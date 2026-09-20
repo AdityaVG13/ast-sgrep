@@ -78,7 +78,7 @@ cold-index budget was set against a 110-file tree (SHA unrecorded) and is
 
 | Surface | Status | Notes |
 |---------|--------|-------|
-| cold self-index CLI | `reproducible-in-tree` | 4.58 s p95 on 2026-08-28 (`2285ce29`) |
+| cold self-index CLI | `reproducible-in-tree` | 14.9 s p95 on 2026-09-20 re-pin (650 files, working tree atop `b23a2454`); 4.58 s p95 on 2026-08-28 (`2285ce29`, 445 files) |
 | warm literal / pattern / semantic CLI | `reproducible-in-tree` | see [speed.md](results/speed.md) |
 | in-process Searcher | `reproducible-in-tree` | `asgrep bench`; sub-millisecond warm path, high first-query CV |
 

@@ -318,12 +318,7 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
         .map(|(i, (_, score))| (i, *score))
         .collect();
     Ok(Some(embed_hits_rescored(
-        &chunks,
-        ranked,
-        &query_vec,
-        &fields,
-        intent,
-        hit_limit,
+        &chunks, ranked, &query_vec, &fields, intent, hit_limit,
     )))
 }
 
@@ -397,12 +392,7 @@ fn embed_pass_lazy_ivf_for_files(
         .map(|(i, (_, score))| (i, *score))
         .collect();
     Ok(Some(embed_hits_rescored(
-        &chunks,
-        ranked,
-        &query_vec,
-        &fields,
-        intent,
-        hit_limit,
+        &chunks, ranked, &query_vec, &fields, intent, hit_limit,
     )))
 }
 
@@ -459,13 +449,9 @@ pub(crate) fn embed_pass_for_files_cached(
     )? {
         return Ok(hits);
     }
-    if let Some(hits) = embed_pass_lazy_ivf_for_files(
-        store,
-        options,
-        parsed,
-        allowed_files,
-        use_field_rescoring,
-    )? {
+    if let Some(hits) =
+        embed_pass_lazy_ivf_for_files(store, options, parsed, allowed_files, use_field_rescoring)?
+    {
         return Ok(hits);
     }
     // gauntlet-r4 (E1): IVF miss only. Skip per-file fallback loops when both
@@ -479,7 +465,8 @@ pub(crate) fn embed_pass_for_files_cached(
     let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
     let mut survivors = Vec::new();
     let mut survivor_ids = Vec::new();
-    for (id, row) in store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?
+    for (id, row) in
+        store.semantic_chunks_for_files(allowed_files, options.lang_filter.as_deref())?
     {
         survivor_ids.push(id);
         survivors.push(row);
@@ -616,8 +603,7 @@ fn try_warmed_file_embed(
     // Snapshot-held Code Mode already loaded every modern chunk at warm.
     // Skip the legacy-embeddings SQL for files with no modern vectors.
     if !trust_snapshot && !missing.is_empty() {
-        let legacy =
-            store.legacy_embeddings_for_files(&missing, options.lang_filter.as_deref())?;
+        let legacy = store.legacy_embeddings_for_files(&missing, options.lang_filter.as_deref())?;
         survivor_ids.extend(std::iter::repeat_n(0, legacy.len()));
         survivors.extend(legacy);
     }
@@ -685,8 +671,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
         )?,
         None => embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?,
     };
-    let ann_threshold = if options.lang_filter.is_some()
-        || (ctx.is_some() && !use_field_rescoring)
+    let ann_threshold = if options.lang_filter.is_some() || (ctx.is_some() && !use_field_rescoring)
     {
         // Lang-filter and Pi snapshot unique: exact RAM rank, never IVF.
         Some(usize::MAX)
@@ -717,7 +702,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
             &fetched_ids
         }
     };
-    Ok(embed_hits_from_pre_rank(
+    embed_hits_from_pre_rank(
         store,
         chunks,
         ids,
@@ -726,7 +711,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
         intent,
         hit_limit,
         use_field_rescoring,
-    )?)
+    )
 }
 /// Process-wide query embedding cache (query|backend|model|dim|pref → vector).
 /// Poison fails closed: clear the map before reuse (sxjc / pass11).
@@ -756,16 +741,15 @@ fn chunk_id_cache() -> &'static Mutex<Option<ChunkIdMemo>> {
     CHUNK_ID_CACHE.get_or_init(|| Mutex::new(None))
 }
 
-fn member_indices_for_files(
+pub fn member_indices_for_files(
     paths: &[String],
     path_order: &[u32],
     allowed_files: &HashSet<String>,
 ) -> Vec<usize> {
     let mut members = Vec::new();
     for file in allowed_files {
-        let found = path_order.binary_search_by(|&idx| {
-            paths[idx as usize].as_str().cmp(file.as_str())
-        });
+        let found =
+            path_order.binary_search_by(|&idx| paths[idx as usize].as_str().cmp(file.as_str()));
         let mut i = match found {
             Ok(hit) => hit,
             Err(_) => continue,
@@ -782,9 +766,16 @@ fn member_indices_for_files(
     members
 }
 
-fn cached_semantic_chunk_index(
-    store: &IndexStore,
-) -> Result<(Arc<Vec<i64>>, Arc<Vec<String>>, Arc<Vec<u32>>, usize, [u8; 32])> {
+/// Cached chunk index: (ids, paths, path_order, dim, fingerprint).
+type CachedChunkIndex = (
+    Arc<Vec<i64>>,
+    Arc<Vec<String>>,
+    Arc<Vec<u32>>,
+    usize,
+    [u8; 32],
+);
+
+fn cached_semantic_chunk_index(store: &IndexStore) -> Result<CachedChunkIndex> {
     let index_data_version = store.index_data_version()?;
     let semantic_data_version = store.semantic_data_version()?;
     let db = store.db_path().to_string_lossy().into_owned();
@@ -871,7 +862,10 @@ fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String
             }
         }
     }
-    Ok((store.get_meta("embed_backend")?, store.get_meta("embed_model")?))
+    Ok((
+        store.get_meta("embed_backend")?,
+        store.get_meta("embed_model")?,
+    ))
 }
 
 fn embed_query_vector(
@@ -938,14 +932,9 @@ fn embed_query_vector_from_meta(
         "semantic",
         "hashed/neural query embed (cache miss)",
     );
-    let vector = embed_query(
-        query,
-        stored_backend,
-        dim,
-        options.embed_preference(),
-    )
-    .map_err(crate::StoreError::Other)?
-    .vector;
+    let vector = embed_query(query, stored_backend, dim, options.embed_preference())
+        .map_err(crate::StoreError::Other)?
+        .vector;
     {
         let mut guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
         if guard.len() < QUERY_EMBED_CACHE_CAP {
@@ -968,10 +957,7 @@ fn rows_in_id_order_with_vectors(
     assemble_rows_in_id_order(store.semantic_chunks_by_ids(ids)?, ids)
 }
 
-fn rows_in_id_order(
-    store: &IndexStore,
-    ids: &[i64],
-) -> Result<Option<Vec<SemanticChunkRow>>> {
+fn rows_in_id_order(store: &IndexStore, ids: &[i64]) -> Result<Option<Vec<SemanticChunkRow>>> {
     let _span = crate::perf_profile::Span::start(
         "semantic_hit_fetch",
         "semantic",
@@ -1057,6 +1043,9 @@ fn fields_for_ids(
         .collect())
 }
 
+// Stable rank-fanout shape: rank context is threaded, not bundled; bundling
+// would churn every rescoring call for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 fn embed_hits_from_pre_rank(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -1073,10 +1062,8 @@ fn embed_hits_from_pre_rank(
         hit_limit
     };
     let taken: Vec<(usize, f32)> = ranked.into_iter().take(pool.max(1)).collect();
-    let pool_chunks: Vec<SemanticChunkRow> = taken
-        .iter()
-        .map(|(idx, _)| chunks[*idx].clone())
-        .collect();
+    let pool_chunks: Vec<SemanticChunkRow> =
+        taken.iter().map(|(idx, _)| chunks[*idx].clone()).collect();
     let pool_ids: Vec<i64> = taken.iter().map(|(idx, _)| ids[*idx]).collect();
     let remapped: Vec<(usize, f32)> = taken
         .into_iter()
@@ -1094,6 +1081,9 @@ fn embed_hits_from_pre_rank(
     ))
 }
 
+// Stable rank-fanout shape: rank context is threaded, not bundled; bundling
+// would churn every rescoring call for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 fn embed_hits_from_concat_rank(
     store: &IndexStore,
     chunks: &[SemanticChunkRow],
@@ -1104,13 +1094,10 @@ fn embed_hits_from_concat_rank(
     rescore_pool: usize,
     use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
-    let ranked =
-        ast_sgrep_embed::rank_chunk_indices_by_vector(query_vec, chunks, chunks.len());
+    let ranked = ast_sgrep_embed::rank_chunk_indices_by_vector(query_vec, chunks, chunks.len());
     let taken: Vec<(usize, f32)> = ranked.into_iter().take(rescore_pool.max(1)).collect();
-    let pool_chunks: Vec<SemanticChunkRow> = taken
-        .iter()
-        .map(|(idx, _)| chunks[*idx].clone())
-        .collect();
+    let pool_chunks: Vec<SemanticChunkRow> =
+        taken.iter().map(|(idx, _)| chunks[*idx].clone()).collect();
     let pool_ids: Vec<i64> = taken.iter().map(|(idx, _)| ids[*idx]).collect();
     let remapped: Vec<(usize, f32)> = taken
         .into_iter()
@@ -1250,32 +1237,4 @@ fn embed_legacy_hits(
         &[],
         EMBED_HIT_LIMIT.max(options.limit),
     ))
-}
-
-#[cfg(test)]
-mod member_filter_tests {
-    use super::member_indices_for_files;
-    use std::collections::HashSet;
-
-    #[test]
-    fn member_indices_match_linear_scan() {
-        let paths: Vec<String> = vec![
-            "b.rs".into(),
-            "a.rs".into(),
-            "a.rs".into(),
-            "c.rs".into(),
-            "a.rs".into(),
-        ];
-        let mut path_order: Vec<u32> = (0..paths.len() as u32).collect();
-        path_order.sort_by(|&x, &y| paths[x as usize].cmp(&paths[y as usize]));
-        let allowed = HashSet::from(["a.rs".into(), "c.rs".into(), "z.rs".into()]);
-        let got = member_indices_for_files(&paths, &path_order, &allowed);
-        let expect: Vec<usize> = paths
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| allowed.contains(*p))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(got, expect);
-    }
 }

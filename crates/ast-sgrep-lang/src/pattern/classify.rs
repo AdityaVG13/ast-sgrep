@@ -162,10 +162,10 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
                 // workspace's TSX parse shapes those sources differently
                 // than the reference grammar), so every template/numeric
                 // face keeps the fail-closed loud envelope.
-                if index != 0 {
-                    if !optional_spelled || !(is_pure_metavariable(raw) || is_pattern_ident(raw)) {
-                        return None;
-                    }
+                if index != 0
+                    && (!optional_spelled || !(is_pure_metavariable(raw) || is_pattern_ident(raw)))
+                {
+                    return None;
                 }
                 (raw, None)
             }
@@ -178,10 +178,10 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
         let mut arg_slots: Option<Vec<ArgSlot>> = None;
         let args = match args_text {
             None => None,
-            Some(args) if args.is_empty() => Some(ArgumentTemplate::Exactly(0)),
+            Some("") => Some(ArgumentTemplate::Exactly(0)),
             // `$$$` / `$$$NAME` is the reference's ANY-arity rest argument
             // (the chains bind EMPTY argument lists, multi A=[]).
-            Some(args) if args == "$$$" => Some(ArgumentTemplate::Any),
+            Some("$$$") => Some(ArgumentTemplate::Any),
             Some(args) if args.starts_with("$$$") && is_metavar_name(&args[3..]) => {
                 Some(ArgumentTemplate::Any)
             }
@@ -206,16 +206,16 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
                 if !optional_spelled {
                     return None;
                 }
-                match parse_call_arg_slots(args) {
-                    Some(slots) => arg_slots = Some(slots),
-                    None => return None,
+                {
+                    let slots = parse_call_arg_slots(args)?;
+                    arg_slots = Some(slots)
                 }
                 None
             }
             Some(_) => return None,
         };
         let args_capture = match args_text {
-            Some(args) if args == "$$$" => None,
+            Some("$$$") => None,
             Some(args) => {
                 if let Some(name) = args.strip_prefix("$$$") {
                     is_metavar_name(name).then(|| (name.to_string(), true))
@@ -469,8 +469,8 @@ pub(crate) fn classify_member_call_chain(p: &str) -> Option<NativeKind> {
         // meta-only lists keep the registered arms byte-compatible.
         let (args, arg_slots) = match args_text {
             None => (None, None),
-            Some(args) if args.is_empty() => (Some(ArgumentTemplate::Exactly(0)), None),
-            Some(args) if args == "$$$" => (Some(ArgumentTemplate::Any), None),
+            Some("") => (Some(ArgumentTemplate::Exactly(0)), None),
+            Some("$$$") => (Some(ArgumentTemplate::Any), None),
             Some(args) if args.starts_with("$$$") && is_metavar_name(&args[3..]) => {
                 (Some(ArgumentTemplate::Any), None)
             }
@@ -490,7 +490,7 @@ pub(crate) fn classify_member_call_chain(p: &str) -> Option<NativeKind> {
             }
         };
         let args_capture = match args_text {
-            Some(args) if args == "$$$" => None,
+            Some("$$$") => None,
             Some(args) => {
                 if let Some(name) = args.strip_prefix("$$$") {
                     is_metavar_name(name).then(|| (name.to_string(), true))

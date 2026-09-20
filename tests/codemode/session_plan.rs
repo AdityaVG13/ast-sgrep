@@ -75,11 +75,7 @@ fn relative_index_path_resolves_against_session_root() {
         .join("custom-index")
         .join("index.db");
     let actual = status["index_path"].as_str().expect("index_path");
-    assert_eq!(
-        std::path::Path::new(actual),
-        expected.as_path(),
-        "{status}"
-    );
+    assert_eq!(std::path::Path::new(actual), expected.as_path(), "{status}");
 }
 
 #[test]
@@ -356,11 +352,11 @@ fn find_is_lexical_word_lookup() {
         .expect("find");
     let hits = out["hits"].as_array().expect("hits");
     assert!(
-        hits.iter().any(|h| h["file"].as_str().unwrap_or("").contains("hello.py")),
+        hits.iter()
+            .any(|h| h["file"].as_str().unwrap_or("").contains("hello.py")),
         "find hello should hit hello.py: {out}"
     );
 }
-
 
 #[test]
 fn read_returns_indexed_line_window() {
@@ -440,7 +436,10 @@ fn edit_batch_applies_all_valid_edits_in_order() {
     assert_eq!(out["ok"], true);
     assert_eq!(out["changed"], 2);
     let body = fs::read_to_string(_tmp.path().join("hello.py")).expect("reread");
-    assert!(body.contains("def greet():") && body.contains("return 2"), "{body}");
+    assert!(
+        body.contains("def greet():") && body.contains("return 2"),
+        "{body}"
+    );
 }
 
 #[test]
@@ -456,10 +455,7 @@ fn edit_rejects_non_unique_old_text() {
             }),
         )
         .expect_err("non-unique must fail");
-    assert!(
-        err.to_string().contains("exactly once"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("exactly once"), "{err}");
 }
 
 #[test]
@@ -548,10 +544,7 @@ fn sticky_session_repeat_is_faster_than_unique_search() {
 fn sticky_embed_hybrid_unique_search_latency() {
     let (_tmp, mut session) = indexed_embed_session();
     session
-        .call(
-            "search",
-            json!({"query": "warmup probe token", "limit": 8}),
-        )
+        .call("search", json!({"query": "warmup probe token", "limit": 8}))
         .expect("warmup");
 
     let queries = [
@@ -575,7 +568,10 @@ fn sticky_embed_hybrid_unique_search_latency() {
             .call("search", json!({"query": q, "limit": 8}))
             .expect("unique hybrid");
         let ns = t0.elapsed().as_nanos() as u64;
-        eprintln!("codemode sticky embed-hybrid unique {q:?} {:.3}ms", ns as f64 / 1e6);
+        eprintln!(
+            "codemode sticky embed-hybrid unique {q:?} {:.3}ms",
+            ns as f64 / 1e6
+        );
         unique_ns.push(ns);
     }
     unique_ns.sort_unstable();
@@ -627,7 +623,9 @@ fn search_injects_in_and_fail_closes_unknown_lang() {
         )
         .expect_err("a scope matching no file must fail loudly");
     assert!(
-        missing_scope.to_string().contains("matches no file or directory"),
+        missing_scope
+            .to_string()
+            .contains("matches no file or directory"),
         "{missing_scope}"
     );
     let scoped = session
@@ -637,10 +635,7 @@ fn search_injects_in_and_fail_closes_unknown_lang() {
     let err = session
         .call("search", json!({"query": "auth", "lang": "notalang"}))
         .expect_err("unknown lang");
-    assert!(
-        err.to_string().contains("unknown lang"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("unknown lang"), "{err}");
 }
 
 #[test]
@@ -652,4 +647,3 @@ fn unknown_tool_suggests_a_close_name() {
     let message = err.to_string();
     assert!(message.contains("Did you mean search"), "{message}");
 }
-

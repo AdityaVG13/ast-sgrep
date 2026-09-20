@@ -33,9 +33,7 @@ fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     let first_up = needle[0].to_ascii_uppercase();
     let mut from = 0;
     while from + needle.len() <= haystack.len() {
-        let Some(off) = memchr::memchr2(first_lo, first_up, &haystack[from..]) else {
-            return None;
-        };
+        let off = memchr::memchr2(first_lo, first_up, &haystack[from..])?;
         let pos = from + off;
         if pos + needle.len() > haystack.len() {
             return None;
@@ -55,7 +53,7 @@ fn add_token_file(map: &mut HashMap<String, Vec<u32>>, token: String, fi: u32) {
     }
 }
 
-fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u32) {
+pub fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u32) {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -82,7 +80,7 @@ fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u32) {
     }
 }
 
-fn file_first_lines(file_idx: &[u32], n_files: usize) -> Vec<u32> {
+pub fn file_first_lines(file_idx: &[u32], n_files: usize) -> Vec<u32> {
     let mut first = vec![u32::MAX; n_files];
     for (i, &fi) in file_idx.iter().enumerate() {
         if let Some(slot) = first.get_mut(fi as usize) {
@@ -116,7 +114,12 @@ fn cascade_prefers_file(path: &str) -> bool {
     true
 }
 
-fn file_byte_ends(file_idx: &[u32], starts: &[u32], n_files: usize, bytes_len: usize) -> Vec<u32> {
+pub fn file_byte_ends(
+    file_idx: &[u32],
+    starts: &[u32],
+    n_files: usize,
+    bytes_len: usize,
+) -> Vec<u32> {
     let mut ends = vec![bytes_len as u32; n_files];
     for (i, &fi) in file_idx.iter().enumerate() {
         let end = starts.get(i + 1).copied().unwrap_or(bytes_len as u32);
@@ -128,9 +131,9 @@ fn file_byte_ends(file_idx: &[u32], starts: &[u32], n_files: usize, bytes_len: u
 }
 
 #[derive(Debug, Clone)]
-struct CorpusFile {
-    path: String,
-    language: Option<String>,
+pub struct CorpusFile {
+    pub path: String,
+    pub language: Option<String>,
 }
 
 /// Packed `lines` table: path-sorted, one record per indexed line.
@@ -226,6 +229,10 @@ impl LineCorpus {
 
     pub fn len(&self) -> usize {
         self.starts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.starts.is_empty()
     }
 
     /// Distinct indexed files packed in this corpus (cascade file-cap).
@@ -469,119 +476,5 @@ impl LineCorpus {
             }
         }
         hits
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pack(lines: &[(&str, Option<&str>, u32, &str)]) -> LineCorpus {
-        let mut bytes = Vec::new();
-        let mut starts = Vec::new();
-        let mut line_nos = Vec::new();
-        let mut file_idx = Vec::new();
-        let mut files = Vec::new();
-        let mut current: Option<&str> = None;
-        for &(path, language, line_no, content) in lines {
-            if current != Some(path) {
-                current = Some(path);
-                files.push(CorpusFile {
-                    path: path.to_string(),
-                    language: language.map(str::to_string),
-                });
-            }
-            starts.push(bytes.len() as u32);
-            bytes.extend_from_slice(content.as_bytes());
-            bytes.push(b'\n');
-            line_nos.push(line_no);
-            file_idx.push((files.len() - 1) as u32);
-        }
-        let n_files = files.len();
-        // Compute the derived slices BEFORE the struct literal: `bytes` and
-        // `starts` move into `LineCorpus`, and both helpers need them.
-        let ends = file_byte_ends(&file_idx, &starts, n_files, bytes.len());
-        let first_lines = file_first_lines(&file_idx, n_files);
-        let mut token_files = HashMap::new();
-        for (i, &fi) in file_idx.iter().enumerate() {
-            let start = starts[i] as usize;
-            let end = starts
-                .get(i + 1)
-                .copied()
-                .map(|s| s as usize)
-                .unwrap_or(bytes.len())
-                .saturating_sub(1);
-            if let Ok(text) = std::str::from_utf8(&bytes[start..end]) {
-                push_ascii_tokens(&mut token_files, text, fi);
-            }
-        }
-        LineCorpus {
-            index_data_version: 1,
-            pragma_data_version: 1,
-            bytes,
-            starts,
-            line_nos,
-            file_idx: file_idx.clone(),
-            files,
-            file_byte_ends: ends,
-            file_first_line: first_lines,
-            token_files,
-        }
-    }
-
-    #[test]
-    fn ident_token_map_finds_camel_case_pieces() {
-        let corpus = pack(&[
-            ("types.rs", Some("rust"), 10, "pub struct SnapshotStamp {"),
-            ("other.rs", Some("rust"), 1, "fn unrelated() {}"),
-        ]);
-        let already = HashSet::new();
-        let hits = corpus.scan_distinct_files_cs("snapshot", 8, &already);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "types.rs");
-        assert_eq!(hits[0].line_no, 10);
-    }
-
-    #[test]
-    fn ident_token_map_prefers_code_over_markdown() {
-        let corpus = pack(&[
-            ("README.md", None, 1, "snapshot generation notes"),
-            ("search/types.rs", Some("rust"), 10, "pub struct SnapshotStamp {"),
-        ]);
-        let already = HashSet::new();
-        let hits = corpus.scan_distinct_files_cs("snapshot", 1, &already);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, "search/types.rs");
-    }
-
-    #[test]
-    fn packed_scan_is_path_sorted_and_respects_cap() {
-        let corpus = pack(&[
-            ("a.rs", Some("rust"), 1, "alpha SearchHit"),
-            ("a.rs", Some("rust"), 2, "nope"),
-            ("b.rs", Some("rust"), 10, "SearchHit again"),
-            ("c.rs", Some("rust"), 3, "SearchHit third"),
-        ]);
-        let hits = corpus.scan_cs("SearchHit", false, None, 2, |_, _| true, |_, _, _| true);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].path, "a.rs");
-        assert_eq!(hits[0].line_no, 1);
-        assert_eq!(hits[1].path, "b.rs");
-        assert_eq!(hits[1].line_no, 10);
-    }
-
-    #[test]
-    fn packed_scan_does_not_cross_newlines() {
-        let corpus = pack(&[("a.rs", None, 1, "Search"), ("a.rs", None, 2, "Hit")]);
-        let hits = corpus.scan_cs("SearchHit", false, None, 8, |_, _| true, |_, _, _| true);
-        assert!(hits.is_empty());
-    }
-
-    #[test]
-    fn packed_scan_emits_line_once() {
-        let corpus = pack(&[("a.rs", None, 1, "SearchHit and SearchHit again")]);
-        let hits = corpus.scan_cs("SearchHit", false, None, 8, |_, _| true, |_, _, _| true);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].line_no, 1);
     }
 }

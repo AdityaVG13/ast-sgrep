@@ -104,10 +104,16 @@ struct EnvRestore {
 
 impl EnvRestore {
     fn capture() -> Self {
-        let saved = ["ASGREP_INDEX_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "HOME", "USERPROFILE"]
-            .into_iter()
-            .map(|key| (key, std::env::var_os(key)))
-            .collect();
+        let saved = [
+            "ASGREP_INDEX_PATH",
+            "ASGREP_USE_CACHE",
+            "XDG_CACHE_HOME",
+            "HOME",
+            "USERPROFILE",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect();
         Self { saved }
     }
 }
@@ -157,7 +163,10 @@ fn writer_generation_bumps_are_unique_not_sequential() {
     assert_eq!(read_writer_generation(root, None), first);
     let second = bump_writer_generation(root, None).unwrap();
     assert_eq!(read_writer_generation(root, None), second);
-    assert_ne!(first, second, "successive bumps must publish distinct epochs");
+    assert_ne!(
+        first, second,
+        "successive bumps must publish distinct epochs"
+    );
 }
 
 /// INTENT: Stamps isolate per root and per pinned DB parent; corrupt/empty
@@ -216,11 +225,15 @@ fn index_data_version_bumps_exactly_one_per_upsert() {
     assert_eq!(store.index_generation().unwrap(), v0);
 
     let first = [(1, "one".to_string())];
-    store.upsert_file(plain_input("src/a.rs", "h1", &first)).unwrap();
+    store
+        .upsert_file(plain_input("src/a.rs", "h1", &first))
+        .unwrap();
     assert_eq!(store.index_data_version().unwrap(), v0 + 1);
 
     let other = [(1, "other".to_string())];
-    store.upsert_file(plain_input("src/b.rs", "h2", &other)).unwrap();
+    store
+        .upsert_file(plain_input("src/b.rs", "h2", &other))
+        .unwrap();
     assert_eq!(store.index_data_version().unwrap(), v0 + 2);
 
     // Same-structure re-upsert routes to refresh_lines_only; still exactly +1.
@@ -259,7 +272,10 @@ fn mtime_match_short_circuits_hash_check_within_certified_root() {
             .connection()
             .execute_batch("UPDATE files SET content_hash = 'tampered' WHERE path = 'src/a.rs'")
             .unwrap();
-        assert_eq!(store.file_hash("src/a.rs").unwrap().as_deref(), Some("tampered"));
+        assert_eq!(
+            store.file_hash("src/a.rs").unwrap().as_deref(),
+            Some("tampered")
+        );
         assert!(store.get_meta("mtime_identity_root").unwrap().is_some());
         generation_before = store.index_data_version().unwrap();
     }
@@ -270,7 +286,10 @@ fn mtime_match_short_circuits_hash_check_within_certified_root() {
     // A pure mtime skip performs no mutation: generation unmoved, tamper intact.
     let store = IndexStore::open(root, Some(&db)).unwrap();
     assert_eq!(store.index_data_version().unwrap(), generation_before);
-    assert_eq!(store.file_hash("src/a.rs").unwrap().as_deref(), Some("tampered"));
+    assert_eq!(
+        store.file_hash("src/a.rs").unwrap().as_deref(),
+        Some("tampered")
+    );
 }
 
 /// INTENT: Gate deletion or a nanos-only stored/fresh mismatch defeats the
@@ -301,7 +320,10 @@ fn mtime_gate_deletion_and_nanos_mismatch_force_hash_recheck() {
     assert_eq!(stats.files_indexed, 1);
     {
         let store = IndexStore::open(root, Some(&db)).unwrap();
-        assert_ne!(store.file_hash("src/a.rs").unwrap().as_deref(), Some("tampered"));
+        assert_ne!(
+            store.file_hash("src/a.rs").unwrap().as_deref(),
+            Some("tampered")
+        );
         assert!(store.get_meta("mtime_identity_root").unwrap().is_some());
     }
 
@@ -342,7 +364,10 @@ fn cross_root_db_reuse_disables_mtime_trust() {
     std::fs::create_dir_all(root_a.join("src")).unwrap();
     std::fs::write(root_a.join("src/a.rs"), "fn content_ax() {}\n").unwrap();
     set_mtime_secs(&root_a.join("src/a.rs"), WHOLE_SECOND_T0);
-    assert_eq!(indexer_at(root_a, &db).index_all().unwrap().files_indexed, 1);
+    assert_eq!(
+        indexer_at(root_a, &db).index_all().unwrap().files_indexed,
+        1
+    );
     let hash_a = IndexStore::open(root_a, Some(&db))
         .unwrap()
         .file_hash("src/a.rs")
@@ -407,7 +432,10 @@ fn newer_than_binary_schema_refused_on_both_open_modes() {
         Some((future, INDEX_SCHEMA_VERSION))
     );
     // The side-effect-free peek still reports the on-disk stamp.
-    assert_eq!(IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(), future);
+    assert_eq!(
+        IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(),
+        future
+    );
 }
 
 /// INTENT: Stale stamp lifecycle — peek reports without migrating, readonly
@@ -429,26 +457,41 @@ fn stale_schema_lifecycle_peek_refuse_migrate_idempotent() {
             .unwrap();
     }
     // Peek reports the stale stamp without migrating.
-    assert_eq!(IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(), stale);
+    assert_eq!(
+        IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(),
+        stale
+    );
     // Read-only open refuses stale rows (discriminant only).
     assert!(IndexStore::open_readonly(temp.path(), Some(&db)).is_err());
     // The refusal is side-effect-free: the stamp is untouched.
-    assert_eq!(IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(), stale);
+    assert_eq!(
+        IndexStore::peek_schema_version(temp.path(), Some(&db)).unwrap(),
+        stale
+    );
     // Writable open migrates in place: on-disk stamp advances to the binary's.
     {
         let store = IndexStore::open(temp.path(), Some(&db)).unwrap();
         assert!(!store.is_read_only());
-        assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            store.on_disk_schema_version().unwrap(),
+            INDEX_SCHEMA_VERSION
+        );
         assert_eq!(store.schema_version(), INDEX_SCHEMA_VERSION);
     }
     // Idempotent: a second writable open is a no-op, and read-only now opens.
     {
         let store = IndexStore::open(temp.path(), Some(&db)).unwrap();
-        assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            store.on_disk_schema_version().unwrap(),
+            INDEX_SCHEMA_VERSION
+        );
     }
     let store = IndexStore::open_readonly(temp.path(), Some(&db)).unwrap();
     assert!(store.is_read_only());
-    assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+    assert_eq!(
+        store.on_disk_schema_version().unwrap(),
+        INDEX_SCHEMA_VERSION
+    );
 }
 
 // ---- cache home: isolation, routing, fail-closed ----
@@ -466,7 +509,10 @@ fn cache_index_path_deterministic_and_root_isolated() {
 
     let root_a = PathBuf::from("/repo/alpha");
     let root_b = PathBuf::from("/repo/beta");
-    assert_eq!(cache_index_path(&root_a).unwrap(), cache_index_path(&root_a).unwrap());
+    assert_eq!(
+        cache_index_path(&root_a).unwrap(),
+        cache_index_path(&root_a).unwrap()
+    );
     assert_ne!(
         cache_index_path(&root_a).unwrap(),
         cache_index_path(&root_b).unwrap(),
@@ -500,7 +546,9 @@ fn cache_routing_local_wins_and_env_selects_base_fail_closed() {
         try_index_db_path(root, None).unwrap(),
         cache_index_path(root).unwrap()
     );
-    assert!(try_index_db_path(root, None).unwrap().starts_with(xdg.path().join("asgrep")));
+    assert!(try_index_db_path(root, None)
+        .unwrap()
+        .starts_with(xdg.path().join("asgrep")));
 
     // A present local db wins over the cache, even with USE_CACHE set.
     let local_db = root.join(".asgrep").join("index.db");
@@ -550,7 +598,10 @@ fn status_reports_stored_counts_and_live_writer_epoch() {
     assert!(status.symbol_count >= 2);
     assert_eq!(status.index_path, db.display().to_string());
     assert_eq!(status.root, root.display().to_string());
-    assert_eq!(status.writer_generation, read_writer_generation(root, Some(&db)));
+    assert_eq!(
+        status.writer_generation,
+        read_writer_generation(root, Some(&db))
+    );
 
     // Status reads the stamp live: a fresh bump is visible on the next status.
     let bumped = bump_writer_generation(root, Some(&db)).unwrap();
@@ -588,7 +639,13 @@ fn status_distinguishes_empty_stored_stale_and_missing() {
     let live_db = live_root.join(".asgrep").join("index.db");
     std::fs::create_dir_all(live_root.join("src")).unwrap();
     std::fs::write(live_root.join("src/a.rs"), "fn alpha_one() {}\n").unwrap();
-    assert_eq!(indexer_at(live_root, &live_db).index_all().unwrap().files_indexed, 1);
+    assert_eq!(
+        indexer_at(live_root, &live_db)
+            .index_all()
+            .unwrap()
+            .files_indexed,
+        1
+    );
     std::fs::remove_file(live_root.join("src/a.rs")).unwrap();
     let store = IndexStore::open(live_root, Some(&live_db)).unwrap();
     assert_eq!(

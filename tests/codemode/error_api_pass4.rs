@@ -30,9 +30,7 @@
 #[path = "error_testkit.rs"]
 mod error_testkit;
 
-use ast_sgrep_codemode::{
-    parse_plan, run_plan, CallError, ServeRequest, ServeResponse,
-};
+use ast_sgrep_codemode::{parse_plan, run_plan, CallError, ServeRequest, ServeResponse};
 use error_testkit::{batch_call, serve_lines, serve_request_line, session_at};
 use serde_json::{json, Value};
 
@@ -70,7 +68,12 @@ fn e4_serve_batch_fault_mid_stream_isolates_and_resumes() {
     for (line, expect_id) in [(&lines[0], "g0"), (&lines[2], "g1")] {
         let response: ServeResponse = serde_json::from_str(line).expect("result line");
         match response {
-            ServeResponse::Result { id, ok, value, error } => {
+            ServeResponse::Result {
+                id,
+                ok,
+                value,
+                error,
+            } => {
                 assert_eq!(id, expect_id);
                 assert!(ok, "good call {expect_id} tainted by the fault");
                 assert!(value.is_some());
@@ -83,11 +86,17 @@ fn e4_serve_batch_fault_mid_stream_isolates_and_resumes() {
     // BatchResult carries wall_ms: u128, which serde_json cannot deserialize;
     // pin the envelope via its `type` tag discriminant plus field shapes.
     let batch: Value = serde_json::from_str(&lines[1]).expect("batch line");
-    assert_eq!(batch.get("type").and_then(Value::as_str), Some("batch_result"));
+    assert_eq!(
+        batch.get("type").and_then(Value::as_str),
+        Some("batch_result")
+    );
     assert_eq!(batch.get("id").and_then(Value::as_str), Some("b0"));
     assert_eq!(batch.get("all_ok").and_then(Value::as_bool), Some(false));
     assert_eq!(batch.get("mode").and_then(Value::as_str), Some("serial"));
-    let rows = batch.get("results").and_then(Value::as_array).expect("rows");
+    let rows = batch
+        .get("results")
+        .and_then(Value::as_array)
+        .expect("rows");
     assert_eq!(rows.len(), 3);
     let pattern: Vec<bool> = rows
         .iter()
@@ -250,11 +259,9 @@ fn e4_atomic_edit_batch_zero_writes_then_resumes() {
     std::fs::write(temp.path().join("a.txt"), "alpha one\n").expect("write a");
     std::fs::write(temp.path().join("b.txt"), "beta two\n").expect("write b");
     let mut session = session_at(temp.path());
-    assert!(
-        session
-            .call("catalog_search", json!({"query": "search"}))
-            .is_ok()
-    );
+    assert!(session
+        .call("catalog_search", json!({"query": "search"}))
+        .is_ok());
 
     let err = session
         .call(
@@ -338,7 +345,10 @@ fn e4_chained_double_fault_unknown_then_budget() {
     let second = session
         .call("catalog_search", json!({"query": "search"}))
         .expect_err("fault 2 must fail");
-    assert!(matches!(second, CallError::BudgetExhausted(5)), "got {second:?}");
+    assert!(
+        matches!(second, CallError::BudgetExhausted(5)),
+        "got {second:?}"
+    );
     assert_eq!(session.call_count(), 5);
 }
 
@@ -354,15 +364,16 @@ fn e4_oversized_response_fault_then_resumes() {
     // consumes its budget unit like any other dispatched call).
     let temp = tempfile::tempdir().expect("tempdir");
     let mut session = session_at(temp.path());
-    assert!(
-        session
-            .call("select", json!({"value": {"v": 1}, "fields": ["v"]}))
-            .is_ok()
-    );
+    assert!(session
+        .call("select", json!({"value": {"v": 1}, "fields": ["v"]}))
+        .is_ok());
 
     let blob = "x".repeat(ast_sgrep_core::MAX_STDIN_LINE_BYTES + 1024);
     let err = session
-        .call("select", json!({"value": {"blob": blob}, "fields": ["blob"]}))
+        .call(
+            "select",
+            json!({"value": {"blob": blob}, "fields": ["blob"]}),
+        )
         .expect_err("oversized response must fail closed");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
     assert_eq!(session.call_count(), 2);

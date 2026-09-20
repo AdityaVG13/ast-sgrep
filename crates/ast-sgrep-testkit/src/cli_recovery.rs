@@ -268,6 +268,11 @@ pub fn run_search(
     crate::assert_success(&output, "search")
 }
 
+/// Outline symbol row: (name, kind, line_start, line_end).
+type OutlineSymbol = (String, String, u64, u64);
+/// Served outline snapshot: (file, count, symbols in served order).
+type OutlineSnapshot = (String, u64, Vec<OutlineSymbol>);
+
 /// INTENT: outline serve snapshot — (file, count, (name, kind, line_start,
 /// line_end) per symbol in served order). Compared whole between baseline
 /// and recovery.
@@ -277,7 +282,7 @@ pub fn run_outline_snapshot(
     root: &str,
     index: &str,
     path: &str,
-) -> (String, u64, Vec<(String, String, u64, u64)>) {
+) -> OutlineSnapshot {
     let output = run_in(
         bin,
         temp.path(),
@@ -293,7 +298,7 @@ pub fn run_outline_snapshot(
         &[],
     );
     let value = crate::assert_success(&output, "outline");
-    let symbols: Vec<(String, String, u64, u64)> = value["symbols"]
+    let symbols: Vec<OutlineSymbol> = value["symbols"]
         .as_array()
         .unwrap_or_else(|| panic!("outline must carry a symbols array: {value}"))
         .iter()
@@ -318,12 +323,15 @@ pub fn run_outline_snapshot(
 pub struct ServeBaseline {
     pub status: Value,
     pub search_keys: Vec<(String, u64, String)>,
-    pub outline: (String, u64, Vec<(String, String, u64, u64)>),
+    pub outline: OutlineSnapshot,
 }
 
 /// INTENT: capture the pre-crash SERVE baseline, asserting it is non-vacuous
 /// (non-empty answers, non-empty outline, expected file count): parity
 /// against an empty baseline would prove nothing.
+// Stable helper shape: baseline inputs are threaded, not bundled; bundling
+// would churn every recovery suite for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub fn capture_baseline(
     bin: &Path,
     temp: &TempDir,
@@ -386,7 +394,15 @@ pub fn assert_serve_parity(
         "{stage}: recovered status must equal the pre-crash baseline"
     );
     assert_eq!(
-        search_answer_keys(&run_search(bin, temp, root, index, query, search_extra, search_envs)),
+        search_answer_keys(&run_search(
+            bin,
+            temp,
+            root,
+            index,
+            query,
+            search_extra,
+            search_envs
+        )),
         baseline.search_keys,
         "{stage}: recovered search answers must equal the pre-crash baseline"
     );

@@ -1,6 +1,6 @@
-# Comparison: ast-sgrep vs ast-grep vs ripgrep vs Semgrep
+# Comparison: ast-sgrep vs ast-grep vs ripgrep vs Semgrep (vs tgrep, fff)
 
-For **searching an indexed repo**, ast-sgrep replaces the other three. Identifiers, strings, structural shapes, defs/callers, and conceptual NL are one ranked list. The other tools remain specialists for jobs that are not search.
+For **searching an indexed repo**, ast-sgrep replaces the scan tools. Identifiers, strings, structural shapes, defs/callers, and conceptual NL are one ranked list. The other tools remain specialists for jobs that are not ranked search.
 
 ## Summary
 
@@ -18,9 +18,26 @@ For **searching an indexed repo**, ast-sgrep replaces the other three. Identifie
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
-| **Typical latency** | ~0.3 ms/search (indexed) | Pattern-dependent | ms–s per full scan |
+| **One-shot CLI latency** | 8.5 ms p95 (`literal:`, indexed) | 61.3 ms p95 (pattern, hand-written code) | 13.1 ms p95 (scan) |
 | **Index required** | Yes (`.asgrep/`) | No | No |
 | **API key for semantic** | No (offline default) | N/A | N/A |
+
+Latency cells are the 2.5.0 re-pin (self corpus, 650 indexed files,
+`release-perf`): [head-to-head](../benchmarks/results/head-to-head.md).
+Warm-server tools are compared separately below — a cold one-shot
+process and a warm server are different contests.
+
+### Also in the arena: tgrep and fff
+
+**tgrep** (warm trigram server,
+1.0.9) answers the same `SearchHit` query in **5.8 ms p95** — it leads
+asgrep's 8.5 ms cold one-shot. asgrep's own warm path (`codemode-serve`,
+0.75 ms p50) is the apples-to-apples contest, not the one-shot CLI.
+
+**fff** (warm ranked file-finder, fff-mcp 0.10.6) answers in **0.4 ms
+p95** but surfaces ~50 ranked matches where exhaustive tools find ~300
+lines. It owns sub-ms ranked file-finding, not exhaustive grep. Compare
+latency only, never match sets.
 
 ## When to use which
 
@@ -144,13 +161,17 @@ This does **not** require the ast-grep CLI. Unsupported shapes return no hits ra
 
 ## Performance expectations
 
+Measured cells (2.5.0 re-pin, self corpus, 650 indexed files) —
+[head-to-head](../benchmarks/results/head-to-head.md):
+
 | Scenario | ast-sgrep | ripgrep | ast-grep |
 |----------|-----------|---------|----------|
-| First-time full-repo search | Index build + fast query | Full scan | Full scan per pattern |
-| Repeated queries same repo | ~sub-ms (indexed) | Full scan each time | Full scan each time |
-| 10k-file monorepo NL query | Indexed + optional IVF | Seconds per scan | Not applicable |
+| Cold index the repo | 14.9 s p95 (one-time) | No index | No index |
+| One-shot token query | 8.5 ms p95 (`literal:`, indexed) | 13.1 ms p95 (scan) | N/A |
+| One-shot structural query | 9.5 ms p95 (`pattern:`, indexed) | N/A | 61.3 ms p95 (hand-written code) |
+| Warm-server query | 0.75 ms p50 (`codemode-serve`) | N/A (no server) | N/A (no server) |
 
-ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Choose based on query frequency and whether you need graph/semantic ranking.
+ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Choose based on query frequency and whether you need graph/semantic ranking. On trees with large generated files, scan/parse-per-query tools pay per query while the index does not (ast-grep 279.8 ms with the generated file included vs 61.3 ms without — same 9.5 ms for asgrep).
 
 ## Migration mental model
 

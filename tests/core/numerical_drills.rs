@@ -143,9 +143,15 @@ fn routing_clamp_creates_ties_with_key_breaks() {
     assert_eq!(by_file("c.rs").score, 1.0 / 63.0);
     assert_eq!(by_file("d.rs").score, 1.0 / 64.0);
     assert_eq!(by_file("a.rs").kind, HitKind::Def);
-    assert_eq!(by_file("a.rs").contributors, vec![HitKind::Def, HitKind::Caller]);
+    assert_eq!(
+        by_file("a.rs").contributors,
+        vec![HitKind::Def, HitKind::Caller]
+    );
     let ranked = rank_fused(fused);
-    assert_eq!(hit_files_in_order(&ranked), vec!["a.rs", "b.rs", "c.rs", "d.rs"]);
+    assert_eq!(
+        hit_files_in_order(&ranked),
+        vec!["a.rs", "b.rs", "c.rs", "d.rs"]
+    );
 
     // The tie order comes from keys, not input order: reversing the input
     // reproduces the fused stream bit-for-bit (emission is sorted by key).
@@ -208,7 +214,11 @@ fn hostile_weights_fuse_on_rails() {
     assert_eq!(by_file("d_graph.rs"), 1.0 / 61.0);
     assert_eq!(by_file("e_anchor.rs"), 1.0 / 61.0);
     for f in ["a_lex.rs", "b_def.rs", "f_embed.rs", "g_pattern.rs"] {
-        assert_eq!(by_file(f), 0.25 * (1.0 / 61.0), "{f} must fuse on the 0.25 rail");
+        assert_eq!(
+            by_file(f),
+            0.25 * (1.0 / 61.0),
+            "{f} must fuse on the 0.25 rail"
+        );
     }
     // Score-desc ranking with file tiebreaks inside each rail cohort.
     assert_eq!(
@@ -254,7 +264,10 @@ fn empty_and_zeroed_channels_vanish() {
     let by_file = |fused: &[SearchHit], f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file(&fused, "e1.rs"), 1.0 / 61.0);
     assert_eq!(by_file(&fused, "e2.rs"), 1.0 / 62.0);
-    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["e1.rs", "e2.rs"]);
+    assert_eq!(
+        hit_files_in_order(&rank_fused(fused)),
+        vec!["e1.rs", "e2.rs"]
+    );
 
     // Empty-terms query: all text channels (asgrep/def/graph/...) route to
     // 0.0 and vanish in fusion; the Embed 2.0/4 = 0.5 survivor is the sole
@@ -294,7 +307,10 @@ fn real_producer_scores_invert_through_routing() {
     // Raw: X 15.0 > Y 13.0. Routed: X 15/33 = 5/11 ~= 0.4545 < Y 1.0.
     // The raw leader loses its rank IN ROUTING, before fusion runs.
     let parsed = ParsedQuery::parse("aa bb cc");
-    assert_eq!(parsed.terms, vec!["aa".to_string(), "bb".to_string(), "cc".to_string()]);
+    assert_eq!(
+        parsed.terms,
+        vec!["aa".to_string(), "bb".to_string(), "cc".to_string()]
+    );
     assert_eq!(parsed.identifier_spelling(), None);
     let raw_x = score_def(&parsed.terms, "xx aa yy bb zz cc");
     let raw_y = score_def(&parsed.terms, "aa");
@@ -310,7 +326,10 @@ fn real_producer_scores_invert_through_routing() {
     route_hits(&parsed, &mut routed);
     assert_eq!(routed[0].score, 15.0 / 33.0);
     assert_eq!(routed[1].score, 1.0);
-    assert!(routed[1].score > routed[0].score, "routing must invert the pair");
+    assert!(
+        routed[1].score > routed[0].score,
+        "routing must invert the pair"
+    );
 
     // Fusion cements the inversion: Y rank 0 -> 1/61, X rank 1 -> 1/62.
     let mut fused = routed;
@@ -319,7 +338,10 @@ fn real_producer_scores_invert_through_routing() {
     let by_file = |f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file("y_inv.rs"), 1.0 / 61.0);
     assert_eq!(by_file("x_inv.rs"), 1.0 / 62.0);
-    assert_eq!(hit_files_in_order(&rank_fused(fused)), vec!["y_inv.rs", "x_inv.rs"]);
+    assert_eq!(
+        hit_files_in_order(&rank_fused(fused)),
+        vec!["y_inv.rs", "x_inv.rs"]
+    );
 }
 
 /// INTENT: 3-channel merge — canonical Def, contributor order, breadth beats
@@ -378,7 +400,10 @@ fn three_way_merge_canonical_and_breadth_win() {
     let ranked = rank_fused(fused);
     assert_eq!(ranked[0].file, "m.rs");
     assert_eq!(
-        ranked.iter().map(|h| (h.file.as_str(), h.line_start)).collect::<Vec<_>>(),
+        ranked
+            .iter()
+            .map(|h| (h.file.as_str(), h.line_start))
+            .collect::<Vec<_>>(),
         vec![("m.rs", 7), ("a.rs", 1), ("a.rs", 2), ("a.rs", 3)]
     );
 }
@@ -426,7 +451,11 @@ fn full_pipeline_through_finish_order_scores_margins() {
     assert_eq!(by_file("a_exact.rs").score, 1.0 / 61.0);
     assert_eq!(by_file("c_sem.rs").score, 1.0 / 61.0);
     for hit in &response.hits {
-        assert_eq!(hit.margin, 0.0, "{} must be alone in its signal group", hit.file);
+        assert_eq!(
+            hit.margin, 0.0,
+            "{} must be alone in its signal group",
+            hit.file
+        );
     }
     // Confidence: Exact base 0.75 / Semantic base 0.35 with one contributor
     // are bit-exact; the 2-contributor Structural row needs epsilon (0.60

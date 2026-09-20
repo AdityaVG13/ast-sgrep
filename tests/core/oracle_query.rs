@@ -69,7 +69,7 @@ fn parsed_query_modes_scopes_and_targets() {
     assert_eq!(scoped.path_scope.as_deref(), Some("src"));
     assert_eq!(scoped.path_scope_error, None);
     assert_eq!(scoped.terms, vec!["foo".to_string()]);
-    assert_eq!(ParsedQuery::parse("foo in:").path_scope_error.is_some(), true);
+    assert!(ParsedQuery::parse("foo in:").path_scope_error.is_some());
     assert_eq!(ParsedQuery::parse("foo in:").path_scope, None);
     assert!(ParsedQuery::parse("a in:x in:y").path_scope_error.is_some());
     assert!(ParsedQuery::parse("a in:../up").path_scope_error.is_some());

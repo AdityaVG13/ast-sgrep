@@ -50,68 +50,57 @@ pub(crate) fn run_doctor(cli: &Cli, root: &Path, args: &DoctorArgs) -> anyhow::R
     }
     crate::print_machine_json("doctor", triage)
 }
+
+/// Static capabilities skeleton (was one 60-line `json!` literal: 26KiB of
+/// .text for static data). Dynamic holes — version, description, the
+/// clap-derived catalog, and the two `MAX_*` consts — are inserted below so
+/// they can never drift from their sources. Regenerate from a trusted binary:
+/// `capabilities --json` minus the envelope and the 7 dynamic keys.
+const CAPABILITIES_SKELETON: &str = include_str!("capabilities_data.json");
+
 pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     let command = crate::Cli::command();
     let (commands, global_flags, search_tuning_flags) = clap_catalog(&command);
-    Ok(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "description": command.get_about().map(|s| s.to_string()).unwrap_or_else(|| "Polyglot hybrid code search".into()),
-        "agent_contract": {"stdout": "one data payload in machine/default-agent modes", "stderr": "empty in machine modes; human diagnostics otherwise", "deterministic": "stable JSON key ordering via serde_json; doctor/capabilities envelopes omit TTY and wall-clock fields; bench history honors SOURCE_DATE_EPOCH; disable color with NO_COLOR=1"},
-        "commands": commands,
-        "global_flags": global_flags,
-        "search_tuning_flags": search_tuning_flags,
-        "root_specification": {
-            "canonical": "positional ROOT on the subcommand (or bare-search ROOT)",
-            "alias": "--root ROOT",
-            "precedence": "conflicting --root and positional ROOT is a usage error; effective_root prefers --root when set",
-            "bin_aliases": ["asgrep", "ast-sgrep"]
-        },
-        "environment": ["ASGREP_LIMIT", "ASGREP_INDEX_PATH", "ASGREP_DURABILITY", "ASGREP_NO_EMBED", "ASGREP_NO_AUTO_INDEX", "ASGREP_AUTO_INDEX", "ASGREP_NEURAL_EMBED", "ASGREP_NEURAL_FALLBACK", "ASGREP_SEMANTIC_ONLY", "ASGREP_TANTIVY", "ASGREP_ANN_THRESHOLD", "ASGREP_ANN_PROBES", "ASGREP_RERANK", "ASGREP_RERANK_TOP_K", "ASGREP_ALLOW_AST_GREP", "ASGREP_ALLOW_EXTERNAL_INDEX", "ASGREP_AST_GREP", "ASGREP_LEDGER_PATH", "ASGREP_USE_CACHE", "XDG_CACHE_HOME", "NO_COLOR", "CI", "TERM", "SOURCE_DATE_EPOCH"],
-        "environment_bool_values": ["1", "0", "true", "false", "yes", "no", "on", "off"],
-        "sibling_binaries": [
-            {"name":"asgrep-mcp","purpose":"MCP stdio server","launch":"asgrep-mcp (stdio JSON-RPC)"},
-            {"name":"asgrep-lsp","purpose":"Language Server Protocol server","launch":"asgrep-lsp"}
-        ],
-        "integrations": {
-            "mcp": {"binary": "asgrep-mcp", "transport": "stdio"},
-            "lsp": {"binary": "asgrep-lsp", "transport": "stdio"}
-        },
-        "indexed_source": {
-            "policy": "Do not spawn rg on indexed source.",
-            "exact_text": "Use literal:<term> for exact substring presence in indexed languages.",
-            "freshness": "CLI: search is read-only (no auto-index/refresh) unless --auto-index; run asgrep index / reindex / watch to write; Pi and Code Mode refresh before search with a 30-second default correctness lease; LSP applies document open/change/save/close before the next request.",
-            "outside_contract": "Use ripgrep only for logs and unindexed or unsupported files."
-        },
-        "aliases": ["ast-sgrep"],
-        "query_prefixes": ["callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:", "semantic:"],
-        "output_limits": {
-            "max_results": ast_sgrep_core::MAX_OUTPUT_RESULTS,
-            "max_excerpt_lines": ast_sgrep_core::MAX_EXCERPT_LINES,
-            "default_snippet_tokens": 96,
-            "default_response_snippet_tokens": 768,
-            "max_snippet_tokens": 4096,
-            "max_response_snippet_tokens": 65536,
-            "max_error_message_chars": 4096
-        },
-        "machine_schema": {
-            "schema_version": "1.0.0",
-            "ok_field": "boolean",
-            "exit_code_field": "integer",
-            "notes": "ok:true only on successful operations; doctor uses ok:false when healthy:false; operational faults use exit_code 2"
-        },
-        "search_formats": ["native", "agent", "agent-capsule", "compact", "github", "gitlab"],
-        "exit_codes": [
-            {"code": 0, "meaning": "success"},
-            {"code": 1, "meaning": "usage error (missing required args, unknown flags, invalid --format, conflicting roots)"},
-            {"code": 2, "meaning": "operational failure (index/search/IO) or doctor healthy:false"}
-        ],
-        "canonical_tasks": ["asgrep capabilities --json", "asgrep robot-docs guide", "asgrep --robot-triage", "asgrep --json --format compact \"where is auth refreshed\" ."],
-        "notes": {
-            "default_search": "Bare QUERY without a subcommand runs hybrid search; the word 'search' is not a required verb — use the `search`/`find`/`query` subcommand only when you want an explicit search command.",
-            "format_implies_json": true,
-            "safe_mutating": "index refreshes incrementally with transactional writes. reindex forces a full transactional rewrite -- prefer `asgrep reindex --dry-run <ROOT> --json` before a full reindex. codemod dry-run always emits a JSON edit plan; apply requires `--yes` (alias `--force`) and commits one source transaction before a separate incremental index transaction. A source-apply failure rolls back source files; an index-refresh failure leaves the source edits applied and reports `asgrep index` as recovery."
-        }
-    }))
+    let mut caps: Value = serde_json::from_str(CAPABILITIES_SKELETON)
+        .map_err(|e| anyhow::anyhow!("checked-in capabilities skeleton must parse: {e}"))?;
+    let obj = caps
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("capabilities skeleton must be an object"))?;
+    obj.insert(
+        "version".to_string(),
+        Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
+    obj.insert(
+        "description".to_string(),
+        Value::String(
+            command
+                .get_about()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Polyglot hybrid code search".into()),
+        ),
+    );
+    obj.insert("commands".to_string(), Value::Array(commands));
+    obj.insert(
+        "global_flags".to_string(),
+        Value::Array(global_flags.into_iter().map(Value::String).collect()),
+    );
+    obj.insert(
+        "search_tuning_flags".to_string(),
+        Value::Array(search_tuning_flags.into_iter().map(Value::String).collect()),
+    );
+    let limits = obj
+        .get_mut("output_limits")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow::anyhow!("capabilities skeleton must carry output_limits"))?;
+    limits.insert(
+        "max_results".to_string(),
+        json!(ast_sgrep_core::MAX_OUTPUT_RESULTS),
+    );
+    limits.insert(
+        "max_excerpt_lines".to_string(),
+        json!(ast_sgrep_core::MAX_EXCERPT_LINES),
+    );
+    Ok(caps)
 }
 
 fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
@@ -594,9 +583,9 @@ pub(crate) fn rewrite_typos(
 ) -> (Vec<std::ffi::OsString>, Vec<String>) {
     let mut warnings = Vec::new();
     let raw = inject_robot_triage(raw, &mut warnings);
-    let help_intent = raw.iter().any(|arg| {
-        matches!(arg.to_str(), Some("-h") | Some("--help") | Some("help"))
-    });
+    let help_intent = raw
+        .iter()
+        .any(|arg| matches!(arg.to_str(), Some("-h") | Some("--help") | Some("help")));
     let mut out = Vec::with_capacity(raw.len());
     let mut passthrough = false;
     let mut saw_positional = false;

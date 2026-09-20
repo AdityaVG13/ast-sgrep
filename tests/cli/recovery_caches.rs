@@ -42,16 +42,32 @@ fn lexical_cache_split_contract_recovers_and_serves() {
         let (temp, root, index) = seed_project();
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &tantivy,
         );
         assert_success(&output, "index");
         let cache = temp.path().join("lexical.db");
         assert!(cache.is_file(), "forced tantivy must build the sidecar");
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &tantivy, 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &tantivy,
+            1,
         );
 
         if shape == "garbage" {
@@ -61,25 +77,54 @@ fn lexical_cache_split_contract_recovers_and_serves() {
         }
 
         // Split contract: the writer fails closed, readers degrade past the cache.
-        let failed = run_in(&asgrep(), 
+        let failed = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &tantivy,
         );
         assert_failure_envelope(&failed, "index", 2, "operational");
         let status = run_status(&asgrep(), &temp, &root_s, &index_s, &[]);
-        assert_eq!(status["file_count"], 1, "{shape}: authoritative rows stay readable");
-        let degraded = run_search(&asgrep(), &temp, &root_s, &index_s, QUERY, &["--no-embed"], &tantivy);
+        assert_eq!(
+            status["file_count"], 1,
+            "{shape}: authoritative rows stay readable"
+        );
+        let degraded = run_search(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            &["--no-embed"],
+            &tantivy,
+        );
         assert!(
-            degraded["hits"].as_array().is_some_and(|hits| !hits.is_empty()),
+            degraded["hits"]
+                .as_array()
+                .is_some_and(|hits| !hits.is_empty()),
             "{shape}: readers must degrade past a corrupt lexical cache: {degraded}"
         );
 
         // Recover: deleting the cache lets the next index rebuild it whole.
         fs::remove_file(&cache).unwrap();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &tantivy,
         );
         assert_success(&output, "index");
@@ -87,9 +132,17 @@ fn lexical_cache_split_contract_recovers_and_serves() {
             cache.is_file() && fs::metadata(&cache).unwrap().len() > 64,
             "{shape}: the next index must rebuild a whole lexical cache"
         );
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &tantivy,
-            &baseline, &format!("post-{shape}-lexical"),
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &tantivy,
+            &baseline,
+            &format!("post-{shape}-lexical"),
         );
     }
 
@@ -98,30 +151,61 @@ fn lexical_cache_split_contract_recovers_and_serves() {
         let (temp, root, index) = seed_project();
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &tantivy,
         );
         assert_success(&output, "index");
         let cache = temp.path().join("lexical.db");
-        let baseline_status = status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
-        let baseline_answers = search_answer_keys(&run_search(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, &["--no-embed"], &tantivy,
+        let baseline_status =
+            status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
+        let baseline_answers = search_answer_keys(&run_search(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            &["--no-embed"],
+            &tantivy,
         ));
         assert!(!baseline_answers.is_empty());
         for cycle in 0..3u32 {
             fs::write(&cache, format!("RECOVERY-CACHES-LEXICAL-CYCLE-{cycle:04}")).unwrap();
-            let failed = run_in(&asgrep(), 
+            let failed = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+                &[
+                    "--index-path",
+                    &index_s,
+                    "--no-embed",
+                    "--json",
+                    "index",
+                    &root_s,
+                ],
                 &tantivy,
             );
             assert_failure_envelope(&failed, "index", 2, "operational");
             fs::remove_file(&cache).unwrap();
-            let output = run_in(&asgrep(), 
+            let output = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+                &[
+                    "--index-path",
+                    &index_s,
+                    "--no-embed",
+                    "--json",
+                    "index",
+                    &root_s,
+                ],
                 &tantivy,
             );
             assert_success(&output, "index");
@@ -135,7 +219,15 @@ fn lexical_cache_split_contract_recovers_and_serves() {
                 "cycle {cycle}: status must converge to baseline"
             );
             assert_eq!(
-                search_answer_keys(&run_search(&asgrep(), &temp, &root_s, &index_s, QUERY, &["--no-embed"], &tantivy)),
+                search_answer_keys(&run_search(
+                    &asgrep(),
+                    &temp,
+                    &root_s,
+                    &index_s,
+                    QUERY,
+                    &["--no-embed"],
+                    &tantivy
+                )),
                 baseline_answers,
                 "cycle {cycle}: answers must converge to baseline"
             );
@@ -162,7 +254,8 @@ fn semantic_ivf_degrades_then_rebuilds_transparently() {
         let (temp, root, index) = seed_project();
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "index", &root_s],
             &ann,
@@ -170,7 +263,17 @@ fn semantic_ivf_degrades_then_rebuilds_transparently() {
         assert_success(&output, "index");
         let ivf = temp.path().join("semantic.ivf");
         assert!(ivf.is_file(), "forced ANN must build the sidecar");
-        let baseline = capture_baseline(&asgrep(), &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &[], &ann, 1);
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &[],
+            &ann,
+            1,
+        );
 
         let injected = if shape == "garbage" {
             b"RECOVERY-CACHES-IVF-GARBAGE-0002-NOT-IVF!!".to_vec()
@@ -180,9 +283,17 @@ fn semantic_ivf_degrades_then_rebuilds_transparently() {
         fs::write(&ivf, &injected).unwrap();
 
         // Beat 1: full function THROUGH the degradation.
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &[], &ann,
-            &baseline, &format!("degraded-{shape}-ivf"),
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &[],
+            &ann,
+            &baseline,
+            &format!("degraded-{shape}-ivf"),
         );
         assert_eq!(
             fs::read(&ivf).unwrap(),
@@ -192,7 +303,8 @@ fn semantic_ivf_degrades_then_rebuilds_transparently() {
 
         // Rebuild: delete + reindex restores a valid sidecar; beat 2 serves baseline.
         fs::remove_file(&ivf).unwrap();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "reindex", &root_s],
             &ann,
@@ -202,15 +314,28 @@ fn semantic_ivf_degrades_then_rebuilds_transparently() {
             fs::read(&ivf).unwrap().starts_with(b"ASIVF\0"),
             "{shape}: recovery must rebuild a valid IVF sidecar"
         );
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &[], &ann,
-            &baseline, &format!("post-rebuilt-{shape}-ivf"),
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &[],
+            &ann,
+            &baseline,
+            &format!("post-rebuilt-{shape}-ivf"),
         );
 
         // Mutation rebuild: a semantic change also restores a valid sidecar.
         fs::write(&ivf, &injected).unwrap();
-        fs::write(root.join("src/lib.rs"), "fn probe_target() { run(2); }\nfn added_fn() {}\n").unwrap();
-        let output = run_in(&asgrep(), 
+        fs::write(
+            root.join("src/lib.rs"),
+            "fn probe_target() { run(2); }\nfn added_fn() {}\n",
+        )
+        .unwrap();
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "reindex", &root_s],
             &ann,
@@ -239,7 +364,8 @@ fn wiped_derived_state_converges_and_restores() {
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let envs = [("ASGREP_TANTIVY", "1"), ("ASGREP_ANN_THRESHOLD", "1")];
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "index", &root_s],
             &envs,
@@ -249,40 +375,79 @@ fn wiped_derived_state_converges_and_restores() {
         let ivf = temp.path().join("semantic.ivf");
         let stamp = temp.path().join("writer_generation");
         assert!(cache.is_file() && ivf.is_file() && stamp.is_file());
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[], 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            1,
         );
         fs::remove_file(&cache).unwrap();
         fs::remove_file(&ivf).unwrap();
         fs::remove_file(&stamp).unwrap();
-        assert!(!cache.exists() && !ivf.exists() && !stamp.exists(), "the drill must really wipe all derived state");
+        assert!(
+            !cache.exists() && !ivf.exists() && !stamp.exists(),
+            "the drill must really wipe all derived state"
+        );
 
         // The next index converges and the authoritative rows keep serving.
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "index", &root_s],
             &envs,
         );
         assert_success(&output, "index");
-        let keys = search_answer_keys(&run_search(&asgrep(), &temp, &root_s, &index_s, QUERY, &["--no-embed"], &[]));
+        let keys = search_answer_keys(&run_search(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            &["--no-embed"],
+            &[],
+        ));
         assert!(!keys.is_empty(), "serve must stay alive through the wipe");
         let outline = run_outline_snapshot(&asgrep(), &temp, &root_s, &index_s, OUTLINE_PATH);
         assert_eq!(outline.1, 2, "outline must stay alive through the wipe");
 
-        let healed = run_in(&asgrep(), 
+        let healed = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "reindex", &root_s],
             &envs,
         );
         let healed = assert_success(&healed, "reindex");
         assert_eq!(healed["files_indexed"], 1);
-        assert!(cache.is_file() && fs::metadata(&cache).unwrap().len() > 0, "recovery must restore the lexical cache");
-        assert!(fs::read(&ivf).unwrap().starts_with(b"ASIVF\0"), "recovery must restore a valid IVF sidecar");
-        let epoch: u64 = fs::read_to_string(&stamp).unwrap().trim().parse().expect("recovery must restore a numeric stamp epoch");
+        assert!(
+            cache.is_file() && fs::metadata(&cache).unwrap().len() > 0,
+            "recovery must restore the lexical cache"
+        );
+        assert!(
+            fs::read(&ivf).unwrap().starts_with(b"ASIVF\0"),
+            "recovery must restore a valid IVF sidecar"
+        );
+        let epoch: u64 = fs::read_to_string(&stamp)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("recovery must restore a numeric stamp epoch");
         assert!(epoch > 0, "restored epoch must be nonzero");
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[],
-            &baseline, "post-wiped-caches",
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            &baseline,
+            "post-wiped-caches",
         );
     }
 
@@ -296,23 +461,47 @@ fn wiped_derived_state_converges_and_restores() {
         let index_s = index.to_str().unwrap();
 
         fs::write(&stamp, "NOT-A-NUMBER{{{\n").unwrap();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", index_s, "--no-embed", "--json", "index", root_s],
+            &[
+                "--index-path",
+                index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                root_s,
+            ],
             &[],
         );
         assert_success(&output, "index");
-        let epoch: u64 = fs::read_to_string(&stamp).unwrap().trim().parse().expect("corrupt stamp must be replaced by a numeric epoch");
+        let epoch: u64 = fs::read_to_string(&stamp)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("corrupt stamp must be replaced by a numeric epoch");
         assert!(epoch > 0, "replacement epoch must be nonzero");
 
         fs::remove_file(&stamp).unwrap();
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", index_s, "--no-embed", "--json", "index", root_s],
+            &[
+                "--index-path",
+                index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                root_s,
+            ],
             &[],
         );
         assert_success(&output, "index");
-        let epoch: u64 = fs::read_to_string(&stamp).unwrap().trim().parse().expect("missing stamp must be recreated as a numeric epoch");
+        let epoch: u64 = fs::read_to_string(&stamp)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("missing stamp must be recreated as a numeric epoch");
         assert!(epoch > 0, "recreated epoch must be nonzero");
         let status = run_status(&asgrep(), &temp, root_s, index_s, &[]);
         assert_eq!(status["writer_generation"], epoch);
@@ -337,7 +526,8 @@ fn recovery_preserves_observables() {
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let envs = [("ASGREP_TANTIVY", "1"), ("ASGREP_ANN_THRESHOLD", "1")];
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "index", &root_s],
             &envs,
@@ -350,18 +540,39 @@ fn recovery_preserves_observables() {
         let db_before = fs::read(&index).unwrap();
         let lexical_before = fs::read(&lexical).unwrap();
         let ivf_before = fs::read(&ivf).unwrap();
-        let stamp_before: u64 = fs::read_to_string(&stamp).unwrap().trim().parse().expect("stamp must be a numeric epoch");
+        let stamp_before: u64 = fs::read_to_string(&stamp)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("stamp must be a numeric epoch");
         assert!(stamp_before > 0);
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
             &["--index-path", &index_s, "--json", "index", &root_s],
             &envs,
         );
         assert_success(&output, "index");
-        assert_eq!(fs::read(&index).unwrap(), db_before, "a no-op index must leave the database byte-identical");
-        assert_eq!(fs::read(&lexical).unwrap(), lexical_before, "a no-op index must leave the lexical cache byte-identical");
-        assert_eq!(fs::read(&ivf).unwrap(), ivf_before, "a no-op index must leave the IVF sidecar byte-identical");
-        let stamp_after: u64 = fs::read_to_string(&stamp).unwrap().trim().parse().expect("stamp must stay a numeric epoch");
+        assert_eq!(
+            fs::read(&index).unwrap(),
+            db_before,
+            "a no-op index must leave the database byte-identical"
+        );
+        assert_eq!(
+            fs::read(&lexical).unwrap(),
+            lexical_before,
+            "a no-op index must leave the lexical cache byte-identical"
+        );
+        assert_eq!(
+            fs::read(&ivf).unwrap(),
+            ivf_before,
+            "a no-op index must leave the IVF sidecar byte-identical"
+        );
+        let stamp_after: u64 = fs::read_to_string(&stamp)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("stamp must stay a numeric epoch");
         assert!(stamp_after > 0, "re-stamped epoch must stay nonzero");
     }
 
@@ -371,29 +582,62 @@ fn recovery_preserves_observables() {
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let tantivy = [("ASGREP_TANTIVY", "1")];
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &tantivy,
         );
         assert_success(&output, "index");
         let snap = |temp: &TempDir| -> (Value, u64, Vec<(String, u64, String)>) {
-            let healed = run_in(&asgrep(), 
+            let healed = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", &index_s, "--no-embed", "--json", "reindex", &root_s],
+                &[
+                    "--index-path",
+                    &index_s,
+                    "--no-embed",
+                    "--json",
+                    "reindex",
+                    &root_s,
+                ],
                 &tantivy,
             );
             let healed = assert_success(&healed, "reindex");
             let files_indexed = healed["files_indexed"].as_u64().unwrap();
             let status = status_snapshot(&run_status(&asgrep(), temp, &root_s, &index_s, &[]));
-            let answers = search_answer_keys(&run_search(&asgrep(), temp, &root_s, &index_s, QUERY, &["--no-embed"], &[]));
+            let answers = search_answer_keys(&run_search(
+                &asgrep(),
+                temp,
+                &root_s,
+                &index_s,
+                QUERY,
+                &["--no-embed"],
+                &[],
+            ));
             (status, files_indexed, answers)
         };
         let first = snap(&temp);
         let second = snap(&temp);
-        assert_eq!(first.0, second.0, "status must be idempotent across reindex");
-        assert_eq!(first.1, second.1, "files_indexed must be idempotent across reindex");
-        assert_eq!(first.2, second.2, "served answers must be idempotent across reindex");
+        assert_eq!(
+            first.0, second.0,
+            "status must be idempotent across reindex"
+        );
+        assert_eq!(
+            first.1, second.1,
+            "files_indexed must be idempotent across reindex"
+        );
+        assert_eq!(
+            first.2, second.2,
+            "served answers must be idempotent across reindex"
+        );
         assert!(!first.2.is_empty(), "the answers must be non-vacuous");
     }
 
@@ -410,8 +654,21 @@ fn recovery_preserves_observables() {
             let root_s = root.to_str().unwrap().to_owned();
             let index_s = index.to_str().unwrap().to_owned();
             let status = status_snapshot(&run_status(&asgrep(), temp, &root_s, &index_s, &[]));
-            let answers = search_answer_keys(&run_search(&asgrep(), temp, &root_s, &index_s, QUERY, &["--no-embed"], &tantivy));
-            let doctor = run_in(&asgrep(), temp.path(), &["--index-path", &index_s, "--json", "doctor", &root_s], &[]);
+            let answers = search_answer_keys(&run_search(
+                &asgrep(),
+                temp,
+                &root_s,
+                &index_s,
+                QUERY,
+                &["--no-embed"],
+                &tantivy,
+            ));
+            let doctor = run_in(
+                &asgrep(),
+                temp.path(),
+                &["--index-path", &index_s, "--json", "doctor", &root_s],
+                &[],
+            );
             let doctor = assert_success(&doctor, "doctor");
             assert_eq!(doctor["healthy"], true);
             let issues = doctor["issues"].as_array().unwrap().len();
@@ -419,9 +676,21 @@ fn recovery_preserves_observables() {
         };
         let clean_obs = observe(&clean.0, &clean.1, &clean.2);
         let recovered_obs = observe(&recovered.0, &recovered.1, &recovered.2);
-        assert!(!clean_obs.1.is_empty(), "the probe answers must be non-vacuous");
-        assert_eq!(recovered_obs.0, clean_obs.0, "recovered status must equal clean status");
-        assert_eq!(recovered_obs.1, clean_obs.1, "recovered answers must equal clean answers");
-        assert_eq!(recovered_obs.2, clean_obs.2, "recovered doctor issues must equal clean doctor issues");
+        assert!(
+            !clean_obs.1.is_empty(),
+            "the probe answers must be non-vacuous"
+        );
+        assert_eq!(
+            recovered_obs.0, clean_obs.0,
+            "recovered status must equal clean status"
+        );
+        assert_eq!(
+            recovered_obs.1, clean_obs.1,
+            "recovered answers must equal clean answers"
+        );
+        assert_eq!(
+            recovered_obs.2, clean_obs.2,
+            "recovered doctor issues must equal clean doctor issues"
+        );
     }
 }

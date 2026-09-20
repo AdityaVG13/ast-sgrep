@@ -130,7 +130,13 @@ fn file_filter_too_long_propagates_operational() {
         root.as_str(),
     ]);
     kit::assert_failure_envelope(&machine, "search", 2, "operational");
-    let human = kit::run(&["search", "--file-filter", bad_filter, "greet", root.as_str()]);
+    let human = kit::run(&[
+        "search",
+        "--file-filter",
+        bad_filter,
+        "greet",
+        root.as_str(),
+    ]);
     kit::assert_human_error(&human, 2);
 }
 
@@ -229,7 +235,13 @@ fn corrupt_index_path_propagates_operational() {
         root.as_str(),
     ]);
     kit::assert_failure_envelope(&machine, "search", 2, "operational");
-    let human = kit::run(&["search", "--index-path", bad_arg.as_str(), "greet", root.as_str()]);
+    let human = kit::run(&[
+        "search",
+        "--index-path",
+        bad_arg.as_str(),
+        "greet",
+        root.as_str(),
+    ]);
     kit::assert_human_error(&human, 2);
 }
 
@@ -258,7 +270,15 @@ fn codemod_empty_pattern_propagates_operational() {
     ]);
     kit::assert_failure_envelope(&dry, "codemod", 2, "operational");
 
-    let human = kit::run(&["codemod", "--yes", "--pattern", "", "--rewrite", "x", root.as_str()]);
+    let human = kit::run(&[
+        "codemod",
+        "--yes",
+        "--pattern",
+        "",
+        "--rewrite",
+        "x",
+        root.as_str(),
+    ]);
     kit::assert_human_error(&human, 2);
 
     let apply_json = kit::run(&[
@@ -313,7 +333,13 @@ fn bench_unknown_suite_propagates_operational() {
         "lib must reject an unknown bench suite"
     );
 
-    let machine = kit::run(&["bench", "--json", "--suite", "no-such-suite-xyz", root.as_str()]);
+    let machine = kit::run(&[
+        "bench",
+        "--json",
+        "--suite",
+        "no-such-suite-xyz",
+        root.as_str(),
+    ]);
     kit::assert_failure_envelope(&machine, "bench", 2, "operational");
     let human = kit::run(&["bench", "--suite", "no-such-suite-xyz", root.as_str()]);
     kit::assert_human_error(&human, 2);

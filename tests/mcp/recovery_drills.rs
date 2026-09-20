@@ -98,9 +98,18 @@ fn assert_status_equal_across_rebuild(recovered: &str, baseline: &str) {
     for body in [&baseline_body, &recovered_body] {
         assert!(body["writer_generation"].is_u64(), "{body:#}");
     }
-    baseline_body.as_object_mut().unwrap().remove("writer_generation");
-    recovered_body.as_object_mut().unwrap().remove("writer_generation");
-    assert_eq!(recovered_body, baseline_body, "status drifted across rebuild");
+    baseline_body
+        .as_object_mut()
+        .unwrap()
+        .remove("writer_generation");
+    recovered_body
+        .as_object_mut()
+        .unwrap()
+        .remove("writer_generation");
+    assert_eq!(
+        recovered_body, baseline_body,
+        "status drifted across rebuild"
+    );
 }
 
 /// Capture the pre-crash baseline chain from a working session.
@@ -118,17 +127,21 @@ fn capture_baseline(session: &mut LiveSession) -> (String, String, String) {
 /// Fresh-session recovery proof with intact durable state: the chain serves
 /// byte-identically to the baseline.
 // WHY file-local: one-use drill helper for the intact-state facets.
-fn assert_fresh_serves_baseline(
-    root: &Path,
-    baseline: &(String, String, String),
-    what: &str,
-) {
+fn assert_fresh_serves_baseline(root: &Path, baseline: &(String, String, String), what: &str) {
     let mut fresh = LiveSession::spawn(Some(root));
     fresh.handshake();
     let (rstatus, rsearch, rread) = serve_chain(&mut fresh, 1);
     assert_serve_valid(&rstatus, &rsearch, &rread);
-    assert_eq!(tool_text(&rstatus), baseline.0, "status drifted across {what}");
-    assert_eq!(tool_text(&rsearch), baseline.1, "search drifted across {what}");
+    assert_eq!(
+        tool_text(&rstatus),
+        baseline.0,
+        "status drifted across {what}"
+    );
+    assert_eq!(
+        tool_text(&rsearch),
+        baseline.1,
+        "search drifted across {what}"
+    );
     assert_eq!(tool_text(&rread), baseline.2, "read drifted across {what}");
     fresh.close_stdin();
     assert!(fresh.wait_clean().success());
@@ -138,11 +151,7 @@ fn assert_fresh_serves_baseline(
 /// then search/read reproduce byte-identically and status matches across the
 /// rebuild stamp.
 // WHY file-local: one-use drill helper for the durable-loss facets.
-fn assert_heal_then_serves_baseline(
-    root: &Path,
-    baseline: &(String, String, String),
-    what: &str,
-) {
+fn assert_heal_then_serves_baseline(root: &Path, baseline: &(String, String, String), what: &str) {
     let mut fresh = LiveSession::spawn(Some(root));
     fresh.handshake();
     fresh.send(&reindex_call(1));
@@ -153,7 +162,11 @@ fn assert_heal_then_serves_baseline(
     let (rstatus, rsearch, rread) = serve_chain(&mut fresh, 2);
     assert_serve_valid(&rstatus, &rsearch, &rread);
     assert_status_equal_across_rebuild(tool_text(&rstatus), &baseline.0);
-    assert_eq!(tool_text(&rsearch), baseline.1, "search drifted across {what}");
+    assert_eq!(
+        tool_text(&rsearch),
+        baseline.1,
+        "search drifted across {what}"
+    );
     assert_eq!(tool_text(&rread), baseline.2, "read drifted across {what}");
     fresh.close_stdin();
     assert!(fresh.wait_clean().success());
@@ -174,7 +187,10 @@ fn kill_idle_and_in_flight_recovers_identical_serve() {
     work.handshake();
     let baseline = capture_baseline(&mut work);
     let crash = work.crash_kill();
-    assert!(!crash.success(), "SIGKILL must terminate the server: {crash}");
+    assert!(
+        !crash.success(),
+        "SIGKILL must terminate the server: {crash}"
+    );
     assert_fresh_serves_baseline(temp.path(), &baseline, "idle kill");
 
     // Facet 2 (in-flight kill): SIGKILL with pipelined requests in flight
@@ -189,7 +205,10 @@ fn kill_idle_and_in_flight_recovers_identical_serve() {
     work.send(&search_call(12));
     work.send(&read_call(13));
     let crash = work.crash_kill();
-    assert!(!crash.success(), "SIGKILL must terminate the server: {crash}");
+    assert!(
+        !crash.success(),
+        "SIGKILL must terminate the server: {crash}"
+    );
     assert_fresh_serves_baseline(temp.path(), &baseline, "in-flight kill");
 }
 
@@ -230,7 +249,11 @@ fn stdin_eof_clean_and_aborted_recovers_identical_serve() {
             continue;
         }
         let value: Value = serde_json::from_str(line.trim()).expect("stdout stays JSON");
-        assert_ne!(value.get("id"), Some(&json!(99)), "torn id answered: {value:#}");
+        assert_ne!(
+            value.get("id"),
+            Some(&json!(99)),
+            "torn id answered: {value:#}"
+        );
     }
     assert_fresh_serves_baseline(temp.path(), &baseline, "aborted EOF");
 }
@@ -255,7 +278,10 @@ fn crash_during_durable_loss_heals_to_baseline_and_chained_double_crash() {
     std::fs::remove_dir_all(temp.path()).expect("remove root");
     assert!(!temp.path().exists());
     let crash = work.crash_kill();
-    assert!(!crash.success(), "SIGKILL must terminate the server: {crash}");
+    assert!(
+        !crash.success(),
+        "SIGKILL must terminate the server: {crash}"
+    );
     std::fs::create_dir_all(&source).expect("restore src");
     std::fs::write(source.join("lib.rs"), FIXTURE_SOURCE).expect("restore source");
     assert!(source.join("lib.rs").is_file());
@@ -271,7 +297,10 @@ fn crash_during_durable_loss_heals_to_baseline_and_chained_double_crash() {
     corrupt_index_db(temp.path());
     assert!(index_db_path(temp.path()).is_file());
     let crash = work.crash_kill();
-    assert!(!crash.success(), "SIGKILL must terminate the server: {crash}");
+    assert!(
+        !crash.success(),
+        "SIGKILL must terminate the server: {crash}"
+    );
     std::fs::remove_file(index_db_path(temp.path())).expect("remove db");
     assert!(!index_db_path(temp.path()).exists());
     assert_heal_then_serves_baseline(temp.path(), &baseline, "index-corrupt crash");
@@ -288,7 +317,10 @@ fn crash_during_durable_loss_heals_to_baseline_and_chained_double_crash() {
     std::fs::remove_file(&db).expect("remove db");
     assert!(!db.exists());
     let crash = work.crash_kill();
-    assert!(!crash.success(), "SIGKILL must terminate the server: {crash}");
+    assert!(
+        !crash.success(),
+        "SIGKILL must terminate the server: {crash}"
+    );
     assert_heal_then_serves_baseline(temp.path(), &baseline, "index-deleted crash");
 
     // Facet 4 (chained drill): kill #1 with durable state intact, an interim

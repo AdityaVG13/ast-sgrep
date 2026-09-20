@@ -1,8 +1,8 @@
 mod embed_support;
+pub mod line_corpus;
 mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
-pub(crate) mod line_corpus;
 pub mod trigram_df;
 pub(crate) mod trigram_static_data;
 mod writer_generation;
@@ -96,30 +96,22 @@ pub fn index_db_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
 }
 
 /// A relative explicit index path (flag or `ASGREP_INDEX_PATH`) resolves
-/// against the process CWD for EVERY subcommand. `search` used to join it
-/// against the search root while
-/// `index` joined it against its root argument, so one invocation could see
-/// two different databases. Unknown-but-relative with no cwd is an error
-/// (fail closed), never a silent root-relative guess.
-fn resolve_explicit_index_path(path: &Path) -> crate::Result<PathBuf> {
+/// against the search root for EVERY subcommand, so `index` and `search`
+/// with the same root always see the same database regardless of the
+/// process CWD.
+fn resolve_explicit_index_path(root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
-        return Ok(path.to_path_buf());
+        return path.to_path_buf();
     }
-    let cwd = std::env::current_dir().map_err(|error| {
-        crate::StoreError::Other(format!(
-            "relative index path {} cannot be resolved (current directory unavailable): {error}",
-            path.display()
-        ))
-    })?;
-    Ok(cwd.join(path))
+    root.join(path)
 }
 
 pub fn try_index_db_path(root: &Path, index_path: Option<&Path>) -> crate::Result<PathBuf> {
     if let Some(path) = index_path {
-        return Ok(as_db_path(resolve_explicit_index_path(path)?));
+        return Ok(as_db_path(resolve_explicit_index_path(root, path)));
     }
     if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        let resolved = resolve_explicit_index_path(Path::new(&env_path))?;
+        let resolved = resolve_explicit_index_path(root, Path::new(&env_path));
         return Ok(as_db_path(resolved));
     }
     let local = root.join(INDEX_DIR).join(INDEX_DB);

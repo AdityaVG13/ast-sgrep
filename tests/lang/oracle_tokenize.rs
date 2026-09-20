@@ -83,7 +83,11 @@ fn expand_concepts_triggers_and_superset() {
     // Empty query: tokens and parts are empty, so the format is one space.
     assert_eq!(expand_concepts(""), " ");
     // Expansion only ADDS terms: every query token survives in the output.
-    for query in ["throttle inbound", "zxqy qwerty", "remember query embeddings"] {
+    for query in [
+        "throttle inbound",
+        "zxqy qwerty",
+        "remember query embeddings",
+    ] {
         let expanded = expand_concepts(query);
         for token in tokenize(query) {
             assert!(

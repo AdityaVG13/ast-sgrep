@@ -121,7 +121,7 @@ pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
     // (`delete $X`, `void $X`, `del $X`) join the same lane; their root
     // kinds are admitted in `is_general_root_kind`.
     let keyword_operator_template = !bare_string_meta_template
-        && placeholders.len() >= 1
+        && !placeholders.is_empty()
         && pattern.split_whitespace().any(|token| {
             matches!(
                 token,
@@ -132,7 +132,7 @@ pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
     // structural punctuation but is structural — the rb modifier root kinds
     // are admitted in `is_general_root_kind` and the any-language loop below
     // verifies the build.
-    let rb_modifier_template = placeholders.len() >= 1 && {
+    let rb_modifier_template = !placeholders.is_empty() && {
         let tokens: Vec<&str> = pattern.split_whitespace().collect();
         tokens.len() >= 3
             && matches!(
@@ -644,6 +644,7 @@ pub(crate) fn node_with_span<'a>(node: Node<'a>, start: usize, end: usize) -> Op
 /// - rs `for`/`while`: comments at/after the last header child refuse;
 ///   leading/mid-header trivia stays transparent.
 /// - rs `loop`: any root-level comment refuses.
+///
 /// Non-loop kinds and comment-free candidates never fire.
 pub(crate) fn loop_head_trivia_structural(lang: Language, node: &Node) -> bool {
     let kind = node.kind();
@@ -848,6 +849,9 @@ pub(crate) fn go_for_clause_comments_refused(clause: Option<Node>) -> bool {
     })
 }
 
+// Matcher-lane shape: (node/source/pattern/template/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_general<'a>(
     node: Node<'a>,
     source: &str,
@@ -922,6 +926,9 @@ pub(crate) fn walk_general<'a>(
 
 /// The descend-only tail of [`walk_general`], shared by the refused-candidate
 /// path (a vetoed loop candidate still descends for nested candidates).
+// Matcher-lane shape: (node/source/pattern/template/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_children_general<'a>(
     node: Node<'a>,
     source: &str,
@@ -961,7 +968,7 @@ pub(crate) fn general_eq<'p>(
     if let Some(text) = node_text(&p, &template.doc) {
         if let Some(name) = template.placeholders.get(text.trim()) {
             let bound = node_text(&c, source)?;
-            return bind_capture(captures, name, &bound);
+            return bind_capture(captures, name, bound);
         }
     }
     if p.kind() != c.kind() {
@@ -1017,7 +1024,7 @@ pub(crate) fn general_eq<'p>(
         if let Some(text) = node_text(&p_children[0], &template.doc) {
             if let Some(name) = template.placeholders.get(text.trim()) {
                 let bound = node_text(&c, source)?;
-                return bind_capture(captures, name, &bound);
+                return bind_capture(captures, name, bound);
             }
         }
     }
@@ -1041,7 +1048,7 @@ pub(crate) fn general_eq<'p>(
         let middle_text = node_text(&p_children[1], &template.doc).unwrap_or_default();
         let name = template.placeholders[middle_text.trim()].clone();
         let bound = node_text(&c, source)
-            .map(|text| strip_container(&text).to_string())
+            .map(|text| strip_container(text).to_string())
             .unwrap_or_default();
         return bind_capture_kind(captures, &name, &bound, true);
     }

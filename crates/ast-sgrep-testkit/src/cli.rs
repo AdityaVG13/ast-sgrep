@@ -108,7 +108,9 @@ pub fn run(bin: &Path, args: &[&str]) -> Output {
 /// collision (e.g. a test deliberately planting `ASGREP_INDEX_PATH`).
 pub fn run_env(bin: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(bin);
-    cmd.args(args).env("NO_COLOR", "1").env("HF_HUB_OFFLINE", "1");
+    cmd.args(args)
+        .env("NO_COLOR", "1")
+        .env("HF_HUB_OFFLINE", "1");
     let scrub: Vec<String> = std::env::vars()
         .map(|(key, _)| key)
         .filter(|key| key.starts_with("ASGREP_"))
@@ -394,7 +396,11 @@ pub fn indexed_project_n(term: &str, n_files: usize) -> (TempDir, PathBuf) {
     let root = temp.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
     for i in 0..n_files {
-        write_fixture(&root, &format!("m{i:02}.rs"), &format!("fn {term}() {{}}\n"));
+        write_fixture(
+            &root,
+            &format!("m{i:02}.rs"),
+            &format!("fn {term}() {{}}\n"),
+        );
     }
     run_index_json_noembed(&root);
     (temp, root)

@@ -40,7 +40,7 @@ fn rrf_score_contract() {
     assert_eq!(rrf_score(0, f64::NEG_INFINITY), -0.0); // 1/-inf
     assert!(rrf_score(0, f64::NEG_INFINITY).is_sign_negative());
     assert_eq!(rrf_score(0, -1.0), f64::INFINITY); // 1/(−1+0+1) = 1/+0
-    // 1/(-61+0+1) = 1/-60 = -(1/60): negation is exact, so bit-equality holds.
+                                                   // 1/(-61+0+1) = 1/-60 = -(1/60): negation is exact, so bit-equality holds.
     assert_eq!(rrf_score(0, -61.0), -1.0 / 60.0);
     // 1/(-62+0+1) = 1/-61 = -(1/61): negation is exact, so bit-equality holds.
     assert_eq!(rrf_score(0, -62.0), -1.0 / 61.0);
@@ -142,25 +142,33 @@ fn weighted_rrf_score_contract() {
     // Non-finite -> 1.0 (L2 pins NaN; inf takes the same branch and must agree
     // bit-for-bit).
     for w in [f64::INFINITY, f64::NEG_INFINITY] {
-        let mut weights = ChannelWeights::default();
-        weights.lexical = w;
+        let weights = ChannelWeights {
+            lexical: w,
+            ..Default::default()
+        };
         assert_eq!(weighted_rrf_score(&one, &weights), 1.0 / 61.0);
     }
     // Finite but out of range clamps to the rails: -3.0 -> 0.25.
     // Expected written with production's op order (0.25 * (1/61)).
-    let mut neg = ChannelWeights::default();
-    neg.lexical = -3.0;
+    let neg = ChannelWeights {
+        lexical: -3.0,
+        ..Default::default()
+    };
     assert_eq!(weighted_rrf_score(&one, &neg), 0.25 * (1.0 / 61.0));
     // -0.0 is finite, so it clamps (up) to the same 0.25 rail, not to 1.0.
-    let mut neg_zero = ChannelWeights::default();
-    neg_zero.lexical = -0.0;
+    let neg_zero = ChannelWeights {
+        lexical: -0.0,
+        ..Default::default()
+    };
     assert_eq!(
         weighted_rrf_score(&one, &neg_zero),
         weighted_rrf_score(&one, &neg)
     );
     // 1e308 -> 2.0 rail.
-    let mut huge_w = ChannelWeights::default();
-    huge_w.lexical = 1e308;
+    let huge_w = ChannelWeights {
+        lexical: 1e308,
+        ..Default::default()
+    };
     assert_eq!(weighted_rrf_score(&one, &huge_w), 2.0 * (1.0 / 61.0));
     // Extreme rank: single tiny-but-finite positive contribution.
     let max_rank = single_rank(FusionChannel::Lexical, usize::MAX);
@@ -300,15 +308,21 @@ fn weighted_rrf_score_contract() {
     let mut two_zero = ChannelRanks::default();
     set_rank(&mut two_zero, FusionChannel::Lexical, Some(0));
     set_rank(&mut two_zero, FusionChannel::Definition, Some(0));
-    let candidates = vec![
+    let candidates = [
         ChannelRanks::default(),
         single_rank(FusionChannel::Lexical, 5),
         single_rank(FusionChannel::Lexical, 0),
         two_zero,
         all_zero,
     ];
-    let base: Vec<f64> = candidates.iter().map(|c| weighted_rrf_score(c, &unit)).collect();
-    let up: Vec<f64> = candidates.iter().map(|c| weighted_rrf_score(c, &scaled)).collect();
+    let base: Vec<f64> = candidates
+        .iter()
+        .map(|c| weighted_rrf_score(c, &unit))
+        .collect();
+    let up: Vec<f64> = candidates
+        .iter()
+        .map(|c| weighted_rrf_score(c, &scaled))
+        .collect();
     for i in 0..candidates.len() {
         for j in 0..candidates.len() {
             assert_eq!(
@@ -512,7 +526,10 @@ fn apply_weighted_rrf_contract() {
     assert_eq!(by_key("c.rs", 1), 1.0 / 63.0);
     assert_eq!(by_key("a.rs", 2), 1.0 / 61.0);
     assert_eq!(by_key("b.rs", 2), 1.0 / 61.0);
-    let keys: Vec<(&str, u32)> = tied.iter().map(|h| (h.file.as_str(), h.line_start)).collect();
+    let keys: Vec<(&str, u32)> = tied
+        .iter()
+        .map(|h| (h.file.as_str(), h.line_start))
+        .collect();
     let mut sorted = keys.clone();
     sorted.sort_unstable();
     assert_eq!(keys, sorted, "fused emission must be in sorted key order");
@@ -719,7 +736,10 @@ fn sensitivity_contract() {
     let live_ex = pair_examples();
     let via_inf = analyze_weight_sensitivity(&live_ex, &unit, f64::INFINITY);
     let via_nan = analyze_weight_sensitivity(&live_ex, &unit, f64::NAN);
-    assert_eq!(via_inf, via_nan, "inf and NaN steps must sanitize identically");
+    assert_eq!(
+        via_inf, via_nan,
+        "inf and NaN steps must sanitize identically"
+    );
     let via_huge = analyze_weight_sensitivity(&live_ex, &unit, 1e308);
     let via_half = analyze_weight_sensitivity(&live_ex, &unit, 0.5);
     assert_eq!(via_huge, via_half, "1e308 step must cap at 0.5");

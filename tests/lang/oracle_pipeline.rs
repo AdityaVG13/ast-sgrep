@@ -24,7 +24,8 @@ use std::path::Path;
 /// repetition leg: the only full-pipeline determinism proof).
 #[test]
 fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
-    let source = "fn greet() {\n    println!(\"hi\");\n}\nfn process_request() {\n    greet();\n}\n";
+    let source =
+        "fn greet() {\n    println!(\"hi\");\n}\nfn process_request() {\n    greet();\n}\n";
     let hits = match_pattern(Language::Rust, source, "fn $NAME($$$)").expect("match ok");
     // Hand: two fn decls in the fixture, one hit each.
     assert_eq!(hits.len(), 2);
@@ -68,7 +69,9 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
     let rep_query = emb.embed_text("greet");
     let mut runs = Vec::new();
     for _ in 0..3 {
-        let extracted = registry.parse(Language::Rust, rep_source).expect("parse ok");
+        let extracted = registry
+            .parse(Language::Rust, rep_source)
+            .expect("parse ok");
         let hits = match_pattern(Language::Rust, rep_source, "fn $NAME($$$)").expect("match ok");
         let scored: Vec<(usize, f32)> = hits
             .iter()
@@ -143,9 +146,10 @@ fn e2e_extraction_and_matching_agree_on_spans_names_lines() {
     let source = "fn callee() {}\nfn caller() { callee(); }\n";
     let extracted = registry.parse(Language::Rust, source).expect("parse ok");
     assert!(
-        extracted.calls.iter().any(|c| {
-            c.caller == "caller" && c.callee == "callee" && c.line == 2
-        }),
+        extracted
+            .calls
+            .iter()
+            .any(|c| { c.caller == "caller" && c.callee == "callee" && c.line == 2 }),
         "calls={:?}",
         extracted.calls
     );
@@ -169,7 +173,11 @@ fn e2e_multilanguage_detect_parse_match() {
     let registry = ParserRegistry::new();
     for (file, lang, source) in cases {
         // Detect from the path alone, then parse and match through it.
-        assert_eq!(detect_language(Path::new(file), None), Some(*lang), "{file}");
+        assert_eq!(
+            detect_language(Path::new(file), None),
+            Some(*lang),
+            "{file}"
+        );
         let extracted = registry.parse(*lang, source).expect("parse ok");
         assert!(
             extracted.symbols.iter().any(|s| s.name == "greet"),

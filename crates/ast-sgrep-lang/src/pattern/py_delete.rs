@@ -335,7 +335,8 @@ pub(crate) fn parse_py_del_postfix(text: &str) -> Option<(PyDelAtom, Vec<PyDelPo
             let atom = atom_at(after[..end].trim())?;
             ops.push(PyDelPostfix::Attr(atom));
             rest = &after[end..];
-        } else if let Some(after) = rest.strip_prefix('[') {
+        } else {
+            let after = rest.strip_prefix('[')?;
             let close = after.find(']')?;
             // One atom per bracket group; a comma (or nested brackets)
             // refuses (the 137 `d[k, j]` discipline).
@@ -379,8 +380,6 @@ pub(crate) fn parse_py_del_postfix(text: &str) -> Option<(PyDelAtom, Vec<PyDelPo
             let atom = atom_at(inner)?;
             ops.push(PyDelPostfix::Index(atom));
             rest = &after[close + 1..];
-        } else {
-            return None;
         }
     }
     Some((head, ops))
@@ -657,14 +656,14 @@ pub(crate) fn py_del_operand_unify(
         PyDelOperand::Whole(name) => bind_capture(
             captures,
             name,
-            &node_text(element, source).unwrap_or_default(),
+            node_text(element, source).unwrap_or_default(),
         )
         .is_some(),
         // `$$$X` binds in the MULTI namespace.
         PyDelOperand::WholeMulti(name) => bind_capture_kind(
             captures,
             name,
-            &node_text(element, source).unwrap_or_default(),
+            node_text(element, source).unwrap_or_default(),
             true,
         )
         .is_some(),
@@ -673,7 +672,7 @@ pub(crate) fn py_del_operand_unify(
                 && element
                     .named_child(0)
                     .and_then(|inner| node_text(&inner, source))
-                    .is_some_and(|text| bind_capture(captures, name, &text).is_some())
+                    .is_some_and(|text| bind_capture(captures, name, text).is_some())
         }
         PyDelOperand::Literal(lit) => {
             node_text(element, source).is_some_and(|text| text.trim() == lit)
@@ -817,7 +816,7 @@ pub(crate) fn py_del_postfix_unify(
             let mut colons_cursor = subscripts.walk();
             let colons = subscripts
                 .children(&mut colons_cursor)
-                .filter(|c| !c.is_named() && node_text(&c, source).is_some_and(|t| t == ":"))
+                .filter(|c| !c.is_named() && node_text(c, source).is_some_and(|t| t == ":"))
                 .count();
             let mut bind_atom = |atom: &PyDelAtom, bound: &Node| -> bool {
                 node_text(bound, source)
@@ -834,16 +833,13 @@ pub(crate) fn py_del_postfix_unify(
             if !bind_atom(lo, lo_node) || !bind_atom(hi, hi_node) {
                 return false;
             }
-            match step {
-                Some(step_atom) => {
-                    let Some(step_bound) = step_node else {
-                        return false;
-                    };
-                    if !bind_atom(step_atom, step_bound) {
-                        return false;
-                    }
+            if let Some(step_atom) = step {
+                let Some(step_bound) = step_node else {
+                    return false;
+                };
+                if !bind_atom(step_atom, step_bound) {
+                    return false;
                 }
-                None => {}
             }
             py_del_prefix_unify(head, prefix, &object, source, captures)
         }
@@ -920,7 +916,7 @@ pub(crate) fn py_del_atom_unify(
         // the remaining object text (`del $A.b($C)` × `del a.b(c)` → A=`a`;
         // a non-attribute function refuses).
         PyDelAtom::ChainBase { base, attrs } => {
-            let mut current = node.clone();
+            let mut current = *node;
             for want in attrs.iter().rev() {
                 if current.kind() != "attribute" {
                     return false;

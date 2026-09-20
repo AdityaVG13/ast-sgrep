@@ -25,8 +25,7 @@
 //! bools / equality of data values) — never message text.
 
 use ast_sgrep_lang::{
-    detect_language, match_pattern, needs_ast_grep_fallback, Language, ParserRegistry,
-    PatternMatch,
+    detect_language, match_pattern, needs_ast_grep_fallback, Language, ParserRegistry, PatternMatch,
 };
 use std::path::Path;
 
@@ -46,7 +45,13 @@ fn empty_and_garbage_source_end_to_end_rank_empty() {
         ("empty", &["", "   \n\t  "]),
         (
             "garbage",
-            &["{{{{ !!!", "}}}[[[", "@@@###$$$", "\x00\x01\x02\x03", "\u{fffd}{{{"],
+            &[
+                "{{{{ !!!",
+                "}}}[[[",
+                "@@@###$$$",
+                "\x00\x01\x02\x03",
+                "\u{fffd}{{{",
+            ],
         ),
     ];
     for lang in Language::all() {
@@ -108,7 +113,12 @@ fn unicode_bom_nul_source_end_to_end_sound_and_stable() {
         assert!(out.is_some(), "{source:?}");
         let out = out.unwrap();
         assert_spans_in_source(&out.ranked, source);
-        assert_eq!(out.ranked, run_pipeline(&registry, "n.py", source, "foo").unwrap().ranked);
+        assert_eq!(
+            out.ranked,
+            run_pipeline(&registry, "n.py", source, "foo")
+                .unwrap()
+                .ranked
+        );
     }
 }
 
@@ -147,7 +157,15 @@ fn unsupported_language_short_circuits_with_no_ranked_output() {
 fn hostile_pattern_on_real_source_stays_sound() {
     let registry = ParserRegistry::new();
     let patterns = [
-        "$%%%", "(((", "}}}", "a..b", "$A.$B.$C($D)", "fn fn fn", "@@@", "???", "<$A>",
+        "$%%%",
+        "(((",
+        "}}}",
+        "a..b",
+        "$A.$B.$C($D)",
+        "fn fn fn",
+        "@@@",
+        "???",
+        "<$A>",
         "foo(",
     ];
     let files = [
@@ -203,16 +221,26 @@ fn fallback_loud_pattern_end_to_end_match_closed() {
 #[test]
 fn depth_breach_end_to_end_loud_flag_with_sound_rank() {
     let registry = ParserRegistry::new();
-    let deep_src = format!("fn f() {{ let x = {}1{}; }}", "(".repeat(300), ")".repeat(300));
+    let deep_src = format!(
+        "fn f() {{ let x = {}1{}; }}",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
     let out = run_pipeline(&registry, "n.rs", &deep_src, "f").unwrap();
     assert!(out.depth_truncated);
     let lang = detect_language(Path::new("n.rs"), Some(&deep_src)).unwrap();
     let hits = match_pattern(lang, &deep_src, "f").unwrap();
     assert_rank_sound(&out.ranked, &hits);
     assert_spans_in_source(&out.ranked, &deep_src);
-    assert_eq!(out.ranked, run_pipeline(&registry, "n.rs", &deep_src, "f").unwrap().ranked);
+    assert_eq!(
+        out.ranked,
+        run_pipeline(&registry, "n.rs", &deep_src, "f")
+            .unwrap()
+            .ranked
+    );
     // Shallow control: same pipeline, flag clear.
-    let shallow = run_pipeline(&registry, "n.rs", "fn f() { let x = (1 + (2 * 3)); }", "f").unwrap();
+    let shallow =
+        run_pipeline(&registry, "n.rs", "fn f() { let x = (1 + (2 * 3)); }", "f").unwrap();
     assert!(!shallow.depth_truncated);
 }
 
@@ -227,7 +255,11 @@ fn depth_breach_end_to_end_loud_flag_with_sound_rank() {
 #[test]
 fn mixed_hostile_corpus_drill() {
     let registry = ParserRegistry::new();
-    let deep_src = format!("fn f() {{ let x = {}1{}; }}", "(".repeat(300), ")".repeat(300));
+    let deep_src = format!(
+        "fn f() {{ let x = {}1{}; }}",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
     let corpus = [
         ("a.rs", "fn foo() { foo(1); foo(2); }"),
         ("b.py", "def foo():\n    foo(1)\n"),
@@ -259,7 +291,10 @@ fn mixed_hostile_corpus_drill() {
     for pattern in ["foo($$$)", "foo"] {
         let (ranked, skipped) = run_corpus(pattern);
         // Documented per-class outcomes inside the corpus.
-        assert_eq!(skipped, vec!["skip.fortran".to_string(), "Makefile".to_string()]);
+        assert_eq!(
+            skipped,
+            vec!["skip.fortran".to_string(), "Makefile".to_string()]
+        );
         assert_eq!(ranked.len(), corpus.len() - skipped.len());
         // Empty and garbage members rank empty; valid members answer.
         for (path, hits) in &ranked {

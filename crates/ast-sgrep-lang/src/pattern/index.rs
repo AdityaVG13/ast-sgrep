@@ -8,9 +8,9 @@ use tree_sitter::Node;
 /// Deepest AST the extraction walk descends into. Pathological nesting
 /// (`let x = ((((…1…))))`) made the walk superquadratic — 2.3 s at depth 500,
 /// >90 s at depth 10000 — while real code stays far below this bound.
-/// Subtrees beyond the cap are skipped and reported through
-/// `ExtractionResult::depth_truncated` so the cached pattern lane can
-/// refuse to serve those files as complete instead of failing open.
+/// > Subtrees beyond the cap are skipped and reported through
+/// > `ExtractionResult::depth_truncated` so the cached pattern lane can
+/// > refuse to serve those files as complete instead of failing open.
 pub const MAX_EXTRACTION_DEPTH: usize = 256;
 
 pub(crate) fn collect_pattern_nodes(root: Node, source: &str) -> (Vec<PatternNode>, bool) {

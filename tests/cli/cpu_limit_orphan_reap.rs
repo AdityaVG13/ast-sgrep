@@ -122,7 +122,7 @@ fn sigkill_of_limiter_parent_leaves_no_orphan_payload_group() {
     let (mut wrapper, pgid) = spawn_limited_group(saturators);
     let members = pgroup_members(pgid);
     assert!(
-        members.len() >= saturators + 1,
+        members.len() > saturators,
         "payload group should hold sh + {saturators} background sleeps, got {members:?}"
     );
 

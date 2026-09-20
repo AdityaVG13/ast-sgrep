@@ -45,14 +45,7 @@ fn scan_line_corpus(
     let lang = options.lang_filter.as_deref();
     let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
     let rows = if !options.case_insensitive {
-        corpus.scan_cs(
-            needle,
-            word_mode,
-            lang,
-            cap,
-            matches_lang,
-            |content, pos, len| is_word_boundary(content, pos, len),
-        )
+        corpus.scan_cs(needle, word_mode, lang, cap, matches_lang, is_word_boundary)
     } else {
         corpus.scan_lines(lang, cap, matches_lang, |content| {
             content_matches_literal(content, needle, needle_lower.as_deref(), word_mode)
@@ -160,7 +153,11 @@ fn scan_trigram_matches(
     // Lang-filtered scans must not SQL-LIMIT: skipped languages consume posting
     // slots in Rust. Unique hybrid has no lang filter, so LIMIT equals the
     // previous lazy break (posting order, first `cap` LIKE/GLOB rows).
-    let sql_cap = if options.lang_filter.is_some() { i64::MAX } else { cap };
+    let sql_cap = if options.lang_filter.is_some() {
+        i64::MAX
+    } else {
+        cap
+    };
     let mut hits = Vec::new();
     let mut scanned = 0usize;
     if sql_like {
@@ -312,7 +309,7 @@ fn literal_sql(
 
 /// Shared case-fold + word/substring gate used by both trigram and SQL residual paths.
 /// ASCII needles skip the per-line `to_lowercase()` allocation (unique-hybrid prefilter).
-fn content_matches_literal(
+pub fn content_matches_literal(
     content: &str,
     needle: &str,
     needle_lower: Option<&str>,
@@ -363,33 +360,11 @@ fn ascii_word_boundary(haystack: &[u8], pos: usize, needle_len: usize) -> bool {
     left_ok && right_ok
 }
 
-fn has_literal_match(haystack: &str, needle: &str, word_mode: bool) -> bool {
+pub fn has_literal_match(haystack: &str, needle: &str, word_mode: bool) -> bool {
     if !word_mode {
         return haystack.contains(needle);
     }
     haystack
         .match_indices(needle)
         .any(|(pos, _)| is_word_boundary(haystack, pos, needle.len()))
-}
-
-#[cfg(test)]
-mod ascii_ci_tests {
-    use super::content_matches_literal;
-
-    fn agree(content: &str, needle: &str, word: bool) {
-        let lower = needle.to_lowercase();
-        let ascii = content_matches_literal(content, needle, Some(&lower), word);
-        let unicode = super::has_literal_match(&content.to_lowercase(), &lower, word);
-        assert_eq!(ascii, unicode, "content={content:?} needle={needle:?} word={word}");
-    }
-
-    #[test]
-    fn ascii_ci_matches_unicode_lowercase_on_ascii_inputs() {
-        for content in ["Encode payload", "encode payload", "ENCODE", "x_encode_y", "en"] {
-            for needle in ["encode", "Encode", "payload"] {
-                agree(content, needle, false);
-                agree(content, needle, true);
-            }
-        }
-    }
 }

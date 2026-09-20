@@ -31,7 +31,10 @@ fn score_ranker_contract() {
     let past_up = f32::from_bits(0x3F80_0002);
     assert!(top_by_similarity(vec![(0, 1.0)], 10, Some(1.0)).is_empty());
     assert!(top_by_similarity(vec![(0, next_up)], 10, Some(1.0)).is_empty());
-    assert_eq!(top_by_similarity(vec![(0, past_up)], 10, Some(1.0)).len(), 1);
+    assert_eq!(
+        top_by_similarity(vec![(0, past_up)], 10, Some(1.0)).len(),
+        1
+    );
     // min = 0.0: next = from_bits(1), the smallest subnormal. Equal fails,
     // one ulp above passes. (MIN_POSITIVE passing is L2; this pins the floor.)
     assert!(top_by_similarity(vec![(0, f32::from_bits(1))], 10, Some(0.0)).is_empty());
@@ -47,7 +50,10 @@ fn score_ranker_contract() {
     assert!(next_neg > -1.0 && past_neg > next_neg);
     assert!(top_by_similarity(vec![(0, -1.0)], 10, Some(-1.0)).is_empty());
     assert!(top_by_similarity(vec![(0, next_neg)], 10, Some(-1.0)).is_empty());
-    assert_eq!(top_by_similarity(vec![(0, past_neg)], 10, Some(-1.0)).len(), 1);
+    assert_eq!(
+        top_by_similarity(vec![(0, past_neg)], 10, Some(-1.0)).len(),
+        1
+    );
     // Non-finite thresholds admit nothing, not everything.
     for bad_min in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         assert!(
@@ -94,11 +100,7 @@ fn score_ranker_contract() {
     // All-nonfinite corpora are honest empties on BOTH rankers. BIT-EXACT.
     for corpus in [
         vec![(0, f32::NAN), (1, f32::NAN)],
-        vec![
-            (0, f32::INFINITY),
-            (1, f32::NEG_INFINITY),
-            (2, f32::NAN),
-        ],
+        vec![(0, f32::INFINITY), (1, f32::NEG_INFINITY), (2, f32::NAN)],
     ] {
         assert!(top_by_similarity(corpus.clone(), 10, None).is_empty());
         assert!(top_k_similarity(corpus, 10, None).is_empty());
@@ -154,12 +156,10 @@ fn score_ranker_contract() {
         corpus.clone(),
         corpus.iter().rev().copied().collect(),
         vec![
-            corpus[6], corpus[2], corpus[0], corpus[7], corpus[4], corpus[3], corpus[1],
-            corpus[5],
+            corpus[6], corpus[2], corpus[0], corpus[7], corpus[4], corpus[3], corpus[1], corpus[5],
         ],
         vec![
-            corpus[3], corpus[5], corpus[7], corpus[1], corpus[4], corpus[0], corpus[6],
-            corpus[2],
+            corpus[3], corpus[5], corpus[7], corpus[1], corpus[4], corpus[0], corpus[6], corpus[2],
         ],
     ];
     let first_sort = top_by_similarity(perms[0].clone(), 5, None);
@@ -202,8 +202,11 @@ fn score_ranker_contract() {
     // deleted; both rankers are pinned against the hand filter rule.
     let corpus = vec![(0, 0.9), (1, 0.3), (2, 0.7), (3, 0.5), (4, 0.1), (5, -0.2)];
     let full_sort = top_by_similarity(corpus.clone(), 10, None);
-    let expected: Vec<(usize, f32)> =
-        full_sort.iter().copied().filter(|(_, s)| *s > 0.5).collect();
+    let expected: Vec<(usize, f32)> = full_sort
+        .iter()
+        .copied()
+        .filter(|(_, s)| *s > 0.5)
+        .collect();
     assert_eq!(expected.len(), 2);
     assert_eq!(top_by_similarity(corpus.clone(), 10, Some(0.5)), expected);
     assert_eq!(top_k_similarity(corpus.clone(), 10, Some(0.5)), expected);

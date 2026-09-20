@@ -1,6 +1,6 @@
 {
   "name": "@ast-sgrep/win32-x64-msvc",
-  "version": "2.1.0",
+  "version": "2.5.0",
   "description": "ast-sgrep native binary for Windows x64 MSVC",
   "license": "MIT",
   "repository": {

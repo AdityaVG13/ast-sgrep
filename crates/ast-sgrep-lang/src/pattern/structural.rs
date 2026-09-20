@@ -155,7 +155,7 @@ pub(crate) fn match_structural(
                 source,
                 pattern,
                 segments,
-                &optional_flags,
+                optional_flags,
                 &mut out,
             );
         }
@@ -425,14 +425,13 @@ pub(crate) fn run_queries(
                 // the pattern-side modifier text and adjudicates per
                 // grammar. Java class candidates consult the same scan on
                 // the member-count faces.
-                if matches!(keyword, "interface")
+                if (matches!(keyword, "interface")
                     || (matches!(keyword, "class")
                         && lang == Language::Java
-                        && body_filter.is_some())
+                        && body_filter.is_some()))
+                    && interface_candidate_refused(lang, &node, source, declaration_modifiers)
                 {
-                    if interface_candidate_refused(lang, &node, source, declaration_modifiers) {
-                        continue;
-                    }
+                    continue;
                 }
             }
             if let Some(want) = name_filter {
@@ -1033,14 +1032,10 @@ pub(crate) fn bind_slot_face_callee_metas(
             let head_len = actual.len() - (pattern_segments.len() - 1);
             let head = actual[..head_len].join("->");
             let mut absorption = captures.clone();
-            if bind_capture(&mut absorption, capture_name(pattern_segments[0])?, &head).is_none() {
-                return None;
-            }
+            bind_capture(&mut absorption, capture_name(pattern_segments[0])?, &head)?;
             for (want, have) in pattern_segments[1..].iter().zip(actual[head_len..].iter()) {
                 if let Some(variable) = capture_name(want) {
-                    if bind_capture(&mut absorption, variable, have).is_none() {
-                        return None;
-                    }
+                    bind_capture(&mut absorption, variable, have)?;
                 }
             }
             *captures = absorption;

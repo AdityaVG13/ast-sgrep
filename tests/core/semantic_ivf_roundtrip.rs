@@ -45,7 +45,8 @@ fn semantic_ivf_roundtrip_and_fingerprint_gate() {
     );
     let query = vec![0.1f32; dim];
     assert_eq!(
-        lazy.search(&query, 3, Some(usize::MAX)).expect("mapped lazy vectors"),
+        lazy.search(&query, 3, Some(usize::MAX))
+            .expect("mapped lazy vectors"),
         loaded.index.search_flat(loaded.vectors(), dim, &query, 3)
     );
     let wrong_fp = compute_ann_fingerprint(6, 5, dim, Some("test"), 0);

@@ -24,7 +24,10 @@ use ast_sgrep_testkit::{edit_full_replace, edit_ranged, edit_ranged_len};
 /// (6 rows folded in; `"1"` duplicated across passes, pinned once).
 #[test]
 fn cpu_limit_bounds_match_contract() {
-    assert_eq!((MIN_CPU_LIMIT, MAX_CPU_LIMIT, DEFAULT_CPU_LIMIT), (1, 80, 80));
+    assert_eq!(
+        (MIN_CPU_LIMIT, MAX_CPU_LIMIT, DEFAULT_CPU_LIMIT),
+        (1, 80, 80)
+    );
     let cases: &[(&str, u8)] = &[
         ("50", 50),
         ("1", 1),
@@ -259,8 +262,9 @@ fn file_uri_decode_matches_hand_paths() {
 /// KILLS: OOB-clamp, rangeLength-ignored, order-check-removal/slice-panic,
 /// and `unwrap_or_else`→`unwrap` mutants.
 /// ABSORBS: text_edit_applies_replace_and_rejects_bad_ranges +
-/// text_edit_range_length_overrides_end + text_edit_reversed_and_oob_rejected
-/// + apply_text_edit_never_panics_falls_back (4 facets, one contract).
+/// text_edit_range_length_overrides_end +
+/// text_edit_reversed_and_oob_rejected +
+/// apply_text_edit_never_panics_falls_back (4 facets, one contract).
 #[test]
 fn text_edit_contracts_apply_and_reject() {
     // Facet 1: full and ranged replaces apply; OOB line range is Err.

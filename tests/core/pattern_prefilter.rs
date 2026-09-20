@@ -54,9 +54,19 @@ fn declaration_keyword_is_not_a_cross_language_required_literal() {
     let profile =
         profile_pattern_search("fn $NAME($$$ARGS)", corpus.path(), Some("javascript")).unwrap();
     assert_eq!(profile.files_considered, 1);
+    // prefiltered=0 is the LIVE pin this test is named for: the `fn`
+    // declaration keyword never becomes a required byte literal (the
+    // memchr gate runs BEFORE answerability, so a `fn`-leak would exclude
+    // this `fn`-free JS file here).
     assert_eq!(profile.files_prefiltered, 0);
-    assert_eq!(profile.files_parsed, 1);
-    assert_eq!(profile.hits, 1);
+    // parsed=0 + hits=0 is CORRECT, not a skip bug: per-file
+    // answerability refuses `fn`-templates for JavaScript (the reference
+    // exits 8 on the same --lang-pinned inputs; phantom matches are the
+    // alternative). Keywords are language-precise by design — JS needs
+    // `function $NAME($$$ARGS)`, which hits — and universality lives in
+    // the `$$A` root lane, not in keywords.
+    assert_eq!(profile.files_parsed, 0);
+    assert_eq!(profile.hits, 0);
 }
 
 #[test]

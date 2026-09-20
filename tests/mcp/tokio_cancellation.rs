@@ -10,7 +10,7 @@ use ast_sgrep_testkit::{
     assert_ping_ok, assert_tool_success, big_tree, cancelled_notif, ping, small_tree, tool_body,
     tool_call, tool_text, tools_list, LiveSession,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 const SLOW_RECV_TIMEOUT: Duration = Duration::from_secs(120);

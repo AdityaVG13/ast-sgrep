@@ -37,9 +37,18 @@ fn assert_status_equal_across_rebuild(recovered: &str, baseline: &str) {
     for body in [&baseline_body, &recovered_body] {
         assert!(body["writer_generation"].is_u64(), "{body:#}");
     }
-    baseline_body.as_object_mut().unwrap().remove("writer_generation");
-    recovered_body.as_object_mut().unwrap().remove("writer_generation");
-    assert_eq!(recovered_body, baseline_body, "status drifted across rebuild");
+    baseline_body
+        .as_object_mut()
+        .unwrap()
+        .remove("writer_generation");
+    recovered_body
+        .as_object_mut()
+        .unwrap()
+        .remove("writer_generation");
+    assert_eq!(
+        recovered_body, baseline_body,
+        "status drifted across rebuild"
+    );
 }
 
 /// INTENT: a missing `ASGREP_ROOT` fails the process closed with zero
@@ -52,11 +61,7 @@ fn startup_with_missing_root_exits_without_json() {
     let temp = tempfile::tempdir().expect("tempdir");
     let missing = temp.path().join("does_not_exist");
     assert!(!missing.exists());
-    let output = spawn_raw_no_handshake(
-        Some(&missing),
-        &[],
-        &[init_payload(TESTKIT_CLIENT_NAME)],
-    );
+    let output = spawn_raw_no_handshake(Some(&missing), &[], &[init_payload(TESTKIT_CLIENT_NAME)]);
     assert!(
         !output.status.success(),
         "missing ASGREP_ROOT must fail the process, got {}",
@@ -72,7 +77,10 @@ fn startup_with_missing_root_exits_without_json() {
                 .is_some()
         })
         .count();
-    assert_eq!(rpc_lines, 0, "no JSON-RPC may escape a failed startup: {stdout:?}");
+    assert_eq!(
+        rpc_lines, 0,
+        "no JSON-RPC may escape a failed startup: {stdout:?}"
+    );
 }
 
 /// INTENT: workspace-root disappearance is a per-call fail-closed fault, the
@@ -95,7 +103,11 @@ fn root_loss_mid_session_fails_closed_ping_survives_live_heal_and_restart_reprod
     std::fs::remove_dir_all(temp.path()).expect("remove root");
     assert!(!temp.path().exists());
     session.send(&tool_call(2, "index_status", json!({})));
-    session.send(&tool_call(3, "keyword_search", json!({"query": "hey", "limit": 4})));
+    session.send(&tool_call(
+        3,
+        "keyword_search",
+        json!({"query": "hey", "limit": 4}),
+    ));
     session.send(&tool_call(4, "code_read", json!({"ids": ["a.rs#L1-L1"]})));
     let mut pipelined = vec![session.recv(), session.recv(), session.recv()];
     pipelined.sort_by_key(|r| r["id"].as_u64().unwrap());
@@ -172,7 +184,10 @@ fn root_loss_mid_session_fails_closed_ping_survives_live_heal_and_restart_reprod
     index_tree(temp.path());
     let (restored_status, restored_search) = chain();
     assert_status_equal_across_rebuild(&restored_status, &baseline_status);
-    assert_eq!(restored_search, baseline_search, "search drifted across fault");
+    assert_eq!(
+        restored_search, baseline_search,
+        "search drifted across fault"
+    );
     let search: Value = serde_json::from_str(&restored_search).expect("search JSON");
     let hits = search["h"].as_array().expect("hits");
     assert!(!hits.is_empty(), "{search:#}");
@@ -286,7 +301,10 @@ fn corrupt_index_refused_loudly_reads_survive_delete_and_reindex_heals() {
         assert_tool_error_shape(response);
     }
     assert_tool_success(&responses[4]);
-    assert_eq!(tool_body(&responses[4])["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        tool_body(&responses[4])["nodes"].as_array().unwrap().len(),
+        1
+    );
 
     // Facet 2 (heal): remove the corrupt inode, `index_repo` rebuilds from
     // source, and status plus search serve the healed index.
@@ -357,7 +375,11 @@ fn index_torn_mid_session_stub_and_half_refused_reads_survive() {
         // `code_read` serves files from the healthy tree, not the torn index.
         // Probed on the stub arm; the half arm pins the refusal delta only.
         if arm == "stub" {
-            session.send(&tool_call(4, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]})));
+            session.send(&tool_call(
+                4,
+                "code_read",
+                json!({"ids": ["src/lib.rs#L1-L1"]}),
+            ));
             let read = session.recv();
             assert_eq!(read["id"], 4, "{read:#}");
             assert_tool_success(&read);
@@ -403,7 +425,11 @@ fn stdin_eof_clean_and_partial_line_exits_cleanly_without_torn_response() {
             continue;
         }
         let value: Value = serde_json::from_str(line.trim()).expect("stdout stays JSON");
-        assert_ne!(value.get("id"), Some(&json!(9)), "torn id answered: {value:#}");
+        assert_ne!(
+            value.get("id"),
+            Some(&json!(9)),
+            "torn id answered: {value:#}"
+        );
     }
 }
 
@@ -491,7 +517,11 @@ fn restart_reproduces_empty_chain_and_clears_elision_state() {
         serde_json::to_string(&second[0]["result"]).unwrap(),
         "tools/list drifted across restarts"
     );
-    assert_eq!(tool_text(&first[1]), tool_text(&second[1]), "status drifted");
+    assert_eq!(
+        tool_text(&first[1]),
+        tool_text(&second[1]),
+        "status drifted"
+    );
     assert_tool_success(&first[1]);
     assert_eq!(tool_body(&first[1])["file_count"], 0);
     assert_eq!(tool_text(&first[2]), tool_text(&second[2]), "miss drifted");
@@ -500,7 +530,10 @@ fn restart_reproduces_empty_chain_and_clears_elision_state() {
     assert_eq!(miss["why"], "empty_index", "{miss:#}");
     assert_eq!(miss["zn"], 0);
     assert_eq!(miss["h"].as_array().unwrap().len(), 0);
-    assert!(miss.get("p").is_none(), "miss carries no path table: {miss:#}");
+    assert!(
+        miss.get("p").is_none(),
+        "miss carries no path table: {miss:#}"
+    );
 
     // Facet 2 (elision reset): snippet elision is session memory, not durable
     // state -- a fresh process re-sends full snippets byte-identical to the
@@ -509,18 +542,31 @@ fn restart_reproduces_empty_chain_and_clears_elision_state() {
         "src/lib.rs",
         "fn target_symbol() { helper(); }\nfn helper() {}\n",
     )]);
-    let search = || tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 4}));
+    let search = || {
+        tool_call(
+            1,
+            "keyword_search",
+            json!({"query": "target_symbol", "limit": 4}),
+        )
+    };
     let first_session = rpc_session(vec![search(), search()], Some(temp.path()));
     assert_eq!(first_session.len(), 2);
     let first_bytes = tool_text(&first_session[0]).to_owned();
     let elided_bytes = tool_text(&first_session[1]).to_owned();
     let elided = tool_body(&first_session[1]);
     assert!(
-        elided["h"].as_array().unwrap().iter().all(|hit| hit[4] == "~"),
+        elided["h"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit[4] == "~"),
         "expected every snippet elided: {elided:#}"
     );
     assert!(elided["ze"].as_u64().unwrap() > 0, "{elided:#}");
-    assert!(elided_bytes.len() < first_bytes.len(), "elided response must be smaller");
+    assert!(
+        elided_bytes.len() < first_bytes.len(),
+        "elided response must be smaller"
+    );
     let second_session = rpc_session(vec![search()], Some(temp.path()));
     assert_eq!(
         tool_text(&second_session[0]),

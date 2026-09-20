@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
 mod agent;
-mod bench;
+pub mod bench;
 mod cli_args;
 mod codemod_cmd;
 mod eval;
 mod index_cmd;
 mod install;
-mod keep_gate;
+pub mod keep_gate;
 mod machine;
 mod outline_cmd;
 mod search_cmd;

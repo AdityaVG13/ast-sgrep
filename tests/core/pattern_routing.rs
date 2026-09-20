@@ -274,7 +274,10 @@ fn ruby_and_php_decl_templates_are_not_masked_by_kind_prefilter() {
 #[test]
 fn dupmeta_pattern_unifies_through_search_pipeline() {
     let session = isolated_index_session();
-    session.write("greet.py", "def greet(name):\n    msg = \"hello \" + name\n    return msg\n");
+    session.write(
+        "greet.py",
+        "def greet(name):\n    msg = \"hello \" + name\n    return msg\n",
+    );
     session.index_all(IndexOptions {
         embed_semantic: false,
         ..session.index_options()
@@ -615,7 +618,9 @@ fn hconf029_answerable_dupmeta_family_still_serves_hits() {
         limit: 32,
         ..session.search_options()
     });
-    let response = searcher.search("pattern:$A == $A == $A").expect("dup-meta serves");
+    let response = searcher
+        .search("pattern:$A == $A == $A")
+        .expect("dup-meta serves");
     assert!(
         !response.hits.is_empty(),
         "the comparison-chain face must keep its hit: {:?}",
@@ -744,10 +749,7 @@ fn hconf033_searcher_treats_foreign_root_index_as_inert() {
     // and would MISS `b_only.py` entirely (absent from A's index).
     assert_eq!(
         answered,
-        vec![
-            ("b_only.py".to_string(), 1),
-            ("shared.py".to_string(), 1)
-        ],
+        vec![("b_only.py".to_string(), 1), ("shared.py".to_string(), 1)],
         "foreign rows leaked or walk lane broken: {:?}",
         response.hits
     );
@@ -830,7 +832,9 @@ fn f62_2_bare_break_and_continue_answer_at_search() {
     let brk = searcher.search("pattern:break").expect("break answers");
     assert_eq!(brk.hits.len(), 1, "{:?}", brk.hits);
     assert_eq!(brk.hits[0].line_start, 2, "{:?}", brk.hits);
-    let cont = searcher.search("pattern:continue").expect("continue answers");
+    let cont = searcher
+        .search("pattern:continue")
+        .expect("continue answers");
     assert_eq!(cont.hits.len(), 1, "{:?}", cont.hits);
     assert_eq!(cont.hits[0].line_start, 3, "{:?}", cont.hits);
 }
@@ -1309,9 +1313,9 @@ fn f87a_comment_face_without_candidates_answers_honest_empty() {
     });
     // sg 0.45.2 (ATTACHED, same fixture): [] rc0 — the pinned comment text
     // `/* nope */` appears on no line.
-    let response = searcher
-        .search("pattern:$a = ($V /* nope */ + 1);")
-        .expect("a NeverMatches-classified comment face with no candidates must answer, not reject");
+    let response = searcher.search("pattern:$a = ($V /* nope */ + 1);").expect(
+        "a NeverMatches-classified comment face with no candidates must answer, not reject",
+    );
     assert!(
         response.hits.is_empty(),
         "no line carries /* nope */: {:?}",
@@ -1962,10 +1966,7 @@ fn f91a_comment_gate_preserves_hash_syntax_and_php_inline_template_faces() {
     // (probes_run1 run-to-run cell). A mutant that refuses every block at
     // the template route flips this loud where sg accepts the placement.
     let session = isolated_index_session();
-    session.write(
-        "probe.php",
-        "<?php\n$alpha = 1 + 1;\n$beta = 2 + 1;\n",
-    );
+    session.write("probe.php", "<?php\n$alpha = 1 + 1;\n$beta = 2 + 1;\n");
     session.index_all(IndexOptions {
         embed_semantic: false,
         ..session.index_options()
@@ -2048,8 +2049,10 @@ fn f92_rust_container_slot_comment_faces_return_sg_exact_sets() {
         let response = searcher
             .search(&format!("pattern:{pattern}"))
             .unwrap_or_else(|err| {
-                panic!("{pattern:?}: sg 0.45.2 answers the registered set — the \
-                        container-slot placement must not be refused: {err:#}")
+                panic!(
+                    "{pattern:?}: sg 0.45.2 answers the registered set — the \
+                        container-slot placement must not be refused: {err:#}"
+                )
             });
         let lines: Vec<u32> = response.hits.iter().map(|h| h.line_start).collect();
         assert_eq!(
@@ -2133,7 +2136,8 @@ fn f92_template_route_embedded_comment_faces_answer_sg_sets() {
     // sg-rc8-class loud posture holds (sg side of the collapsed spelling is
     // n/a — the collapse is the registered user-WIP class). A mutant that
     // accepts every line placement flips these silent.
-    let rust_line_twin_body = "fn main() {\n    let y = a + b;\n    let f = calc(1, // line\n        2);\n}\n";
+    let rust_line_twin_body =
+        "fn main() {\n    let y = a + b;\n    let f = calc(1, // line\n        2);\n}\n";
     for pattern in ["calc(1, // line\n 2)", "a + // c\n b"] {
         let session = isolated_index_session();
         session.write("probe.rs", rust_line_twin_body);
@@ -2226,10 +2230,7 @@ fn f92_two_statement_brace_compound_stays_loud_where_sg_rejects() {
             ),
         }
         // semicolon + multiline twins: same sg-rc8 spelling class (probes_run2).
-        for twin in [
-            "1_000 ($A) { $_0x1F };",
-            "1_000 ($A) {\n  $_0x1F\n}",
-        ] {
+        for twin in ["1_000 ($A) { $_0x1F };", "1_000 ($A) {\n  $_0x1F\n}"] {
             match searcher.search(&format!("pattern:{twin}")) {
                 Ok(response) => panic!(
                     "{lang} {twin:?}: sg 0.45.2 rc8 — brace-compound twin must not \
@@ -2246,7 +2247,11 @@ fn f92_two_statement_brace_compound_stays_loud_where_sg_rejects() {
     // sg lenient-accept witnesses (rc0/rc1-empty): the silent walk answer is
     // the agreement and must NOT move to loud.
     for (lang, file, body) in [
-        ("php", "probe.php", "<?php\n$t = config(1000, 7);\nif ($c) { d(); }\n"),
+        (
+            "php",
+            "probe.php",
+            "<?php\n$t = config(1000, 7);\nif ($c) { d(); }\n",
+        ),
         (
             "c",
             "probe.c",
@@ -2272,8 +2277,10 @@ fn f92_two_statement_brace_compound_stays_loud_where_sg_rejects() {
         let response = searcher
             .search("pattern:1_000 ($A) { $_0x1F }")
             .unwrap_or_else(|err| {
-                panic!("{lang}: sg 0.45.2 lenient-accepts the spelling — must keep \
-                        the silent walk answer: {err:#}")
+                panic!(
+                    "{lang}: sg 0.45.2 lenient-accepts the spelling — must keep \
+                        the silent walk answer: {err:#}"
+                )
             });
         assert!(
             response.hits.is_empty(),
@@ -2304,8 +2311,18 @@ fn f92_template_route_gate_stays_loud_on_sg_rc8_placements() {
             "csharp",
             "a + b // c",
         ),
-        ("probe.rb", "y = a + b\nz = f(1,\n  2)\n", "rb", "// c\na + b"),
-        ("probe.rb", "y = a + b\nz = f(1,\n  2)\n", "rb", "a + // c\n b"),
+        (
+            "probe.rb",
+            "y = a + b\nz = f(1,\n  2)\n",
+            "rb",
+            "// c\na + b",
+        ),
+        (
+            "probe.rb",
+            "y = a + b\nz = f(1,\n  2)\n",
+            "rb",
+            "a + // c\n b",
+        ),
         (
             "probe.py",
             "alpha = 1 + 1\nbeta = 2 + 1\nx = 1\n",
@@ -2426,9 +2443,24 @@ fn f94a_dollar_carrying_inline_block_faces_stay_loud_pending_walker_lane() {
         ("probe.rs", F94A_RUST_CORPUS, "rust", "area( /* note */ $A)"),
         ("probe.rs", F94A_RUST_CORPUS, "rust", "$A + /* c */ $B"),
         ("probe.rs", F94A_RUST_CORPUS, "rust", "let $A = /* w */ $B;"),
-        ("probe.ts", F94A_TS_CORPUS, "typescript", "f($A, /* n */ $B)"),
-        ("probe.ts", F94A_TS_CORPUS, "typescript", "const $A = /* w */ $B;"),
-        ("probe.js", F94A_JS_CORPUS, "javascript", "f($A, /* n */ $B)"),
+        (
+            "probe.ts",
+            F94A_TS_CORPUS,
+            "typescript",
+            "f($A, /* n */ $B)",
+        ),
+        (
+            "probe.ts",
+            F94A_TS_CORPUS,
+            "typescript",
+            "const $A = /* w */ $B;",
+        ),
+        (
+            "probe.js",
+            F94A_JS_CORPUS,
+            "javascript",
+            "f($A, /* n */ $B)",
+        ),
         ("probe.go", F94A_GO_CORPUS, "go", "f($A, /* n */ $B)"),
         ("probe.go", F94A_GO_CORPUS, "go", "$A := /* w */ $B"),
         ("Probe.java", F94A_JAVA_CORPUS, "java", "f($A, /* n */ $B)"),
@@ -2438,7 +2470,12 @@ fn f94a_dollar_carrying_inline_block_faces_stay_loud_pending_walker_lane() {
         ("probe.c", F94A_C_CORPUS, "c", "$A + /* c */ $B"),
         ("probe.cpp", F94A_CPP_CORPUS, "cpp", "f($A, /* n */ $B)"),
         ("probe.cs", F94A_CS_CORPUS, "csharp", "F($A, /* n */ $B)"),
-        ("probe.swift", F94A_SWIFT_CORPUS, "swift", "f($A, /* n */ $B)"),
+        (
+            "probe.swift",
+            F94A_SWIFT_CORPUS,
+            "swift",
+            "f($A, /* n */ $B)",
+        ),
         ("probe.kt", F94A_KT_CORPUS, "kotlin", "f($A, /* n */ $B)"),
     ] {
         let session = isolated_index_session();
@@ -2481,8 +2518,18 @@ fn f94a_dollar_carrying_inline_block_faces_stay_loud_pending_walker_lane() {
 #[test]
 fn f94a_sg_lenient_inline_comment_faces_stay_loud_pending_walker_lane() {
     for (file, body, lang, pattern) in [
-        ("probe.ts", F94A_TS_CORPUS, "typescript", "$obj.m(/* m */ $A)"),
-        ("probe.js", F94A_JS_CORPUS, "javascript", "$obj.m(/* m */ $A)"),
+        (
+            "probe.ts",
+            F94A_TS_CORPUS,
+            "typescript",
+            "$obj.m(/* m */ $A)",
+        ),
+        (
+            "probe.js",
+            F94A_JS_CORPUS,
+            "javascript",
+            "$obj.m(/* m */ $A)",
+        ),
         ("probe.php", F94A_PHP_CORPUS, "php", "$A /* c */ = $B"),
     ] {
         let session = isolated_index_session();
@@ -2530,10 +2577,7 @@ fn f94a_sg_lenient_inline_comment_faces_stay_loud_pending_walker_lane() {
 /// the constraints forbid.
 #[test]
 fn f94a_php_attribute_faces_answer_sg_sets() {
-    for (pattern, expected) in [
-        ("#[Route('/home')]", Some(vec![2u32])),
-        ("#[ ]", None),
-    ] {
+    for (pattern, expected) in [("#[Route('/home')]", Some(vec![2u32])), ("#[ ]", None)] {
         let session = isolated_index_session();
         session.write("probe.php", F94A_PHP_ATTR_CORPUS);
         session.index_all(IndexOptions {
@@ -2545,10 +2589,7 @@ fn f94a_php_attribute_faces_answer_sg_sets() {
             limit: 8,
             ..session.search_options()
         });
-        match (
-            expected,
-            searcher.search(&format!("pattern:{pattern}")),
-        ) {
+        match (expected, searcher.search(&format!("pattern:{pattern}"))) {
             (Some(expected), Ok(response)) => {
                 let lines: Vec<u32> = response.hits.iter().map(|h| h.line_start).collect();
                 assert_eq!(
@@ -2597,9 +2638,11 @@ fn f94a_ruby_regex_literal_hash_faces_answer_sg_sets() {
         let response = searcher
             .search(&format!("pattern:{pattern}"))
             .unwrap_or_else(|err| {
-                panic!("ruby {pattern:?}: sg 0.45.2 answers the regex-literal face \
+                panic!(
+                    "ruby {pattern:?}: sg 0.45.2 answers the regex-literal face \
                         (run2 cells 1-5) — the `#` inside the literal is not a \
-                        comment and must not be refused: {err:#}")
+                        comment and must not be refused: {err:#}"
+                )
             });
         let lines: Vec<u32> = response.hits.iter().map(|h| h.line_start).collect();
         assert_eq!(
@@ -2637,15 +2680,30 @@ fn f94a_comment_and_attribute_gate_stays_loud_where_sg_is_loud() {
         ("probe.rb", F94A_RB_CORPUS, "ruby", "x = 1 / 2 # c"),
         // py/rb `#[` and py hash: comment syntax (run2 cells 35-36, 39, 16)
         ("probe.rb", F94A_RB_CORPUS, "ruby", "#[Attr]\nv2 = 1 + 2"),
-        ("probe.py", "x = f(1, 2)\nz = 1 + 2\n", "python", "x = 1 # c"),
-        ("probe.py", "x = f(1, 2)\nz = 1 + 2\n", "python", "#[Attr]\nx = f(1, 2)"),
+        (
+            "probe.py",
+            "x = f(1, 2)\nz = 1 + 2\n",
+            "python",
+            "x = 1 # c",
+        ),
+        (
+            "probe.py",
+            "x = f(1, 2)\nz = 1 + 2\n",
+            "python",
+            "#[Attr]\nx = f(1, 2)",
+        ),
         // php assignment + comment faces sg rc8s (run1 cell 39; run2 40, 42-44, 46)
         ("probe.php", F94A_PHP_CORPUS, "php", "$A = /* w */ $B;"),
         ("probe.php", F94A_PHP_CORPUS, "php", "$A = $B;"),
         ("probe.php", F94A_PHP_CORPUS, "php", "$A = f(/* w */ $B);"),
         ("probe.php", F94A_PHP_CORPUS, "php", "$A = $B /* w */;"),
         // php attribute faces sg rc8s (run2 cells 24-25, 29, 34)
-        ("probe.php", F94A_PHP_ATTR_CORPUS, "php", "#[Id]\nprivate $id;"),
+        (
+            "probe.php",
+            F94A_PHP_ATTR_CORPUS,
+            "php",
+            "#[Id]\nprivate $id;",
+        ),
         (
             "probe.php",
             F94A_PHP_ATTR_CORPUS,
@@ -2674,11 +2732,26 @@ fn f94a_comment_and_attribute_gate_stays_loud_where_sg_is_loud() {
         ),
         // ts/js `#[` is invalid syntax — sg rc8 (run2 cells 37-38); the
         // subject answered a silent fail-open ok:true [] pre-fix.
-        ("probe.ts", F94A_TS_CORPUS, "typescript", "#[Attr]\nconst t2 = config(1000, 7);"),
-        ("probe.js", F94A_JS_CORPUS, "javascript", "#[Attr]\nvar v = h(3, 7);"),
+        (
+            "probe.ts",
+            F94A_TS_CORPUS,
+            "typescript",
+            "#[Attr]\nconst t2 = config(1000, 7);",
+        ),
+        (
+            "probe.js",
+            F94A_JS_CORPUS,
+            "javascript",
+            "#[Attr]\nvar v = h(3, 7);",
+        ),
         // NeverMatches + inline block keeps the registered loud routing
         // (run1 cell 105: sg rc8).
-        ("probe.ts", F94A_TS_CORPUS, "typescript", "$f($A) { /* c */ $_0x1F }"),
+        (
+            "probe.ts",
+            F94A_TS_CORPUS,
+            "typescript",
+            "$f($A) { /* c */ $_0x1F }",
+        ),
     ] {
         let session = isolated_index_session();
         session.write(file, body);
@@ -2711,9 +2784,12 @@ fn f94a_comment_and_attribute_gate_stays_loud_where_sg_is_loud() {
 /// a µ-spelled meta pattern must not drop µ-free files from the walk).
 const F96_RUST_MAIN: &str = "fn main() {\n    \u{b5}A + 1;\n    x + 1;\n    \u{b5} + 1;\n    f(9);\n    f(y);\n    \u{b5}A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n}\n";
 const F96_RUST_AUX: &str = "fn aux() {\n    q + 1;\n    r + 2;\n}\n";
-const F96_PY_BODY: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
-const F96_RUBY_BODY: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
-const F96_JS_BODY: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
+const F96_PY_BODY: &str =
+    "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
+const F96_RUBY_BODY: &str =
+    "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
+const F96_JS_BODY: &str =
+    "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
 const F96_JAVA_BODY: &str = "class T {\n    void m() {\n    \u{b5}A + 1;\n    x + 1;\n    \u{b5} + 1;\n    f(9);\n    f(y);\n    \u{b5}A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n    }\n}\n";
 
 fn f96_hits(session: &IsolatedIndexSession, pattern: &str) -> Vec<(String, u32)> {
@@ -3138,10 +3214,7 @@ fn f100_ruby_suffix_search_answers_sg_set() {
         embed_semantic: false,
         ..session.index_options()
     });
-    for (pattern, want) in [
-        ("\u{b5}A?", vec![1u32, 5, 6]),
-        ("$A?", vec![1, 5, 6]),
-    ] {
+    for (pattern, want) in [("\u{b5}A?", vec![1u32, 5, 6]), ("$A?", vec![1, 5, 6])] {
         let hits = f96_hits(&session, pattern);
         assert_eq!(
             hits.iter().map(|(_, l)| *l).collect::<Vec<u32>>(),
@@ -3361,7 +3434,10 @@ fn f105_php_comment_slot_member_call_takes_loud_census() {
     // The f87a php assignment-hook face (comment-transparent lane) keeps its
     // walk-answered contract through the same narrowed exemption.
     let hook = isolated_index_session();
-    hook.write("h.php", "<?php\n$alpha = 1 + 1;\n$a = $alpha + /* c */ 1;\n");
+    hook.write(
+        "h.php",
+        "<?php\n$alpha = 1 + 1;\n$a = $alpha + /* c */ 1;\n",
+    );
     hook.index_all(IndexOptions {
         embed_semantic: false,
         ..hook.index_options()
@@ -3646,9 +3722,8 @@ fn f107_swift_member_chain_pattern_answers_sg_aligned() {
 /// guard re-serves the silent empty and this test fails.
 #[test]
 fn f122c_keyword_literal_roots_answer_via_native_walk() {
-    let session = indexed_rs(
-        "fn alpha(x: bool) {\n    if x { beta(true); }\n}\nfn beta(v: bool) {}\n",
-    );
+    let session =
+        indexed_rs("fn alpha(x: bool) {\n    if x { beta(true); }\n}\nfn beta(v: bool) {}\n");
     let searcher = session.searcher(SearchOptions {
         use_embed: false,
         limit: 8,
@@ -3657,7 +3732,12 @@ fn f122c_keyword_literal_roots_answer_via_native_walk() {
     let hits = searcher
         .search("pattern:true")
         .expect("keyword literal must answer via the walk, not fail closed");
-    assert_eq!(hits.hits.len(), 1, "sg answers the leaf node: {:?}", hits.hits);
+    assert_eq!(
+        hits.hits.len(),
+        1,
+        "sg answers the leaf node: {:?}",
+        hits.hits
+    );
     assert_eq!(hits.hits[0].line_start, 2, "{:?}", hits.hits[0]);
 }
 
@@ -3724,7 +3804,11 @@ fn f132a_bare_debugger_cli_pattern_answers_debugger_statement() {
         "sg answers the debugger_statement n1 per js/ts file: {:?}",
         bare.hits
     );
-    assert!(bare.hits.iter().all(|h| h.line_start == 1), "{:?}", bare.hits);
+    assert!(
+        bare.hits.iter().all(|h| h.line_start == 1),
+        "{:?}",
+        bare.hits
+    );
     let semi = searcher
         .search("pattern:debugger;")
         .expect("debugger; answers");
@@ -3895,7 +3979,12 @@ fn f133b_import_use_and_python_simple_statements_answer_sg_aligned() {
     assert_eq!(per.get("imp.js"), Some(&1), "grid js:import sg n1: {per:?}");
     assert_eq!(per.get("imp.ts"), Some(&1), "grid ts:import sg n1: {per:?}");
     assert_eq!(per.get("imp.py"), Some(&1), "grid py:import sg n1: {per:?}");
-    assert_eq!(imp.hits.len(), 3, "no import hits outside the three grammars: {:?}", imp.hits);
+    assert_eq!(
+        imp.hits.len(),
+        3,
+        "no import hits outside the three grammars: {:?}",
+        imp.hits
+    );
     let use_hits = searcher
         .search("pattern:use")
         .expect("bare use answers via the native walk");
@@ -3915,12 +4004,7 @@ fn f133b_import_use_and_python_simple_statements_answer_sg_aligned() {
         let resp = searcher
             .search(pattern)
             .unwrap_or_else(|e| panic!("{pattern} must answer via the native walk: {e}"));
-        assert_eq!(
-            resp.hits.len(),
-            1,
-            "{pattern} ({why}): {:?}",
-            resp.hits
-        );
+        assert_eq!(resp.hits.len(), 1, "{pattern} ({why}): {:?}", resp.hits);
         assert_eq!(resp.hits[0].file, "pyfive.py", "{pattern}: {:?}", resp.hits);
     }
 }
@@ -3951,7 +4035,11 @@ fn f133c_go_and_ruby_tail_keywords_answer_sg_aligned() {
         ..session.search_options()
     });
     for (pattern, file, why) in [
-        ("pattern:fallthrough", "gokw.go", "grid go:fallthrough sg n1"),
+        (
+            "pattern:fallthrough",
+            "gokw.go",
+            "grid go:fallthrough sg n1",
+        ),
         ("pattern:goto", "gokw.go", "grid go:goto sg n1"),
         ("pattern:redo", "rbkw.rb", "grid rb:redo sg n1"),
         ("pattern:retry", "rbkw.rb", "grid rb:retry sg n1"),
@@ -4069,9 +4157,7 @@ fn f135a_go_defer_go_and_ts_await_bare_spellings_answer_sg_aligned() {
     );
 }
 
-fn f135_per_file(
-    hits: &[ast_sgrep_core::SearchHit],
-) -> std::collections::BTreeMap<String, usize> {
+fn f135_per_file(hits: &[ast_sgrep_core::SearchHit]) -> std::collections::BTreeMap<String, usize> {
     let mut out = std::collections::BTreeMap::new();
     for hit in hits {
         *out.entry(hit.file.clone()).or_insert(0) += 1;
@@ -4108,8 +4194,18 @@ fn f135b_return_semi_answers_operand_less_only_end_to_end() {
         .search("pattern:return;")
         .expect("return; answers via the native walk");
     let per_file = f135_per_file(&semi.hits);
-    assert_eq!(per_file.get("ret.js"), Some(&1), "sg n1: the empty return only: {:?}", semi.hits);
-    assert_eq!(per_file.get("ret.ts"), Some(&1), "sg n1: the empty return only: {:?}", semi.hits);
+    assert_eq!(
+        per_file.get("ret.js"),
+        Some(&1),
+        "sg n1: the empty return only: {:?}",
+        semi.hits
+    );
+    assert_eq!(
+        per_file.get("ret.ts"),
+        Some(&1),
+        "sg n1: the empty return only: {:?}",
+        semi.hits
+    );
 }
 
 /// f135c (134A-F1/F7 ingress seam, grids A13/A1/X_py_del_two, oracle
@@ -4213,7 +4309,10 @@ fn f136_del_meta_and_modifier_interface_bind_end_to_end() {
     // `pattern_nodes` identifier row — so the ident-exact index serve
     // answered silent ok:true-0 where sg 0.45.2 answers the
     // delete_expression family n1 (the F-131E-2/F-132E escape genus).
-    session.write("dv.js", "const o = {k: 1, j: 2};\ndelete o.k;\ndelete o.j;\n");
+    session.write(
+        "dv.js",
+        "const o = {k: 1, j: 2};\ndelete o.k;\ndelete o.j;\n",
+    );
     session.index_all(IndexOptions {
         embed_semantic: false,
         ..session.index_options()
@@ -4283,10 +4382,7 @@ fn f137m_csharp_bare_statement_keyword_escape_reaches_the_walk() {
 #[test]
 fn f139_java_class_member_count_reaches_the_walk() {
     let session = isolated_index_session();
-    session.write(
-        "k.java",
-        "public abstract class K {\n    void n();\n}\n",
-    );
+    session.write("k.java", "public abstract class K {\n    void n();\n}\n");
     session.index_all(IndexOptions {
         embed_semantic: false,
         ..session.index_options()
@@ -4314,10 +4410,7 @@ fn f139_java_class_member_count_reaches_the_walk() {
 #[test]
 fn php_pretty_printed_namespace_mixed_body_survives_the_prefilter() {
     let session = isolated_index_session();
-    session.write(
-        "a.php",
-        "<?php\nnamespace A {\n  f( );\n  g( );\n}\n",
-    );
+    session.write("a.php", "<?php\nnamespace A {\n  f( );\n  g( );\n}\n");
     session.index_all(IndexOptions {
         embed_semantic: false,
         ..session.index_options()
@@ -4337,7 +4430,6 @@ fn php_pretty_printed_namespace_mixed_body_survives_the_prefilter() {
         response.hits
     );
 }
-
 
 /// f147a (146E-F1 TRUE ROOT, ingress byte-fidelity): the `pattern:`-query
 /// scope split must deliver the user's pattern BYTES to the pattern lane.

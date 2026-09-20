@@ -322,4 +322,9 @@ parser!(
     TS_JS
 );
 parser!(DartParser, Dart, tree_sitter_dart::LANGUAGE, DART);
-parser!(MoonBitParser, MoonBit, tree_sitter_moonbit::LANGUAGE, MOONBIT);
+parser!(
+    MoonBitParser,
+    MoonBit,
+    tree_sitter_moonbit::LANGUAGE,
+    MOONBIT
+);

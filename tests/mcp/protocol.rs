@@ -316,7 +316,11 @@ fn hierarchical_searches_return_snippets_and_ids_without_auto_fusion() {
     // [id, kind, signal, symbol, snippet]; `p` maps path id to project path.
     // Fused `search` may surface defs (`d`) ahead of plain lexical (`x`).
     for (name, query, expected_kinds) in [
-        ("search", "target_symbol", &["d", "x", "e", "c", "a", "g"][..]),
+        (
+            "search",
+            "target_symbol",
+            &["d", "x", "e", "c", "a", "g"][..],
+        ),
         ("keyword_search", "target_symbol", &["x"][..]),
         ("ast_search", "fn $NAME() { $$$BODY }", &["p"][..]),
         ("semantic_search", "target symbol", &["e"][..]),

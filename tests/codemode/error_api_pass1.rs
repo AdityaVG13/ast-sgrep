@@ -29,9 +29,7 @@
 #[path = "error_testkit.rs"]
 mod error_testkit;
 
-use ast_sgrep_codemode::{
-    parse_plan, run_batch, run_plan, CallError, ServeRequest, ServeResponse,
-};
+use ast_sgrep_codemode::{parse_plan, run_batch, run_plan, CallError, ServeRequest, ServeResponse};
 use ast_sgrep_core::MAX_QUERY_CHARS;
 use error_testkit::{
     batch_call, batch_request, config_at, serve_lines, serve_request_line, session_at,
@@ -214,7 +212,10 @@ fn e1_other_search_find_chain_query_validation() {
     ];
     for (tool, args) in cases {
         let err = session.call(tool, args.clone()).expect_err("query guard");
-        assert!(matches!(err, CallError::Other(_)), "tool {tool}: got {err:?}");
+        assert!(
+            matches!(err, CallError::Other(_)),
+            "tool {tool}: got {err:?}"
+        );
     }
 }
 
@@ -233,7 +234,10 @@ fn e1_other_unknown_lang_rejected_pre_io() {
         let err = session
             .call(tool, json!({"query": "auth", "lang": "notalang"}))
             .expect_err("unknown lang");
-        assert!(matches!(err, CallError::Other(_)), "tool {tool}: got {err:?}");
+        assert!(
+            matches!(err, CallError::Other(_)),
+            "tool {tool}: got {err:?}"
+        );
     }
 }
 
@@ -315,7 +319,9 @@ fn e1_other_index_repo_targeted_shape() {
         json!({"paths": [escaped.to_str().expect("utf8")]}),
     ];
     for args in cases {
-        let err = session.call("index_repo", args.clone()).expect_err("paths guard");
+        let err = session
+            .call("index_repo", args.clone())
+            .expect_err("paths guard");
         assert!(matches!(err, CallError::Other(_)), "got {err:?}");
     }
 }

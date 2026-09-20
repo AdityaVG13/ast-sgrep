@@ -6,8 +6,8 @@
 //! `catalog_search`/`filter_hits` batches only — no index I/O.
 
 use ast_sgrep_codemode::{
-    BatchRequest, CallError, MAX_BATCH_ERROR_BYTES, MAX_BATCH_RESPONSE_BYTES,
-    MAX_BATCH_VALUE_BYTES, run_batch,
+    run_batch, BatchRequest, CallError, MAX_BATCH_ERROR_BYTES, MAX_BATCH_RESPONSE_BYTES,
+    MAX_BATCH_VALUE_BYTES,
 };
 use ast_sgrep_testkit as testkit;
 use ast_sgrep_testkit::scored_hits6;
@@ -33,8 +33,8 @@ fn batch_contract() {
                 limit,
                 ..testkit::batch_request(vec![testkit::catalog_call("solo", "search")])
             };
-            let resp =
-                run_batch(testkit::config_at(temp.path()), &req).expect("degenerate batch limit runs");
+            let resp = run_batch(testkit::config_at(temp.path()), &req)
+                .expect("degenerate batch limit runs");
             assert!(resp.all_ok);
             assert_eq!(resp.call_count, 1);
             assert_eq!(resp.mode, "serial");
@@ -129,18 +129,20 @@ fn batch_contract() {
             assert_eq!(resp.results.len(), n, "size {n}");
             assert!(resp.all_ok, "size {n}");
             assert_eq!(resp.mode, "serial", "size {n}");
-            assert_eq!(
-                resp.results.iter().filter(|r| r.ok).count(),
-                n,
-                "size {n}"
-            );
+            assert_eq!(resp.results.iter().filter(|r| r.ok).count(), n, "size {n}");
         }
     }
     // §7 ABSORBED: batch_threshold_sweep_exact_per_id_counts — one 5-call
     // batch fans a threshold sweep: exact per-id map {t5:2,t4:3,t3:4,t2:5,t1:6}.
     {
         let temp = tempfile::tempdir().expect("tempdir");
-        let thresholds = [("t5", 5.0), ("t4", 4.0), ("t3", 3.0), ("t2", 2.0), ("t1", 1.0)];
+        let thresholds = [
+            ("t5", 5.0),
+            ("t4", 4.0),
+            ("t3", 3.0),
+            ("t2", 2.0),
+            ("t1", 1.0),
+        ];
         let calls: Vec<ast_sgrep_codemode::BatchCall> = thresholds
             .iter()
             .map(|(id, min)| {
@@ -173,7 +175,13 @@ fn batch_contract() {
             .collect();
         assert_eq!(
             counts,
-            std::collections::BTreeMap::from([("t1", 6), ("t2", 5), ("t3", 4), ("t4", 3), ("t5", 2)])
+            std::collections::BTreeMap::from([
+                ("t1", 6),
+                ("t2", 5),
+                ("t3", 4),
+                ("t4", 3),
+                ("t5", 2)
+            ])
         );
     }
 }

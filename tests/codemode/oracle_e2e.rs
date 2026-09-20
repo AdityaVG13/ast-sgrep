@@ -50,7 +50,10 @@ fn indexed_plan_execute_shape_golden_flow() {
     assert!(result.ok);
     assert_eq!(result.call_count, 3);
     assert_eq!(result.return_value, json!({"hit_count": 1}));
-    assert_eq!(golden_text_pretty(&result.return_value), "{\n  \"hit_count\": 1\n}\n");
+    assert_eq!(
+        golden_text_pretty(&result.return_value),
+        "{\n  \"hit_count\": 1\n}\n"
+    );
 }
 
 /// INTENT=batch catalog results feed a plan select: "search" matches 10
@@ -64,7 +67,10 @@ fn batch_output_feeds_plan_end_to_end() {
     let temp = tempfile::tempdir().expect("tempdir");
     let batch = run_batch(
         config_at(temp.path()),
-        &batch_request(vec![catalog_call("w1", "search"), catalog_call("w2", "search")]),
+        &batch_request(vec![
+            catalog_call("w1", "search"),
+            catalog_call("w2", "search"),
+        ]),
     )
     .expect("batch runs");
     assert!(batch.all_ok);
@@ -82,7 +88,10 @@ fn batch_output_feeds_plan_end_to_end() {
     .expect("plan parses");
     let mut session = session_at(temp.path());
     let result = run_plan(&mut session, &plan).expect("plan runs");
-    assert_eq!(result.return_value, json!([{"name": "search"}, {"name": "find"}]));
+    assert_eq!(
+        result.return_value,
+        json!([{"name": "search"}, {"name": "find"}])
+    );
 }
 
 /// INTENT=same plan on two fresh sessions plus the direct-call path yield
@@ -124,8 +133,11 @@ fn rerun_determinism_freezes_golden_text() {
     assert_eq!(golden_text_pretty(&r1.return_value), hand);
     assert_eq!(golden_text_pretty(&r2.return_value), hand);
     assert_eq!(golden_text_pretty(&shaped), hand);
-    let batch = run_batch(config_at(temp.path()), &batch_request(vec![catalog_call("c", "chain")]))
-        .expect("batch runs");
+    let batch = run_batch(
+        config_at(temp.path()),
+        &batch_request(vec![catalog_call("c", "chain")]),
+    )
+    .expect("batch runs");
     assert!(batch.all_ok);
     assert_eq!(
         batch.results[0].value.as_ref().expect("value"),
@@ -157,7 +169,10 @@ fn budget_exhaustion_midplan_with_batch_isolation() {
     let again = tight
         .call("catalog_search", json!({"query": "search"}))
         .expect_err("stays exhausted");
-    assert!(matches!(again, CallError::BudgetExhausted(2)), "got {again:?}");
+    assert!(
+        matches!(again, CallError::BudgetExhausted(2)),
+        "got {again:?}"
+    );
     let mut roomy = session_at(temp.path());
     roomy.max_calls = 3;
     let ok = run_plan(&mut roomy, &plan).expect("roomy runs");
@@ -299,7 +314,8 @@ fn oversized_response_fail_closed_across_surfaces() {
     assert!(batch.results[0].error.is_some());
     let mut small = session_at(temp.path());
     assert_eq!(
-        small.call("select", json!({"value": {"a": 1}, "fields": ["a"]}))
+        small
+            .call("select", json!({"value": {"a": 1}, "fields": ["a"]}))
             .expect("small ok"),
         json!({"a": 1})
     );
@@ -369,7 +385,10 @@ fn session_read_agrees_with_budget_rendering() {
         .call("read", json!({"path": "lib.rs", "start": 1, "end": 3}))
         .expect("read");
     assert_eq!(window["count"], json!(1));
-    let body = window["windows"][0]["text"].as_str().expect("text").to_string();
+    let body = window["windows"][0]["text"]
+        .as_str()
+        .expect("text")
+        .to_string();
     assert_eq!(body, "pub fn alpha() {\n    1\n}");
     let hit = sample_search_hit(&body);
     assert_eq!(render(&hit, DetailLevel::Full).body, body);

@@ -577,14 +577,13 @@ pub(crate) fn kt_binds_nothing_template(pattern: &str) -> bool {
         let p = pattern.trim();
         let rest = if let Some(r) = p.strip_prefix("companion object") {
             r
-        } else if let Some(r) = p.strip_prefix("init") {
+        } else {
+            let r = p.strip_prefix("init")?;
             // The `init` prefix demands a word boundary (`initX` is a name).
             if r.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
                 return None;
             }
             r
-        } else {
-            return None;
         };
         let inner = rest.trim_start().strip_prefix('{')?;
         let close = balanced_brace_close(inner)?;

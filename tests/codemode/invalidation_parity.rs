@@ -199,10 +199,16 @@ fn m_order_independence() {
     {
         let (root_a, _ia, mut session_a) = setup();
         let (root_b, _ib, mut session_b) = setup();
-        fs::rename(root_a.path().join("alpha.py"), root_a.path().join("beta.py"))
-            .expect("rename a");
-        fs::rename(root_b.path().join("alpha.py"), root_b.path().join("beta.py"))
-            .expect("rename b");
+        fs::rename(
+            root_a.path().join("alpha.py"),
+            root_a.path().join("beta.py"),
+        )
+        .expect("rename a");
+        fs::rename(
+            root_b.path().join("alpha.py"),
+            root_b.path().join("beta.py"),
+        )
+        .expect("rename b");
         let forward = refresh(&mut session_a, &["alpha.py", "beta.py"]);
         assert_eq!(forward["ok"], true);
         let reverse = refresh(&mut session_b, &["beta.py", "alpha.py"]);
@@ -310,10 +316,9 @@ fn m_conv_cycle_convergence() {
         let baseline_find = hit_bytes(&find(&mut session, ALPHA));
         let baseline_search = hit_bytes(&search(&mut session, format!("word:{ALPHA}")));
         let baseline_census = file_count(&mut session);
-        assert!(matches!(
-            session.peek_cached_search(&json!({"query": format!("word:{ALPHA}"), "limit": 8})),
-            Some(_)
-        ));
+        assert!(session
+            .peek_cached_search(&json!({"query": format!("word:{ALPHA}"), "limit": 8}))
+            .is_some());
 
         let root = session.config().root.clone();
         write_py(&root, "beta.py", BETA);

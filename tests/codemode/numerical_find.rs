@@ -30,7 +30,10 @@ fn find_contract() {
             .expect("limit 0 runs");
         assert_eq!(floored["hits"].as_array().expect("hits").len(), 1);
         let capped = session
-            .call("find", json!({"query": "n2totality", "limit": 1_000_000_000u64}))
+            .call(
+                "find",
+                json!({"query": "n2totality", "limit": 1_000_000_000u64}),
+            )
             .expect("huge limit runs");
         assert_eq!(capped["hits"].as_array().expect("hits").len(), 3);
         let negative = session

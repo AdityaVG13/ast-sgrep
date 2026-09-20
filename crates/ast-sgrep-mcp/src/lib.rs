@@ -665,12 +665,8 @@ impl McpServer {
             Some((cached_key, _)) => cached_key != &key,
         };
         if need_new {
-            let searcher = Searcher::new(self.search_options(
-                root.clone(),
-                limit,
-                file_filter,
-                lang_filter,
-            ))?;
+            let searcher =
+                Searcher::new(self.search_options(root.clone(), limit, file_filter, lang_filter))?;
             guard.writer_generation =
                 ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
             guard.entry = Some((key, searcher));
@@ -718,37 +714,21 @@ impl McpServer {
             lang,
             preview,
         } = args;
-        let (searcher, generation) = match self.searcher_for(
-            root.clone(),
-            limit,
-            file_filter.clone(),
-            lang.clone(),
-        ) {
-            Ok(pair) => pair,
-            Err(error) if error.to_string().contains("index is empty") => {
-                let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
-                return Ok(serde_json::to_string(&miss)?);
-            }
-            Err(error) => return Err(error),
-        };
+        let (searcher, generation) =
+            match self.searcher_for(root.clone(), limit, file_filter.clone(), lang.clone()) {
+                Ok(pair) => pair,
+                Err(error) if error.to_string().contains("index is empty") => {
+                    let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
+                    return Ok(serde_json::to_string(&miss)?);
+                }
+                Err(error) => return Err(error),
+            };
         if matches!(mode, AgentSearchMode::Semantic) {
             if let Some(msg) = self
-                .search_options(
-                    root.clone(),
-                    limit,
-                    file_filter.clone(),
-                    lang.clone(),
-                )
+                .search_options(root.clone(), limit, file_filter.clone(), lang.clone())
                 .unavailable_non_hashed_embed()
             {
-                self.restore_searcher(
-                    root,
-                    limit,
-                    file_filter,
-                    lang,
-                    generation,
-                    searcher,
-                );
+                self.restore_searcher(root, limit, file_filter, lang, generation, searcher);
                 anyhow::bail!(msg);
             }
         }
@@ -758,14 +738,7 @@ impl McpServer {
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(&query),
         };
-        self.restore_searcher(
-            root.clone(),
-            limit,
-            file_filter,
-            lang,
-            generation,
-            searcher,
-        );
+        self.restore_searcher(root.clone(), limit, file_filter, lang, generation, searcher);
         let response = response?;
         // 6a3i: a miss is the cheapest response we can send, and the one where
         // a vague answer costs the most in speculative agent retries.

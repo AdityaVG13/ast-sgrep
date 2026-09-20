@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-export const CODEMODE_BINDING_VERSION = "2.1.0";
+export const CODEMODE_BINDING_VERSION = "2.5.0";
 let cached;
 function platformTriple() {
     const { platform, arch } = process;

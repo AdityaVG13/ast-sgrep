@@ -33,25 +33,25 @@ mod scrub;
 mod verdict;
 pub use cli::{
     asgrep_bin, assert_failure_envelope, assert_finite_unit, assert_fixture_hits,
-    assert_human_error, assert_human_success, assert_no_success_shape,
-    assert_operational_envelope, assert_success, assert_usage_envelope, envelope_shape,
-    eval_project, f64_at, fixture_root, indexed_project, indexed_project_n, parse_human_row,
-    parse_human_summary, parse_stdout, run, run_env, run_eval_ok, run_eval_raw,
-    run_index_default, run_index_json_noembed, run_json, run_json_full, run_search_json,
-    usage_message, write_fixture, write_gold, CliSession,
+    assert_human_error, assert_human_success, assert_no_success_shape, assert_operational_envelope,
+    assert_success, assert_usage_envelope, envelope_shape, eval_project, f64_at, fixture_root,
+    indexed_project, indexed_project_n, parse_human_row, parse_human_summary, parse_stdout, run,
+    run_env, run_eval_ok, run_eval_raw, run_index_default, run_index_json_noembed, run_json,
+    run_json_full, run_search_json, usage_message, write_fixture, write_gold, CliSession,
 };
 pub use cli_oracle::{
-    oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json, oracle_run_raw,
-    oracle_search_corpus, run_drain_timeout, sorted_surface_keys, write_root_bytes, OracleCorpus,
-};
-pub use cli_recovery::{
-    assert_doctor_unhealthy, assert_serve_parity, capture_baseline, run_in, run_index, run_outline_snapshot,
-    run_reindex, run_search, run_status, run_timeout, search_answer_keys, seed_big_project,
-    seed_project, status_snapshot, KillOnDrop, ServeBaseline, OUTLINE_PATH, QUERY, RUN_TIMEOUT,
-    SOURCE,
+    oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json,
+    oracle_run_raw, oracle_search_corpus, run_drain_timeout, sorted_surface_keys, write_root_bytes,
+    OracleCorpus,
 };
 #[cfg(unix)]
 pub use cli_recovery::kill9;
+pub use cli_recovery::{
+    assert_doctor_unhealthy, assert_serve_parity, capture_baseline, run_in, run_index,
+    run_outline_snapshot, run_reindex, run_search, run_status, run_timeout, search_answer_keys,
+    seed_big_project, seed_project, status_snapshot, KillOnDrop, ServeBaseline, OUTLINE_PATH,
+    QUERY, RUN_TIMEOUT, SOURCE,
+};
 #[cfg(feature = "codemode")]
 pub use codemode::{
     assert_json_byte_identical, assert_other_preserves_cause, batch_call, batch_request,
@@ -81,9 +81,8 @@ pub use core_oracle::{
     write_core_fixture, CorePipelineFixture,
 };
 pub use core_recovery::{
-    assert_torn, build_and_quiet, corpus_session, home_names, quarantine_path,
-    quiesced_db_bytes, search_parity_key, search_parity_keys, store_snapshot, upsert_test_file,
-    RECOVERY_CORPUS,
+    assert_torn, build_and_quiet, corpus_session, home_names, quarantine_path, quiesced_db_bytes,
+    search_parity_key, search_parity_keys, store_snapshot, upsert_test_file, RECOVERY_CORPUS,
 };
 pub use fault::{
     corrupt_db_total, err_of, flip_bytes, is_corrupt_kind, remove_sqlite_sidecars, sqlite_code,
@@ -98,9 +97,7 @@ pub use golden::{
     canonicalize_chain_response, canonicalize_extraction, canonicalize_text, golden_text_pretty,
     updating_goldens,
 };
-pub use hit::{
-    fused_key, hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey,
-};
+pub use hit::{fused_key, hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
     searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
@@ -114,7 +111,9 @@ pub use lang_pipeline::{
     assert_rank_sound, assert_spans_in_source, rank_hits, run_pipeline, score_hit, PipelineOutcome,
 };
 #[cfg(feature = "lsp")]
-pub use lsp::{edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend};
+pub use lsp::{
+    edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend,
+};
 pub use mcp::{
     assert_hit_envelope, assert_jsonrpc_error, assert_miss_envelope, assert_ping_ok,
     assert_tool_error_shape, assert_tool_success, assert_tool_success_shape, assert_tools_list_ok,
@@ -122,9 +121,8 @@ pub use mcp::{
     expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
     mcp_bin, multi_hit_tree, ping, response_by_id, rpc_at, rpc_pipeline, rpc_session,
     rpc_session_env, rpc_session_raw, search_call, small_tree, snippet_bytes,
-    spawn_raw_no_handshake, tool_body,
-    tool_call, tool_error_discriminant, tool_text, tools_list, CallSession, LiveSession,
-    TESTKIT_CLIENT_NAME,
+    spawn_raw_no_handshake, tool_body, tool_call, tool_error_discriminant, tool_text, tools_list,
+    CallSession, LiveSession, TESTKIT_CLIENT_NAME,
 };
 #[cfg(feature = "plugins")]
 pub use mcp::{assert_hit_path_set, hit_path_set};

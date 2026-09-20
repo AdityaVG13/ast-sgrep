@@ -137,7 +137,7 @@ fn local_embed_vectors_bit_identical_across_entry_points() {
         "",
         "héllo wörld 🦀",
     ];
-    let refs: Vec<&str> = inputs.iter().copied().collect();
+    let refs: Vec<&str> = inputs.to_vec();
     let batched = embed_batch_with_chain(&refs, EmbedPreference::Semantic);
     assert_eq!(batched.len(), inputs.len());
     let mut seen = Vec::new();
@@ -246,11 +246,8 @@ fn offline_resolution_surface_stable() {
 #[cfg(not(feature = "neural-embed"))]
 #[test]
 fn non_neural_cells_fallback_exact_and_stored_neural_rejected() {
-    // Negative guard: loud failure if this cell runs with neural compiled in.
-    assert!(
-        !cfg!(feature = "neural-embed"),
-        "non-neural cell requires neural-embed OFF"
-    );
+    // The #[cfg(not(feature = "neural-embed"))] gate above is the guard: this
+    // cell cannot compile, let alone run, with neural compiled in.
     use ast_sgrep_embed::{
         embed_batch_with_chain, embed_query, embed_with_chain, EmbedBackendKind, EmbedPreference,
         Embedder, HashedEmbedder, SEMANTIC_DIM,

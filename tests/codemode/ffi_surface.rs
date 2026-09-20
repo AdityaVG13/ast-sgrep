@@ -11,11 +11,13 @@
 //! execution is unobservable here — only construction (`Ok` discriminant) and
 //! the sync validation reasons are pinned.
 //!
-//! Link note (macOS): `RUSTFLAGS="-C link-arg=-undefined -C
-//! link-arg=dynamic_lookup" cargo test -p ast-sgrep-codemode-napi --test
-//! ffi_surface`. Tests never call Node FFI.
+//! Link note: node symbols stay unresolved via the napi crate's build.rs
+//! (tests never call Node FFI); plain `cargo test -p
+//! ast-sgrep-codemode-napi` works on macOS/Linux.
 
-use ast_sgrep_codemode::{SessionConfig, MAX_BATCH_CALLS, MAX_BATCH_ID_BYTES, MAX_BATCH_TOOL_BYTES};
+use ast_sgrep_codemode::{
+    SessionConfig, MAX_BATCH_CALLS, MAX_BATCH_ID_BYTES, MAX_BATCH_TOOL_BYTES,
+};
 use ast_sgrep_codemode_napi::{
     async_api_version, binding_version, is_native, JsSessionConfig, Session,
 };
@@ -165,7 +167,9 @@ fn fast_lookups_render_contract_shapes() {
         )
         .expect("catalog_describe");
     assert_eq!(described["name"], json!("search"));
-    assert!(described["description"].as_str().is_some_and(|d| !d.is_empty()));
+    assert!(described["description"]
+        .as_str()
+        .is_some_and(|d| !d.is_empty()));
     assert_eq!(session.call_count(), 2);
 
     // Before any db exists the readonly Searcher fails closed (discriminant
@@ -260,11 +264,7 @@ fn async_construction_validates_identity_only() {
         .map(|_| ())
         .is_ok());
     assert!(session
-        .call(
-            "defs".to_string(),
-            Some(json!({"symbol": "Main"})),
-            None
-        )
+        .call("defs".to_string(), Some(json!({"symbol": "Main"})), None)
         .map(|_| ())
         .is_ok());
 
@@ -273,11 +273,7 @@ fn async_construction_validates_identity_only() {
     let task = session
         .batch(
             vec![
-                js_call(
-                    "ok",
-                    "catalog_describe",
-                    Some(json!({"name": "search"})),
-                ),
+                js_call("ok", "catalog_describe", Some(json!({"name": "search"}))),
                 js_call("bad-tool", "zzz_no_such_tool", None),
                 js_call("bad-args", "defs", Some(json!({}))),
             ],
@@ -301,7 +297,10 @@ fn async_construction_validates_identity_only() {
     drop(task);
 
     // All 6 violation classes rejected with exact reasons (canonical text).
-    let err = session.batch(vec![], None).err().expect("empty batch rejected");
+    let err = session
+        .batch(vec![], None)
+        .err()
+        .expect("empty batch rejected");
     assert_eq!(err.reason, "batch.calls must be non-empty");
     let err = session
         .batch(vec![js_call("", "search", None)], None)
@@ -338,8 +337,14 @@ fn async_construction_validates_identity_only() {
     let calls: Vec<_> = (0..MAX_BATCH_CALLS + 1)
         .map(|i| js_call(&format!("id-{i}"), "search", None))
         .collect();
-    let err = session.batch(calls, None).err().expect("oversize batch rejected");
-    assert_eq!(err.reason, format!("batch.calls exceeds max {MAX_BATCH_CALLS}"));
+    let err = session
+        .batch(calls, None)
+        .err()
+        .expect("oversize batch rejected");
+    assert_eq!(
+        err.reason,
+        format!("batch.calls exceeds max {MAX_BATCH_CALLS}")
+    );
 
     // Exact-max boundaries construct: every `>` comparison is exclusive.
     let mut calls: Vec<_> = (0..MAX_BATCH_CALLS - 1)
@@ -351,7 +356,9 @@ fn async_construction_validates_identity_only() {
         Some(json!({"query": "q"})),
     ));
     assert_eq!(calls.len(), MAX_BATCH_CALLS);
-    let task = session.batch(calls, None).expect("exact-max batch constructs");
+    let task = session
+        .batch(calls, None)
+        .expect("exact-max batch constructs");
     drop(task);
 
     // Limits count bytes, not chars: 'é' is 2 bytes, so 64 are exactly 128
@@ -389,13 +396,13 @@ fn async_construction_validates_identity_only() {
         .batch(calls, None)
         .err()
         .expect("overcount + empty id rejected");
-    assert_eq!(err.reason, format!("batch.calls exceeds max {MAX_BATCH_CALLS}"));
+    assert_eq!(
+        err.reason,
+        format!("batch.calls exceeds max {MAX_BATCH_CALLS}")
+    );
     let err = session
         .batch(
-            vec![
-                js_call("ok", "search", None),
-                js_call("second", "", None),
-            ],
+            vec![js_call("ok", "search", None), js_call("second", "", None)],
             None,
         )
         .err()

@@ -160,7 +160,10 @@ fn signature_keys_are_per_pattern_stable_under_growth() {
     let decl_once = cached_pattern_signatures("fn greet_user").unwrap();
     let kind_once = cached_pattern_signatures("fn $NAME").unwrap();
     assert_eq!(ident_once, cached_pattern_signatures("SearchHit").unwrap());
-    assert_eq!(decl_once, cached_pattern_signatures("fn greet_user").unwrap());
+    assert_eq!(
+        decl_once,
+        cached_pattern_signatures("fn greet_user").unwrap()
+    );
     assert_eq!(kind_once, cached_pattern_signatures("fn $NAME").unwrap());
     assert_ne!(ident_once, decl_once);
     assert_ne!(ident_once, kind_once);
@@ -209,8 +212,14 @@ fn native_answerability_is_per_language_keyed() {
         Language::JavaScript,
         "if (alpha) { $B }"
     ));
-    assert!(!native_pattern_answerable(Language::Swift, "if (alpha) { $B }"));
-    assert!(!native_pattern_answerable(Language::Swift, "if (alpha) { $B }"));
+    assert!(!native_pattern_answerable(
+        Language::Swift,
+        "if (alpha) { $B }"
+    ));
+    assert!(!native_pattern_answerable(
+        Language::Swift,
+        "if (alpha) { $B }"
+    ));
     assert!(native_pattern_answerable(
         Language::JavaScript,
         "if (alpha) { $B }"
@@ -222,7 +231,10 @@ fn native_answerability_is_per_language_keyed() {
         Language::JavaScript,
         "if (alpha) { $B }"
     ));
-    assert!(!native_pattern_answerable(Language::Swift, "if (alpha) { $B }"));
+    assert!(!native_pattern_answerable(
+        Language::Swift,
+        "if (alpha) { $B }"
+    ));
 
     // Leg 2 (cross-language repetition): interleaved consults never flip.
     let rust_fn = native_pattern_answerable(Language::Rust, "fn $NAME($$$)");

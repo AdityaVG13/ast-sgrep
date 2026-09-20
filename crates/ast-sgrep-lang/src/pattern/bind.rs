@@ -444,12 +444,8 @@ pub(crate) fn capture_call_path(
         }
     } else {
         if capture_name(pattern_segments[0]).is_none() {
-            let Some(callee_node) = call_field_node(node) else {
-                return None;
-            };
-            let Some(callee_text) = node_text(&callee_node, source) else {
-                return None;
-            };
+            let callee_node = call_field_node(node)?;
+            let callee_text = node_text(&callee_node, source)?;
             if callee_text != pattern_segments[0].trim() {
                 return None;
             }

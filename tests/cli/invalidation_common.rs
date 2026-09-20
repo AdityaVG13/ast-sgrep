@@ -26,11 +26,7 @@ pub fn fixture_two_files() -> (tempfile::TempDir, PathBuf, PathBuf, String, Stri
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("proj");
     fs::create_dir_all(&root).expect("proj");
-    fs::write(
-        root.join("alpha.rs"),
-        "pub fn alpha_one() -> u32 { 1 }\n",
-    )
-    .expect("alpha");
+    fs::write(root.join("alpha.rs"), "pub fn alpha_one() -> u32 { 1 }\n").expect("alpha");
     fs::write(root.join("beta.rs"), "pub fn beta_one() -> u32 { 2 }\n").expect("beta");
     let index = dir.path().join("idx").join("index.db");
     let root_s = root.to_str().expect("root utf8").to_owned();

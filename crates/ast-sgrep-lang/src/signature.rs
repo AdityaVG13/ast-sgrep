@@ -42,8 +42,26 @@ pub use crate::pattern::DECL_PATTERN_PREFIXES as DECL_PREFIXES;
 /// away). For grammars outside an arm's scope the literal lane keeps
 /// serving genuine identifier shapes (the rs `debugger` zero-drift rule).
 const STATEMENT_KEYWORDS: &[&str] = &[
-    "return", "raise", "yield", "throw", "await", "break", "continue", "next", "last", "debugger",
-    "import", "pass", "global", "del", "assert", "use", "fallthrough", "goto", "redo", "retry",
+    "return",
+    "raise",
+    "yield",
+    "throw",
+    "await",
+    "break",
+    "continue",
+    "next",
+    "last",
+    "debugger",
+    "import",
+    "pass",
+    "global",
+    "del",
+    "assert",
+    "use",
+    "fallthrough",
+    "goto",
+    "redo",
+    "retry",
     // Go's bare `defer`/`go` are STATEMENT_HEAD_KEYWORDS whose statement
     // shapes the reference answers (twice vs the subject's none) — the
     // ident-serve trap silenced them exactly like bare `debugger`. Because
@@ -77,7 +95,16 @@ const STATEMENT_KEYWORDS: &[&str] = &[
     // every genuine identifier shape of the same spelling in other
     // grammars at reference parity (py/rs/rb identifier shapes stay
     // equal-count; the rs-debugger zero-drift rule).
-    "defer", "go", "delete", "lock", "using", "var", "fixed", "checked", "unchecked", "unsafe",
+    "defer",
+    "go",
+    "delete",
+    "lock",
+    "using",
+    "var",
+    "fixed",
+    "checked",
+    "unchecked",
+    "unsafe",
 ];
 
 /// True when `pattern_nodes` rows for these signatures are the same nodes the
@@ -108,13 +135,11 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
     if pattern.is_empty() {
         return Some(vec![]);
     }
-    if !pattern.contains('$') {
-        if is_pattern_ident(pattern) {
-            return Some(vec![pattern.to_string()]);
-        }
-        // `fn foo` / `struct Bar` fall through to decl: rows. A raw
-        // "fn foo" string is not stored as a pattern_nodes signature.
+    if !pattern.contains('$') && is_pattern_ident(pattern) {
+        return Some(vec![pattern.to_string()]);
     }
+    // `fn foo` / `struct Bar` fall through to decl: rows. A raw
+    // "fn foo" string is not stored as a pattern_nodes signature.
     // Never let a broad cached signature bypass native validation. In
     // particular, malformed declaration tails must remain match-none.
     classify_native(pattern)?;
@@ -281,7 +306,7 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
         // whitespace-free TOKEN — still a required byte run of any match,
         // over-broad in the sound direction. A token-only segment never
         // needs this fallback.
-        .map(|segment| {
+        .and_then(|segment| {
             if segment.chars().any(char::is_whitespace) {
                 segment
                     .split_whitespace()
@@ -291,7 +316,6 @@ pub fn required_pattern_literal(pattern: &str) -> Option<String> {
                 Some(segment.to_string())
             }
         })
-        .flatten()
 }
 
 /// Longest concrete code token of a `$`-less pattern, with comment regions
@@ -400,11 +424,7 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
     ),
     (
         "def ",
-        &[
-            "function_definition",
-            "method",
-            "singleton_method",
-        ],
+        &["function_definition", "method", "singleton_method"],
     ),
     (
         "function ",
@@ -479,8 +499,7 @@ fn is_pattern_path(value: &str) -> bool {
             // pattern-side derivation must accept the same spellings to
             // address them.
             .all(|segment| {
-                is_pattern_ident(segment)
-                    || crate::pattern::namespace_qualified_segment(segment)
+                is_pattern_ident(segment) || crate::pattern::namespace_qualified_segment(segment)
             })
 }
 
@@ -513,20 +532,4 @@ fn has_multiple_call_segments(pattern: &str) -> bool {
         }
     }
     call_segments + usize::from(segment_has_call) > 1
-}
-
-#[cfg(test)]
-mod index_serve_tests {
-    use super::{cached_pattern_signatures, index_can_serve_pattern};
-
-    #[test]
-    fn ident_and_decl_are_index_complete_kind_is_not() {
-        let ident = cached_pattern_signatures("SearchHit").unwrap();
-        assert!(index_can_serve_pattern("SearchHit", &ident));
-        let decl = cached_pattern_signatures("fn greet_user").unwrap();
-        assert!(index_can_serve_pattern("fn greet_user", &decl));
-        let kind = cached_pattern_signatures("fn $NAME").unwrap();
-        assert!(!index_can_serve_pattern("fn $NAME", &kind));
-        assert!(!index_can_serve_pattern("fn $NAME() { $$$BODY }", &[]));
-    }
 }

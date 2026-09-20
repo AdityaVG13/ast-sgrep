@@ -9,7 +9,9 @@
 //! comment above it). Nothing here snapshots production output.
 
 use ast_sgrep_core::fusion::LearnedFusionModel;
-use ast_sgrep_core::intent::{default_weights, route_hits, weights_for, ChannelWeights, QueryIntent};
+use ast_sgrep_core::intent::{
+    default_weights, route_hits, weights_for, ChannelWeights, QueryIntent,
+};
 use ast_sgrep_core::query::ParsedQuery;
 use ast_sgrep_core::rank::{score_caller, score_def};
 use ast_sgrep_core::search::{HitKind, SearchHit};
@@ -46,14 +48,7 @@ fn default_weights_contract() {
     for intent in [QueryIntent::Literal, QueryIntent::Structural] {
         let w = default_weights(intent);
         for v in [
-            w.lexical,
-            w.def,
-            w.caller,
-            w.graph,
-            w.anchor,
-            w.embed,
-            w.pattern,
-            w.import,
+            w.lexical, w.def, w.caller, w.graph, w.anchor, w.embed, w.pattern, w.import,
         ] {
             assert_eq!(v, 1.0, "flat intent {intent:?} must be all-ones");
         }
@@ -170,8 +165,8 @@ fn route_hits_contract() {
     let mut s = [def3];
     route_hits(&spelled, &mut s);
     assert_eq!(s[0].score, 0.5); // 11.5/23 via the spelling denom
-    // Empty terms: text channels (asgrep/def/caller/graph/anchor) zero out;
-    // non-text channels still normalize (embed 2.0/4 = 0.5).
+                                 // Empty terms: text channels (asgrep/def/caller/graph/anchor) zero out;
+                                 // non-text channels still normalize (embed 2.0/4 = 0.5).
     let empty = ParsedQuery::parse("");
     assert!(empty.terms.is_empty());
     let mut z = [
@@ -272,10 +267,10 @@ fn route_hits_contract() {
     assert_eq!(hits[3].score, hits[4].score);
 }
 
-/// INTENT: `score_def`/`score_caller` extreme-term-count exactness + zero-guard
-/// + relevance-ladder relations (producer-score contract).
+/// INTENT: `score_def`/`score_caller` extreme-term-count exactness, zero-guard,
+/// and relevance-ladder relations (producer-score contract).
 /// KILLS: coverage/base-guard-mutant, ladder/scale-mutant.
-/// ABSORBS: `score_def_caller_extreme_term_counts` (N2) +
+/// ABSORBS: `score_def_caller_extreme_term_counts` (N2),
 /// `def_caller_relevance_ladder_relations` (N3).
 #[test]
 fn score_def_caller_contract() {
@@ -303,7 +298,10 @@ fn score_def_caller_contract() {
     let multi = vec!["foo".to_string(), "bar".to_string()];
     assert!(score_def(&multi, "foo bar") > score_caller(&multi, "foo bar"));
     let unmatched = vec!["zzz".to_string()];
-    assert_eq!(score_def(&unmatched, "foo"), score_caller(&unmatched, "foo"));
+    assert_eq!(
+        score_def(&unmatched, "foo"),
+        score_caller(&unmatched, "foo")
+    );
     // Appending a matching term strictly raises coverage; appending a
     // non-matching term leaves the sum bit-identical (zero-score terms are
     // skipped before the accumulator is touched).

@@ -9,11 +9,10 @@
 //! `declaration_prefix` `None`, and the unsupported-language `None` paths.
 
 use ast_sgrep_lang::{
-    cached_pattern_signatures, candidate_kind_signatures, classify_native,
-    declaration_prefix, detect_language, index_can_serve_pattern, is_pattern_ident,
-    is_universal_root_pattern, match_literal_pattern, match_pattern,
-    native_pattern_answerable, needs_ast_grep_fallback, required_pattern_literal,
-    tree_sitter_language, Language, ParserRegistry,
+    cached_pattern_signatures, candidate_kind_signatures, classify_native, declaration_prefix,
+    detect_language, index_can_serve_pattern, is_pattern_ident, is_universal_root_pattern,
+    match_literal_pattern, match_pattern, native_pattern_answerable, needs_ast_grep_fallback,
+    required_pattern_literal, tree_sitter_language, Language, ParserRegistry,
 };
 use std::path::Path;
 
@@ -78,7 +77,10 @@ fn registry_parses_every_language_ok() {
     let registry = ParserRegistry::new();
     for lang in Language::all() {
         assert!(registry.parse(*lang, "").is_ok(), "{lang}");
-        assert!(registry.parse(*lang, "{{{{\n\x00\x01garbage").is_ok(), "{lang}");
+        assert!(
+            registry.parse(*lang, "{{{{\n\x00\x01garbage").is_ok(),
+            "{lang}"
+        );
     }
 }
 
@@ -112,10 +114,24 @@ fn extraction_empty_and_garbage_fail_closed() {
 fn depth_guard_threshold() {
     let registry = ParserRegistry::new();
     let shallow_src = "fn f() { let x = (1 + (2 * 3)); }";
-    assert!(!registry.parse(Language::Rust, shallow_src).unwrap().depth_truncated);
+    assert!(
+        !registry
+            .parse(Language::Rust, shallow_src)
+            .unwrap()
+            .depth_truncated
+    );
     // 300-deep paren nesting breaches the 256 cap.
-    let deep_src = format!("fn f() {{ let x = {}1{}; }}", "(".repeat(300), ")".repeat(300));
-    assert!(registry.parse(Language::Rust, &deep_src).unwrap().depth_truncated);
+    let deep_src = format!(
+        "fn f() {{ let x = {}1{}; }}",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
+    assert!(
+        registry
+            .parse(Language::Rust, &deep_src)
+            .unwrap()
+            .depth_truncated
+    );
 }
 
 /// E1-LANG-06: classifier rejections (exotic shapes -> None).
@@ -148,7 +164,10 @@ fn cached_and_candidate_signature_gaps() {
     assert_eq!(cached_pattern_signatures(""), Some(vec![]));
     // Positive controls: concrete callee addresses one call: row,
     // metavariable callee addresses the kind rows.
-    assert_eq!(cached_pattern_signatures("foo($$$)").unwrap(), vec!["call:foo".to_string()]);
+    assert_eq!(
+        cached_pattern_signatures("foo($$$)").unwrap(),
+        vec!["call:foo".to_string()]
+    );
     assert_eq!(
         cached_pattern_signatures("$F($$$)").unwrap(),
         vec!["kind:call_expression".to_string(), "kind:call".to_string()]
@@ -185,7 +204,10 @@ fn required_pattern_literal_absent() {
 fn serve_and_answer_gates() {
     // index_can_serve_pattern denials.
     assert!(!index_can_serve_pattern("foo", &[]));
-    assert!(!index_can_serve_pattern("fn $N", &["kind:function_item".to_string()]));
+    assert!(!index_can_serve_pattern(
+        "fn $N",
+        &["kind:function_item".to_string()]
+    ));
     assert!(!index_can_serve_pattern("return", &["return".to_string()]));
     assert!(index_can_serve_pattern("foo", &["foo".to_string()]));
     // Degenerate `;;` roots are unanswerable outside py/swift/kt.
@@ -224,18 +246,32 @@ fn fallback_loud_class() {
 #[test]
 fn match_ok_empty_rejections() {
     // Empty pattern.
-    assert!(match_pattern(Language::Rust, "fn foo() {}", "").unwrap().is_empty());
-    assert!(match_literal_pattern(Language::Rust, "fn foo() {}", "").unwrap().is_empty());
+    assert!(match_pattern(Language::Rust, "fn foo() {}", "")
+        .unwrap()
+        .is_empty());
+    assert!(match_literal_pattern(Language::Rust, "fn foo() {}", "")
+        .unwrap()
+        .is_empty());
     // Bare-connector garbage class.
-    assert!(match_pattern(Language::Rust, "fn foo() {}", "->").unwrap().is_empty());
-    assert!(match_pattern(Language::Rust, "fn foo() {}", "::").unwrap().is_empty());
+    assert!(match_pattern(Language::Rust, "fn foo() {}", "->")
+        .unwrap()
+        .is_empty());
+    assert!(match_pattern(Language::Rust, "fn foo() {}", "::")
+        .unwrap()
+        .is_empty());
     // PHP-only garbage spellings.
-    assert!(match_pattern(Language::Php, "<?php $a && $b;", "&&").unwrap().is_empty());
-    assert!(match_pattern(Language::Php, "<?php $a && $b;", ".").unwrap().is_empty());
+    assert!(match_pattern(Language::Php, "<?php $a && $b;", "&&")
+        .unwrap()
+        .is_empty());
+    assert!(match_pattern(Language::Php, "<?php $a && $b;", ".")
+        .unwrap()
+        .is_empty());
     // Garbage source is Ok (per-file robustness), never Err.
     assert!(match_pattern(Language::Rust, "{{{{ !!", "foo").is_ok());
     // Positive control: a literal hit is found.
-    assert!(!match_pattern(Language::Rust, "fn foo() {}", "foo").unwrap().is_empty());
+    assert!(!match_pattern(Language::Rust, "fn foo() {}", "foo")
+        .unwrap()
+        .is_empty());
 }
 
 /// E1-LANG-12: declaration_prefix is None for non-declaration nodes.
@@ -245,7 +281,9 @@ fn match_ok_empty_rejections() {
 #[test]
 fn declaration_prefix_non_decl_none() {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_language(Language::Rust)).unwrap();
+    parser
+        .set_language(&tree_sitter_language(Language::Rust))
+        .unwrap();
     let tree = parser.parse("fn foo() { bar(); }", None).unwrap();
     let root = tree.root_node();
     // The function_item node has a prefix; the identifier / call nodes do not.

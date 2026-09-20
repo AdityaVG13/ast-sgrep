@@ -52,7 +52,9 @@ fn dot_and_cosine_kernels_match_hand_values() {
     let twos = vec![2.0f32; 64];
     assert_eq!(dot_similarity(&ones, &twos), 128.0);
     assert_eq!(dot_similarity(&vec![1.0f32; 63], &vec![1.0f32; 63]), 63.0);
-    let alt: Vec<f32> = (0..100).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+    let alt: Vec<f32> = (0..100)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
     assert_eq!(dot_similarity(&alt, &vec![1.0f32; 100]), 0.0);
     // Hand dot: 2.5*-4 + -1*2 + 0.5*8 = -8 (exact); dot is symmetric.
     let a = [2.5f32, -1.0, 0.5];
@@ -76,10 +78,7 @@ fn dot_and_cosine_kernels_match_hand_values() {
     let parallel = cosine_similarity(&[1.0, 1.0], &[2.0, 2.0]);
     assert!((parallel - 1.0).abs() < 1e-6, "got {parallel}");
     // Hand: cos([3,4],[4,3]) = 24/25 = 0.96; symmetric and bounded ±1.
-    assert!(approx_eq(
-        cosine_similarity(&[3.0, 4.0], &[4.0, 3.0]),
-        0.96
-    ));
+    assert!(approx_eq(cosine_similarity(&[3.0, 4.0], &[4.0, 3.0]), 0.96));
     let pairs: &[(&[f32], &[f32])] = &[
         (&[3.0, 4.0], &[4.0, 3.0]),
         (&[1.0, 1.0], &[-1.0, -1.0]),

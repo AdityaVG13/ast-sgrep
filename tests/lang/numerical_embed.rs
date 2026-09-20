@@ -119,8 +119,8 @@ fn embed_contract() {
     let nan = embed_from_bytes(&[0xFF, 0xFF, 0xFF, 0xFF]).expect("aligned ok");
     assert_eq!(nan.len(), 1);
     assert_eq!(nan[0].to_bits(), 0xFFFF_FFFF);
-    let pair = embed_from_bytes(&[0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00])
-        .expect("aligned ok");
+    let pair =
+        embed_from_bytes(&[0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00]).expect("aligned ok");
     assert_eq!(pair, vec![1.0, 0.0]);
 }
 

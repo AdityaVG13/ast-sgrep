@@ -17,10 +17,9 @@ pub(crate) fn cs_expression_template(pattern: &str) -> Option<CsExpressionTempla
     let p = pattern.trim();
     let (keyword, rest) = if let Some(rest) = p.strip_prefix("checked") {
         ("checked", rest)
-    } else if let Some(rest) = p.strip_prefix("unchecked") {
-        ("unchecked", rest)
     } else {
-        return None;
+        let rest = p.strip_prefix("unchecked")?;
+        ("unchecked", rest)
     };
     if !rest.starts_with('(') {
         return None;
@@ -183,10 +182,7 @@ pub(crate) fn ja_strip_modifier_run(pattern: &str) -> (Vec<String>, bool, &str) 
 pub(crate) fn ja_strip_annotation_run(pattern: &str) -> (Vec<String>, &str) {
     let mut out = Vec::new();
     let mut rest = pattern;
-    loop {
-        let Some(after) = rest.strip_prefix('@') else {
-            break;
-        };
+    while let Some(after) = rest.strip_prefix('@') {
         let name_end = after
             .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
             .unwrap_or(after.len());
@@ -479,9 +475,7 @@ pub(crate) fn java_sync_method_match(
     let mut cursor_index = 0usize;
     for want in &template.modifiers {
         loop {
-            let Some(token) = tokens.get(cursor_index) else {
-                return None;
-            };
+            let token = tokens.get(cursor_index)?;
             match token {
                 // An annotation must not sit between pattern modifiers.
                 None => return None,
@@ -653,7 +647,7 @@ pub(crate) struct SwiftForTemplate {
 }
 
 pub(crate) fn swift_for_template(pattern: &str) -> Option<SwiftForTemplate> {
-    let mut tokens = pattern.trim().split_whitespace();
+    let mut tokens = pattern.split_whitespace();
     if tokens.next()? != "for" {
         return None;
     }
@@ -748,7 +742,7 @@ pub(crate) struct RsLetElseTemplate {
 }
 
 pub(crate) fn rs_let_else_template(pattern: &str) -> Option<RsLetElseTemplate> {
-    let mut tokens = pattern.trim().split_whitespace();
+    let mut tokens = pattern.split_whitespace();
     if tokens.next()? != "let" {
         return None;
     }

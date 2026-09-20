@@ -22,9 +22,7 @@ use ast_sgrep_core::intent::{route_hits, ChannelWeights};
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};
 use ast_sgrep_core::search::{HitKind, SearchHit};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
-use ast_sgrep_core::{
-    IndexOptions, Indexer, IndexStore, SearchOptions, SearchResponse, Searcher,
-};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, SearchResponse, Searcher};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -309,7 +307,12 @@ pub fn tie_corpus() -> Vec<SearchHit> {
     // ceiling 11.5) both route to 1.0. Within-channel ranks fall back to
     // (file, line): def a=0 b=1 c=2 d=3; caller a=0 b=1.
     let mut defs = Vec::new();
-    for (file, raw) in [("a.rs", 13.0), ("b.rs", 26.0), ("c.rs", 130.0), ("d.rs", 1300.0)] {
+    for (file, raw) in [
+        ("a.rs", 13.0),
+        ("b.rs", 26.0),
+        ("c.rs", 130.0),
+        ("d.rs", 1300.0),
+    ] {
         let mut hit = crate::mk_hit(HitKind::Def, file, 1, raw);
         hit.symbol = Some("foo".to_string());
         defs.push(hit);

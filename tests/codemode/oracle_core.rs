@@ -140,7 +140,10 @@ fn plan_lifecycle_parses_validates_resolves_and_reruns_deterministically() {
         let plan = parse_plan(raw).expect("adversarial plans parse");
         let mut session = session_at(temp.path());
         let err = run_plan(&mut session, &plan).expect_err("must fail");
-        assert!(matches!(err, CallError::InvalidArgs(_)), "case {i}: got {err:?}");
+        assert!(
+            matches!(err, CallError::InvalidArgs(_)),
+            "case {i}: got {err:?}"
+        );
     }
 
     // Facet 5 (return default): omitting `return` returns the last step —
@@ -148,7 +151,10 @@ fn plan_lifecycle_parses_validates_resolves_and_reruns_deterministically() {
     // array-index return paths resolve by hand (tools[0] is "search").
     let explicit = parse_plan(&search_select_plan()).expect("explicit parses");
     let mut implied_raw = search_select_plan();
-    implied_raw.as_object_mut().expect("object").remove("return");
+    implied_raw
+        .as_object_mut()
+        .expect("object")
+        .remove("return");
     let implied = parse_plan(&implied_raw).expect("implied parses");
     assert!(implied.return_ref.is_none());
     let mut s1 = session_at(temp.path());
@@ -264,14 +270,21 @@ fn batch_envelope_validates_shapes_orders_and_modes() {
     // order, not sorted order.
     let mut bad = catalog_call("bad", "search");
     bad.tool = "no-such-tool".to_string();
-    let forward = vec![catalog_call("x", "search"), bad.clone(), catalog_call("y", "search")];
+    let forward = vec![
+        catalog_call("x", "search"),
+        bad.clone(),
+        catalog_call("y", "search"),
+    ];
     let reversed: Vec<BatchCall> = forward.iter().rev().cloned().collect();
     let r1 = run_batch(config.clone(), &batch_request(forward)).expect("runs");
     let r2 = run_batch(config.clone(), &batch_request(reversed)).expect("runs");
     assert!(!r1.all_ok && !r2.all_ok);
     assert_eq!((r1.call_count, r2.call_count), (3, 3));
     let by_id = |r: &ast_sgrep_codemode::BatchResponse| {
-        r.results.iter().map(|c| (c.id.clone(), c.ok)).collect::<Vec<_>>()
+        r.results
+            .iter()
+            .map(|c| (c.id.clone(), c.ok))
+            .collect::<Vec<_>>()
     };
     let mut m1 = by_id(&r1);
     let mut m2 = by_id(&r2);
@@ -313,7 +326,11 @@ fn batch_envelope_validates_shapes_orders_and_modes() {
     // Duplicate ids both execute (no dedup) — the no-aliasing contract.
     let mut bad = catalog_call("m", "search");
     bad.tool = "no-such-tool".to_string();
-    let calls = vec![catalog_call("a", "search"), bad, catalog_call("z", "search")];
+    let calls = vec![
+        catalog_call("a", "search"),
+        bad,
+        catalog_call("z", "search"),
+    ];
     let response = run_batch(config.clone(), &batch_request(calls)).expect("runs");
     assert!(!response.all_ok);
     assert_eq!(response.call_count, 3);
@@ -332,7 +349,10 @@ fn batch_envelope_validates_shapes_orders_and_modes() {
     assert!(response.results[0].ok && !response.results[1].ok && response.results[2].ok);
     let dup = run_batch(
         config.clone(),
-        &batch_request(vec![catalog_call("dup", "search"), catalog_call("dup", "search")]),
+        &batch_request(vec![
+            catalog_call("dup", "search"),
+            catalog_call("dup", "search"),
+        ]),
     )
     .expect("dup ids run");
     assert!(dup.all_ok);
@@ -409,7 +429,10 @@ fn budgets_default_floor_and_exhaust_monotonically() {
     assert_eq!(default.max_tokens, 900);
     assert_eq!(default.default_detail, DetailLevel::Block);
     assert!(select(&[], default).is_empty());
-    let hits = vec![sample_search_hit("fn foo() {\nbar();\n}\n"), sample_search_hit("fn bar() {}\n")];
+    let hits = vec![
+        sample_search_hit("fn foo() {\nbar();\n}\n"),
+        sample_search_hit("fn bar() {}\n"),
+    ];
     let starved = select(
         &hits,
         OutputBudget {
@@ -427,7 +450,10 @@ fn budgets_default_floor_and_exhaust_monotonically() {
         },
     );
     assert!(funded.iter().all(|r| r.detail == DetailLevel::Full));
-    assert_eq!(plan_cost(&funded), funded.iter().map(|r| r.cost).sum::<usize>());
+    assert_eq!(
+        plan_cost(&funded),
+        funded.iter().map(|r| r.cost).sum::<usize>()
+    );
     let meta = render(&hits[0], DetailLevel::Metadata);
     assert_eq!(meta.body, "");
     let full = render(&hits[0], DetailLevel::Full);
@@ -449,7 +475,9 @@ fn budgets_default_floor_and_exhaust_monotonically() {
     let mut zero = session_at(temp.path());
     zero.max_calls = 0;
     assert!(zero.exhausted());
-    let err = zero.call("catalog_search", args()).expect_err("zero budget");
+    let err = zero
+        .call("catalog_search", args())
+        .expect_err("zero budget");
     assert!(matches!(err, CallError::BudgetExhausted(0)), "got {err:?}");
 
     // Facet 5 (monotone + sticky): a smaller budget never completes more
@@ -470,5 +498,8 @@ fn budgets_default_floor_and_exhaust_monotonically() {
     let again = tight
         .call("catalog_search", json!({"query": "search"}))
         .expect_err("stays exhausted");
-    assert!(matches!(again, CallError::BudgetExhausted(1)), "got {again:?}");
+    assert!(
+        matches!(again, CallError::BudgetExhausted(1)),
+        "got {again:?}"
+    );
 }

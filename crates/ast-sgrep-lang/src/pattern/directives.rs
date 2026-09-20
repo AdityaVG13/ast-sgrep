@@ -470,9 +470,7 @@ pub(crate) fn directive_template(pattern: &str) -> Option<DirectiveTemplate> {
                 break;
             }
         }
-        let Some(inner) = rest.strip_suffix(';') else {
-            return None;
-        };
+        let inner = rest.strip_suffix(';')?;
         // The alias face: split at the TOP-LEVEL `=` (depth-aware over
         // paren/bracket/brace groups).
         if let Some(eq_at) = top_level_equals(inner) {
@@ -508,9 +506,7 @@ pub(crate) fn directive_template(pattern: &str) -> Option<DirectiveTemplate> {
         if inner.is_empty() || inner.chars().any(is_sg_cs_trivia) {
             return None;
         }
-        let Some(target) = lane_slot(&inner) else {
-            return None;
-        };
+        let target = lane_slot(&inner)?;
         return Some(DirectiveTemplate::CsUsing {
             global_prefix,
             keyword_run,
@@ -546,17 +542,21 @@ pub(crate) fn directive_lane_serves(lang: Language, pattern: &str) -> bool {
     let Some(template) = directive_template(pattern) else {
         return false;
     };
-    match (&template, lang) {
-        (DirectiveTemplate::Semi { head: "import", .. }, Language::Java) => true,
-        (DirectiveTemplate::Semi { head: "use", .. }, Language::Rust | Language::Php) => true,
-        (DirectiveTemplate::CsUsing { .. }, Language::CSharp) => true,
-        (DirectiveTemplate::PhpUseKind { .. }, Language::Php) => true,
+    matches!(
+        (&template, lang),
         (
-            DirectiveTemplate::PyImport { .. } | DirectiveTemplate::PyFromImport { .. },
-            Language::Python,
-        ) => true,
-        _ => false,
-    }
+            DirectiveTemplate::Semi { head: "import", .. },
+            Language::Java
+        ) | (
+            DirectiveTemplate::Semi { head: "use", .. },
+            Language::Rust | Language::Php
+        ) | (DirectiveTemplate::CsUsing { .. }, Language::CSharp)
+            | (DirectiveTemplate::PhpUseKind { .. }, Language::Php)
+            | (
+                DirectiveTemplate::PyImport { .. } | DirectiveTemplate::PyFromImport { .. },
+                Language::Python,
+            )
+    )
 }
 
 pub(crate) fn match_directive_root(
@@ -632,9 +632,7 @@ pub(crate) fn py_import_match(
         // `import $X as $Y` — the FIRST child must be an aliased_import (a
         // leading plain name refuses); candidate children AFTER it are
         // skipped (a trailing plain name keeps the bind).
-        let Some(first) = children.first() else {
-            return None;
-        };
+        let first = children.first()?;
         if first.kind() != "aliased_import" {
             return None;
         }
@@ -819,7 +817,7 @@ pub(crate) fn use_semi_match(
         let head_end = after_gap
             .find(|c| is_sg_php_gap_trivia(c) || (matches!(target, LaneName::Meta(_)) && c == '\0'))
             .unwrap_or(after_gap.len());
-        if &after_gap[..head_end] != &kind[..] {
+        if after_gap[..head_end] != kind[..] {
             return None;
         }
         // The kind-clause NAME gap admits NUL for Meta targets (capture
@@ -933,9 +931,7 @@ pub(crate) fn cs_using_match(
             rest = after.trim_start_matches(is_sg_cs_gap_junk);
         }
     }
-    let Some(after_using) = rest.strip_prefix("using") else {
-        return None;
-    };
+    let after_using = rest.strip_prefix("using")?;
     if !after_using.starts_with(is_sg_cs_gap_junk) {
         return None;
     }

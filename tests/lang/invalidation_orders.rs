@@ -27,10 +27,7 @@ fn panel_order_permutations_agree_across_fresh_threads() {
             .map(|p| lines(&match_pattern(Language::Rust, RUST_FNS, p).unwrap()))
             .collect::<Vec<_>>()
     };
-    let forward = run_in_fresh_thread({
-        let panel = panel;
-        move || query(&panel)
-    });
+    let forward = run_in_fresh_thread(move || query(&panel));
     let reversed = run_in_fresh_thread({
         let mut rev = panel;
         rev.reverse();

@@ -672,7 +672,11 @@ fn codemod_dry_run_honors_lang_filter() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let out = Command::new(&bin)
         .args([
@@ -705,10 +709,7 @@ fn codemod_dry_run_honors_lang_filter() {
         .iter()
         .map(|file| file["path"].as_str().unwrap())
         .collect();
-    assert!(
-        !paths.is_empty(),
-        "python defs must be planned: {plan}"
-    );
+    assert!(!paths.is_empty(), "python defs must be planned: {plan}");
     assert!(
         paths.iter().all(|path| path.ends_with(".py")),
         "codemod --lang py must not plan cross-language edits: {paths:?}"
@@ -735,7 +736,11 @@ fn codemod_rewrite_binds_suite_body_metavariable() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let out = Command::new(&bin)
         .args([

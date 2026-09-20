@@ -7,19 +7,19 @@
 //! Every assertion keys on documented discriminants (exit code, machine envelope,
 //! status/search/outline shapes, durable bytes) — never message text.
 
+#[cfg(unix)]
+use ast_sgrep_testkit::kill9;
 use ast_sgrep_testkit::{
     assert_failure_envelope, assert_serve_parity, assert_success, capture_baseline, run_in,
     run_index, run_reindex, run_search, run_status, search_answer_keys, seed_big_project,
     seed_project, status_snapshot, truncate_file, KillOnDrop, OUTLINE_PATH, QUERY, RUN_TIMEOUT,
 };
-#[cfg(unix)]
-use ast_sgrep_testkit::kill9;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
-use std::time::Duration;
 
 /// Exact binary path via the compile-time env cargo sets for THIS test target.
 /// `env!` must expand here (it is unset inside the testkit dependency); the
@@ -47,8 +47,16 @@ fn corrupt_store_refuses_quarantines_heals_and_serves() {
         run_index(&asgrep(), &temp, &root, &index);
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[], 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            1,
         );
 
         // CRASH: plant the fault; keep the injected bytes for evidence checks.
@@ -65,27 +73,62 @@ fn corrupt_store_refuses_quarantines_heals_and_serves() {
         let quarantine = index.with_file_name("idx.db.corrupt");
 
         // OBSERVE: every reader refuses; the refusing writer moves nothing.
-        let status = run_in(&asgrep(), 
+        let status = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "status", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "status",
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&status, "status", 2, "operational");
-        let outline = run_in(&asgrep(), 
+        let outline = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "outline", OUTLINE_PATH, &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "outline",
+                OUTLINE_PATH,
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&outline, "outline", 2, "operational");
-        let search = run_in(&asgrep(), 
+        let search = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--no-auto-index", "--json", "search", QUERY, &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--no-auto-index",
+                "--json",
+                "search",
+                QUERY,
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&search, "search", 2, "operational");
-        let refused = run_in(&asgrep(), 
+        let refused = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "index", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "index",
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&refused, "index", 2, "operational");
@@ -109,9 +152,17 @@ fn corrupt_store_refuses_quarantines_heals_and_serves() {
         );
 
         // SERVE: identical to the pre-crash baseline.
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[],
-            &baseline, &format!("post-{shape}-store"),
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            &baseline,
+            &format!("post-{shape}-store"),
         );
     }
 }
@@ -133,14 +184,30 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
         run_index(&asgrep(), &temp, &root, &index);
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[], 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            1,
         );
         fs::remove_file(&index).unwrap();
         assert!(!index.exists(), "the drill must really delete the database");
-        let refused = run_in(&asgrep(), 
+        let refused = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "status", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "status",
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&refused, "status", 2, "operational");
@@ -150,9 +217,17 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
             !index.with_file_name("idx.db.corrupt").exists(),
             "a cold-start rebuild must not take a quarantine"
         );
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[],
-            &baseline, "post-deleted-db",
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            &baseline,
+            "post-deleted-db",
         );
     }
 
@@ -162,8 +237,16 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
         run_index(&asgrep(), &temp, &root, &index);
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[], 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            1,
         );
         fs::write(&index, b"").unwrap();
         assert_eq!(fs::metadata(&index).unwrap().len(), 0);
@@ -173,9 +256,17 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
             !index.with_file_name("idx.db.corrupt").exists(),
             "a cold-start rebuild must not take a quarantine"
         );
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[],
-            &baseline, "post-zero-length-db",
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            &baseline,
+            "post-zero-length-db",
         );
     }
 
@@ -186,14 +277,30 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let quarantine = index.with_file_name("idx.db.corrupt");
-        let baseline = capture_baseline(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[], 1,
+        let baseline = capture_baseline(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            1,
         );
         let garbage1 = b"RECOVERY-STORE-CHAIN-CRASH1-0002".to_vec();
         fs::write(&index, &garbage1).unwrap();
-        let refused = run_in(&asgrep(), 
+        let refused = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "status", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "status",
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&refused, "status", 2, "operational");
@@ -205,9 +312,17 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
             "crash #1 evidence must be quarantined"
         );
         fs::remove_file(&index).unwrap();
-        let refused = run_in(&asgrep(), 
+        let refused = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", &index_s, "--no-embed", "--json", "status", &root_s],
+            &[
+                "--index-path",
+                &index_s,
+                "--no-embed",
+                "--json",
+                "status",
+                &root_s,
+            ],
             &[],
         );
         assert_failure_envelope(&refused, "status", 2, "operational");
@@ -222,9 +337,17 @@ fn deleted_or_empty_store_cold_starts_and_serves() {
             !index.with_file_name("idx.db.corrupt.1").exists(),
             "the cold start must not take a new quarantine slot"
         );
-        assert_serve_parity(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, OUTLINE_PATH, &["--no-embed"], &[],
-            &baseline, "post-chained-crashes",
+        assert_serve_parity(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            OUTLINE_PATH,
+            &["--no-embed"],
+            &[],
+            &baseline,
+            "post-chained-crashes",
         );
     }
 }
@@ -252,7 +375,8 @@ fn quarantine_evidence_stable_unique_and_deterministic() {
         fs::write(&index, &garbage).unwrap();
         run_reindex(&asgrep(), &temp, &root, &index, &[]);
         assert_eq!(fs::read(&quarantine).unwrap(), garbage);
-        let status_after_heal = status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
+        let status_after_heal =
+            status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
         run_reindex(&asgrep(), &temp, &root, &index, &[]);
         assert_eq!(
             fs::read(&quarantine).unwrap(),
@@ -280,9 +404,17 @@ fn quarantine_evidence_stable_unique_and_deterministic() {
         fs::write(index.with_file_name("idx.db.corrupt"), &sentinel).unwrap();
         let garbage = b"RECOVERY-STORE-FRESH-CORRUPT-0004".to_vec();
         fs::write(&index, &garbage).unwrap();
-        let healed = run_in(&asgrep(), 
+        let healed = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", index_s, "--no-embed", "--json", "reindex", root_s],
+            &[
+                "--index-path",
+                index_s,
+                "--no-embed",
+                "--json",
+                "reindex",
+                root_s,
+            ],
             &[],
         );
         let healed = assert_success(&healed, "reindex");
@@ -305,9 +437,16 @@ fn quarantine_evidence_stable_unique_and_deterministic() {
         run_index(&asgrep(), &temp, &root, &index);
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
-        let baseline_status = status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
-        let baseline_answers = search_answer_keys(&run_search(&asgrep(), 
-            &temp, &root_s, &index_s, QUERY, &["--no-embed"], &[],
+        let baseline_status =
+            status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
+        let baseline_answers = search_answer_keys(&run_search(
+            &asgrep(),
+            &temp,
+            &root_s,
+            &index_s,
+            QUERY,
+            &["--no-embed"],
+            &[],
         ));
         assert!(!baseline_answers.is_empty());
         for cycle in 0..3u32 {
@@ -321,7 +460,15 @@ fn quarantine_evidence_stable_unique_and_deterministic() {
                 "cycle {cycle}: status must converge to baseline"
             );
             assert_eq!(
-                search_answer_keys(&run_search(&asgrep(), &temp, &root_s, &index_s, QUERY, &["--no-embed"], &[])),
+                search_answer_keys(&run_search(
+                    &asgrep(),
+                    &temp,
+                    &root_s,
+                    &index_s,
+                    QUERY,
+                    &["--no-embed"],
+                    &[]
+                )),
                 baseline_answers,
                 "cycle {cycle}: answers must converge to baseline"
             );
@@ -337,7 +484,9 @@ fn quarantine_evidence_stable_unique_and_deterministic() {
                 slot.display()
             );
             assert!(
-                !index.with_file_name(format!("idx.db.corrupt.{}", cycle + 1)).exists(),
+                !index
+                    .with_file_name(format!("idx.db.corrupt.{}", cycle + 1))
+                    .exists(),
                 "cycle {cycle}: no slot beyond the current one may exist"
             );
         }
@@ -362,9 +511,21 @@ fn recovery_locking_serializes_without_corruption() {
         let (temp, root, index) = seed_project();
         run_index(&asgrep(), &temp, &root, &index);
         fs::write(&index, b"RECOVERY-STORE-LOCK-DEBRIS-0005").unwrap();
-        fs::write(index.with_file_name("idx.db.reindex.lock"), "stale-lock-garbage").unwrap();
-        fs::write(temp.path().join(".writer_generation.999999.0.tmp"), "stale-stamp-tmp").unwrap();
-        fs::write(temp.path().join(".semantic.ivf.999999.tmp"), "stale-ivf-tmp").unwrap();
+        fs::write(
+            index.with_file_name("idx.db.reindex.lock"),
+            "stale-lock-garbage",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(".writer_generation.999999.0.tmp"),
+            "stale-stamp-tmp",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(".semantic.ivf.999999.tmp"),
+            "stale-ivf-tmp",
+        )
+        .unwrap();
         let healed = run_reindex(&asgrep(), &temp, &root, &index, &[]);
         assert_eq!(healed["files_indexed"], 1);
         assert!(
@@ -382,11 +543,16 @@ fn recovery_locking_serializes_without_corruption() {
         let lock_dir = index.with_file_name("idx.db.reindex.lock");
         let quarantine = index.with_file_name("idx.db.corrupt");
         fs::create_dir(&lock_dir).unwrap();
-        let refused = run_in(&asgrep(), 
+        let refused = run_in(
+            &asgrep(),
             temp.path(),
             &[
-                "--index-path", index.to_str().unwrap(), "--no-embed", "--json",
-                "reindex", root.to_str().unwrap(),
+                "--index-path",
+                index.to_str().unwrap(),
+                "--no-embed",
+                "--json",
+                "reindex",
+                root.to_str().unwrap(),
             ],
             &[],
         );
@@ -396,7 +562,10 @@ fn recovery_locking_serializes_without_corruption() {
             garbage,
             "the refused rebuild must leave the corrupt inode untouched"
         );
-        assert!(!quarantine.exists(), "the refused rebuild must not take a quarantine");
+        assert!(
+            !quarantine.exists(),
+            "the refused rebuild must not take a quarantine"
+        );
         fs::remove_dir(&lock_dir).unwrap();
         let healed = run_reindex(&asgrep(), &temp, &root, &index, &[]);
         assert_eq!(healed["files_indexed"], 1);
@@ -410,10 +579,18 @@ fn recovery_locking_serializes_without_corruption() {
             let (temp, root, index) = seed_project();
             run_index(&asgrep(), &temp, &root, &index);
             fs::write(&index, b"RECOVERY-STORE-LOCK-DEADPID-0007").unwrap();
-            let mut probe = Command::new("sh").arg("-c").arg("exit 0").spawn().expect("spawn pid probe");
+            let mut probe = Command::new("sh")
+                .arg("-c")
+                .arg("exit 0")
+                .spawn()
+                .expect("spawn pid probe");
             let dead_pid = probe.id();
             assert!(probe.wait().expect("wait probe").success());
-            fs::write(index.with_file_name("idx.db.reindex.lock"), format!("pid={dead_pid}\n")).unwrap();
+            fs::write(
+                index.with_file_name("idx.db.reindex.lock"),
+                format!("pid={dead_pid}\n"),
+            )
+            .unwrap();
             let healed = run_reindex(&asgrep(), &temp, &root, &index, &[]);
             assert_eq!(healed["files_indexed"], 1);
             assert!(
@@ -450,16 +627,30 @@ fn recovery_locking_serializes_without_corruption() {
             ));
             let deadline = Instant::now() + Duration::from_secs(10);
             while !ready.is_file() {
-                assert!(Instant::now() < deadline, "the flock holder never acquired the lock");
                 assert!(
-                    holder.child().try_wait().expect("try_wait holder").is_none(),
+                    Instant::now() < deadline,
+                    "the flock holder never acquired the lock"
+                );
+                assert!(
+                    holder
+                        .child()
+                        .try_wait()
+                        .expect("try_wait holder")
+                        .is_none(),
                     "the flock holder died before acquiring the lock"
                 );
                 std::thread::sleep(Duration::from_millis(25));
             }
             let mut healing = KillOnDrop(Some(
                 Command::new(asgrep())
-                    .args(["--index-path", &index_s, "--no-embed", "--json", "reindex", &root_s])
+                    .args([
+                        "--index-path",
+                        &index_s,
+                        "--no-embed",
+                        "--json",
+                        "reindex",
+                        &root_s,
+                    ])
                     .env("NO_COLOR", "1")
                     .current_dir(temp.path())
                     .stdout(Stdio::piped())
@@ -469,7 +660,11 @@ fn recovery_locking_serializes_without_corruption() {
             ));
             std::thread::sleep(Duration::from_secs(3));
             assert!(
-                healing.child().try_wait().expect("try_wait reindex").is_none(),
+                healing
+                    .child()
+                    .try_wait()
+                    .expect("try_wait reindex")
+                    .is_none(),
                 "reindex must block on the live holder, not exit under it"
             );
             let _ = holder.child().kill();
@@ -479,7 +674,10 @@ fn recovery_locking_serializes_without_corruption() {
                 match healing.child().try_wait().expect("try_wait reindex") {
                     Some(_) => break,
                     None => {
-                        assert!(Instant::now() < deadline, "reindex never completed after the holder died");
+                        assert!(
+                            Instant::now() < deadline,
+                            "reindex never completed after the holder died"
+                        );
                         std::thread::sleep(Duration::from_millis(25));
                     }
                 }
@@ -518,38 +716,78 @@ fn sigkill_mid_rewrite_recovers_and_serves() {
 
     // Twin A: the uninterrupted reference run.
     let (temp_a, root_a, index_a) = seed_big_project(FILES);
-    let output = run_in(&asgrep(), 
+    let output = run_in(
+        &asgrep(),
         temp_a.path(),
-        &["--index-path", index_a.to_str().unwrap(), "--no-embed", "--json", "index", root_a.to_str().unwrap()],
+        &[
+            "--index-path",
+            index_a.to_str().unwrap(),
+            "--no-embed",
+            "--json",
+            "index",
+            root_a.to_str().unwrap(),
+        ],
         &tantivy,
     );
     assert_success(&output, "index");
     let root_as = root_a.to_str().unwrap().to_owned();
     let index_as = index_a.to_str().unwrap().to_owned();
     run_reindex(&asgrep(), &temp_a, &root_a, &index_a, &tantivy);
-    let reference_status = status_snapshot(&run_status(&asgrep(), &temp_a, &root_as, &index_as, &[]));
-    let reference_answers = search_answer_keys(&run_search(&asgrep(), &temp_a, &root_as, &index_as, PROBE, &["--no-embed"], &tantivy));
+    let reference_status =
+        status_snapshot(&run_status(&asgrep(), &temp_a, &root_as, &index_as, &[]));
+    let reference_answers = search_answer_keys(&run_search(
+        &asgrep(),
+        &temp_a,
+        &root_as,
+        &index_as,
+        PROBE,
+        &["--no-embed"],
+        &tantivy,
+    ));
     assert_eq!(reference_status["file_count"], FILES);
     assert!(!reference_answers.is_empty());
 
     // Twin B: POPULATE + baseline, then the kill fault.
     let (temp_b, root_b, index_b) = seed_big_project(FILES);
-    let output = run_in(&asgrep(), 
+    let output = run_in(
+        &asgrep(),
         temp_b.path(),
-        &["--index-path", index_b.to_str().unwrap(), "--no-embed", "--json", "index", root_b.to_str().unwrap()],
+        &[
+            "--index-path",
+            index_b.to_str().unwrap(),
+            "--no-embed",
+            "--json",
+            "index",
+            root_b.to_str().unwrap(),
+        ],
         &tantivy,
     );
     assert_success(&output, "index");
     assert!(temp_b.path().join("lexical.db").is_file());
     let root_s = root_b.to_str().unwrap().to_owned();
     let index_s = index_b.to_str().unwrap().to_owned();
-    let baseline = capture_baseline(&asgrep(), 
-        &temp_b, &root_s, &index_s, PROBE, PROBE_FILE, &["--no-embed"], &tantivy, FILES as u64,
+    let baseline = capture_baseline(
+        &asgrep(),
+        &temp_b,
+        &root_s,
+        &index_s,
+        PROBE,
+        PROBE_FILE,
+        &["--no-embed"],
+        &tantivy,
+        FILES as u64,
     );
     for _ in 0..5 {
         let mut victim = KillOnDrop(Some(
             Command::new(asgrep())
-                .args(["--index-path", &index_s, "--no-embed", "--json", "reindex", &root_s])
+                .args([
+                    "--index-path",
+                    &index_s,
+                    "--no-embed",
+                    "--json",
+                    "reindex",
+                    &root_s,
+                ])
                 .env("NO_COLOR", "1")
                 .env("ASGREP_TANTIVY", "1")
                 .current_dir(temp_b.path())
@@ -568,9 +806,17 @@ fn sigkill_mid_rewrite_recovers_and_serves() {
     }
 
     // Next-run contract: intact commit or loud refusal, never exit 1.
-    let status = run_in(&asgrep(), 
+    let status = run_in(
+        &asgrep(),
         temp_b.path(),
-        &["--index-path", &index_s, "--no-embed", "--json", "status", &root_s],
+        &[
+            "--index-path",
+            &index_s,
+            "--no-embed",
+            "--json",
+            "status",
+            &root_s,
+        ],
         &[],
     );
     match status.status.code() {
@@ -593,12 +839,28 @@ fn sigkill_mid_rewrite_recovers_and_serves() {
         "resumed status must equal uninterrupted status"
     );
     assert_eq!(
-        search_answer_keys(&run_search(&asgrep(), &temp_b, &root_s, &index_s, PROBE, &["--no-embed"], &tantivy)),
+        search_answer_keys(&run_search(
+            &asgrep(),
+            &temp_b,
+            &root_s,
+            &index_s,
+            PROBE,
+            &["--no-embed"],
+            &tantivy
+        )),
         reference_answers,
         "resumed answers must equal uninterrupted answers"
     );
-    assert_serve_parity(&asgrep(), 
-        &temp_b, &root_s, &index_s, PROBE, PROBE_FILE, &["--no-embed"], &tantivy,
-        &baseline, "post-SIGKILL",
+    assert_serve_parity(
+        &asgrep(),
+        &temp_b,
+        &root_s,
+        &index_s,
+        PROBE,
+        PROBE_FILE,
+        &["--no-embed"],
+        &tantivy,
+        &baseline,
+        "post-SIGKILL",
     );
 }

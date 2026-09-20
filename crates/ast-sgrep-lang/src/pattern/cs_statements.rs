@@ -314,9 +314,7 @@ pub(crate) fn csharp_statement_bind(
         )),
     };
     if let Some((res, res_node)) = resource.as_ref() {
-        let Some(text) = node_text(res_node, source) else {
-            return None;
-        };
+        let text = node_text(res_node, source)?;
         let ok = match res {
             CsResource::Meta(name) => bind_capture(captures, name, text.trim()).is_some(),
             CsResource::Literal(lit) => text.trim() == lit,
@@ -338,9 +336,7 @@ pub(crate) fn csharp_statement_bind(
                 return None;
             };
             let text = node_text(only, source)?;
-            if bind_capture(captures, &name, text).is_none() {
-                return None;
-            }
+            bind_capture(captures, &name, text)?;
         }
         CsBody::Nested {
             inner: nested,
@@ -438,9 +434,7 @@ pub(crate) fn csharp_statement_bind(
                 return None;
             }
             for (p_stmt, c_stmt) in tpl_stmts.iter().zip(stmts.iter()) {
-                if general_eq(&tpl, *p_stmt, *c_stmt, source, captures).is_none() {
-                    return None;
-                }
+                general_eq(&tpl, *p_stmt, *c_stmt, source, captures)?;
             }
         }
     }

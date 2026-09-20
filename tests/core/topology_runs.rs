@@ -859,7 +859,7 @@ fn fuse_stage_explicit_rrf_deterministic_across_sets() {
 /// resolve per the ambient set with the `Other` discriminant on closed;
 /// local battery after == before == golden (post-failure integrity).
 /// Absorbs T4#3 (only sequencing pin) and the T4#4 default-cell construction
-/// + post-failure atoms (its stored-backend matrix lives in
+/// plus post-failure atoms (its stored-backend matrix lives in
 /// `topology_local`, with a wider two-cell span).
 /// KILLS: index-poisoning, gate-inversion.
 #[test]

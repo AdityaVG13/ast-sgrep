@@ -151,7 +151,7 @@ pub fn call_tool(
     }
 }
 
-fn require_symbol<'a>(args: &'a Value) -> Result<&'a str, CallError> {
+fn require_symbol(args: &Value) -> Result<&str, CallError> {
     args.get("symbol")
         .and_then(|v| v.as_str())
         .or_else(|| args.get("query").and_then(|v| v.as_str()))

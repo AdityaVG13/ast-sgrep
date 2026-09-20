@@ -1591,7 +1591,11 @@ fn gate_on_beyond_native_fails_closed_not_silent_empty() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let output = Command::new(&bin)
         .args([
@@ -1657,7 +1661,11 @@ fn pattern_ingress_rejection_envelope_is_loud_fail_closed() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let output = Command::new(&bin)
         .args([
@@ -1708,7 +1716,11 @@ fn pattern_valid_but_zero_hits_envelope_stays_success() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
 
     let output = Command::new(&bin)
         .args([

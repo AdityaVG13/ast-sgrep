@@ -30,12 +30,18 @@ fn sibling_db(session: &IsolatedIndexSession, name: &str) -> PathBuf {
 
 fn integrity(root: &Path, db: &Path) -> String {
     let store = IndexStore::open_readonly(root, Some(db)).unwrap();
-    store.connection().query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap()
+    store
+        .connection()
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap()
 }
 
 fn quick_check(root: &Path, db: &Path) -> String {
     let store = IndexStore::open_readonly(root, Some(db)).unwrap();
-    store.connection().query_row("PRAGMA quick_check(1)", [], |r| r.get(0)).unwrap()
+    store
+        .connection()
+        .query_row("PRAGMA quick_check(1)", [], |r| r.get(0))
+        .unwrap()
 }
 
 /// INTENT: rebuilding unchanged state converges — an incremental second pass
@@ -65,16 +71,25 @@ fn rebuilds_are_idempotent() {
         })
         .unwrap();
         let stats = indexer.index_all().unwrap();
-        assert_eq!(stats.files_indexed, 0, "unchanged corpus must index nothing");
+        assert_eq!(
+            stats.files_indexed, 0,
+            "unchanged corpus must index nothing"
+        );
         assert_eq!(stats.files_failed, 0);
         indexer.store().checkpoint_wal().unwrap();
         drop(indexer);
 
-        assert_eq!(quiesced_db_bytes(&db), bytes_once, "second incremental pass must be byte-identical");
+        assert_eq!(
+            quiesced_db_bytes(&db),
+            bytes_once,
+            "second incremental pass must be byte-identical"
+        );
         assert_eq!(store_snapshot(&root, &db), snap_once);
         assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_once);
         assert_eq!(integrity(&root, &db), "ok");
-        assert!(home_names(db.parent().unwrap()).iter().all(|n| !n.contains(".corrupt")));
+        assert!(home_names(db.parent().unwrap())
+            .iter()
+            .all(|n| !n.contains(".corrupt")));
     }
 
     // Facet: two forced rebuilds converge logically (raw bytes excluded by
@@ -108,7 +123,10 @@ fn rebuilds_are_idempotent() {
         let second = dir.join("second.ivf");
         save_semantic_ivf(&first, fp, dim, &vectors, &index).unwrap();
         save_semantic_ivf(&second, fp, dim, &vectors, &index).unwrap();
-        assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
 
         save_semantic_ivf(&first, fp, dim, &vectors, &index).unwrap();
         assert_eq!(
@@ -117,7 +135,10 @@ fn rebuilds_are_idempotent() {
             "IVF overwrite must be byte-stable"
         );
         for path in [&first, &second] {
-            assert_eq!(load_semantic_ivf(path, fp).unwrap().unwrap().vectors, vectors);
+            assert_eq!(
+                load_semantic_ivf(path, fp).unwrap().unwrap().vectors,
+                vectors
+            );
         }
     }
 }
@@ -153,12 +174,23 @@ fn repair_then_verify_restores_healthy_state() {
 
         build_and_quiet(&root, &db, true, false);
 
-        assert!(quarantine_path(&db, ".corrupt").is_file(), "{shape}: recovery must preserve the torn inode");
+        assert!(
+            quarantine_path(&db, ".corrupt").is_file(),
+            "{shape}: recovery must preserve the torn inode"
+        );
         assert_eq!(integrity(&root, &db), "ok");
         assert_eq!(quick_check(&root, &db), "ok");
         assert_eq!(integrity(&root, &db), "ok", "verification must be stable");
-        assert_eq!(store_snapshot(&root, &db), snap_healthy, "{shape}: repair must restore the snapshot");
-        assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_healthy, "{shape}: repair must restore search keys");
+        assert_eq!(
+            store_snapshot(&root, &db),
+            snap_healthy,
+            "{shape}: repair must restore the snapshot"
+        );
+        assert_eq!(
+            search_parity_keys(&root, &db, QUERIES, false),
+            hits_healthy,
+            "{shape}: repair must restore search keys"
+        );
     }
 }
 
@@ -218,7 +250,10 @@ fn recovery_is_deterministic_and_order_independent() {
         let mut quarantines = Vec::new();
         let mut snaps = Vec::new();
         let mut hits = Vec::new();
-        for (tag, order) in [("order-12.db", [0usize, 1usize]), ("order-21.db", [1usize, 0usize])] {
+        for (tag, order) in [
+            ("order-12.db", [0usize, 1usize]),
+            ("order-21.db", [1usize, 0usize]),
+        ] {
             let db = sibling_db(&session, tag);
             let mut torn = base_bytes.clone();
             for k in order {
@@ -234,7 +269,10 @@ fn recovery_is_deterministic_and_order_independent() {
             hits.push(search_parity_keys(&root, &db, QUERIES, false));
         }
         assert_eq!(quarantines[0], quarantines[1]);
-        assert_eq!(snaps[0], snaps[1], "recovery must converge regardless of fault order");
+        assert_eq!(
+            snaps[0], snaps[1],
+            "recovery must converge regardless of fault order"
+        );
         assert_eq!(hits[0], hits[1]);
     }
 }
@@ -264,7 +302,10 @@ fn interrupted_work_resumes_to_fresh_state() {
         let mut indexer = indexer;
         indexer.set_cancel(cancel.clone());
         let err = err_of(indexer.index_all());
-        assert!(matches!(err, StoreError::Other(_)), "cancelled build must fail as Other, got {err:?}");
+        assert!(
+            matches!(err, StoreError::Other(_)),
+            "cancelled build must fail as Other, got {err:?}"
+        );
         assert_eq!(indexer.store().status().unwrap().file_count, 0);
         drop(indexer);
 
@@ -272,8 +313,14 @@ fn interrupted_work_resumes_to_fresh_state() {
         build_and_quiet(&root, &resumed_db, false, false);
         build_and_quiet(&root, &fresh_db, false, false);
 
-        assert_eq!(store_snapshot(&root, &resumed_db), store_snapshot(&root, &fresh_db));
-        assert_eq!(search_parity_keys(&root, &resumed_db, QUERIES, false), search_parity_keys(&root, &fresh_db, QUERIES, false));
+        assert_eq!(
+            store_snapshot(&root, &resumed_db),
+            store_snapshot(&root, &fresh_db)
+        );
+        assert_eq!(
+            search_parity_keys(&root, &resumed_db, QUERIES, false),
+            search_parity_keys(&root, &fresh_db, QUERIES, false)
+        );
         assert_eq!(integrity(&root, &resumed_db), "ok");
     }
 
@@ -315,10 +362,19 @@ fn interrupted_work_resumes_to_fresh_state() {
         build_and_quiet(&root, &fresh_db, false, false);
 
         let store = IndexStore::open_readonly(&root, Some(&resumed_db)).unwrap();
-        assert!(store.file_hash("partial.py").unwrap().is_none(), "abandoned row must not survive");
+        assert!(
+            store.file_hash("partial.py").unwrap().is_none(),
+            "abandoned row must not survive"
+        );
         drop(store);
-        assert_eq!(store_snapshot(&root, &resumed_db), store_snapshot(&root, &fresh_db));
-        assert_eq!(search_parity_keys(&root, &resumed_db, QUERIES, false), search_parity_keys(&root, &fresh_db, QUERIES, false));
+        assert_eq!(
+            store_snapshot(&root, &resumed_db),
+            store_snapshot(&root, &fresh_db)
+        );
+        assert_eq!(
+            search_parity_keys(&root, &resumed_db, QUERIES, false),
+            search_parity_keys(&root, &fresh_db, QUERIES, false)
+        );
     }
 }
 
@@ -343,8 +399,14 @@ fn recovered_index_matches_never_crashed_twin() {
     assert_torn(&recovered_db);
     build_and_quiet(&root, &recovered_db, true, false);
 
-    assert_eq!(store_snapshot(&root, &recovered_db), store_snapshot(&root, &healthy_db));
-    assert_eq!(search_parity_keys(&root, &recovered_db, QUERIES, false), search_parity_keys(&root, &healthy_db, QUERIES, false));
+    assert_eq!(
+        store_snapshot(&root, &recovered_db),
+        store_snapshot(&root, &healthy_db)
+    );
+    assert_eq!(
+        search_parity_keys(&root, &recovered_db, QUERIES, false),
+        search_parity_keys(&root, &healthy_db, QUERIES, false)
+    );
     assert_eq!(
         search_parity_key(&root, &recovered_db, UNKNOWN_QUERY, false),
         search_parity_key(&root, &healthy_db, UNKNOWN_QUERY, false),

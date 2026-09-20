@@ -49,9 +49,7 @@ const DO_NOT_EXPAND: &[&str] = &[
 /// PPMI observations and hashed features agree on camelCase / acronym edges.
 pub fn subtokens(identifier: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for segment in identifier.split(|c: char| {
-        c == ':' || c == '.' || c.is_whitespace()
-    }) {
+    for segment in identifier.split(|c: char| c == ':' || c == '.' || c.is_whitespace()) {
         if segment.is_empty() {
             continue;
         }

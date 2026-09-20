@@ -101,9 +101,15 @@ fn code_read_split_contract() {
         let temp = tempfile::tempdir().unwrap();
         let lines = (0..20).map(|_| "aaaa").collect::<Vec<_>>().join("\n") + "\n";
         std::fs::write(temp.path().join("grid.rs"), lines).unwrap();
-        let ids: Vec<Value> = (1..=20).map(|n| json!(format!("grid.rs#L{n}-L{n}"))).collect();
+        let ids: Vec<Value> = (1..=20)
+            .map(|n| json!(format!("grid.rs#L{n}-L{n}")))
+            .collect();
         let responses = rpc_session(
-            vec![tool_call(1, "code_read", json!({"ids": ids, "max_chars": 25}))],
+            vec![tool_call(
+                1,
+                "code_read",
+                json!({"ids": ids, "max_chars": 25}),
+            )],
             Some(temp.path()),
         );
         assert_tool_success_shape(&responses[0]);
@@ -127,10 +133,16 @@ fn code_read_split_contract() {
         let line = "a".repeat(12);
         let text = (0..4).map(|_| line.as_str()).collect::<Vec<_>>().join("\n") + "\n";
         std::fs::write(temp.path().join("quad.rs"), text).unwrap();
-        let ids: Vec<Value> = (1..=4).map(|n| json!(format!("quad.rs#L{n}-L{n}"))).collect();
+        let ids: Vec<Value> = (1..=4)
+            .map(|n| json!(format!("quad.rs#L{n}-L{n}")))
+            .collect();
         for cap in [10_u64, 15_u64] {
             let responses = rpc_session(
-                vec![tool_call(1, "code_read", json!({"ids": ids, "max_chars": cap}))],
+                vec![tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ids, "max_chars": cap}),
+                )],
                 Some(temp.path()),
             );
             assert_tool_success_shape(&responses[0]);
@@ -141,9 +153,15 @@ fn code_read_split_contract() {
                 .iter()
                 .map(|n| n["content"].as_str().unwrap().chars().count())
                 .sum();
-            assert_eq!(total as u64, cap, "saturated split must spend exactly the cap: {body:#}");
+            assert_eq!(
+                total as u64, cap,
+                "saturated split must spend exactly the cap: {body:#}"
+            );
             for (index, node) in nodes.iter().enumerate() {
-                assert_eq!(node["truncated"], true, "node {index} at cap {cap} must truncate: {body:#}");
+                assert_eq!(
+                    node["truncated"], true,
+                    "node {index} at cap {cap} must truncate: {body:#}"
+                );
             }
         }
     }
@@ -158,8 +176,16 @@ fn code_read_split_contract() {
             .sum();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["trio.rs#L1-L1", "trio.rs#L2-L2", "trio.rs#L3-L3"], "max_chars": 100})),
-                tool_call(2, "code_read", json!({"ids": ["trio.rs#L1-L1", "trio.rs#L2-L2", "trio.rs#L3-L3"], "max_chars": 1000})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["trio.rs#L1-L1", "trio.rs#L2-L2", "trio.rs#L3-L3"], "max_chars": 100}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["trio.rs#L1-L1", "trio.rs#L2-L2", "trio.rs#L3-L3"], "max_chars": 1000}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -172,9 +198,15 @@ fn code_read_split_contract() {
                 .iter()
                 .map(|n| n["content"].as_str().unwrap().chars().count())
                 .sum();
-            assert_eq!(total, fs_total, "unsaturated split must equal the fs total: {body:#}");
+            assert_eq!(
+                total, fs_total,
+                "unsaturated split must equal the fs total: {body:#}"
+            );
             for node in nodes {
-                assert_eq!(node["truncated"], false, "unsaturated node must not truncate: {body:#}");
+                assert_eq!(
+                    node["truncated"], false,
+                    "unsaturated node must not truncate: {body:#}"
+                );
             }
             sums.push(total);
         }
@@ -218,7 +250,10 @@ fn code_read_split_contract() {
             per_node.push(lens);
         }
         for pair in totals.windows(2) {
-            assert!(pair[1] >= pair[0], "total chars must not shrink in cap: {totals:?}");
+            assert!(
+                pair[1] >= pair[0],
+                "total chars must not shrink in cap: {totals:?}"
+            );
         }
         for node in 0..3 {
             for step in 1..per_node.len() {
@@ -230,8 +265,14 @@ fn code_read_split_contract() {
                 );
             }
         }
-        assert_eq!(totals[3], totals[4], "saturated totals must agree: {totals:?}");
-        assert_eq!(totals[4], fs_total, "saturated total must equal the fs total: {totals:?} vs {fs_total}");
+        assert_eq!(
+            totals[3], totals[4],
+            "saturated totals must agree: {totals:?}"
+        );
+        assert_eq!(
+            totals[4], fs_total,
+            "saturated total must equal the fs total: {totals:?} vs {fs_total}"
+        );
     }
     // Leg 7 (pass4 drill): 7/3 -> [3,2,2] then 8/3 -> [3,3,2].
     {
@@ -243,12 +284,23 @@ fn code_read_split_contract() {
         .unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["tri.rs#L1-L1", "tri.rs#L2-L2", "tri.rs#L3-L3"], "max_chars": 7})),
-                tool_call(2, "code_read", json!({"ids": ["tri.rs#L1-L1", "tri.rs#L2-L2", "tri.rs#L3-L3"], "max_chars": 8})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["tri.rs#L1-L1", "tri.rs#L2-L2", "tri.rs#L3-L3"], "max_chars": 7}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["tri.rs#L1-L1", "tri.rs#L2-L2", "tri.rs#L3-L3"], "max_chars": 8}),
+                ),
             ],
             Some(temp.path()),
         );
-        let want = [(7_usize, ["AAA", "BB", "CC"]), (8_usize, ["AAA", "BBB", "CC"])];
+        let want = [
+            (7_usize, ["AAA", "BB", "CC"]),
+            (8_usize, ["AAA", "BBB", "CC"]),
+        ];
         for (response, (cap, contents)) in responses.iter().zip(want) {
             assert_tool_success_shape(response);
             let body = tool_body(response);
@@ -277,8 +329,16 @@ fn code_read_split_contract() {
         .unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["quad.rs#L1-L1", "quad.rs#L2-L2", "quad.rs#L3-L3", "quad.rs#L4-L4"], "max_chars": 11})),
-                tool_call(2, "code_read", json!({"ids": ["quad.rs#L1-L1", "quad.rs#L2-L2", "quad.rs#L3-L3", "quad.rs#L4-L4"], "max_chars": 14})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["quad.rs#L1-L1", "quad.rs#L2-L2", "quad.rs#L3-L3", "quad.rs#L4-L4"], "max_chars": 11}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["quad.rs#L1-L1", "quad.rs#L2-L2", "quad.rs#L3-L3", "quad.rs#L4-L4"], "max_chars": 14}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -327,18 +387,34 @@ fn code_read_window_contract() {
         std::fs::write(temp.path().join("five.rs"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["five.rs#L1-L1"], "context_lines": 100})),
-                tool_call(2, "code_read", json!({"ids": ["five.rs#L5-L5"], "context_lines": 2})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["five.rs#L1-L1"], "context_lines": 100}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["five.rs#L5-L5"], "context_lines": 2}),
+                ),
             ],
             Some(temp.path()),
         );
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
         let top = tool_body(&responses[0]);
-        assert_eq!(top["nodes"][0]["lines"], json!({"start": 1, "end": 5}), "{top:#}");
+        assert_eq!(
+            top["nodes"][0]["lines"],
+            json!({"start": 1, "end": 5}),
+            "{top:#}"
+        );
         assert_eq!(top["nodes"][0]["content"], "l1\nl2\nl3\nl4\nl5", "{top:#}");
         let bottom = tool_body(&responses[1]);
-        assert_eq!(bottom["nodes"][0]["lines"], json!({"start": 3, "end": 5}), "{bottom:#}");
+        assert_eq!(
+            bottom["nodes"][0]["lines"],
+            json!({"start": 3, "end": 5}),
+            "{bottom:#}"
+        );
         assert_eq!(bottom["nodes"][0]["content"], "l3\nl4\nl5", "{bottom:#}");
     }
     // Leg 2 (pass1 exact): one-sided clamps L1-L2 ctx1 -> (1,3), L4-L5 -> (3,5).
@@ -347,18 +423,34 @@ fn code_read_window_contract() {
         std::fs::write(temp.path().join("five.rs"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["five.rs#L1-L2"], "context_lines": 1})),
-                tool_call(2, "code_read", json!({"ids": ["five.rs#L4-L5"], "context_lines": 1})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["five.rs#L1-L2"], "context_lines": 1}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["five.rs#L4-L5"], "context_lines": 1}),
+                ),
             ],
             Some(temp.path()),
         );
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
         let first = tool_body(&responses[0]);
-        assert_eq!(first["nodes"][0]["lines"], json!({"start": 1, "end": 3}), "{first:#}");
+        assert_eq!(
+            first["nodes"][0]["lines"],
+            json!({"start": 1, "end": 3}),
+            "{first:#}"
+        );
         assert_eq!(first["nodes"][0]["content"], "l1\nl2\nl3", "{first:#}");
         let last = tool_body(&responses[1]);
-        assert_eq!(last["nodes"][0]["lines"], json!({"start": 3, "end": 5}), "{last:#}");
+        assert_eq!(
+            last["nodes"][0]["lines"],
+            json!({"start": 3, "end": 5}),
+            "{last:#}"
+        );
         assert_eq!(last["nodes"][0]["content"], "l3\nl4\nl5", "{last:#}");
     }
     // Leg 3 (pass2 totality): ctx 0/100 accept, 101/-1/huge/float reject.
@@ -367,12 +459,36 @@ fn code_read_window_contract() {
         std::fs::write(temp.path().join("five.rs"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": 0})),
-                tool_call(2, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": 100})),
-                tool_call(3, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": 101})),
-                tool_call(4, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": -1})),
-                tool_call(5, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": u64::MAX})),
-                tool_call(6, "code_read", json!({"ids": ["five.rs#L3-L3"], "context_lines": 1.5})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": 0}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": 100}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": 101}),
+                ),
+                tool_call(
+                    4,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": -1}),
+                ),
+                tool_call(
+                    5,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": u64::MAX}),
+                ),
+                tool_call(
+                    6,
+                    "code_read",
+                    json!({"ids": ["five.rs#L3-L3"], "context_lines": 1.5}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -383,19 +499,34 @@ fn code_read_window_contract() {
             assert_tool_error_shape(response);
         }
         let exact = tool_body(&responses[0]);
-        assert_eq!(exact["nodes"][0]["lines"], json!({"start": 3, "end": 3}), "{exact:#}");
+        assert_eq!(
+            exact["nodes"][0]["lines"],
+            json!({"start": 3, "end": 3}),
+            "{exact:#}"
+        );
         assert_eq!(exact["nodes"][0]["content"], "l3", "{exact:#}");
         assert_eq!(exact["nodes"][0]["truncated"], false, "{exact:#}");
         let clamped = tool_body(&responses[1]);
-        assert_eq!(clamped["nodes"][0]["lines"], json!({"start": 1, "end": 5}), "{clamped:#}");
-        assert_eq!(clamped["nodes"][0]["content"], "l1\nl2\nl3\nl4\nl5", "{clamped:#}");
+        assert_eq!(
+            clamped["nodes"][0]["lines"],
+            json!({"start": 1, "end": 5}),
+            "{clamped:#}"
+        );
+        assert_eq!(
+            clamped["nodes"][0]["content"], "l1\nl2\nl3\nl4\nl5",
+            "{clamped:#}"
+        );
     }
     // Leg 4 (pass3 metamorphic): top-edge re-clamp is a fixed point.
     {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("seven.rs"), "r1\nr2\nr3\nr4\nr5\nr6\nr7\n").unwrap();
         let first = rpc_session(
-            vec![tool_call(1, "code_read", json!({"ids": ["seven.rs#L2-L2"], "context_lines": 50}))],
+            vec![tool_call(
+                1,
+                "code_read",
+                json!({"ids": ["seven.rs#L2-L2"], "context_lines": 50}),
+            )],
             Some(temp.path()),
         );
         assert_tool_success_shape(&first[0]);
@@ -404,9 +535,21 @@ fn code_read_window_contract() {
         let widened = format!("seven.rs#L{start}-L{end}");
         let again = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": [widened.clone()], "context_lines": 50})),
-                tool_call(2, "code_read", json!({"ids": [widened], "context_lines": 100})),
-                tool_call(3, "code_read", json!({"ids": ["seven.rs#L2-L2"], "context_lines": 100})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": [widened.clone()], "context_lines": 50}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": [widened], "context_lines": 100}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["seven.rs#L2-L2"], "context_lines": 100}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -415,9 +558,20 @@ fn code_read_window_contract() {
         }
         for (index, response) in again.iter().enumerate() {
             let body = tool_body(response);
-            assert_eq!(window(&body, 0), (start, end), "re-clamp {index} moved the window: base {base:#} vs {body:#}");
-            assert_eq!(node_content(&body, 0), node_content(&base, 0), "re-clamp {index} changed content");
-            assert_eq!(body["nodes"][0]["truncated"], base["nodes"][0]["truncated"], "re-clamp {index} flipped truncated");
+            assert_eq!(
+                window(&body, 0),
+                (start, end),
+                "re-clamp {index} moved the window: base {base:#} vs {body:#}"
+            );
+            assert_eq!(
+                node_content(&body, 0),
+                node_content(&base, 0),
+                "re-clamp {index} changed content"
+            );
+            assert_eq!(
+                body["nodes"][0]["truncated"], base["nodes"][0]["truncated"],
+                "re-clamp {index} flipped truncated"
+            );
         }
     }
     // Leg 5 (pass3 metamorphic): bottom-edge re-clamp is a fixed point.
@@ -425,7 +579,11 @@ fn code_read_window_contract() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("seven.rs"), "r1\nr2\nr3\nr4\nr5\nr6\nr7\n").unwrap();
         let first = rpc_session(
-            vec![tool_call(1, "code_read", json!({"ids": ["seven.rs#L6-L6"], "context_lines": 50}))],
+            vec![tool_call(
+                1,
+                "code_read",
+                json!({"ids": ["seven.rs#L6-L6"], "context_lines": 50}),
+            )],
             Some(temp.path()),
         );
         assert_tool_success_shape(&first[0]);
@@ -434,9 +592,21 @@ fn code_read_window_contract() {
         let widened = format!("seven.rs#L{start}-L{end}");
         let again = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": [widened.clone()], "context_lines": 50})),
-                tool_call(2, "code_read", json!({"ids": [widened], "context_lines": 100})),
-                tool_call(3, "code_read", json!({"ids": ["seven.rs#L6-L6"], "context_lines": 100})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": [widened.clone()], "context_lines": 50}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": [widened], "context_lines": 100}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["seven.rs#L6-L6"], "context_lines": 100}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -445,21 +615,42 @@ fn code_read_window_contract() {
         }
         for (index, response) in again.iter().enumerate() {
             let body = tool_body(response);
-            assert_eq!(window(&body, 0), (start, end), "re-clamp {index} moved the window: base {base:#} vs {body:#}");
-            assert_eq!(node_content(&body, 0), node_content(&base, 0), "re-clamp {index} changed content");
-            assert_eq!(body["nodes"][0]["truncated"], base["nodes"][0]["truncated"], "re-clamp {index} flipped truncated");
+            assert_eq!(
+                window(&body, 0),
+                (start, end),
+                "re-clamp {index} moved the window: base {base:#} vs {body:#}"
+            );
+            assert_eq!(
+                node_content(&body, 0),
+                node_content(&base, 0),
+                "re-clamp {index} changed content"
+            );
+            assert_eq!(
+                body["nodes"][0]["truncated"], base["nodes"][0]["truncated"],
+                "re-clamp {index} flipped truncated"
+            );
         }
     }
     // Leg 6 (pass3 metamorphic): ctx 0,1,2,4 nest (starts fall, ends rise).
     {
         let temp = tempfile::tempdir().unwrap();
-        let text = (1..=9).map(|n| format!("L{n}")).collect::<Vec<_>>().join("\n") + "\n";
+        let text = (1..=9)
+            .map(|n| format!("L{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
         std::fs::write(temp.path().join("nine.rs"), text).unwrap();
         let ctxs = [0_u64, 1, 2, 4];
         let calls: Vec<Value> = ctxs
             .iter()
             .enumerate()
-            .map(|(i, ctx)| tool_call(i as u32 + 1, "code_read", json!({"ids": ["nine.rs#L5-L5"], "context_lines": ctx})))
+            .map(|(i, ctx)| {
+                tool_call(
+                    i as u32 + 1,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L5-L5"], "context_lines": ctx}),
+                )
+            })
             .collect();
         let responses = rpc_session(calls, Some(temp.path()));
         let bodies: Vec<Value> = responses
@@ -471,26 +662,61 @@ fn code_read_window_contract() {
             .collect();
         let windows: Vec<(u64, u64)> = bodies.iter().map(|body| window(body, 0)).collect();
         for pair in windows.windows(2) {
-            assert!(pair[1].0 <= pair[0].0, "start must not move right as ctx grows: {windows:?}");
-            assert!(pair[1].1 >= pair[0].1, "end must not move left as ctx grows: {windows:?}");
+            assert!(
+                pair[1].0 <= pair[0].0,
+                "start must not move right as ctx grows: {windows:?}"
+            );
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "end must not move left as ctx grows: {windows:?}"
+            );
         }
         let contents: Vec<&str> = bodies.iter().map(|body| node_content(body, 0)).collect();
         for pair in contents.windows(2) {
-            assert!(pair[1].contains(pair[0]), "smaller window must nest in larger: {:?} vs {:?}", pair[0], pair[1]);
+            assert!(
+                pair[1].contains(pair[0]),
+                "smaller window must nest in larger: {:?} vs {:?}",
+                pair[0],
+                pair[1]
+            );
         }
     }
     // Leg 7 (pass3 metamorphic): subrange nesting + spelling equivalence.
     {
         let temp = tempfile::tempdir().unwrap();
-        let text = (1..=9).map(|n| format!("L{n}")).collect::<Vec<_>>().join("\n") + "\n";
+        let text = (1..=9)
+            .map(|n| format!("L{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
         std::fs::write(temp.path().join("nine.rs"), text).unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["nine.rs#L5-L5"], "context_lines": 0})),
-                tool_call(2, "code_read", json!({"ids": ["nine.rs#L4-L6"], "context_lines": 0})),
-                tool_call(3, "code_read", json!({"ids": ["nine.rs#L3-L7"], "context_lines": 0})),
-                tool_call(4, "code_read", json!({"ids": ["nine.rs#L5-L5"], "context_lines": 1})),
-                tool_call(5, "code_read", json!({"ids": ["nine.rs#L4-L6"], "context_lines": 1})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L5-L5"], "context_lines": 0}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L4-L6"], "context_lines": 0}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L3-L7"], "context_lines": 0}),
+                ),
+                tool_call(
+                    4,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L5-L5"], "context_lines": 1}),
+                ),
+                tool_call(
+                    5,
+                    "code_read",
+                    json!({"ids": ["nine.rs#L4-L6"], "context_lines": 1}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -502,15 +728,49 @@ fn code_read_window_contract() {
             })
             .collect();
         let windows: Vec<(u64, u64)> = bodies[..3].iter().map(|body| window(body, 0)).collect();
-        assert!(windows[1].0 <= windows[0].0 && windows[1].1 >= windows[0].1, "L4-L6 must contain L5-L5: {windows:?}");
-        assert!(windows[2].0 <= windows[1].0 && windows[2].1 >= windows[1].1, "L3-L7 must contain L4-L6: {windows:?}");
+        assert!(
+            windows[1].0 <= windows[0].0 && windows[1].1 >= windows[0].1,
+            "L4-L6 must contain L5-L5: {windows:?}"
+        );
+        assert!(
+            windows[2].0 <= windows[1].0 && windows[2].1 >= windows[1].1,
+            "L3-L7 must contain L4-L6: {windows:?}"
+        );
         let contents: Vec<&str> = bodies.iter().map(|body| node_content(body, 0)).collect();
-        assert!(contents[1].contains(contents[0]), "L4-L6 must nest L5-L5 content: {:?} vs {:?}", contents[0], contents[1]);
-        assert!(contents[2].contains(contents[1]), "L3-L7 must nest L4-L6 content: {:?} vs {:?}", contents[1], contents[2]);
-        assert_eq!(window(&bodies[3], 0), windows[1], "ctx-spelling must match range-spelling: {:#} vs {:#}", bodies[3], bodies[1]);
-        assert_eq!(contents[3], contents[1], "ctx-spelling content must match range-spelling");
-        assert_eq!(window(&bodies[4], 0), windows[2], "ctx-spelling must match range-spelling: {:#} vs {:#}", bodies[4], bodies[2]);
-        assert_eq!(contents[4], contents[2], "ctx-spelling content must match range-spelling");
+        assert!(
+            contents[1].contains(contents[0]),
+            "L4-L6 must nest L5-L5 content: {:?} vs {:?}",
+            contents[0],
+            contents[1]
+        );
+        assert!(
+            contents[2].contains(contents[1]),
+            "L3-L7 must nest L4-L6 content: {:?} vs {:?}",
+            contents[1],
+            contents[2]
+        );
+        assert_eq!(
+            window(&bodies[3], 0),
+            windows[1],
+            "ctx-spelling must match range-spelling: {:#} vs {:#}",
+            bodies[3],
+            bodies[1]
+        );
+        assert_eq!(
+            contents[3], contents[1],
+            "ctx-spelling content must match range-spelling"
+        );
+        assert_eq!(
+            window(&bodies[4], 0),
+            windows[2],
+            "ctx-spelling must match range-spelling: {:#} vs {:#}",
+            bodies[4],
+            bodies[2]
+        );
+        assert_eq!(
+            contents[4], contents[2],
+            "ctx-spelling content must match range-spelling"
+        );
     }
     // Leg 8 (pass4 drill): exact (start,end,content,chars,bytes,lines) sweep.
     {
@@ -519,7 +779,13 @@ fn code_read_window_contract() {
         let calls: Vec<Value> = [0_u64, 1, 2, 3]
             .iter()
             .enumerate()
-            .map(|(i, ctx)| tool_call(i as u32 + 1, "code_read", json!({"ids": ["seven.rs#L4-L4"], "context_lines": ctx})))
+            .map(|(i, ctx)| {
+                tool_call(
+                    i as u32 + 1,
+                    "code_read",
+                    json!({"ids": ["seven.rs#L4-L4"], "context_lines": ctx}),
+                )
+            })
             .collect();
         let responses = rpc_session(calls, Some(temp.path()));
         let want = [
@@ -532,7 +798,11 @@ fn code_read_window_contract() {
         for (response, (lines, start, end, content, chars)) in responses.iter().zip(want) {
             assert_tool_success_shape(response);
             let body = tool_body(response);
-            assert_eq!(body["nodes"][0]["lines"], json!({"start": start, "end": end}), "{body:#}");
+            assert_eq!(
+                body["nodes"][0]["lines"],
+                json!({"start": start, "end": end}),
+                "{body:#}"
+            );
             let got = body["nodes"][0]["content"].as_str().unwrap();
             assert_eq!(got, content, "{body:#}");
             assert_eq!(got.chars().count(), chars, "{body:#}");
@@ -563,9 +833,21 @@ fn code_read_truncation_contract() {
         std::fs::write(temp.path().join("uni.rs"), "ééé\n").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["uni.rs#L1-L1"], "max_chars": 2})),
-                tool_call(2, "code_read", json!({"ids": ["uni.rs#L1-L1"], "max_chars": 3})),
-                tool_call(3, "code_read", json!({"ids": ["uni.rs#L1-L1"], "max_chars": 1})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["uni.rs#L1-L1"], "max_chars": 2}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["uni.rs#L1-L1"], "max_chars": 3}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["uni.rs#L1-L1"], "max_chars": 1}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -593,13 +875,41 @@ fn code_read_truncation_contract() {
         std::fs::write(temp.path().join("abc.rs"), "abc\n").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1})),
-                tool_call(2, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1_000_000})),
-                tool_call(3, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": 0})),
-                tool_call(4, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1_000_001})),
-                tool_call(5, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": -1})),
-                tool_call(6, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": u64::MAX})),
-                tool_call(7, "code_read", json!({"ids": ["abc.rs#L1-L1"], "max_chars": "many"})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1_000_000}),
+                ),
+                tool_call(
+                    3,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": 0}),
+                ),
+                tool_call(
+                    4,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": 1_000_001}),
+                ),
+                tool_call(
+                    5,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": -1}),
+                ),
+                tool_call(
+                    6,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": u64::MAX}),
+                ),
+                tool_call(
+                    7,
+                    "code_read",
+                    json!({"ids": ["abc.rs#L1-L1"], "max_chars": "many"}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -619,12 +929,28 @@ fn code_read_truncation_contract() {
     // Leg 3 (pass2 totality): huge ASCII + wide lines keep exactly 10 chars.
     {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join("huge.rs"), format!("{}\n", "z".repeat(5000))).unwrap();
-        std::fs::write(temp.path().join("wide.rs"), format!("{}\n", "é".repeat(100))).unwrap();
+        std::fs::write(
+            temp.path().join("huge.rs"),
+            format!("{}\n", "z".repeat(5000)),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("wide.rs"),
+            format!("{}\n", "é".repeat(100)),
+        )
+        .unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["huge.rs#L1-L1"], "max_chars": 10})),
-                tool_call(2, "code_read", json!({"ids": ["wide.rs#L1-L1"], "max_chars": 10})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["huge.rs#L1-L1"], "max_chars": 10}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["wide.rs#L1-L1"], "max_chars": 10}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -640,7 +966,11 @@ fn code_read_truncation_contract() {
         let wcontent = wide["nodes"][0]["content"].as_str().unwrap();
         assert_eq!(wcontent, "é".repeat(10), "{wide:#}");
         assert_eq!(wcontent.chars().count(), 10, "{wide:#}");
-        assert_eq!(wcontent.len(), 20, "10 chars must occupy 20 bytes: {wide:#}");
+        assert_eq!(
+            wcontent.len(),
+            20,
+            "10 chars must occupy 20 bytes: {wide:#}"
+        );
         assert_eq!(wide["nodes"][0]["truncated"], true, "{wide:#}");
     }
     // Leg 4 (pass3 metamorphic): single-ref monotone + prefix + one flag flip.
@@ -651,7 +981,13 @@ fn code_read_truncation_contract() {
         let calls: Vec<Value> = caps
             .iter()
             .enumerate()
-            .map(|(i, cap)| tool_call(i as u32 + 1, "code_read", json!({"ids": ["alpha.rs#L1-L1"], "max_chars": cap})))
+            .map(|(i, cap)| {
+                tool_call(
+                    i as u32 + 1,
+                    "code_read",
+                    json!({"ids": ["alpha.rs#L1-L1"], "max_chars": cap}),
+                )
+            })
             .collect();
         let responses = rpc_session(calls, Some(temp.path()));
         let bodies: Vec<Value> = responses
@@ -663,23 +999,48 @@ fn code_read_truncation_contract() {
             .collect();
         let contents: Vec<&str> = bodies.iter().map(|body| node_content(body, 0)).collect();
         for pair in contents.windows(2) {
-            assert!(pair[1].len() >= pair[0].len(), "bytes must not shrink: {:?} vs {:?}", pair[0], pair[1]);
+            assert!(
+                pair[1].len() >= pair[0].len(),
+                "bytes must not shrink: {:?} vs {:?}",
+                pair[0],
+                pair[1]
+            );
             assert!(
                 pair[1].chars().count() >= pair[0].chars().count(),
                 "chars must not shrink: {:?} vs {:?}",
                 pair[0],
                 pair[1]
             );
-            assert!(pair[1].starts_with(pair[0]), "shorter content must prefix the longer: {:?} vs {:?}", pair[0], pair[1]);
+            assert!(
+                pair[1].starts_with(pair[0]),
+                "shorter content must prefix the longer: {:?} vs {:?}",
+                pair[0],
+                pair[1]
+            );
         }
-        let flags: Vec<bool> = bodies.iter().map(|body| body["nodes"][0]["truncated"].as_bool().unwrap()).collect();
+        let flags: Vec<bool> = bodies
+            .iter()
+            .map(|body| body["nodes"][0]["truncated"].as_bool().unwrap())
+            .collect();
         let first_false = flags.iter().position(|flag| !flag);
         if let Some(cut) = first_false {
-            assert!(flags[cut..].iter().all(|flag| !flag), "truncated must not flip back to true: {flags:?}");
-            assert!(flags[..cut].iter().all(|flag| *flag), "truncated must be true before saturation: {flags:?}");
+            assert!(
+                flags[cut..].iter().all(|flag| !flag),
+                "truncated must not flip back to true: {flags:?}"
+            );
+            assert!(
+                flags[..cut].iter().all(|flag| *flag),
+                "truncated must be true before saturation: {flags:?}"
+            );
         }
-        assert_eq!(contents[4], contents[5], "caps at/above saturation must agree");
-        assert!(!flags[4] && !flags[5], "saturated reads must not truncate: {flags:?}");
+        assert_eq!(
+            contents[4], contents[5],
+            "caps at/above saturation must agree"
+        );
+        assert!(
+            !flags[4] && !flags[5],
+            "saturated reads must not truncate: {flags:?}"
+        );
     }
     // Leg 5 (pass3 metamorphic): 24x"é" bytes always 2x chars, prefix-chained.
     {
@@ -689,7 +1050,13 @@ fn code_read_truncation_contract() {
         let calls: Vec<Value> = caps
             .iter()
             .enumerate()
-            .map(|(i, cap)| tool_call(i as u32 + 1, "code_read", json!({"ids": ["wide.rs#L1-L1"], "max_chars": cap})))
+            .map(|(i, cap)| {
+                tool_call(
+                    i as u32 + 1,
+                    "code_read",
+                    json!({"ids": ["wide.rs#L1-L1"], "max_chars": cap}),
+                )
+            })
             .collect();
         let responses = rpc_session(calls, Some(temp.path()));
         let bodies: Vec<Value> = responses
@@ -701,7 +1068,11 @@ fn code_read_truncation_contract() {
             .collect();
         let contents: Vec<&str> = bodies.iter().map(|body| node_content(body, 0)).collect();
         for (content, cap) in contents.iter().zip(caps) {
-            assert_eq!(content.len(), 2 * content.chars().count(), "cap {cap}: bytes must be 2x chars: {content:?}");
+            assert_eq!(
+                content.len(),
+                2 * content.chars().count(),
+                "cap {cap}: bytes must be 2x chars: {content:?}"
+            );
         }
         for pair in contents.windows(2) {
             assert!(
@@ -710,9 +1081,17 @@ fn code_read_truncation_contract() {
                 pair[0],
                 pair[1]
             );
-            assert!(pair[1].starts_with(pair[0]), "shorter content must prefix the longer: {:?} vs {:?}", pair[0], pair[1]);
+            assert!(
+                pair[1].starts_with(pair[0]),
+                "shorter content must prefix the longer: {:?} vs {:?}",
+                pair[0],
+                pair[1]
+            );
         }
-        assert_eq!(contents[4], contents[5], "caps at/above saturation must agree");
+        assert_eq!(
+            contents[4], contents[5],
+            "caps at/above saturation must agree"
+        );
         assert_eq!(bodies[4]["nodes"][0]["truncated"], false, "{:#}", bodies[4]);
         assert_eq!(bodies[5]["nodes"][0]["truncated"], false, "{:#}", bodies[5]);
     }
@@ -725,10 +1104,18 @@ fn code_read_truncation_contract() {
         let greek_caps = [1_u64, 3, 4, 5, 6];
         let mut calls = Vec::new();
         for (i, cap) in ascii_caps.iter().enumerate() {
-            calls.push(tool_call(i as u32 + 1, "code_read", json!({"ids": ["alpha.rs#L1-L1"], "max_chars": cap})));
+            calls.push(tool_call(
+                i as u32 + 1,
+                "code_read",
+                json!({"ids": ["alpha.rs#L1-L1"], "max_chars": cap}),
+            ));
         }
         for (i, cap) in greek_caps.iter().enumerate() {
-            calls.push(tool_call(i as u32 + 11, "code_read", json!({"ids": ["greek.rs#L1-L1"], "max_chars": cap})));
+            calls.push(tool_call(
+                i as u32 + 11,
+                "code_read",
+                json!({"ids": ["greek.rs#L1-L1"], "max_chars": cap}),
+            ));
         }
         let responses = rpc_session(calls, Some(temp.path()));
         assert_eq!(responses.len(), 10);
@@ -739,7 +1126,8 @@ fn code_read_truncation_contract() {
             ("abcdefghijklmnopqrstuvwxyz", 26, 26, false),
             ("abcdefghijklmnopqrstuvwxyz", 26, 26, false),
         ];
-        for (response, (content, chars, bytes, truncated)) in responses[..5].iter().zip(ascii_want) {
+        for (response, (content, chars, bytes, truncated)) in responses[..5].iter().zip(ascii_want)
+        {
             assert_tool_success_shape(response);
             let body = tool_body(response);
             let got = body["nodes"][0]["content"].as_str().unwrap();
@@ -755,7 +1143,8 @@ fn code_read_truncation_contract() {
             ("αβγδε", 5, 10, false),
             ("αβγδε", 5, 10, false),
         ];
-        for (response, (content, chars, bytes, truncated)) in responses[5..].iter().zip(greek_want) {
+        for (response, (content, chars, bytes, truncated)) in responses[5..].iter().zip(greek_want)
+        {
             assert_tool_success_shape(response);
             let body = tool_body(response);
             let got = body["nodes"][0]["content"].as_str().unwrap();
@@ -790,7 +1179,11 @@ fn code_read_emptyfile_contract() {
         assert_tool_success_shape(&responses[0]);
         assert_tool_error_shape(&responses[1]);
         let body = tool_body(&responses[0]);
-        assert_eq!(body["nodes"][0]["lines"], json!({"start": 1, "end": 1}), "{body:#}");
+        assert_eq!(
+            body["nodes"][0]["lines"],
+            json!({"start": 1, "end": 1}),
+            "{body:#}"
+        );
         assert_eq!(body["nodes"][0]["content"], "", "{body:#}");
         assert_eq!(body["nodes"][0]["truncated"], false, "{body:#}");
     }
@@ -800,8 +1193,16 @@ fn code_read_emptyfile_contract() {
         std::fs::write(temp.path().join("empty.rs"), "").unwrap();
         let responses = rpc_session(
             vec![
-                tool_call(1, "code_read", json!({"ids": ["empty.rs#L1-L1"], "max_chars": 1})),
-                tool_call(2, "code_read", json!({"ids": ["empty.rs#L1-L1"], "max_chars": 1_000_000})),
+                tool_call(
+                    1,
+                    "code_read",
+                    json!({"ids": ["empty.rs#L1-L1"], "max_chars": 1}),
+                ),
+                tool_call(
+                    2,
+                    "code_read",
+                    json!({"ids": ["empty.rs#L1-L1"], "max_chars": 1_000_000}),
+                ),
                 tool_call(3, "code_read", json!({"ids": ["empty.rs#L2-L2"]})),
             ],
             Some(temp.path()),
@@ -812,7 +1213,11 @@ fn code_read_emptyfile_contract() {
         assert_tool_error_shape(&responses[2]);
         for response in &responses[..2] {
             let body = tool_body(response);
-            assert_eq!(body["nodes"][0]["lines"], json!({"start": 1, "end": 1}), "{body:#}");
+            assert_eq!(
+                body["nodes"][0]["lines"],
+                json!({"start": 1, "end": 1}),
+                "{body:#}"
+            );
             assert_eq!(body["nodes"][0]["content"], "", "{body:#}");
             assert_eq!(body["nodes"][0]["truncated"], false, "{body:#}");
         }
@@ -838,14 +1243,22 @@ fn code_read_emptyfile_contract() {
         assert_tool_success_shape(&responses[2]);
         assert_tool_success_shape(&responses[3]);
         let solo = tool_body(&responses[0]);
-        assert_eq!(solo["nodes"][0]["lines"], json!({"start": 1, "end": 1}), "{solo:#}");
+        assert_eq!(
+            solo["nodes"][0]["lines"],
+            json!({"start": 1, "end": 1}),
+            "{solo:#}"
+        );
         assert_eq!(solo["nodes"][0]["content"], "solo", "{solo:#}");
         assert_eq!(solo["nodes"][0]["truncated"], false, "{solo:#}");
         let nl = tool_body(&responses[2]);
         assert_eq!(nl["nodes"][0]["content"], "x", "{nl:#}");
         assert_eq!(nl["nodes"][0]["truncated"], false, "{nl:#}");
         let bare = tool_body(&responses[3]);
-        assert_eq!(bare["nodes"][0]["lines"], json!({"start": 1, "end": 1}), "{bare:#}");
+        assert_eq!(
+            bare["nodes"][0]["lines"],
+            json!({"start": 1, "end": 1}),
+            "{bare:#}"
+        );
         assert_eq!(bare["nodes"][0]["content"], "", "{bare:#}");
         assert_eq!(bare["nodes"][0]["truncated"], false, "{bare:#}");
     }

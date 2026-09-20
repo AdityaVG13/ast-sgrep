@@ -247,7 +247,7 @@ fn concurrent_write_during_apply_is_refused_not_silently_overwritten() {
                 // The concurrent write: fresh content that does NOT match
                 // the plan's expected original. If apply overwrites this
                 // silently, it is a lost update.
-                let _ = fs::write(&watcher_root.join("src/c.rs"), CONCURRENT);
+                let _ = fs::write(watcher_root.join("src/c.rs"), CONCURRENT);
                 watcher_wrote.store(true, Ordering::SeqCst);
             }
         });
@@ -435,9 +435,8 @@ fn codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits() {
 fn codemod_zero_edits_stay_ok_when_index_serves_nothing() {
     let content = "fn unrelated() { keep(beta); }\n";
     let (_temp, root, index_path) = indexed_single_file_fixture("lib.rs", content);
-    let plan =
-        plan_codemod(&root, Some(&index_path), None, "fn old_name", "fn new_name")
-            .expect("absent declaration must plan without error");
+    let plan = plan_codemod(&root, Some(&index_path), None, "fn old_name", "fn new_name")
+        .expect("absent declaration must plan without error");
     assert_eq!(plan.files_changed, 0, "nothing to change");
     assert_eq!(plan.edit_count, 0);
 }
@@ -514,7 +513,13 @@ fn recover_orphans_restores_newest_backup_by_mtime_not_name_order() {
         .unwrap();
 
     // Any plan run over the still-indexed path heals the tree first.
-    let plan = plan_codemod(&root, Some(&index_path), None, "legacy($ARG)", "modern($ARG)");
+    let plan = plan_codemod(
+        &root,
+        Some(&index_path),
+        None,
+        "legacy($ARG)",
+        "modern($ARG)",
+    );
     let healed = fs::read_to_string(&lib).expect("canonical path must be restored");
     assert_eq!(
         healed, newest_content,
@@ -554,9 +559,18 @@ fn codemod_bom_only_pattern_refuses_loud_like_the_empty_pattern() {
         );
     }
 
-    let led = plan_codemod(&root, Some(&index_path), None, "\u{feff}old_name", "new_name")
-        .expect("a BOM-led real pattern must strip and plan, not refuse as empty");
-    assert_eq!(led.edit_count, 1, "the stripped pattern still plans its edit");
+    let led = plan_codemod(
+        &root,
+        Some(&index_path),
+        None,
+        "\u{feff}old_name",
+        "new_name",
+    )
+    .expect("a BOM-led real pattern must strip and plan, not refuse as empty");
+    assert_eq!(
+        led.edit_count, 1,
+        "the stripped pattern still plans its edit"
+    );
 }
 
 /// PASS 65 (LOW b): a stale index must not trigger the H-CONF-023 honesty
@@ -573,7 +587,11 @@ fn codemod_stale_index_with_removed_decl_plans_quiet_zero_not_false_refusal() {
     let (_temp, root, index_path) = indexed_single_file_fixture("lib.rs", content);
 
     // Stale the index: the declaration leaves the tree AFTER indexing.
-    fs::write(root.join("src/lib.rs"), "fn new_name() { legacy(alpha); }\n").unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "fn new_name() { legacy(alpha); }\n",
+    )
+    .unwrap();
 
     let plan = plan_codemod(&root, Some(&index_path), None, "fn old_name", "fn new_name")
         .expect("stale index with the declaration gone must plan quietly, not refuse");
@@ -611,8 +629,14 @@ const d = log(maybe(), run);
 ";
     let (_temp, root, index_path) = indexed_single_file_fixture("lib.ts", CHAIN_SOURCE);
 
-    let plan = plan_codemod(&root, Some(&index_path), None, "$O?.$M($$$A)", "log($O, $M)")
-        .expect("nested overlaps must resolve outermost-wins, not refuse the whole plan");
+    let plan = plan_codemod(
+        &root,
+        Some(&index_path),
+        None,
+        "$O?.$M($$$A)",
+        "log($O, $M)",
+    )
+    .expect("nested overlaps must resolve outermost-wins, not refuse the whole plan");
     assert_eq!(plan.edit_count, 2, "one OUTER edit per matched line");
     assert_eq!(plan.files.len(), 1);
     let edits = &plan.files[0].edits;
@@ -813,7 +837,11 @@ fn stale_index_dry_run_and_apply_agree_on_edit_count() {
     let root = temp.path().join("fixture");
     let src = root.join("src");
     fs::create_dir_all(&src).unwrap();
-    fs::write(src.join("a.py"), "def old_name(x):\n    return old_name(x)\n").unwrap();
+    fs::write(
+        src.join("a.py"),
+        "def old_name(x):\n    return old_name(x)\n",
+    )
+    .unwrap();
     let index_path = temp.path().join("index.db");
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
         .args([
@@ -846,7 +874,10 @@ fn stale_index_dry_run_and_apply_agree_on_edit_count() {
         ])
         .output()
         .expect("run asgrep codemod --dry-run");
-    assert!(dry.status.success(), "dry-run must succeed on a stale index");
+    assert!(
+        dry.status.success(),
+        "dry-run must succeed on a stale index"
+    );
     let dry: serde_json::Value = serde_json::from_slice(&dry.stdout).unwrap();
     let dry_edits = dry["plan"]["edit_count"].as_u64().unwrap();
 
@@ -877,7 +908,10 @@ fn stale_index_dry_run_and_apply_agree_on_edit_count() {
         dry_edits, applied,
         "preview contract: dry-run and apply must agree on the same stale state"
     );
-    assert_eq!(dry_edits, 2, "both sites are literal-anchored after the shift");
+    assert_eq!(
+        dry_edits, 2,
+        "both sites are literal-anchored after the shift"
+    );
     assert_eq!(
         fs::read_to_string(src.join("a.py")).unwrap(),
         "# shifted\n# shifted2\ndef new_name(x):\n    return new_name(x)\n",
@@ -922,14 +956,7 @@ fn rewrite_template_two_dollar_name_substitutes_the_capture_like_sg() {
         .expect("run asgrep index");
     assert!(status.success(), "indexing must succeed");
 
-    let plan = plan_codemod(
-        &root,
-        Some(&index_path),
-        None,
-        "g($$A)",
-        "wrap($$A)",
-    )
-    .unwrap();
+    let plan = plan_codemod(&root, Some(&index_path), None, "g($$A)", "wrap($$A)").unwrap();
     let mut planned: Vec<String> = plan
         .files
         .iter()
@@ -1103,8 +1130,7 @@ fn codemod_strips_pattern_ingress_prefix_and_plans_sg_parity_edits() {
     );
     assert_eq!(prefixed.files[0].path, "src/p.php");
     assert_eq!(
-        prefixed.files[0].edits[0].before,
-        "echo \"a b\";",
+        prefixed.files[0].edits[0].before, "echo \"a b\";",
         "the edit span must be the sg-matched statement"
     );
     assert_eq!(prefixed.files[0].edits[0].after, "XRAY;");
@@ -1114,8 +1140,14 @@ fn codemod_strips_pattern_ingress_prefix_and_plans_sg_parity_edits() {
     );
 
     // Grammar parity: prefixed and stripped ingress plan the SAME plan.
-    let stripped =
-        plan_codemod(&root, Some(&index_path), Some("php"), "echo \"a b\";", "XRAY;").unwrap();
+    let stripped = plan_codemod(
+        &root,
+        Some(&index_path),
+        Some("php"),
+        "echo \"a b\";",
+        "XRAY;",
+    )
+    .unwrap();
     let spans = |plan: &ast_sgrep_core::codemod::CodemodPlan| {
         plan.files
             .iter()
@@ -1138,7 +1170,11 @@ fn codemod_strips_pattern_ingress_prefix_and_plans_sg_parity_edits() {
     // `$`-gate into a silent zero (js `g($A)`, search-served {j.js:4}).
     for (lang, pattern, before) in [
         ("php", "pattern:$s = \"m\" . \"n\";", "$s = \"m\" . \"n\";"),
-        ("js", "pattern:console.log(\"x y\");", "console.log(\"x y\");"),
+        (
+            "js",
+            "pattern:console.log(\"x y\");",
+            "console.log(\"x y\");",
+        ),
         ("js", "pattern:g($A)", "g(1)"),
     ] {
         let plan = plan_codemod(&root, Some(&index_path), Some(lang), pattern, "XRAY;")
@@ -1211,7 +1247,10 @@ fn codemod_cli_prefixed_literal_pattern_plans_the_search_served_edit() {
         Some(1),
         "codemod must plan the edit search serves, not a silent zero: {dry}"
     );
-    assert_eq!(dry["plan"]["files"][0]["edits"][0]["before"], "echo \"a b\";");
+    assert_eq!(
+        dry["plan"]["files"][0]["edits"][0]["before"],
+        "echo \"a b\";"
+    );
     assert_eq!(dry["plan"]["files"][0]["edits"][0]["after"], "XRAY;");
 }
 
@@ -1244,8 +1283,7 @@ fn codemod_prefixed_ingress_keeps_unsupported_and_empty_patterns_loud() {
     }
 
     let error = plan_codemod(&root, Some(&index_path), None, "pattern:", "XRAY;")
-        .err()
-        .expect("a vacuous pattern: ingress must refuse loudly");
+        .expect_err("a vacuous pattern: ingress must refuse loudly");
     let text = format!("{error:#}");
     assert!(
         text.contains("must not be empty"),
@@ -1274,8 +1312,7 @@ fn codemod_prefixed_bom_ingress_normalizes_in_search_lane_order() {
     // The named finding face: a vacuous `pattern:<BOM>` must reach the same
     // loud emptiness refusal the identical search string hits.
     let error = plan_codemod(&root, Some(&index_path), None, "pattern:\u{feff}", "XRAY;")
-        .err()
-        .expect("a vacuous pattern:<BOM> ingress must refuse loudly like search");
+        .expect_err("a vacuous pattern:<BOM> ingress must refuse loudly like search");
     let text = format!("{error:#}");
     assert!(
         text.contains("must not be empty"),
@@ -1349,11 +1386,7 @@ fn codemod_plans_all_sg_sites_for_expando_meta_pattern() {
     let root = temp.path().join("fixture");
     fs::create_dir_all(&root).unwrap();
     // Byte-identical to the pass98 c98_cmod fixture (m3d probe corpus).
-    fs::write(
-        root.join("a.rs"),
-        "fn a() {\n    z + 1;\n    y + 1;\n}\n",
-    )
-    .unwrap();
+    fs::write(root.join("a.rs"), "fn a() {\n    z + 1;\n    y + 1;\n}\n").unwrap();
     fs::write(
         root.join("b.rs"),
         "static NAME: &str = \"n\";\nfn b() {\n    NAME + 1;\n    x + 1;\n    q + 1;\n}\n",
@@ -1394,9 +1427,8 @@ fn codemod_plans_all_sg_sites_for_expando_meta_pattern() {
     // The $-twin keeps its registered codemod-loud class (97B evidence):
     // `pattern is not supported by the in-process structural matcher`.
     let twin = plan_codemod(&root, Some(&index_path), None, "$NAME + 1", "R($NAME)");
-    let err = twin.expect_err(
-        "$NAME + 1: the registered $-twin class is codemod-LOUD — must stay loud",
-    );
+    let err =
+        twin.expect_err("$NAME + 1: the registered $-twin class is codemod-LOUD — must stay loud");
     let text = format!("{err:#}");
     assert!(
         text.contains("not supported by the in-process structural matcher"),

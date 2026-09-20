@@ -49,8 +49,16 @@ fn dispatch_by_advertised_names_with_tool_count_tripwire() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    let search_name = names.iter().find(|name| *name == "keyword_search").unwrap().clone();
-    let read_name = names.iter().find(|name| *name == "code_read").unwrap().clone();
+    let search_name = names
+        .iter()
+        .find(|name| *name == "keyword_search")
+        .unwrap()
+        .clone();
+    let read_name = names
+        .iter()
+        .find(|name| *name == "code_read")
+        .unwrap()
+        .clone();
 
     // Spawn 2: search by advertised name; hits are non-empty, zn agrees.
     let mut session = LiveSession::spawn(Some(temp.path()));
@@ -88,17 +96,23 @@ fn dispatch_by_advertised_names_with_tool_count_tripwire() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let body = tool_body(&responses[1]);
     let nodes = body["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), 1, "{body:#}");
     assert!(nodes[0]["id"].as_str().unwrap().contains("#L"), "{body:#}");
     assert!(nodes[0]["lines"]["start"].as_u64().unwrap() >= 1);
     assert!(
-        nodes[0]["lines"]["end"].as_u64().unwrap()
-            >= nodes[0]["lines"]["start"].as_u64().unwrap()
+        nodes[0]["lines"]["end"].as_u64().unwrap() >= nodes[0]["lines"]["start"].as_u64().unwrap()
     );
-    assert!(!nodes[0]["content"].as_str().unwrap().is_empty(), "{body:#}");
+    assert!(
+        !nodes[0]["content"].as_str().unwrap().is_empty(),
+        "{body:#}"
+    );
 }
 
 /// INTENT: search-then-read is consistent -- one fan-out read over every hit
@@ -140,8 +154,9 @@ fn search_then_read_fan_out_matches_counts_and_path_table() {
     assert!(!hits.is_empty(), "{envelope:#}");
     assert_eq!(envelope["zn"].as_u64().unwrap() as usize, hits.len());
     assert_eq!(distinct_hit_paths(&hits).len(), 3, "{envelope:#}");
-    let table: HashMap<String, String> =
-        ast_sgrep_plugins::resolve_compact_paths(&envelope).into_iter().collect();
+    let table: HashMap<String, String> = ast_sgrep_plugins::resolve_compact_paths(&envelope)
+        .into_iter()
+        .collect();
     assert_eq!(table.len(), 3, "{envelope:#}");
     let table_paths: HashSet<&String> = table.values().collect();
     let ids: Vec<Value> = hits.iter().map(|hit| hit[0].clone()).collect();
@@ -163,7 +178,11 @@ fn search_then_read_fan_out_matches_counts_and_path_table() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let body = tool_body(&responses[1]);
     let nodes = body["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), hits.len(), "{body:#}");
@@ -174,8 +193,17 @@ fn search_then_read_fan_out_matches_counts_and_path_table() {
         let end = node["lines"]["end"].as_u64().unwrap();
         assert!(start >= 1 && end >= start, "{node:#}");
         assert!(!node["content"].as_str().unwrap().is_empty(), "{node:#}");
-        let file = node["id"].as_str().unwrap().split("#L").next().unwrap().to_owned();
-        assert!(table_paths.contains(&file), "{node:#} not in {table_paths:?}");
+        let file = node["id"]
+            .as_str()
+            .unwrap()
+            .split("#L")
+            .next()
+            .unwrap()
+            .to_owned();
+        assert!(
+            table_paths.contains(&file),
+            "{node:#} not in {table_paths:?}"
+        );
         read_files.insert(file);
     }
     assert_eq!(read_files.len(), 3, "every tree file must round-trip");
@@ -221,10 +249,17 @@ fn ast_search_chain_reads_pattern_hits() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let body = tool_body(&responses[1]);
     assert_eq!(body["nodes"].as_array().unwrap().len(), 1);
-    assert!(!body["nodes"][0]["content"].as_str().unwrap().is_empty(), "{body:#}");
+    assert!(
+        !body["nodes"][0]["content"].as_str().unwrap().is_empty(),
+        "{body:#}"
+    );
 }
 
 /// INTENT: the index lifecycle runs miss (empty_index) -> index_repo indexes
@@ -300,8 +335,15 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
-    assert_eq!(tool_body(&responses[1])["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
+    assert_eq!(
+        tool_body(&responses[1])["nodes"].as_array().unwrap().len(),
+        1
+    );
 
     // Empty-tree leg (fresh tree, one spawn): status zero, empty_index miss
     // (never a bare empty hit list), read is a tool error.
@@ -324,9 +366,17 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(responses.len(), 3);
-    assert_eq!(responses[0]["result"]["isError"], false, "{:#}", responses[0]);
+    assert_eq!(
+        responses[0]["result"]["isError"], false,
+        "{:#}",
+        responses[0]
+    );
     assert_eq!(tool_body(&responses[0])["file_count"], 0);
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let miss = tool_body(&responses[1]);
     assert_eq!(miss["why"], "empty_index", "{miss:#}");
     assert_eq!(miss["zn"], 0);
@@ -425,7 +475,11 @@ fn session_recovers_after_errors_without_restart() {
     for response in &responses[..3] {
         assert_tool_error_shape(response);
     }
-    assert_eq!(responses[3]["result"]["isError"], false, "{:#}", responses[3]);
+    assert_eq!(
+        responses[3]["result"]["isError"], false,
+        "{:#}",
+        responses[3]
+    );
     assert!(!tool_body(&responses[3])["h"].as_array().unwrap().is_empty());
 
     // Leg 2 (poisoned process): unknown tool + bad read, then a genuine
@@ -449,8 +503,15 @@ fn session_recovers_after_errors_without_restart() {
     assert!(session.wait_clean().success());
     assert_tool_error_shape(&responses[0]);
     assert_tool_error_shape(&responses[1]);
-    assert_eq!(responses[2]["result"]["isError"], false, "{:#}", responses[2]);
-    let compact_id = tool_body(&responses[2])["h"][0][0].as_str().unwrap().to_owned();
+    assert_eq!(
+        responses[2]["result"]["isError"], false,
+        "{:#}",
+        responses[2]
+    );
+    let compact_id = tool_body(&responses[2])["h"][0][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     // Leg 3 (FRESH process, not the poisoned one above): a client chain
     // succeeds after errors. Proven: post-error chains work; NOT proven:
@@ -473,9 +534,20 @@ fn session_recovers_after_errors_without_restart() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_tool_error_shape(&responses[0]);
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
-    assert_eq!(responses[2]["result"]["isError"], false, "{:#}", responses[2]);
-    assert_eq!(tool_body(&responses[2])["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
+    assert_eq!(
+        responses[2]["result"]["isError"], false,
+        "{:#}",
+        responses[2]
+    );
+    assert_eq!(
+        tool_body(&responses[2])["nodes"].as_array().unwrap().len(),
+        1
+    );
 }
 
 /// INTENT: the same chain (tools/list, search with resend_seen, long-id read)
@@ -518,8 +590,16 @@ fn session_rerun_is_deterministic_across_processes() {
         serde_json::to_string(&runs[1][0]["result"]).unwrap(),
         "tools/list drifted across processes"
     );
-    assert_eq!(tool_text(&runs[0][1]), tool_text(&runs[1][1]), "search drifted");
-    assert_eq!(tool_text(&runs[0][2]), tool_text(&runs[1][2]), "read drifted");
+    assert_eq!(
+        tool_text(&runs[0][1]),
+        tool_text(&runs[1][1]),
+        "search drifted"
+    );
+    assert_eq!(
+        tool_text(&runs[0][2]),
+        tool_text(&runs[1][2]),
+        "read drifted"
+    );
     assert_eq!(runs[0][1]["result"]["isError"], false);
     assert_eq!(runs[0][2]["result"]["isError"], false);
 }

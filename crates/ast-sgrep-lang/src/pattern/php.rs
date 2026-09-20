@@ -93,7 +93,7 @@ pub(crate) fn classify_php_assignment(p: &str) -> Option<NativeKind> {
     if let Some((value, value_multi)) = php_bare_meta(rhs_body) {
         return Some(NativeKind::Assignment {
             target: lhs.to_string(),
-            op: op,
+            op,
             op_class: php_op_class(op)?,
             rhs_expr: None,
             value: value.to_string(),
@@ -106,7 +106,7 @@ pub(crate) fn classify_php_assignment(p: &str) -> Option<NativeKind> {
     validate_php_rhs_expr(&rhs)?;
     Some(NativeKind::Assignment {
         target: lhs.to_string(),
-        op: op,
+        op,
         op_class: php_op_class(op)?,
         rhs_expr: Some(rhs),
         value: String::new(),
@@ -206,7 +206,7 @@ pub(crate) fn php_rhs_has_tight_doubled_sign(rhs: &str) -> bool {
                 let spaced_left = i > 0 && matches!(bytes[i - 1], b' ' | b'\t');
                 let spaced_right = bytes[i + 2..]
                     .first()
-                    .map_or(true, |&b| matches!(b, b' ' | b'\t'));
+                    .is_none_or(|&b| matches!(b, b' ' | b'\t'));
                 if !(spaced_left && spaced_right) {
                     return true;
                 }
@@ -272,7 +272,7 @@ pub(crate) fn split_php_binary(p: &str) -> Option<(&str, &'static str, &str)> {
                     // allows non-ASCII identifier bytes) lands mid-code-point;
                     // slice only at char boundaries.
                     if p.is_char_boundary(i) && p[i..].starts_with(op) {
-                        return Some((&p[..i].trim(), op, &p[i + op.len()..]));
+                        return Some((p[..i].trim(), op, &p[i + op.len()..]));
                     }
                 }
             }
@@ -624,8 +624,7 @@ pub(crate) fn is_php_literal_target(lhs: &str) -> bool {
 /// The RHS is exactly one bare canonical metavariable (`$V` / `$$V`
 /// single namespace, `$$$V` multi).
 pub(crate) fn php_bare_meta(rhs: &str) -> Option<(&str, bool)> {
-    if rhs.starts_with("$$$") {
-        let name = &rhs[3..];
+    if let Some(name) = rhs.strip_prefix("$$$") {
         is_metavar_name(name).then_some((name, true))
     } else {
         capture_name(rhs).map(|name| (name, false))
@@ -1088,7 +1087,7 @@ pub(crate) fn php_rhs_expr_matches(
             if let Some(name) = capture_name(text) {
                 let multi = text.starts_with("$$$");
                 if let Some(cand_text) = node_text(&cand, source) {
-                    return bind_capture_kind(captures, name, &cand_text, multi).is_some();
+                    return bind_capture_kind(captures, name, cand_text, multi).is_some();
                 }
                 return false;
             }
@@ -1106,7 +1105,7 @@ pub(crate) fn php_rhs_expr_matches(
             if let Some(name) = text.strip_prefix("$$").filter(|n| is_metavar_name(n)) {
                 if matches!(cand.kind(), "variable_name" | "dynamic_variable_name") {
                     if let Some(cand_text) = node_text(&cand, source) {
-                        return bind_capture_kind(captures, name, &cand_text, false).is_some();
+                        return bind_capture_kind(captures, name, cand_text, false).is_some();
                     }
                 }
                 return false;

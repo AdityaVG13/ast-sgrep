@@ -20,9 +20,9 @@ pub(crate) fn walk_literal(
     // the string node. Nodes nested UNDER a comment/string ancestor stay
     // skipped, so string/comment content never becomes matchable.
     if !is_inside_comment_or_string(&node) {
-        if identifier_matches(&node, source, pattern) {
-            push_match(&node, source, pattern, Some(pattern), out);
-        } else if literal_content_matches(&node, source, pattern) {
+        if identifier_matches(&node, source, pattern)
+            || literal_content_matches(&node, source, pattern)
+        {
             push_match(&node, source, pattern, Some(pattern), out);
         } else if let Some(template) = template {
             // The structural arm — only ever ADDS matches after the
@@ -127,11 +127,13 @@ pub(crate) struct LiteralTemplate {
     pub(crate) span: Option<(usize, usize)>,
 }
 
+/// Per-thread (language, pattern) → parsed `$`-less template cache.
+type LiteralTemplateCache = HashMap<(Language, String), Option<std::sync::Arc<LiteralTemplate>>>;
+
 thread_local! {
     /// Per-thread literal-pattern template cache (one pattern parse per
     /// (language, pattern); `Tree` clone is reference-counted).
-    static LITERAL_TEMPLATES:
-        RefCell<HashMap<(Language, String), Option<std::sync::Arc<LiteralTemplate>>>> =
+    static LITERAL_TEMPLATES: RefCell<LiteralTemplateCache> =
         RefCell::new(HashMap::new());
 }
 

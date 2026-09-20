@@ -249,11 +249,11 @@ fn render_search_json(
     preview: crate::cli_args::PreviewMode,
     cli: &Cli,
 ) -> serde_json::Value {
+    use crate::cli_args::PreviewMode;
     use ast_sgrep_plugins::{
         format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
         DetailLevel, OutputBudget, OutputFormat,
     };
-    use crate::cli_args::PreviewMode;
 
     let tuning = cli.active_tuning();
 

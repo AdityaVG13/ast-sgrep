@@ -72,10 +72,17 @@ impl Fixture {
             &[],
         );
         assert_eq!(code, 0, "stderr={stderr} value={value}");
-        assert!(stderr.is_empty(), "machine mode stderr must be empty: {stderr}");
+        assert!(
+            stderr.is_empty(),
+            "machine mode stderr must be empty: {stderr}"
+        );
         assert_eq!(value["ok"], true);
         assert!(value["files_indexed"].as_u64().unwrap_or(0) >= 1);
-        Self { _temp: temp, root, index }
+        Self {
+            _temp: temp,
+            root,
+            index,
+        }
     }
 
     fn search(&self, extra: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
@@ -131,9 +138,14 @@ fn machine_surfaces_identical_across_sets() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["exit_code"], 0);
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(value["index_schema_version"], ast_sgrep_core::INDEX_SCHEMA_VERSION);
+    assert_eq!(
+        value["index_schema_version"],
+        ast_sgrep_core::INDEX_SCHEMA_VERSION
+    );
     assert_eq!(value["machine_schema_version"], value["schema_version"]);
-    assert!(value["machine_schema_version"].as_str().is_some_and(|v| !v.is_empty()));
+    assert!(value["machine_schema_version"]
+        .as_str()
+        .is_some_and(|v| !v.is_empty()));
 
     // JSON<->text relation: the 3 text lines restate the JSON scalars exactly.
     let output = run_env(&bin, &["version"], &[]);
@@ -141,11 +153,20 @@ fn machine_surfaces_identical_across_sets() {
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3, "text={text}");
-    assert_eq!(lines[0], format!("asgrep {}", value["version"].as_str().unwrap()));
-    assert_eq!(lines[1], format!("index_schema {}", value["index_schema_version"]));
+    assert_eq!(
+        lines[0],
+        format!("asgrep {}", value["version"].as_str().unwrap())
+    );
+    assert_eq!(
+        lines[1],
+        format!("index_schema {}", value["index_schema_version"])
+    );
     assert_eq!(
         lines[2],
-        format!("machine_schema {}", value["machine_schema_version"].as_str().unwrap())
+        format!(
+            "machine_schema {}",
+            value["machine_schema_version"].as_str().unwrap()
+        )
     );
 
     // Clap `--version` restates the JSON version exactly (cross-entry check).
@@ -153,7 +174,10 @@ fn machine_surfaces_identical_across_sets() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert_eq!(stdout.lines().count(), 1);
-    assert_eq!(stdout.trim(), format!("asgrep {}", value["version"].as_str().unwrap()));
+    assert_eq!(
+        stdout.trim(),
+        format!("asgrep {}", value["version"].as_str().unwrap())
+    );
 
     // capabilities: exact tuning-flag and environment lists, element-for-element.
     let (code, value, stderr) = run_json_full(&bin, &["capabilities", "--json"], &[]);
@@ -327,9 +351,22 @@ fn machine_surfaces_identical_across_sets() {
         .iter()
         .map(|f| f.as_str().expect("format"))
         .collect();
-    assert_eq!(formats, ["native", "agent", "agent-capsule", "compact", "github", "gitlab"]);
+    assert_eq!(
+        formats,
+        [
+            "native",
+            "agent",
+            "agent-capsule",
+            "compact",
+            "github",
+            "gitlab"
+        ]
+    );
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(value["machine_schema"]["schema_version"], value["schema_version"]);
+    assert_eq!(
+        value["machine_schema"]["schema_version"],
+        value["schema_version"]
+    );
 }
 
 /// INTENT: help carries exactly the documented feature markers in every build
@@ -353,7 +390,11 @@ fn help_markers_identical_across_sets() {
     assert_eq!(help.matches("neural-embed").count(), 2, "help={help}");
     assert_eq!(help.matches("--rerank").count(), 3, "help={help}");
     assert_eq!(help.matches("--rerank-top-k").count(), 1, "help={help}");
-    assert_eq!(help.matches("(needs neural-embed feature)").count(), 1, "help={help}");
+    assert_eq!(
+        help.matches("(needs neural-embed feature)").count(),
+        1,
+        "help={help}"
+    );
 
     for sub in ["index", "keyword", "semantic"] {
         let output = run_env(&bin, &[sub, "--help"], &[]);
@@ -362,7 +403,11 @@ fn help_markers_identical_across_sets() {
         assert!(!help.is_empty());
         assert_eq!(help.matches("neural-embed").count(), 2, "{sub} help={help}");
         assert_eq!(help.matches("--rerank").count(), 3, "{sub} help={help}");
-        assert_eq!(help.matches("--rerank-top-k").count(), 1, "{sub} help={help}");
+        assert_eq!(
+            help.matches("--rerank-top-k").count(),
+            1,
+            "{sub} help={help}"
+        );
         assert_eq!(
             help.matches("(needs neural-embed feature)").count(),
             1,
@@ -375,7 +420,11 @@ fn help_markers_identical_across_sets() {
     assert_eq!(top.matches("neural-embed").count(), 2, "top help={top}");
     assert_eq!(top.matches("--rerank").count(), 3, "top help={top}");
     assert_eq!(top.matches("--rerank-top-k").count(), 1, "top help={top}");
-    assert_eq!(top.matches("(needs neural-embed feature)").count(), 1, "top help={top}");
+    assert_eq!(
+        top.matches("(needs neural-embed feature)").count(),
+        1,
+        "top help={top}"
+    );
 
     for sub in ["outline", "status", "doctor"] {
         let output = run_env(&bin, &[sub, "--help"], &[]);
@@ -446,14 +495,21 @@ fn default_flows_exact_and_topk_inert() {
     assert_eq!(status["file_count"], 1);
     assert_eq!(status["caller_count"], 1);
 
-    let fx = Fixture { _temp: temp, root, index };
+    let fx = Fixture {
+        _temp: temp,
+        root,
+        index,
+    };
     let (code, base, stderr) = fx.search(&[], &[]);
     assert_eq!(code, 0, "stderr={stderr} value={base}");
     assert!(stderr.is_empty());
     assert_eq!(base["ok"], true);
     let hits = base["hits"].as_array().expect("hits array");
     assert_eq!(hits.len(), 2, "value={base}");
-    let mut kinds: Vec<&str> = hits.iter().map(|h| h["kind"].as_str().expect("kind")).collect();
+    let mut kinds: Vec<&str> = hits
+        .iter()
+        .map(|h| h["kind"].as_str().expect("kind"))
+        .collect();
     kinds.sort_unstable();
     assert_eq!(kinds, ["caller", "def"]);
     assert!(hits.iter().all(|h| h["symbol"] == "alpha_query_target"));
@@ -508,7 +564,10 @@ fn embed_off_inert_and_channel_equivalence() {
     assert_eq!(code, 0, "stderr={stderr} value={via_semantic}");
     assert!(stderr.is_empty());
     assert_eq!(via_semantic["ok"], true);
-    assert_eq!(via_semantic["hits"], via_search["hits"], "channel hits diverged");
+    assert_eq!(
+        via_semantic["hits"], via_search["hits"],
+        "channel hits diverged"
+    );
     assert!(!via_semantic["hits"].as_array().expect("hits").is_empty());
 }
 
@@ -560,7 +619,10 @@ fn parse_diagnose_surfaces_identical() {
     assert_eq!(code, 1, "value={missing_query}");
     assert_eq!(missing_query["error"]["kind"], "usage");
     assert_eq!(object_keys(&missing_query), object_keys(&bad_value));
-    assert_eq!(object_keys(&missing_query["error"]), object_keys(&bad_value["error"]));
+    assert_eq!(
+        object_keys(&missing_query["error"]),
+        object_keys(&bad_value["error"])
+    );
 
     let missing = temp.path().join("missing");
     let (code, missing_root, stderr) = run_json_full(
@@ -610,7 +672,10 @@ fn parse_diagnose_surfaces_identical() {
     assert_eq!(dry["walk_errors"], false);
     assert_eq!(dry["files_would_index"], 1);
     assert_eq!(dry["files_skipped"], 0);
-    assert!(!dry_index.exists(), "dry-run must not create the index file");
+    assert!(
+        !dry_index.exists(),
+        "dry-run must not create the index file"
+    );
 
     // Outline: exact roster plus byte-identical output across two independent
     // indexes of the same root (determinism relation).
@@ -650,12 +715,18 @@ fn parse_diagnose_surfaces_identical() {
         assert_eq!(value["count"], 2);
         let symbols = value["symbols"].as_array().expect("symbols");
         assert_eq!(symbols.len(), 2);
-        let names: Vec<&str> = symbols.iter().map(|s| s["name"].as_str().expect("name")).collect();
+        let names: Vec<&str> = symbols
+            .iter()
+            .map(|s| s["name"].as_str().expect("name"))
+            .collect();
         assert_eq!(names, ["alpha_query_target", "beta_helper"]);
         assert!(symbols.iter().all(|s| s["kind"] == "function"));
         outlines.push(output.stdout);
     }
-    assert_eq!(outlines[0], outlines[1], "outline bytes diverged across indexes");
+    assert_eq!(
+        outlines[0], outlines[1],
+        "outline bytes diverged across indexes"
+    );
 
     // Doctor: healthy envelope on a freshly indexed root.
     let (code, value, stderr) = run_json_full(
@@ -674,5 +745,7 @@ fn parse_diagnose_surfaces_identical() {
     assert_eq!(value["command"], "doctor");
     assert_eq!(value["healthy"], true);
     assert_eq!(value["issues"].as_array().map(Vec::len), Some(0));
-    assert!(value["suggested_commands"].as_array().is_some_and(|c| !c.is_empty()));
+    assert!(value["suggested_commands"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty()));
 }

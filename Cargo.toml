@@ -16,7 +16,7 @@ members = [
 default-members = ["crates/ast-sgrep-cli"]
 
 [workspace.package]
-version = "2.1.0"
+version = "2.5.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/AdityaVG13/ast-sgrep"
@@ -34,6 +34,13 @@ codegen-units = 1
 debug = "line-tables-only"
 strip = false
 
+# Shipped artifacts: release-perf codegen, symbols stripped. Kept as a
+# separate profile (not strip=true on release-perf) so profiling keeps
+# line tables. DSR/release builds must use this profile.
+[profile.release-ship]
+inherits = "release-perf"
+strip = true
+
 [workspace.dependencies]
 anyhow = "1"
 # Caret range (not an exact pin): API surface used is Hasher/hash(), stable
@@ -49,7 +56,7 @@ idna_adapter = "=1.0.0"
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tempfile = "=3.14.0"
+tempfile = "=3.27.0"
 thiserror = "2"
 tree-sitter = "0.26"
 tree-sitter-go = "0.25"
@@ -68,6 +75,6 @@ walkdir = "2"
 rayon = "=1.12.0"
 notify = "=6.1.1"
 simsimd = "=6.5.16"
-rustix = { version = "0.38", features = ["fs"] }
+rustix = { version = "1", features = ["fs"] }
 cap-std = "=4.0.2"
 cap-fs-ext = "=4.0.2"

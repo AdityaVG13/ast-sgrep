@@ -154,7 +154,10 @@ fn m_search_delta_matrix() {
         refresh(&mut session, &["beta.py"]);
 
         let found = session
-            .call("search", json!({"query": format!("word:{BETA}"), "limit": 8}))
+            .call(
+                "search",
+                json!({"query": format!("word:{BETA}"), "limit": 8}),
+            )
             .expect("search beta");
         assert!(hits_file(&found, "beta.py"), "{found}");
         assert_eq!(hit_file_set(&found).len(), 1, "{found}");
@@ -170,7 +173,10 @@ fn m_search_delta_matrix() {
         assert_eq!(refreshed["stats"]["files_indexed"], 0);
 
         let via_search = session
-            .call("search", json!({"query": format!("word:{ALPHA}"), "limit": 8}))
+            .call(
+                "search",
+                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
+            )
             .expect("search alpha");
         assert!(hit_file_set(&via_search).is_empty(), "{via_search}");
     }
@@ -197,7 +203,10 @@ fn m_defs_delta_matrix() {
             .expect("defs newdef");
         assert!(hits_file(&found, "newdef.py"), "{found}");
         let phantom = session
-            .call("defs", json!({"symbol": "snorkel_never_defined", "limit": 8}))
+            .call(
+                "defs",
+                json!({"symbol": "snorkel_never_defined", "limit": 8}),
+            )
             .expect("defs phantom");
         assert!(hit_file_set(&phantom).is_empty(), "{phantom}");
     }
@@ -313,10 +322,10 @@ fn m_catalog_stable_and_convergent() {
             .expect("edit");
 
         let repo = ast_sgrep_codemode::catalog_describe("index_repo");
-        assert!(matches!(repo, Some(_)));
+        assert!(repo.is_some());
         assert_eq!(repo.map(|def| def.read_only), Some(false));
         let search = ast_sgrep_codemode::catalog_describe("search");
-        assert!(matches!(search, Some(_)));
+        assert!(search.is_some());
         assert_eq!(search.map(|def| def.read_only), Some(true));
 
         let unknown = session

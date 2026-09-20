@@ -36,10 +36,26 @@ fn keyword_search_limit_contract() {
         )]);
         let responses = rpc_session(
             vec![
-                tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 1})),
-                tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": 100})),
-                tool_call(3, "keyword_search", json!({"query": "target_symbol", "limit": 0})),
-                tool_call(4, "keyword_search", json!({"query": "target_symbol", "limit": 101})),
+                tool_call(
+                    1,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 1}),
+                ),
+                tool_call(
+                    2,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 100}),
+                ),
+                tool_call(
+                    3,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 0}),
+                ),
+                tool_call(
+                    4,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 101}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -70,12 +86,32 @@ fn keyword_search_limit_contract() {
         )]);
         let responses = rpc_session(
             vec![
-                tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": -1})),
-                tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": u64::MAX})),
-                tool_call(3, "keyword_search", json!({"query": "target_symbol", "limit": 1.5})),
-                tool_call(4, "keyword_search", json!({"query": "target_symbol", "limit": "4"})),
+                tool_call(
+                    1,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": -1}),
+                ),
+                tool_call(
+                    2,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": u64::MAX}),
+                ),
+                tool_call(
+                    3,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 1.5}),
+                ),
+                tool_call(
+                    4,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": "4"}),
+                ),
                 over_u64,
-                tool_call(6, "keyword_search", json!({"query": "target_symbol", "limit": 4})),
+                tool_call(
+                    6,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -88,11 +124,26 @@ fn keyword_search_limit_contract() {
     // Leg 3 (pass3 metamorphic): counts non-decreasing, within limit, stable head.
     {
         let temp = indexed_tree(&[
-            ("src/a.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/b.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/c.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/d.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/e.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+            (
+                "src/a.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/b.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/c.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/d.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/e.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
         ]);
         let limits = [1_u64, 2, 4, 100];
         let calls: Vec<Value> = limits
@@ -118,7 +169,10 @@ fn keyword_search_limit_contract() {
             .iter()
             .map(|body| body["h"].as_array().unwrap().len())
             .collect();
-        assert!(counts.iter().all(|count| *count > 0), "every limit must hit: {counts:?}");
+        assert!(
+            counts.iter().all(|count| *count > 0),
+            "every limit must hit: {counts:?}"
+        );
         for (index, pair) in counts.windows(2).enumerate() {
             assert!(
                 pair[1] >= pair[0],
@@ -128,9 +182,15 @@ fn keyword_search_limit_contract() {
             );
         }
         for (count, limit) in counts.iter().zip(limits) {
-            assert!((*count as u64) <= limit, "count {count} exceeds its limit {limit}: {counts:?}");
+            assert!(
+                (*count as u64) <= limit,
+                "count {count} exceeds its limit {limit}: {counts:?}"
+            );
         }
-        let heads: Vec<&Value> = bodies.iter().map(|body| &body["h"].as_array().unwrap()[0]).collect();
+        let heads: Vec<&Value> = bodies
+            .iter()
+            .map(|body| &body["h"].as_array().unwrap()[0])
+            .collect();
         for head in &heads[1..] {
             assert_eq!(*head, heads[0], "head row must be stable across limits");
         }
@@ -138,9 +198,18 @@ fn keyword_search_limit_contract() {
     // Leg 4 (pass4 drill): limits 1/2/3/100 yield 1/2/3/3 rows, 32B snippets.
     {
         let temp = indexed_tree(&[
-            ("src/f0.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/f1.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/f2.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+            (
+                "src/f0.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/f1.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/f2.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
         ]);
         let limits = [1_u64, 2, 3, 100];
         let calls: Vec<Value> = limits
@@ -166,7 +235,10 @@ fn keyword_search_limit_contract() {
             assert_eq!(body["zn"], want as u64, "limit {limit}: {body:#}");
             for hit in hits {
                 let snippet = hit.as_array().unwrap()[4].as_str().unwrap();
-                assert_eq!(snippet, "fn target_symbol() { helper(); }", "limit {limit}: {body:#}");
+                assert_eq!(
+                    snippet, "fn target_symbol() { helper(); }",
+                    "limit {limit}: {body:#}"
+                );
                 assert_eq!(snippet.chars().count(), 32, "limit {limit}: {body:#}");
                 assert_eq!(snippet.len(), 32, "limit {limit}: {body:#}");
             }
@@ -197,8 +269,16 @@ fn keyword_search_budget_contract() {
         )]);
         let responses = rpc_session(
             vec![
-                tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 7})),
-                tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 65536})),
+                tool_call(
+                    1,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 7}),
+                ),
+                tool_call(
+                    2,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 65536}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -225,10 +305,26 @@ fn keyword_search_budget_contract() {
         )]);
         let responses = rpc_session(
             vec![
-                tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 1})),
-                tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 65536})),
-                tool_call(3, "keyword_search", json!({"query": "target_symbol", "limit": 4, "budget_tokens": 0})),
-                tool_call(4, "keyword_search", json!({"query": "target_symbol", "limit": 4, "budget_tokens": 65537})),
+                tool_call(
+                    1,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 1}),
+                ),
+                tool_call(
+                    2,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "budget_tokens": 65536}),
+                ),
+                tool_call(
+                    3,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "budget_tokens": 0}),
+                ),
+                tool_call(
+                    4,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "budget_tokens": 65537}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -250,12 +346,36 @@ fn keyword_search_budget_contract() {
         )]);
         let responses = rpc_session(
             vec![
-                tool_call(1, "keyword_search", json!({"query": "target_symbol", "budget_tokens": -1})),
-                tool_call(2, "keyword_search", json!({"query": "target_symbol", "budget_tokens": u64::MAX})),
-                tool_call(3, "keyword_search", json!({"query": "target_symbol", "budget_tokens": 1.5})),
-                tool_call(4, "keyword_search", json!({"query": "target_symbol", "budget_tokens": "many"})),
-                tool_call(5, "keyword_search", json!({"query": "target_symbol", "budget_tokens": true})),
-                tool_call(6, "keyword_search", json!({"query": "target_symbol", "limit": 4, "budget_tokens": 8})),
+                tool_call(
+                    1,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "budget_tokens": -1}),
+                ),
+                tool_call(
+                    2,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "budget_tokens": u64::MAX}),
+                ),
+                tool_call(
+                    3,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "budget_tokens": 1.5}),
+                ),
+                tool_call(
+                    4,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "budget_tokens": "many"}),
+                ),
+                tool_call(
+                    5,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "budget_tokens": true}),
+                ),
+                tool_call(
+                    6,
+                    "keyword_search",
+                    json!({"query": "target_symbol", "limit": 4, "budget_tokens": 8}),
+                ),
             ],
             Some(temp.path()),
         );
@@ -269,9 +389,18 @@ fn keyword_search_budget_contract() {
     // Leg 4 (pass4 drill): budgets 3/50/200 fund 0/32/96 bytes with echoes.
     {
         let temp = indexed_tree(&[
-            ("src/f0.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/f1.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-            ("src/f2.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+            (
+                "src/f0.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/f1.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
+            (
+                "src/f2.rs",
+                "fn target_symbol() { helper(); }\nfn helper() {}\n",
+            ),
         ]);
         let budgets = [3_u64, 50, 200];
         let calls: Vec<Value> = budgets
@@ -289,8 +418,9 @@ fn keyword_search_budget_contract() {
         assert_eq!(responses.len(), 3);
         let want_totals = [0_usize, 32, 96];
         let want_sorted = [vec![0, 0, 0], vec![0, 0, 32], vec![32, 32, 32]];
-        for (response, ((budget, total), mut sorted)) in
-            responses.iter().zip(budgets.iter().zip(want_totals).zip(want_sorted))
+        for (response, ((budget, total), mut sorted)) in responses
+            .iter()
+            .zip(budgets.iter().zip(want_totals).zip(want_sorted))
         {
             assert_tool_success_shape(response);
             let body = tool_body(response);

@@ -23,7 +23,7 @@
 //!
 //! D1 absorbs the former D3 (whole-`.asgrep/` deletion): the same miss-mapping
 //! + live-rebuild shape at dir granularity, run as D1's second fault leg on
-//! the `search` channel (leg 1 uses `keyword_search`).
+//!   the `search` channel (leg 1 uses `keyword_search`).
 //!
 //! Non-duplication: recovery pins mid-session stub/half index tears, root
 //! deletion + live heal, EOF, garbage lines, and shape-only invalid envelopes,
@@ -360,7 +360,7 @@ fn drill_sandbox_escape_mid_session_refused_session_unpoisoned() {
         "{before:#}"
     );
 
-    let attempts = vec![
+    let attempts = [
         tool_call(
             2,
             "keyword_search",

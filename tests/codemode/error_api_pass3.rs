@@ -45,8 +45,8 @@ use ast_sgrep_codemode::{
     ServeResponse,
 };
 use error_testkit::{
-    assert_dispatch_equivalence, batch_call, batch_request, config_at, discriminant,
-    serve_lines, serve_request_line, session_at,
+    assert_dispatch_equivalence, batch_call, batch_request, config_at, discriminant, serve_lines,
+    serve_request_line, session_at,
 };
 use serde_json::{json, Value};
 
@@ -93,9 +93,7 @@ fn e3_dispatch_equivalence() {
     for (tool, args, expected) in cases {
         assert_dispatch_equivalence(temp.path(), tool, args.clone());
         let mut probe = session_at(temp.path());
-        let err = probe
-            .call(tool, args.clone())
-            .expect_err("fault must fail");
+        let err = probe.call(tool, args.clone()).expect_err("fault must fail");
         assert_eq!(discriminant(&err), *expected, "tool {tool}");
         match *expected {
             "unknown_tool" => assert!(
@@ -165,7 +163,10 @@ fn e3_repeat_bad_call_deterministic() {
     let second = spent
         .call("catalog_search", json!({"query": "search"}))
         .expect_err("zero budget must fail identically");
-    assert!(matches!(first, CallError::BudgetExhausted(0)), "got {first:?}");
+    assert!(
+        matches!(first, CallError::BudgetExhausted(0)),
+        "got {first:?}"
+    );
     assert_eq!(discriminant(&first), discriminant(&second));
     assert_eq!(spent.call_count(), 0);
     let bypass = call_tool(&mut spent, "no-such-tool", json!({})).expect_err("bypass dispatches");
@@ -195,8 +196,8 @@ fn e3_batch_position_independence() {
     ];
     let mut good_values: Vec<(Value, Value)> = Vec::new();
     for (position, calls) in rotations.into_iter().enumerate() {
-        let response = run_batch(config_at(temp.path()), &batch_request(calls))
-            .expect("envelope stays Ok");
+        let response =
+            run_batch(config_at(temp.path()), &batch_request(calls)).expect("envelope stays Ok");
         assert!(!response.all_ok, "position {position}");
         assert_eq!(response.call_count, 3, "position {position}");
         let by_id = |id: &str| {
@@ -345,8 +346,8 @@ fn e3_batch_mirrors_direct_outcomes() {
         .iter()
         .map(|(id, tool, args)| batch_call(id, tool, args.clone()))
         .collect();
-    let response = run_batch(config_at(temp.path()), &batch_request(batch_calls))
-        .expect("envelope stays Ok");
+    let response =
+        run_batch(config_at(temp.path()), &batch_request(batch_calls)).expect("envelope stays Ok");
     assert_eq!(response.results.len(), direct_ok.len());
     // Absorbed from e1_batch_per_call_mirrors_direct_discriminants: the batch
     // charges one unit per call and echoes ids in input order.
@@ -397,8 +398,14 @@ fn e3_plan_fail_closed_never_ok() {
     assert!(matches!(err, CallError::InvalidArgs(_)), "got {err:?}");
     assert_eq!(session.call_count(), 2);
     let body = std::fs::read_to_string(temp.path().join("a.txt")).expect("reread");
-    assert!(body.contains("hello mars"), "executed prefix must apply: {body:?}");
-    assert!(!body.contains("hello world"), "prefix must apply fully: {body:?}");
+    assert!(
+        body.contains("hello mars"),
+        "executed prefix must apply: {body:?}"
+    );
+    assert!(
+        !body.contains("hello world"),
+        "prefix must apply fully: {body:?}"
+    );
 
     // Absorbed remainder-resume half of e4_plan_prefix_applied_then_remainder_resumes
     // (its first half was a line-for-line duplicate of the prefix block above):
@@ -412,7 +419,10 @@ fn e3_plan_fail_closed_never_ok() {
     assert!(ok.ok);
     assert_eq!(session.call_count(), 4);
     let body = std::fs::read_to_string(temp.path().join("a.txt")).expect("reread");
-    assert!(body.contains("hello mars"), "resume must keep the prefix: {body:?}");
+    assert!(
+        body.contains("hello mars"),
+        "resume must keep the prefix: {body:?}"
+    );
 
     std::fs::write(temp.path().join("b.txt"), "keep me\n").expect("write");
     let mut direct = session_at(temp.path());
@@ -422,7 +432,10 @@ fn e3_plan_fail_closed_never_ok() {
             json!({"path": "b.txt", "oldText": "not-present-anywhere", "newText": "x"}),
         )
         .expect_err("edit guard");
-    assert!(matches!(direct_err, CallError::Other(_)), "got {direct_err:?}");
+    assert!(
+        matches!(direct_err, CallError::Other(_)),
+        "got {direct_err:?}"
+    );
     let plan = parse_plan(&json!({"steps": [
         {"id": "g", "tool": "catalog_search", "args": {"query": "search"}},
         {"id": "e", "tool": "edit", "args": {"path": "b.txt", "oldText": "not-present-anywhere", "newText": "x"}},
@@ -482,7 +495,12 @@ fn e3_serve_stream_position_independence() {
             };
             let response: ServeResponse = serde_json::from_str(line).expect("result line");
             match response {
-                ServeResponse::Result { id, ok, value, error } => {
+                ServeResponse::Result {
+                    id,
+                    ok,
+                    value,
+                    error,
+                } => {
                     assert_eq!(id, expected_id, "position {position}");
                     if expected_id == "b" {
                         assert!(!ok, "position {position}: bad call surfaced as ok");
@@ -500,7 +518,10 @@ fn e3_serve_stream_position_independence() {
             }
         }
         let last: ServeResponse = serde_json::from_str(&lines[4]).expect("bye line");
-        assert!(matches!(last, ServeResponse::Bye), "position {position}: got {last:?}");
+        assert!(
+            matches!(last, ServeResponse::Bye),
+            "position {position}: got {last:?}"
+        );
     }
     assert_eq!(good_values.len(), 3);
     assert_eq!(good_values[0], good_values[1]);

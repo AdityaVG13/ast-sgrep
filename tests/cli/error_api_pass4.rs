@@ -98,7 +98,13 @@ fn query_pattern_conflict_drill_single_query_recovers() {
         let dir = kit::fixture_root();
         kit::index_root(dir.path());
         let root = dir.path().to_string_lossy().into_owned();
-        let human = kit::run(&["--lang", "xx-no-such-lang", "search", "greet", root.as_str()]);
+        let human = kit::run(&[
+            "--lang",
+            "xx-no-such-lang",
+            "search",
+            "greet",
+            root.as_str(),
+        ]);
         kit::assert_human_error(&human, 1);
         let machine = kit::run(&[
             "--json",
@@ -120,7 +126,14 @@ fn query_pattern_conflict_drill_single_query_recovers() {
         let root = dir.path().to_string_lossy().into_owned();
         let human = kit::run(&["search", "--pattern", "greet", "greet", root.as_str()]);
         kit::assert_human_error(&human, 1);
-        let machine = kit::run(&["search", "--json", "--pattern", "greet", "greet", root.as_str()]);
+        let machine = kit::run(&[
+            "search",
+            "--json",
+            "--pattern",
+            "greet",
+            "greet",
+            root.as_str(),
+        ]);
         kit::assert_failure_envelope(&machine, "search", 1, "usage");
         recover_search_both_modes(&root);
     }
@@ -178,7 +191,12 @@ fn unreadable_gold_eval_drill_valid_gold_recovers() {
         "recovered eval must score one query: {value}"
     );
     assert_eq!(value["aggregate"]["n_queries"], 1);
-    kit::assert_human_success(&kit::run(&["eval", "--gold", gold_arg.as_str(), root.as_str()]));
+    kit::assert_human_success(&kit::run(&[
+        "eval",
+        "--gold",
+        gold_arg.as_str(),
+        root.as_str(),
+    ]));
 }
 
 /// INTENT: outline missing file fails 2 both modes, indexed file recovers with
@@ -224,7 +242,13 @@ fn chained_corrupt_plus_bad_arg_ordered_recovery() {
     kit::corrupt_index_db(&db);
 
     // Both faults present: arg validation runs before state open, so usage/1 wins.
-    let human = kit::run(&["--lang", "xx-no-such-lang", "search", "greet", root.as_str()]);
+    let human = kit::run(&[
+        "--lang",
+        "xx-no-such-lang",
+        "search",
+        "greet",
+        root.as_str(),
+    ]);
     kit::assert_human_error(&human, 1);
     let machine = kit::run(&[
         "--json",

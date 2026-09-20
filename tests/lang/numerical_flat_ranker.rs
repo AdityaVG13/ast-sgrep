@@ -128,13 +128,7 @@ fn flat_ranker_contract() {
     // Inf query, partial survival: pair 0 skipped; row0 [1,0] gives
     // dot=0,na=1,nb=1 -> 0.0; row1 [0,1] gives 1/1 -> 1.0. BIT-EXACT.
     assert_eq!(
-        top_k_flat_similarity(
-            &[f32::INFINITY, 1.0],
-            &[1.0, 0.0, 0.0, 1.0],
-            2,
-            5,
-            None
-        ),
+        top_k_flat_similarity(&[f32::INFINITY, 1.0], &[1.0, 0.0, 0.0, 1.0], 2, 5, None),
         vec![(1, 1.0), (0, 0.0)]
     );
     // Inf row scores 0.0 (both pairs skipped) and sorts after the 1.0.
@@ -166,9 +160,17 @@ fn flat_ranker_contract() {
     flat[7 * 2 + 1] = f32::NAN;
     let ranked = top_k_flat_similarity(&[1.0, 0.0], &flat, 2, 40, None);
     assert_eq!(ranked.len(), 40);
-    let mut expected: Vec<(usize, f32)> =
-        (0..64).step_by(2).map(|i| (i, 1.0)).collect();
-    expected.extend([(1, 0.0), (3, 0.0), (5, 0.0), (7, 0.0), (9, 0.0), (11, 0.0), (13, 0.0), (15, 0.0)]);
+    let mut expected: Vec<(usize, f32)> = (0..64).step_by(2).map(|i| (i, 1.0)).collect();
+    expected.extend([
+        (1, 0.0),
+        (3, 0.0),
+        (5, 0.0),
+        (7, 0.0),
+        (9, 0.0),
+        (11, 0.0),
+        (13, 0.0),
+        (15, 0.0),
+    ]);
     assert_eq!(ranked, expected);
     assert!(ranked.iter().all(|(_, s)| s.is_finite()));
 
@@ -178,17 +180,15 @@ fn flat_ranker_contract() {
     // with bit-identical scores (rows have distinct hand angles: 1.0, 0.6,
     // ~0.7071, 0.0, -1.0 — no ties to break differently).
     let query = vec![1.0, 0.0];
-    let rows: Vec<[f32; 2]> = vec![
-        [1.0, 0.0],
-        [3.0, 4.0],
-        [1.0, 1.0],
-        [0.0, 1.0],
-        [-1.0, 0.0],
-    ];
+    let rows: Vec<[f32; 2]> = vec![[1.0, 0.0], [3.0, 4.0], [1.0, 1.0], [0.0, 1.0], [-1.0, 0.0]];
     let flat: Vec<f32> = rows.iter().flatten().copied().collect();
     let base = top_k_flat_similarity(&query, &flat, 2, 5, None);
     assert_eq!(base.len(), 5);
-    for perm in [vec![3, 0, 4, 1, 2], vec![4, 3, 2, 1, 0], vec![1, 2, 3, 4, 0]] {
+    for perm in [
+        vec![3, 0, 4, 1, 2],
+        vec![4, 3, 2, 1, 0],
+        vec![1, 2, 3, 4, 0],
+    ] {
         let pflat: Vec<f32> = perm.iter().flat_map(|&j| rows[j]).collect();
         let ranked = top_k_flat_similarity(&query, &pflat, 2, 5, None);
         assert_eq!(ranked.len(), 5);
@@ -215,7 +215,10 @@ fn flat_ranker_contract() {
     assert_eq!(ranked.len(), 4);
     assert_eq!(ranked_indices(&ranked), vec![1, 0, 2, 3]);
     assert_eq!(ranked[0].1, 1.0);
-    assert!(approx_eq(ranked[1].1, 0.70710678), "got {ranked:?}");
+    assert!(
+        approx_eq(ranked[1].1, std::f32::consts::FRAC_1_SQRT_2),
+        "got {ranked:?}"
+    );
     assert_eq!(ranked[2].1, 0.0);
     assert_eq!(ranked[3].1, -1.0);
     // Control: the dot confound is real — row0 out-dots row1 a hundredfold.
@@ -272,14 +275,7 @@ fn flat_ranker_contract() {
     let ranked = top_k_flat_similarity(&[1.0, 0.0], &flat, 2, 6, None);
     assert_eq!(
         ranked,
-        vec![
-            (1, 1.0),
-            (5, 1.0),
-            (0, 0.0),
-            (2, 0.0),
-            (3, 0.0),
-            (4, 0.0)
-        ]
+        vec![(1, 1.0), (5, 1.0), (0, 0.0), (2, 0.0), (3, 0.0), (4, 0.0)]
     );
 
     // ── Clause flat_threshold_drill (N4): hand 0.6 strictness ──
@@ -296,7 +292,10 @@ fn flat_ranker_contract() {
     assert_eq!(cut.len(), 2);
     assert_eq!(cut[0], (2, 1.0));
     assert_eq!(cut[1].0, 1);
-    assert!(approx_eq(cut[1].1, 0.70710678), "got {cut:?}");
+    assert!(
+        approx_eq(cut[1].1, std::f32::consts::FRAC_1_SQRT_2),
+        "got {cut:?}"
+    );
 
     // ── Clause duplicate_drill (N4): truncation keeps lowest indices ──
     // 8 identical rows [1,1] vs [1,0]: every score is the same f32 bit
@@ -307,7 +306,10 @@ fn flat_ranker_contract() {
     assert_eq!(ranked_indices(&ranked), vec![0, 1, 2, 3, 4]);
     for (_, s) in &ranked {
         assert_eq!(*s, ranked[0].1);
-        assert!(approx_eq(*s, 0.70710678), "got {ranked:?}");
+        assert!(
+            approx_eq(*s, std::f32::consts::FRAC_1_SQRT_2),
+            "got {ranked:?}"
+        );
     }
     let full = top_k_flat_similarity(&[1.0, 0.0], &flat, 2, 8, None);
     assert_eq!(ranked_indices(&full), vec![0, 1, 2, 3, 4, 5, 6, 7]);

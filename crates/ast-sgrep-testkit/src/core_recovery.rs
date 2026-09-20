@@ -15,7 +15,7 @@
 //!   convention: a broken fixture is a test failure, not a fallible op.
 
 use crate::fault::remove_sqlite_sidecars;
-use crate::isolation::{IsolatedIndexSession, isolated_index_session};
+use crate::isolation::{isolated_index_session, IsolatedIndexSession};
 use ast_sgrep_core::store::UpsertFileInput;
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,10 @@ use std::path::{Path, PathBuf};
 pub const RECOVERY_CORPUS: &[(&str, &str)] = &[
     ("src/a.py", "def alpha_needle():\n    return 1\n"),
     ("src/b.py", "def beta_needle():\n    return 2\n"),
-    ("src/c.py", "import os\n\ndef gamma_caller():\n    return os.getcwd()\n"),
+    (
+        "src/c.py",
+        "import os\n\ndef gamma_caller():\n    return os.getcwd()\n",
+    ),
 ];
 
 /// INTENT: the writable starting point every core recovery test builds from —
@@ -133,7 +136,12 @@ pub fn search_parity_keys(
 ) -> Vec<(String, Vec<String>)> {
     queries
         .iter()
-        .map(|q| ((*q).to_string(), search_parity_key(root, db, q, use_tantivy)))
+        .map(|q| {
+            (
+                (*q).to_string(),
+                search_parity_key(root, db, q, use_tantivy),
+            )
+        })
         .collect()
 }
 
@@ -143,9 +151,7 @@ pub fn search_parity_keys(
 pub fn assert_torn(db: &Path) {
     match rusqlite::Connection::open(db) {
         Err(_) => {}
-        Ok(conn) => match conn.query_row("PRAGMA integrity_check", [], |r| {
-            r.get::<_, String>(0)
-        }) {
+        Ok(conn) => match conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)) {
             Err(_) => {}
             Ok(detail) => assert_ne!(detail, "ok", "fault fixture is not torn: {}", db.display()),
         },

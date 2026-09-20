@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v2.0.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
+**v2.5.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
 
 > **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
@@ -24,7 +24,7 @@ It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `
 
 **Upgrading to 2.0:** this is a breaking semver release. Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Local hashed semantic search remains the default, optional neural embeddings remain in-process, and indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. Pi users can update the package normally.
 
-Standalone CLI binaries are on the [v2.0.0 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.0.0) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
+Standalone CLI binaries are on the [v2.5.0 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.5.0) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
 
 To build from source:
 
@@ -64,6 +64,27 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 ```
 
 ---
+
+## What's new in 2.5.0
+
+2.5.0 is a speed + correctness release: two new languages, a 20× one-shot
+literal fix, read-only search by default, and a hardened MCP/Pi surface.
+Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
+
+| You can now... | How |
+|----------------|-----|
+| Search Dart and MoonBit | `.dart` / `.mbt` indexing with symbol/call/import extraction and native structural patterns. 15 languages total. |
+| Get one-shot literal answers in ~8 ms | Cold queries take the trigram/SQL path instead of loading the full RAM line corpus: `literal:SearchHit` dropped from 171 ms to 8.5 ms p95 (beats ripgrep 13.1 ms on the same tree). |
+| Search without touching the index | Search opens the index read-only and no longer auto-indexes. `--auto-index` opts back in; `index` / `reindex` / `watch` remain the write path. |
+| Run MCP on official rmcp | `asgrep-mcp` speaks stdio through `rmcp` instead of a hand-rolled loop. `notifications/cancelled` aborts in-flight indexing; `ping` stays live. |
+| Trust the ranking more | Exact-case definitions rank first, conceptual queries prefer code over docs that repeat them, and fanout seeds concept-related defs instead of flooding `callers:main`. |
+| Recover from schema drift | `asgrep version` prints `index_schema`; doctor reports on-disk vs binary schema and the exact recovery command. |
+
+Also in this release: SIGTERM/SIGHUP kills the worker in <100 ms;
+writers checkpoint WAL with a 64 MiB journal cap; pattern excerpts are
+reconstructed from `lines` (no duplicated source text); `--lang` accepts
+every indexed extension; C `typedef`s match `type:` patterns; Pi boots
+under Bun and degrades gracefully against older launchers.
 
 ## What's new in 2.0
 
@@ -183,13 +204,14 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 
 | Recorded comparison | Status | Published result | Evidence |
 |---------------------|--------|------------------|----------|
-| 2026-09-20 self corpus (~650 tracked files) | `reproducible-in-tree` | Warm literal 7.9 ms vs rg 13.0 ms; `pattern:SearchHit` 10.2 ms vs ast-grep 63.3 ms; semantic NL 18.5 ms; fff warm 0.5 ms (ranked, latency-only) | [speed.md](benchmarks/results/speed.md) |
+| 2.5.0 re-pin, self corpus (702 tracked / 650 indexed) | `reproducible-in-tree` | Warm literal 8.5 ms vs rg 13.1 ms; `pattern:SearchHit` 9.5 ms vs ast-grep 61.3 ms hand-written (279.8 with generated file); semantic NL 15.5 ms; fff warm 0.4 ms (ranked, latency-only) | [speed.md](benchmarks/results/speed.md) |
+| 2026-09-20 one-shot fix row (~650 tracked files) | `reproducible-in-tree` | Warm literal 7.9 ms vs rg 13.0 ms; `pattern:SearchHit` 10.2 ms vs ast-grep 63.3 ms; semantic NL 18.5 ms | [speed.md](benchmarks/results/speed.md) |
 | 2026-08-28 self corpus (445 tracked files) | `reproducible-in-tree` | Cold index 4.58 s p95; warm literal 19.0 ms vs rg 11.1 ms; `pattern:SearchHit` 129 ms vs ast-grep 26.5 ms; semantic NL 20.3 ms | [speed.md](benchmarks/results/speed.md) |
 | Warm lexical / structural at 23k–100k | `historical` / `UNREPRODUCIBLE` | Large speedups in that dump; latency-only for structural | [head-to-head.md](benchmarks/results/head-to-head.md) |
 | Cross-tool bake-off | `UNREPRODUCIBLE` | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
 | Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
 
-Measured 2026-09-20 on Apple M5 Max from a working tree atop `ccbccf19` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (~650 files indexed, schema 16, `index.db` 231 MiB). Warm `literal:SearchHit` **7.9 ms p95** vs ripgrep **13.0 ms** (asgrep 1.65×), near warm-tgrep p95 (7.5 ms; tgrep leads p50); `grep -rn` 50.2 ms. Warm `pattern:SearchHit` **10.2 ms p95** vs ast-grep **63.3 ms** (latency-only, not match-set). Semantic NL **18.5 ms p95**. fff-mcp warm `grep` answers in **0.5 ms p95** but surfaces 54 ranked matches where exhaustive tools find ~300 lines (latency-only by design). The 2026-08-28 row (445 files; rg and ast-grep won those two CLI races) is kept in [speed.md](benchmarks/results/speed.md) for history. Full protocol there.
+Measured 2026-09-20 on Apple M5 Max from the 2.5.0 tree atop `b23a2454` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (650 files indexed, schema 16, `index.db` 292 MiB). Warm `literal:SearchHit` **8.5 ms p95** vs ripgrep **13.1 ms** (asgrep 1.54×); warm-tgrep server leads at 5.8 ms; `grep -rn` 58.1 ms. Warm `pattern:SearchHit` **9.5 ms p95** vs ast-grep **61.3 ms** on hand-written code (**6.5×**, latency-only, not match-set) — 279.8 ms with the generated 1 MB+ file included, which ast-grep parses per query and the index does not. Semantic NL **15.5 ms p95**. fff-mcp warm `grep` answers in **0.4 ms p95** but surfaces ranked matches where exhaustive tools find ~300 lines (latency-only by design). Older rows are kept in [speed.md](benchmarks/results/speed.md) for history. Full protocol there.
 
 Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md).
 
@@ -252,7 +274,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v2.0.0.** Local-first embeddings, index schema 12, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages, fusion-normalized ranking, and the hashed semantic layer remain.
+**v2.5.0.** Local-first embeddings, index schema 16, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages (Dart, MoonBit newest), fusion-normalized ranking, and the hashed semantic layer remain. Search is read-only by default; MCP runs on official rmcp.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

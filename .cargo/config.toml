@@ -1,6 +1,10 @@
-# CPU isolation: single job + duty-cycle wrapper.
-# The wrapper lives in scripts/ relative to the workspace root.
-
-[build]
-jobs = 1
-rustc-wrapper = "scripts/rustc-capped"
+# CPU isolation is OPT-IN (shared-agent boxes): uncomment for single-job +
+# duty-cycle builds. Left OFF by default: the wrapper is POSIX-only
+# (SIGSTOP/SIGCONT duty cycling) and breaks Windows builds outright
+# (cargo cannot execute the shell wrapper: error 193), and jobs=1
+# throttles every user's and every release/CI build to one codegen unit.
+# The agent harness wraps heavy tool calls per-invocation instead.
+#
+# [build]
+# jobs = 1
+# rustc-wrapper = "scripts/rustc-capped"

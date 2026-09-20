@@ -49,7 +49,9 @@ fn pipeline_evidence_roundtrip_shaping_and_counts() {
     assert!(def.score > 0.0);
     assert_eq!(def.file, "lib.rs");
 
-    let callers = prefixed.search("callers:refresh_token").expect("callers search");
+    let callers = prefixed
+        .search("callers:refresh_token")
+        .expect("callers search");
     let caller = callers
         .hits
         .iter()
@@ -64,18 +66,29 @@ fn pipeline_evidence_roundtrip_shaping_and_counts() {
         "fn auth_refresh() {}\nfn login() { auth_refresh(); }\n",
     )]);
     drop(build_core_index(&fixture));
-    let hybrid = core_searcher(&fixture, 16).search("auth_refresh").expect("hybrid search");
+    let hybrid = core_searcher(&fixture, 16)
+        .search("auth_refresh")
+        .expect("hybrid search");
 
     assert!(!hybrid.hits.is_empty(), "hybrid must surface the def");
     assert!(
-        hybrid.hits.iter().any(|hit| hit.kind == HitKind::Def
-            && hit.symbol.as_deref() == Some("auth_refresh")),
+        hybrid
+            .hits
+            .iter()
+            .any(|hit| hit.kind == HitKind::Def && hit.symbol.as_deref() == Some("auth_refresh")),
         "hybrid must include the Def hit; got {:?}",
-        hybrid.hits.iter().map(|hit| (hit.kind.as_str(), hit.symbol.clone())).collect::<Vec<_>>()
+        hybrid
+            .hits
+            .iter()
+            .map(|hit| (hit.kind.as_str(), hit.symbol.clone()))
+            .collect::<Vec<_>>()
     );
     // Pipeline-wide provenance invariant: no anonymous evidence survives.
     for hit in &hybrid.hits {
-        assert!(!hit.contributors.is_empty(), "contributors must be non-empty");
+        assert!(
+            !hit.contributors.is_empty(),
+            "contributors must be non-empty"
+        );
         assert_eq!(hit.signal, hit.kind.signal());
         assert!(hit.confidence > 0.0 && hit.confidence <= 1.0);
     }
@@ -95,21 +108,33 @@ fn pipeline_evidence_roundtrip_shaping_and_counts() {
     let bodies: Vec<(String, String)> = (0..5)
         .map(|n| (format!("probe{n}.rs"), format!("let probe_token = {n};\n")))
         .collect();
-    let refs: Vec<(&str, &str)> =
-        bodies.iter().map(|(name, body)| (name.as_str(), body.as_str())).collect();
+    let refs: Vec<(&str, &str)> = bodies
+        .iter()
+        .map(|(name, body)| (name.as_str(), body.as_str()))
+        .collect();
     let fixture = write_core_fixture(&refs);
     drop(build_core_index(&fixture));
 
-    let head = core_searcher(&fixture, 2).search("literal:probe_token").expect("search");
+    let head = core_searcher(&fixture, 2)
+        .search("literal:probe_token")
+        .expect("search");
     assert_eq!(head.hits.len(), 2);
     assert_eq!(head.limit, 2);
 
-    let full = core_searcher(&fixture, 10).search("literal:probe_token").expect("search");
+    let full = core_searcher(&fixture, 10)
+        .search("literal:probe_token")
+        .expect("search");
     assert_eq!(full.hits.len(), 5);
     assert_eq!(full.limit, 10);
     assert_eq!(
         sorted_hit_files(&full),
-        vec!["probe0.rs", "probe1.rs", "probe2.rs", "probe3.rs", "probe4.rs"]
+        vec![
+            "probe0.rs",
+            "probe1.rs",
+            "probe2.rs",
+            "probe3.rs",
+            "probe4.rs"
+        ]
     );
     for hit in &full.hits {
         assert!(hit.excerpt.contains("probe_token"));
@@ -125,35 +150,50 @@ fn pipeline_evidence_roundtrip_shaping_and_counts() {
     ]);
     drop(build_core_index(&fixture));
 
-    let unfiltered = core_searcher(&fixture, 10).search("literal:filter_probe").expect("search");
+    let unfiltered = core_searcher(&fixture, 10)
+        .search("literal:filter_probe")
+        .expect("search");
     assert_eq!(unfiltered.hits.len(), 5);
 
     let mut filtered = core_search_options(&fixture.root, &fixture.db, 10);
     filtered.file_filter = Some("src/**".to_string());
-    let response = Searcher::new(filtered).expect("searcher").search("literal:filter_probe").expect("search");
+    let response = Searcher::new(filtered)
+        .expect("searcher")
+        .search("literal:filter_probe")
+        .expect("search");
     assert_eq!(response.hits.len(), 3);
-    assert_eq!(sorted_hit_files(&response), vec!["src/a.rs", "src/b.rs", "src/c.rs"]);
+    assert_eq!(
+        sorted_hit_files(&response),
+        vec!["src/a.rs", "src/b.rs", "src/c.rs"]
+    );
 
     let mut nomatch = core_search_options(&fixture.root, &fixture.db, 10);
     nomatch.file_filter = Some("zzz/**".to_string());
-    let empty = Searcher::new(nomatch).expect("searcher").search("literal:filter_probe").expect("search");
+    let empty = Searcher::new(nomatch)
+        .expect("searcher")
+        .search("literal:filter_probe")
+        .expect("search");
     assert!(empty.hits.is_empty());
 
     // Facet 6: count-only reports hand-computed per-file counts.
     let bodies: Vec<(String, String)> = (0..5)
         .map(|n| (format!("count{n}.rs"), format!("let count_probe = {n};\n")))
         .collect();
-    let refs: Vec<(&str, &str)> =
-        bodies.iter().map(|(name, body)| (name.as_str(), body.as_str())).collect();
+    let refs: Vec<(&str, &str)> = bodies
+        .iter()
+        .map(|(name, body)| (name.as_str(), body.as_str()))
+        .collect();
     let fixture = write_core_fixture(&refs);
     drop(build_core_index(&fixture));
 
     let mut options = core_search_options(&fixture.root, &fixture.db, 10);
     options.count_only = true;
-    let response = Searcher::new(options).expect("searcher").search("literal:count_probe").expect("search");
+    let response = Searcher::new(options)
+        .expect("searcher")
+        .search("literal:count_probe")
+        .expect("search");
     assert!(response.hits.is_empty());
-    let expected: Vec<(String, u32)> =
-        (0..5).map(|n| (format!("count{n}.rs"), 1)).collect();
+    let expected: Vec<(String, u32)> = (0..5).map(|n| (format!("count{n}.rs"), 1)).collect();
     assert_eq!(response.counts, expected);
     assert_eq!(response.counts.iter().map(|(_, n)| n).sum::<u32>(), 5);
 }
@@ -204,7 +244,11 @@ fn pipeline_determinism_reindex_and_incremental() {
     let mut indexer =
         Indexer::new(core_index_options(&fixture.root, &fixture.db)).expect("indexer");
     assert_eq!(indexer.index_all().expect("first").files_indexed, 2);
-    let before = response_hit_keys_with_scores(&core_searcher(&fixture, 16).search("stable_one").expect("search"));
+    let before = response_hit_keys_with_scores(
+        &core_searcher(&fixture, 16)
+            .search("stable_one")
+            .expect("search"),
+    );
     assert!(!before.is_empty());
     drop(indexer);
 
@@ -215,7 +259,11 @@ fn pipeline_determinism_reindex_and_incremental() {
     let second = indexer.index_all().expect("second");
     assert_eq!(second.files_indexed, 0);
     drop(indexer);
-    let after = response_hit_keys_with_scores(&core_searcher(&fixture, 16).search("stable_one").expect("search"));
+    let after = response_hit_keys_with_scores(
+        &core_searcher(&fixture, 16)
+            .search("stable_one")
+            .expect("search"),
+    );
     assert_eq!(before, after);
 
     // Facet 3: incremental update adds then removes exactly one file's evidence.
@@ -226,33 +274,47 @@ fn pipeline_determinism_reindex_and_incremental() {
 
     let added = fixture.root.join("added.rs");
     fs::write(&added, "fn added_symbol() {}\n").expect("write");
-    let up = indexer.update_paths(std::slice::from_ref(&added)).expect("add");
+    let up = indexer
+        .update_paths(std::slice::from_ref(&added))
+        .expect("add");
     assert_eq!(up.files_indexed, 1);
     assert_eq!(up.files_removed, 0);
     drop(indexer);
-    let found = core_searcher(&fixture, 16).search("defs:added_symbol").expect("search");
+    let found = core_searcher(&fixture, 16)
+        .search("defs:added_symbol")
+        .expect("search");
     assert!(
-        found.hits.iter().any(|hit| hit.kind == HitKind::Def
-            && hit.symbol.as_deref() == Some("added_symbol")),
+        found
+            .hits
+            .iter()
+            .any(|hit| hit.kind == HitKind::Def && hit.symbol.as_deref() == Some("added_symbol")),
         "added file must be searchable"
     );
 
     fs::remove_file(&added).expect("remove");
-    let mut indexer =
-        Indexer::new(core_index_options(&fixture.root, &fixture.db)).expect("reopen");
-    let down = indexer.update_paths(std::slice::from_ref(&added)).expect("remove");
+    let mut indexer = Indexer::new(core_index_options(&fixture.root, &fixture.db)).expect("reopen");
+    let down = indexer
+        .update_paths(std::slice::from_ref(&added))
+        .expect("remove");
     assert_eq!(down.files_removed, 1);
     drop(indexer);
-    let gone = core_searcher(&fixture, 16).search("defs:added_symbol").expect("search");
+    let gone = core_searcher(&fixture, 16)
+        .search("defs:added_symbol")
+        .expect("search");
     assert!(
-        gone.hits.iter().all(|hit| hit.symbol.as_deref() != Some("added_symbol")),
+        gone.hits
+            .iter()
+            .all(|hit| hit.symbol.as_deref() != Some("added_symbol")),
         "removed file must leave no def evidence"
     );
     // No collateral removal: the untouched file still serves.
-    let kept = core_searcher(&fixture, 16).search("defs:base_symbol").expect("search");
+    let kept = core_searcher(&fixture, 16)
+        .search("defs:base_symbol")
+        .expect("search");
     assert!(
-        kept.hits.iter().any(|hit| hit.kind == HitKind::Def
-            && hit.symbol.as_deref() == Some("base_symbol")),
+        kept.hits
+            .iter()
+            .any(|hit| hit.kind == HitKind::Def && hit.symbol.as_deref() == Some("base_symbol")),
         "untouched file must keep serving"
     );
 }
@@ -275,13 +337,22 @@ fn pipeline_empty_missing_and_cancelled_fail_closed() {
     assert_eq!(stats.files_failed, 0);
     drop(indexer);
 
-    for query in ["anything_at_all", "defs:anything_at_all", "literal:anything_at_all"] {
-        let response = core_searcher(&fixture, 16).search(query).expect("search empty");
+    for query in [
+        "anything_at_all",
+        "defs:anything_at_all",
+        "literal:anything_at_all",
+    ] {
+        let response = core_searcher(&fixture, 16)
+            .search(query)
+            .expect("search empty");
         assert!(response.hits.is_empty(), "query {query} must find nothing");
     }
     let mut counted = core_search_options(&fixture.root, &fixture.db, 16);
     counted.count_only = true;
-    let counts = Searcher::new(counted).expect("searcher").search("anything_at_all").expect("count");
+    let counts = Searcher::new(counted)
+        .expect("searcher")
+        .search("anything_at_all")
+        .expect("count");
     assert!(counts.hits.is_empty());
     assert!(counts.counts.is_empty());
 
@@ -319,9 +390,14 @@ fn pipeline_empty_missing_and_cancelled_fail_closed() {
     flag.store(false, Ordering::Release);
     assert_eq!(indexer.index_all().expect("retry").files_indexed, 2);
     drop(indexer);
-    let found = core_searcher(&fixture, 16).search("defs:cancel_one").expect("search");
+    let found = core_searcher(&fixture, 16)
+        .search("defs:cancel_one")
+        .expect("search");
     assert!(
-        found.hits.iter().any(|hit| hit.symbol.as_deref() == Some("cancel_one")),
+        found
+            .hits
+            .iter()
+            .any(|hit| hit.symbol.as_deref() == Some("cancel_one")),
         "post-cancel index must serve"
     );
 }

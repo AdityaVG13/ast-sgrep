@@ -8,7 +8,7 @@
 
 use crate::session::CodeModeSession;
 use anyhow::{anyhow, Context};
-use ast_sgrep_core::{Indexer, IndexOptions, MAX_EXCERPT_LINES, MAX_INDEX_FILE_BYTES};
+use ast_sgrep_core::{IndexOptions, Indexer, MAX_EXCERPT_LINES, MAX_INDEX_FILE_BYTES};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -182,7 +182,7 @@ impl CodeModeSession {
     }
 }
 
-pub(crate) fn dispatch_find_query(raw: &str) -> String {
+pub fn dispatch_find_query(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(target) = trimmed.strip_prefix("blast:") {
         let target = target.trim();
@@ -352,7 +352,10 @@ fn parse_edit_value(value: &Value) -> anyhow::Result<EditSpec> {
 fn diff_lines(text: &str) -> (Vec<String>, bool) {
     const MAX_DIFF_LINES: usize = 24;
     let all: Vec<String> = text.lines().map(str::to_string).collect();
-    (all.iter().take(MAX_DIFF_LINES).cloned().collect(), all.len() > MAX_DIFF_LINES)
+    (
+        all.iter().take(MAX_DIFF_LINES).cloned().collect(),
+        all.len() > MAX_DIFF_LINES,
+    )
 }
 
 fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String> {
@@ -499,27 +502,4 @@ fn read_disk_window(
         .map(|(i, line)| (i as u32 + 1, line.to_string()))
         .collect();
     Ok(slice_indexed(&numbered, start, end, max_chars))
-}
-
-#[cfg(test)]
-mod find_dispatch {
-    use super::dispatch_find_query;
-
-    #[test]
-    fn blast_symbol_becomes_callers() {
-        assert_eq!(
-            dispatch_find_query("blast:process_request"),
-            "callers:process_request"
-        );
-    }
-
-    #[test]
-    fn blast_path_becomes_imports() {
-        assert_eq!(dispatch_find_query("blast:src/auth.ts"), "imports:src/auth.ts");
-    }
-
-    #[test]
-    fn unprefixed_is_word() {
-        assert_eq!(dispatch_find_query("hello"), "word:hello");
-    }
 }

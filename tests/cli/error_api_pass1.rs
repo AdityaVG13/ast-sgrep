@@ -93,7 +93,14 @@ fn clap_rejection_is_exit_1_with_usage_envelope() {
         let b = kit::fixture_root();
         let ra = a.path().to_string_lossy().into_owned();
         let rb = b.path().to_string_lossy().into_owned();
-        let output = kit::run(&["--json", "--root", ra.as_str(), "search", "greet", rb.as_str()]);
+        let output = kit::run(&[
+            "--json",
+            "--root",
+            ra.as_str(),
+            "search",
+            "greet",
+            rb.as_str(),
+        ]);
         kit::assert_failure_envelope(&output, "search", 1, "usage");
     }
 }
@@ -129,7 +136,13 @@ fn missing_root_search_is_operational_exit_2() {
 
         let missing = dir.path().join("no-gold.json");
         let missing_arg = missing.to_string_lossy().into_owned();
-        let unreadable = kit::run(&["eval", "--json", "--gold", missing_arg.as_str(), root.as_str()]);
+        let unreadable = kit::run(&[
+            "eval",
+            "--json",
+            "--gold",
+            missing_arg.as_str(),
+            root.as_str(),
+        ]);
         kit::assert_failure_envelope(&unreadable, "eval", 2, "operational");
 
         let empty = dir.path().join("empty-gold.json");

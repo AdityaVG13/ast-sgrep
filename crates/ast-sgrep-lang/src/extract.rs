@@ -197,6 +197,24 @@ pub(crate) fn last_identifier_in_chain(node: &Node, source: &str) -> Option<Stri
     if is_ident_kind(node.kind()) {
         return node_text(node, source).map(str::to_string);
     }
+    if node.kind() == "constructor_expression" {
+        // MoonBit `@pkg.Ctor(args)`: the callee is the dotted constructor,
+        // not the package qualifier. Scoped to package-qualified shapes so
+        // Swift `Type(args)` keeps first-found behavior (see MEMBER_EXPR_KINDS).
+        let mut cursor = node.walk();
+        let mut has_package = false;
+        let mut dotted = None;
+        for child in node.children(&mut cursor) {
+            if child.kind() == "package_identifier" {
+                has_package = true;
+            } else if let Some(text) = dot_accessor_text(&child, source) {
+                dotted = Some(text.to_string());
+            }
+        }
+        if has_package && dotted.is_some() {
+            return dotted;
+        }
+    }
     if is_member_expr_kind(node.kind()) {
         let mut cursor = node.walk();
         let mut last = None;

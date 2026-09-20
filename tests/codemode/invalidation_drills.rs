@@ -15,7 +15,7 @@ use ast_sgrep_testkit::{
     seeded_py_repo as setup, status_file_count as file_count,
     status_writer_generation as writer_generation, targeted_refresh as refresh, write_py,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs;
 
@@ -155,14 +155,20 @@ fn m_drill_change_detect_refresh_serve() {
     // exactly to the new path via every tool.
     {
         let (root, _index, mut session) = setup();
-        assert_eq!(hit_bytes(&find(&mut session, ALPHA)), b"alpha.py".as_slice());
+        assert_eq!(
+            hit_bytes(&find(&mut session, ALPHA)),
+            b"alpha.py".as_slice()
+        );
         let gen_before = writer_generation(&mut session);
 
         fs::rename(root.path().join("alpha.py"), root.path().join("beta.py"))
             .expect("rename fixture");
 
         assert_eq!(writer_generation(&mut session), gen_before);
-        assert_eq!(hit_bytes(&find(&mut session, ALPHA)), b"alpha.py".as_slice());
+        assert_eq!(
+            hit_bytes(&find(&mut session, ALPHA)),
+            b"alpha.py".as_slice()
+        );
 
         let refreshed = refresh(&mut session, &["alpha.py", "beta.py"]);
         assert_eq!(refreshed["ok"], true);
@@ -234,7 +240,10 @@ fn m_drill_change_detect_refresh_serve() {
         write_py(root.path(), "beta.py", BETA);
 
         assert_eq!(writer_generation(&mut session), gen_before);
-        assert_eq!(hit_bytes(&find(&mut session, ALPHA)), b"alpha.py".as_slice());
+        assert_eq!(
+            hit_bytes(&find(&mut session, ALPHA)),
+            b"alpha.py".as_slice()
+        );
         assert!(hit_name_set(&find(&mut session, BETA)).is_empty());
         assert!(hit_name_set(&find(&mut session, GAMMA)).is_empty());
 
@@ -328,11 +337,7 @@ fn drill_chained_multi_change_add_modify_delete_rename() {
     // LINK 4 — RENAME: move alpha.py to delta.py; stale serves old path;
     // refresh; token moved exactly.
     let gen3 = writer_generation(&mut session);
-    fs::rename(
-        root.path().join("alpha.py"),
-        root.path().join("delta.py"),
-    )
-    .expect("rename fixture");
+    fs::rename(root.path().join("alpha.py"), root.path().join("delta.py")).expect("rename fixture");
     assert_eq!(
         hit_bytes(&find(&mut session, GAMMA)),
         b"alpha.py".as_slice()

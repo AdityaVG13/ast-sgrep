@@ -10,7 +10,9 @@ use super::{as_db_path, INDEX_DIR};
 /// build-then-swap, but leftover `generations/<id>/index.db` paths still
 /// stamp the enclosing `.asgrep/` home so peers share one epoch file.
 const GENERATIONS_DIR: &str = "generations";
-use std::fs::{File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

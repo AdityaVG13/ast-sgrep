@@ -124,7 +124,11 @@ fn e2_plan_short_circuits_preserving_variant() {
             "other" => assert!(matches!(err, CallError::Other(_)), "got {err:?}"),
             _ => unreachable!("unknown variant leg"),
         }
-        assert_eq!(planned.call_count(), 2, "tool {tool}: later steps never run");
+        assert_eq!(
+            planned.call_count(),
+            2,
+            "tool {tool}: later steps never run"
+        );
     }
 }
 
@@ -171,7 +175,11 @@ fn e2_batch_envelope_validation_is_err() {
         many,
         vec![batch_call("", "catalog_search", json!({"query": "x"}))],
         vec![batch_call("ok", "", json!({}))],
-        vec![batch_call(&long_id, "catalog_search", json!({"query": "x"}))],
+        vec![batch_call(
+            &long_id,
+            "catalog_search",
+            json!({"query": "x"}),
+        )],
         vec![batch_call("ok", &long_tool, json!({}))],
     ];
     for calls in &cases {
@@ -194,11 +202,9 @@ fn e2_budget_sticks_on_session() {
     session.max_calls = 2;
     assert!(!session.exhausted());
     for _ in 0..2 {
-        assert!(
-            session
-                .call("catalog_search", json!({"query": "search"}))
-                .is_ok()
-        );
+        assert!(session
+            .call("catalog_search", json!({"query": "search"}))
+            .is_ok());
     }
     assert_eq!(session.call_count(), 2);
     assert!(session.exhausted());
@@ -206,10 +212,7 @@ fn e2_budget_sticks_on_session() {
         let err = session
             .call("catalog_search", json!({"query": "search"}))
             .expect_err("spent budget must fail");
-        assert!(
-            matches!(err, CallError::BudgetExhausted(2)),
-            "got {err:?}"
-        );
+        assert!(matches!(err, CallError::BudgetExhausted(2)), "got {err:?}");
     }
     assert_eq!(session.call_count(), 2);
     assert!(session.exhausted());
@@ -268,7 +271,9 @@ fn e2_serve_tool_failures_are_result_and_continues() {
     for (line, expect_ok) in lines.iter().take(3).zip([false, false, true]) {
         let response: ServeResponse = serde_json::from_str(line).expect("result line");
         match response {
-            ServeResponse::Result { ok, value, error, .. } => {
+            ServeResponse::Result {
+                ok, value, error, ..
+            } => {
                 assert_eq!(ok, expect_ok);
                 assert_eq!(value.is_some(), expect_ok);
                 assert_eq!(error.is_some(), !expect_ok);

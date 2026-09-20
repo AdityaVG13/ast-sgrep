@@ -30,7 +30,10 @@ fn assert_no_quarantine(root: &Path) {
         .filter_map(|entry| entry.ok().map(|e| e.file_name()))
         .filter(|name| name.to_string_lossy().contains(".corrupt"))
         .collect();
-    assert!(quarantines.is_empty(), "no silent quarantine: {quarantines:?}");
+    assert!(
+        quarantines.is_empty(),
+        "no silent quarantine: {quarantines:?}"
+    );
 }
 
 /// INTENT=file records refuse at the right layer (missing->Other/io,
@@ -82,7 +85,9 @@ fn file_records_refuse_bad_layers_and_resume_good_deterministically() {
             let err = if name == "plan" {
                 testkit::load_plan_file(&path).expect_err("must fail")
             } else {
-                testkit::load_batch_file(&path).map(|_| ()).expect_err("must fail")
+                testkit::load_batch_file(&path)
+                    .map(|_| ())
+                    .expect_err("must fail")
             };
             assert!(
                 matches!(err, CallError::Json(_)),
@@ -106,7 +111,10 @@ fn file_records_refuse_bad_layers_and_resume_good_deterministically() {
          "args": {"value": "$narrow", "fields": ["hit_count"]}},
     ], "return": "$out"});
     let plan_path = dir.path().join("plan.json");
-    testkit::write_file(&plan_path, &serde_json::to_vec(&plan_raw).expect("plan json"));
+    testkit::write_file(
+        &plan_path,
+        &serde_json::to_vec(&plan_raw).expect("plan json"),
+    );
     let plan = testkit::load_plan_file(&plan_path).expect("plan loads before fault");
     let mut session = CodeModeSession::new(config.clone());
     let first = run_plan(&mut session, &plan).expect("plan runs before fault");
@@ -125,7 +133,10 @@ fn file_records_refuse_bad_layers_and_resume_good_deterministically() {
         testkit::catalog_call("w2", "chain"),
     ]);
     let batch_path = dir.path().join("batch.json");
-    testkit::write_file(&batch_path, &serde_json::to_vec(&batch_raw).expect("batch json"));
+    testkit::write_file(
+        &batch_path,
+        &serde_json::to_vec(&batch_raw).expect("batch json"),
+    );
     let request = testkit::load_batch_file(&batch_path).expect("batch loads before fault");
     let first = run_batch(config.clone(), &request).expect("batch runs before fault");
     assert!(first.all_ok);
@@ -144,7 +155,10 @@ fn file_records_refuse_bad_layers_and_resume_good_deterministically() {
     // deterministically with hand-computed values (unique token narrowed to
     // its file; catalog ranking facts).
     let plan_path = dir.path().join("plan-roundtrip.json");
-    testkit::write_file(&plan_path, &serde_json::to_vec(&plan_raw).expect("plan json"));
+    testkit::write_file(
+        &plan_path,
+        &serde_json::to_vec(&plan_raw).expect("plan json"),
+    );
     let plan = testkit::load_plan_file(&plan_path).expect("plan loads");
     assert_eq!(plan.steps.len(), 3);
     for _ in 0..2 {
@@ -155,7 +169,10 @@ fn file_records_refuse_bad_layers_and_resume_good_deterministically() {
         assert_eq!(result.return_value, json!({"hit_count": 1}));
     }
     let batch_path = dir.path().join("batch-roundtrip.json");
-    testkit::write_file(&batch_path, &serde_json::to_vec(&batch_raw).expect("batch json"));
+    testkit::write_file(
+        &batch_path,
+        &serde_json::to_vec(&batch_raw).expect("batch json"),
+    );
     let request = testkit::load_batch_file(&batch_path).expect("batch loads");
     assert_eq!(request.calls.len(), 2);
     let response = run_batch(config, &request).expect("batch runs");
@@ -198,7 +215,9 @@ fn absent_or_unwritable_host_state_fails_closed() {
         .call("read", json!({"path": "src/a.rs", "start": 1, "end": 2}))
         .expect_err("read without index must fail");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    let status = session.call("index_status", json!({})).expect("status creates");
+    let status = session
+        .call("index_status", json!({}))
+        .expect("status creates");
     assert_eq!(status["file_count"], json!(0));
     assert!(temp.path().join("index.db").is_file());
     let first = session
@@ -226,12 +245,18 @@ fn absent_or_unwritable_host_state_fails_closed() {
         .call("index_repo", json!({"force": false}))
         .expect("index");
     session
-        .call("search", json!({"query": "needle_unique_rc_gone", "limit": 5}))
+        .call(
+            "search",
+            json!({"query": "needle_unique_rc_gone", "limit": 5}),
+        )
         .expect("search before fault");
     std::fs::remove_dir_all(root_temp.path()).expect("delete root");
     assert!(!root_temp.path().exists());
     let err = session
-        .call("search", json!({"query": "needle_unique_rc_gone", "limit": 5}))
+        .call(
+            "search",
+            json!({"query": "needle_unique_rc_gone", "limit": 5}),
+        )
         .expect_err("warm search after root deletion must fail");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
     let mut resumed = CodeModeSession::new(config.clone());
@@ -407,12 +432,14 @@ fn schema_versions_refuse_future_and_migrate_stale_preserving_output() {
         .call("index_status", json!({}))
         .expect_err("future schema status must fail");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    assert_eq!(testkit::db_user_version(&db), 9999, "refusal must not migrate");
-    let peeked = ast_sgrep_core::IndexStore::peek_schema_version(
-        &config.root,
-        config.index_path.as_deref(),
-    )
-    .expect("peek survives refusal");
+    assert_eq!(
+        testkit::db_user_version(&db),
+        9999,
+        "refusal must not migrate"
+    );
+    let peeked =
+        ast_sgrep_core::IndexStore::peek_schema_version(&config.root, config.index_path.as_deref())
+            .expect("peek survives refusal");
     assert_eq!(peeked, 9999);
 
     // Facet 2 (stale migrate + resume): a one-behind stamp refuses reads
@@ -427,8 +454,14 @@ fn schema_versions_refuse_future_and_migrate_stale_preserving_output() {
         .call("search", json!({"query": TOKEN, "limit": 5}))
         .expect_err("stale schema search must refuse");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    session.call("index_status", json!({})).expect("writer migrates");
-    assert_eq!(testkit::db_user_version(&db), current, "writer must stamp current");
+    session
+        .call("index_status", json!({}))
+        .expect("writer migrates");
+    assert_eq!(
+        testkit::db_user_version(&db),
+        current,
+        "writer must stamp current"
+    );
     let mut resumed = CodeModeSession::new(config);
     let out = resumed
         .call(
@@ -439,7 +472,8 @@ fn schema_versions_refuse_future_and_migrate_stale_preserving_output() {
     let hits = out["hits"].as_array().expect("hits array");
     assert!(!hits.is_empty(), "migrated rows must serve: {out}");
     assert!(
-        hits.iter().any(|h| h["file"].as_str().unwrap_or("").contains("src/a.rs")),
+        hits.iter()
+            .any(|h| h["file"].as_str().unwrap_or("").contains("src/a.rs")),
         "{out}"
     );
 
@@ -468,8 +502,14 @@ fn schema_versions_refuse_future_and_migrate_stale_preserving_output() {
         .call("search", json!({"query": TOKEN, "limit": 5}))
         .expect_err("stale schema search must refuse");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    stale.call("index_status", json!({})).expect("writer migrates");
-    assert_eq!(testkit::db_user_version(&db), current, "writer must stamp current");
+    stale
+        .call("index_status", json!({}))
+        .expect("writer migrates");
+    assert_eq!(
+        testkit::db_user_version(&db),
+        current,
+        "writer must stamp current"
+    );
     let mut resumed = CodeModeSession::new(config);
     assert_eq!(
         resumed
@@ -502,8 +542,7 @@ fn writer_generation_stamp_is_failopen_hint_restored_by_writer() {
     // generation 0 (documented cold-start protocol) and the session keeps
     // serving instead of failing closed.
     let (_temp1, config) = testkit::indexed_codemode_repo(TOKEN);
-    let stamp =
-        ast_sgrep_core::writer_generation_path(&config.root, config.index_path.as_deref());
+    let stamp = ast_sgrep_core::writer_generation_path(&config.root, config.index_path.as_deref());
     // Indexing is a write, so it advertises a generation; the true positive
     // is that a valid stamp parses to its file content.
     let advertised: u64 = std::fs::read_to_string(&stamp)
@@ -539,8 +578,7 @@ fn writer_generation_stamp_is_failopen_hint_restored_by_writer() {
     // verified search still reads 0 and serves; the next writer op
     // republishes a valid nonzero stamp; a resumed session serves again.
     let (_temp2, config) = testkit::indexed_codemode_repo(TOKEN);
-    let stamp =
-        ast_sgrep_core::writer_generation_path(&config.root, config.index_path.as_deref());
+    let stamp = ast_sgrep_core::writer_generation_path(&config.root, config.index_path.as_deref());
     let advertised: u64 = std::fs::read_to_string(&stamp)
         .expect("indexing bumps the stamp")
         .trim()

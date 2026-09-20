@@ -31,7 +31,7 @@ const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.li
          FROM callers c JOIN files f ON f.id = c.file_id";
 type CallerQueryRow = (String, Option<String>, String, String, u32);
 type CallerFilter = fn(&[String], Option<&str>) -> (String, Vec<String>);
-type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
+pub type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
 
 /// Snapshot-held unique hybrid: one SQL load of defs, then RAM substring match.
 #[derive(Clone)]
@@ -96,7 +96,7 @@ impl WarmedSymbolTable {
     }
 }
 
-fn kind_rank(kind: &str) -> u8 {
+pub fn kind_rank(kind: &str) -> u8 {
     match kind {
         "function" | "method" => 0,
         "type" | "enum" | "class" | "interface" | "struct" => 1,
@@ -107,7 +107,7 @@ fn kind_rank(kind: &str) -> u8 {
 /// Canonical symbol-row order shared by the warmed table and the cold SQL
 /// lane: (kind group, path, line, name). Deterministic across index builds
 /// — never rowid order, which parallel indexing scrambles.
-fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp::Ordering {
+pub fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp::Ordering {
     kind_rank(left.3.as_str())
         .cmp(&kind_rank(right.3.as_str()))
         .then_with(|| left.0.cmp(&right.0))
@@ -121,11 +121,7 @@ fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp::Ord
 /// minority kinds off over-budget pages. Groups are [`kind_rank`] codes
 /// (0 = function/method, 1 = type family, 2 = other) so callers can bucket
 /// indices without borrowing rows.
-fn quota_partition<T>(
-    items: Vec<T>,
-    group_of: impl Fn(&T) -> u8,
-    limit: usize,
-) -> Vec<T> {
+pub fn quota_partition<T>(items: Vec<T>, group_of: impl Fn(&T) -> u8, limit: usize) -> Vec<T> {
     // Functions otherwise spend the whole budget before enums/structs
     // (`Durability`, `SnapshotStamp`) that conceptual gold names.
     let other_keep = ((limit / 2).max(4)).min(limit);
@@ -527,14 +523,7 @@ pub fn symbol_pass_for_files(
     allowed_files: &HashSet<String>,
     include_callers: bool,
 ) -> Result<Vec<SearchHit>> {
-    symbol_pass_for_files_warmed(
-        store,
-        options,
-        parsed,
-        allowed_files,
-        include_callers,
-        None,
-    )
+    symbol_pass_for_files_warmed(store, options, parsed, allowed_files, include_callers, None)
 }
 
 pub(crate) fn symbol_pass_for_files_warmed(
@@ -551,7 +540,7 @@ pub(crate) fn symbol_pass_for_files_warmed(
     // File-restricted hybrid does not need the 500-row exhaustive window;
     // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
     // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
-    let sql_limit = retained_limit(options).max(32).min(SYMBOL_SQL_LIMIT);
+    let sql_limit = retained_limit(options).clamp(32, SYMBOL_SQL_LIMIT);
     let rows = if let Some(table) = warmed {
         table.matches_for_files(options, &parsed.terms, allowed_files, sql_limit)
     } else {
@@ -825,75 +814,4 @@ pub fn search_imports(
             SearchHit::import(path, language, module_path, line_no)
         })
         .collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn row(path: &str, name: &str, kind: &str, line: u32) -> SymbolSpanRow {
-        (
-            path.to_string(),
-            Some("python".to_string()),
-            name.to_string(),
-            kind.to_string(),
-            line,
-            line,
-        )
-    }
-
-    #[test]
-    fn quota_buckets_reserve_minority_slots_over_budget() {
-        // 10 functions + 3 classes, budget 8: other_keep = max(8/2,4) = 4,
-        // so all 3 classes survive and functions take the remaining 5.
-        let mut rows = Vec::new();
-        for i in 0..10 {
-            rows.push(row(
-                &format!("src/m{i}.py"),
-                &format!("qzz_f{i}"),
-                "function",
-                1,
-            ));
-        }
-        for i in 0..3 {
-            rows.push(row(
-                &format!("src/c{i}.py"),
-                &format!("qzz_C{i}"),
-                "class",
-                1,
-            ));
-        }
-        rows.sort_by(cmp_symbol_rows);
-        let kept = quota_partition(rows, |row| kind_rank(row.3.as_str()), 8);
-        assert_eq!(kept.len(), 8);
-        let kinds: Vec<&str> = kept.iter().map(|row| row.3.as_str()).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                "function", "function", "function", "function", "function", "class", "class",
-                "class",
-            ],
-            "functions first, then every surviving class"
-        );
-        // Within-bucket order is (path, line, name): deterministic across
-        // index builds, never rowid order.
-        let names: Vec<&str> = kept.iter().map(|row| row.2.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["qzz_f0", "qzz_f1", "qzz_f2", "qzz_f3", "qzz_f4", "qzz_C0", "qzz_C1", "qzz_C2",]
-        );
-    }
-
-    #[test]
-    fn quota_partition_is_noop_under_budget() {
-        let mut rows = vec![
-            row("src/b.py", "qzz_b", "function", 3),
-            row("src/a.py", "qzz_A", "class", 1),
-        ];
-        rows.sort_by(cmp_symbol_rows);
-        let kept = quota_partition(rows, |row| kind_rank(row.3.as_str()), 32);
-        assert_eq!(kept.len(), 2);
-        assert_eq!(kept[0].2, "qzz_b");
-        assert_eq!(kept[1].2, "qzz_A");
-    }
 }

@@ -18,7 +18,7 @@
 //! search served the OTHER root's stale content); the distinctness test
 //! fails if the `seen`-guard merge dedup is removed (mutation-verified).
 
-use ast_sgrep_core::{IndexOptions, Indexer, IndexStore, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
@@ -89,9 +89,7 @@ fn cross_root_same_mtime_different_content_is_reindexed() {
         "cross-root content difference must be re-indexed even under equal mtimes"
     );
 
-    let hits = searcher(&root_b, &db)
-        .search("pattern:greet")
-        .unwrap();
+    let hits = searcher(&root_b, &db).search("pattern:greet").unwrap();
     assert_eq!(hits.hits.len(), 1);
     assert!(
         hits.hits[0].excerpt.contains("greet(name)"),
@@ -149,13 +147,14 @@ fn cross_root_identical_content_skips_deterministically() {
     make_case(true);
 }
 
-/// EXP-012 (H-CONF-017): the pattern channel emits strict multisets —
-/// no duplicate (file, line_start, line_end) keys in the envelope hit
-/// sequence for the canonical `pattern:main` repro shape. The corpus
-/// includes same-line repeat matches (the native walker's emission the
-/// merge-time dedup must collapse) and a `$$$` call pattern routed through
-/// the kind-signature/native union path (where the historical pass-6
-/// duplicate emission lived).
+/// EXP-012 (H-CONF-017, re-keyed per PASS 131/f131): the pattern channel
+/// emits span-distinct rows — no duplicate (file, line_start, line_end,
+/// byte_span) keys. Two INDEPENDENT same-line nodes are two sg rows and
+/// must both survive (f131, sg receipt); the merge-time dedup collapses
+/// the SAME node found by overlapping query arms (equal spans), which is
+/// what this pins. Line-only keys contradicted f131 on the `$F($$$A)`
+/// sibling-call face; one-row-per-line presentation lives downstream
+/// (RRF line-fusion on the hybrid path), not in this union.
 #[test]
 fn pattern_channel_hit_keys_are_distinct() {
     let temp = tempfile::tempdir().unwrap();
@@ -181,7 +180,14 @@ fn pattern_channel_hit_keys_are_distinct() {
         let keys: Vec<_> = response
             .hits
             .iter()
-            .map(|hit| (hit.file.clone(), hit.line_start, hit.line_end))
+            .map(|hit| {
+                (
+                    hit.file.clone(),
+                    hit.line_start,
+                    hit.line_end,
+                    hit.byte_span,
+                )
+            })
             .collect();
         let distinct = keys.iter().collect::<std::collections::HashSet<_>>();
         assert_eq!(
@@ -190,4 +196,16 @@ fn pattern_channel_hit_keys_are_distinct() {
             "pattern channel emitted duplicate hit keys for {query}: {keys:?}"
         );
     }
+    // The sibling-call face keeps BOTH rows (f131 contract at this layer).
+    let sibs = searcher.search("pattern:$F($$$A)").unwrap();
+    let brow: Vec<_> = sibs
+        .hits
+        .iter()
+        .filter(|hit| hit.file == "b.rs" && hit.line_start == 2)
+        .collect();
+    assert_eq!(brow.len(), 2, "sibling calls survive: {brow:?}");
+    assert_ne!(
+        brow[0].byte_span, brow[1].byte_span,
+        "surviving rows are span-distinct nodes: {brow:?}"
+    );
 }

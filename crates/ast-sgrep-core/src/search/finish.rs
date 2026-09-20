@@ -349,7 +349,7 @@ fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHi
     }
     hits
 }
-#[cfg(any(feature = "rerank", test))]
+#[cfg(feature = "rerank")]
 pub(super) fn apply_rerank_order(
     mut hits: Vec<SearchHit>,
     top_k: usize,

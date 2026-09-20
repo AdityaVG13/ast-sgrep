@@ -108,3 +108,6 @@ path = "../../tests/codemode/numerical_read.rs"
 [[test]]
 name = "numerical_select"
 path = "../../tests/codemode/numerical_select.rs"
+[[test]]
+name = "io_unit"
+path = "../../tests/codemode/io_unit.rs"

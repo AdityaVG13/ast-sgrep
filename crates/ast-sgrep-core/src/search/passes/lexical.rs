@@ -7,7 +7,7 @@ use crate::store::IndexStore;
 use crate::Result;
 use rusqlite::params;
 use std::collections::HashMap;
-type LineMatches = HashMap<(String, u32), (Vec<usize>, Option<String>, String)>;
+pub type LineMatches = HashMap<(String, u32), (Vec<usize>, Option<String>, String)>;
 
 /// Floor for the lexical candidate pool. User `options.limit` raises this when larger (s7jw.1).
 pub const LEXICAL_POOL_FLOOR: usize = 100;
@@ -149,8 +149,7 @@ fn lexical_from_field(
             .filter(|id| seen.insert(*id))
             .collect::<Vec<_>>()
     };
-    let placeholders = std::iter::repeat("?")
-        .take(ids.len())
+    let placeholders = std::iter::repeat_n("?", ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let id_sql = format!("SELECT id, path, language FROM files WHERE id IN ({placeholders})");
@@ -196,12 +195,14 @@ fn accumulate(
         .0
         .push(rank);
 }
-fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
+/// Sortable lexical row: ((path, line_no), (ranks, language, content)).
+type LexicalHitRow = ((String, u32), (Vec<usize>, Option<String>, String));
+
+pub fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
     // Emit in (path, line_no) order. LineMatches is a randomly seeded
     // HashMap, so `into_iter` made the lexical channel's hit order a
     // per-process random value (the unstable-sort hazard at its source).
-    let mut rows: Vec<((String, u32), (Vec<usize>, Option<String>, String))> =
-        matches.into_iter().collect();
+    let mut rows: Vec<LexicalHitRow> = matches.into_iter().collect();
     rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     rows.into_iter()
         .map(|((path, line_no), (ranks, language, content))| {
@@ -249,40 +250,4 @@ pub(crate) fn query_is_code_like(parsed: &ParsedQuery) -> bool {
             && trimmed.chars().any(|c| c.is_lowercase());
         has_underscore || has_path || camel || shouty
     })
-}
-
-#[cfg(test)]
-mod emission_order_tests {
-    use super::hits_from_matches;
-    use std::collections::HashMap;
-
-    /// The lexical channel must emit hits in (path, line_no) order.
-    /// LineMatches is a randomly seeded HashMap, so an unsorted
-    /// `into_iter` re-rolls the emission order every call and every process.
-    #[test]
-    fn lexical_emission_is_key_sorted_every_call() {
-        let build = || {
-            let mut matches: HashMap<(String, u32), (Vec<usize>, Option<String>, String)> =
-                HashMap::new();
-            for i in 0..6 {
-                matches.insert(
-                    (format!("src/mod{i}.rs"), 7),
-                    (vec![i as usize], Some("rust".into()), "row".into()),
-                );
-            }
-            matches
-        };
-        let reference = hits_from_matches(build());
-        for run in 0..20 {
-            let hits = hits_from_matches(build());
-            let keys: Vec<(String, u32)> =
-                hits.iter().map(|hit| (hit.file.clone(), hit.line_start)).collect();
-            let mut sorted = keys.clone();
-            sorted.sort();
-            assert_eq!(keys, sorted, "run {run}: emission must be key-sorted");
-            let reference_keys: Vec<(String, u32)> =
-                reference.iter().map(|hit| (hit.file.clone(), hit.line_start)).collect();
-            assert_eq!(keys, reference_keys, "run {run}: emission must be stable");
-        }
-    }
 }

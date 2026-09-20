@@ -63,10 +63,7 @@ fn schema_mismatch_helper_roundtrip_is_format_contract() {
     let err = StoreError::schema_newer_than_binary(7, 5);
     assert!(matches!(err, StoreError::Other(_)));
     let message = err.to_string();
-    assert_eq!(
-        StoreError::parse_schema_mismatch(&message),
-        Some((7, 5))
-    );
+    assert_eq!(StoreError::parse_schema_mismatch(&message), Some((7, 5)));
     assert_eq!(StoreError::parse_schema_mismatch("garbage"), None);
     assert_eq!(StoreError::parse_schema_mismatch(""), None);
 }

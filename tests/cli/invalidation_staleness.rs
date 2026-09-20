@@ -25,8 +25,9 @@ use std::fs;
 /// prune row (removed=1, status file_count drops to 1).
 /// KILLS: always-rebuild (freshness-check deletion) | stale-row-reuse |
 /// rebuild-all | prune-omission.
-/// ABSORBS: `index_second_run_reuses_fresh_rows` + `index_rebuilds_only_stale_file_after_edit`
-/// + `index_refresh_prunes_deleted_file` (I1 MERGE→matrix/staleness-counts ×3).
+/// ABSORBS: `index_second_run_reuses_fresh_rows` +
+/// `index_rebuilds_only_stale_file_after_edit` +
+/// `index_refresh_prunes_deleted_file` (I1 MERGE→matrix/staleness-counts ×3).
 #[test]
 fn matrix_staleness_counts() {
     let bin = asgrep_bin();
@@ -38,7 +39,10 @@ fn matrix_staleness_counts() {
 
     // Row 1 — reuse: a no-change second index reuses all rows.
     let second = run_index(&bin, &index_s, &root_s);
-    assert_eq!(second["files_indexed"], 0, "fresh rows must be reused: {second}");
+    assert_eq!(
+        second["files_indexed"], 0,
+        "fresh rows must be reused: {second}"
+    );
     assert_eq!(second["files_skipped"], 2, "{second}");
     assert_eq!(second["files_removed"], 0, "{second}");
     assert_eq!(second["files_failed"], 0, "{second}");
@@ -134,7 +138,10 @@ fn status_discriminants_fresh_vs_missing_index() {
     assert_eq!(missing.status.code(), Some(2));
     let missing_value = parse_stdout(&missing);
     assert_eq!(missing_value["ok"], false, "{missing_value}");
-    assert_eq!(missing_value["error"]["kind"], "operational", "{missing_value}");
+    assert_eq!(
+        missing_value["error"]["kind"], "operational",
+        "{missing_value}"
+    );
     assert!(
         !index.exists(),
         "status over a missing index must not create the database"
@@ -228,43 +235,33 @@ fn mutated_predicate_truth_table() {
     use ast_sgrep_core::IndexStats;
     // Reuse: nothing written or deleted -> no reopen needed.
     assert!(!IndexStats::default().mutated());
-    assert!(
-        !IndexStats {
-            files_skipped: 3,
-            ..IndexStats::default()
-        }
-        .mutated()
-    );
+    assert!(!IndexStats {
+        files_skipped: 3,
+        ..IndexStats::default()
+    }
+    .mutated());
     // A failed write leaves no new rows behind -> still no mutation.
-    assert!(
-        !IndexStats {
-            files_failed: 1,
-            ..IndexStats::default()
-        }
-        .mutated()
-    );
+    assert!(!IndexStats {
+        files_failed: 1,
+        ..IndexStats::default()
+    }
+    .mutated());
     // Any written or deleted file row counts as a mutation.
-    assert!(
-        IndexStats {
-            files_indexed: 1,
-            ..IndexStats::default()
-        }
-        .mutated()
-    );
-    assert!(
-        IndexStats {
-            files_removed: 1,
-            ..IndexStats::default()
-        }
-        .mutated()
-    );
-    assert!(
-        IndexStats {
-            files_indexed: 1,
-            files_removed: 1,
-            files_skipped: 9,
-            ..IndexStats::default()
-        }
-        .mutated()
-    );
+    assert!(IndexStats {
+        files_indexed: 1,
+        ..IndexStats::default()
+    }
+    .mutated());
+    assert!(IndexStats {
+        files_removed: 1,
+        ..IndexStats::default()
+    }
+    .mutated());
+    assert!(IndexStats {
+        files_indexed: 1,
+        files_removed: 1,
+        files_skipped: 9,
+        ..IndexStats::default()
+    }
+    .mutated());
 }

@@ -149,7 +149,12 @@ fn normalized_status_bytes(output: &Output) -> Vec<u8> {
 
 // why: one (exit code, raw bytes) snapshot per outline path; refusal codes
 // are part of the relation. WHY area-local: same as `normalized_search_bytes`.
-fn snapshot_outline(bin: &Path, index_s: &str, root_s: &str, rels: &[&str]) -> Vec<(Option<i32>, Vec<u8>)> {
+fn snapshot_outline(
+    bin: &Path,
+    index_s: &str,
+    root_s: &str,
+    rels: &[&str],
+) -> Vec<(Option<i32>, Vec<u8>)> {
     rels.iter()
         .map(|rel| {
             let output = run_outline(bin, index_s, root_s, rel);
@@ -167,11 +172,7 @@ fn mutate_to_final_tree(root: &Path) {
         "pub fn alpha_one() -> u32 { 1 }\npub fn alpha_two() -> u32 { 2 }\n",
     );
     fs::remove_file(root.join("beta.rs")).expect("delete beta");
-    fs::write(
-        root.join("gamma.rs"),
-        "pub fn gamma_new() -> u32 { 3 }\n",
-    )
-    .expect("add gamma");
+    fs::write(root.join("gamma.rs"), "pub fn gamma_new() -> u32 { 3 }\n").expect("add gamma");
 }
 
 /// Fixed per-step mtimes for order-independence convergence.
@@ -212,11 +213,7 @@ fn reset_to_v0(root: &Path, index: &Path) {
 // why: order-harness ADD step at its fixed instant. WHY area-local: same as
 // `reset_to_v0`.
 fn add_gamma(root: &Path) {
-    fs::write(
-        root.join("gamma.rs"),
-        "pub fn gamma_new() -> u32 { 3 }\n",
-    )
-    .expect("add gamma");
+    fs::write(root.join("gamma.rs"), "pub fn gamma_new() -> u32 { 3 }\n").expect("add gamma");
     set_mtime_secs(&root.join("gamma.rs"), MTIME_ADDED);
 }
 
@@ -224,7 +221,7 @@ fn add_gamma(root: &Path) {
 // as `reset_to_v0`.
 fn modify_alpha(root: &Path) {
     fs::write(
-        &root.join("alpha.rs"),
+        root.join("alpha.rs"),
         "pub fn alpha_one() -> u32 { 1 }\npub fn alpha_two() -> u32 { 2 }\n",
     )
     .expect("modify alpha");
@@ -309,7 +306,10 @@ fn matrix_targeted_refresh() {
     let rels = ["alpha.rs", "beta.rs"];
     let targeted_outline = snapshot_outline(&bin, &index_s, &root_s, &rels);
     let full_outline = snapshot_outline(&bin, &full_s, &root_s, &rels);
-    for (rel, (left, right)) in rels.iter().zip(targeted_outline.iter().zip(full_outline.iter())) {
+    for (rel, (left, right)) in rels
+        .iter()
+        .zip(targeted_outline.iter().zip(full_outline.iter()))
+    {
         assert_eq!((left.0, right.0), (Some(0), Some(0)), "{rel}");
         assert_eq!(left.1, right.1, "{rel}: targeted != full refresh");
     }
@@ -341,7 +341,10 @@ fn matrix_parity_incremental_vs_clean() {
     let incremental = snapshot_search(&bin, &index_s, &root_s);
     let clean = snapshot_search(&bin, &clean_s, &root_s);
     assert_eq!(incremental.len(), clean.len());
-    for (query, (left, right)) in PROBE_QUERIES.iter().zip(incremental.iter().zip(clean.iter())) {
+    for (query, (left, right)) in PROBE_QUERIES
+        .iter()
+        .zip(incremental.iter().zip(clean.iter()))
+    {
         assert_eq!(left.0, Some(0), "{query}: incremental search must exit 0");
         assert_eq!(right.0, Some(0), "{query}: clean search must exit 0");
         assert_eq!(left.1, right.1, "{query}: incremental != clean rebuild");
@@ -420,8 +423,12 @@ fn matrix_parity_order_independence() {
         add_gamma(&root);
         run_index(&bin, &index_s, &root_s);
         let order1_search = snapshot_search(&bin, &index_s, &root_s);
-        let order1_outline =
-            snapshot_outline(&bin, &index_s, &root_s, &["alpha.rs", "gamma.rs", "beta.rs"]);
+        let order1_outline = snapshot_outline(
+            &bin,
+            &index_s,
+            &root_s,
+            &["alpha.rs", "gamma.rs", "beta.rs"],
+        );
 
         reset_to_v0(&root, &index);
         run_index(&bin, &index_s, &root_s);
@@ -430,8 +437,12 @@ fn matrix_parity_order_independence() {
         fs::remove_file(root.join("beta.rs")).expect("delete beta");
         run_index(&bin, &index_s, &root_s);
         let order2_search = snapshot_search(&bin, &index_s, &root_s);
-        let order2_outline =
-            snapshot_outline(&bin, &index_s, &root_s, &["alpha.rs", "gamma.rs", "beta.rs"]);
+        let order2_outline = snapshot_outline(
+            &bin,
+            &index_s,
+            &root_s,
+            &["alpha.rs", "gamma.rs", "beta.rs"],
+        );
 
         for (query, (left, right)) in PROBE_QUERIES
             .iter()
@@ -477,11 +488,17 @@ fn matrix_parity_reindex() {
         let outline_twice = snapshot_outline(&bin, &index_s, &root_s, &rels);
         let status_twice = assert_success(&run_status_raw(&bin, &index_s, &root_s), "status");
 
-        for (query, (left, right)) in PROBE_QUERIES.iter().zip(search_once.iter().zip(search_twice.iter())) {
+        for (query, (left, right)) in PROBE_QUERIES
+            .iter()
+            .zip(search_once.iter().zip(search_twice.iter()))
+        {
             assert_eq!((left.0, right.0), (Some(0), Some(0)), "{query}");
             assert_eq!(left.1, right.1, "{query}: reindex is not idempotent");
         }
-        for (rel, (left, right)) in rels.iter().zip(outline_once.iter().zip(outline_twice.iter())) {
+        for (rel, (left, right)) in rels
+            .iter()
+            .zip(outline_once.iter().zip(outline_twice.iter()))
+        {
             assert_eq!(left.0, right.0, "{rel}: outline exit codes diverge");
             assert_eq!(left.1, right.1, "{rel}: reindex is not idempotent");
         }

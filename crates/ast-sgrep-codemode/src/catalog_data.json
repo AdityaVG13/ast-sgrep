@@ -1,0 +1,561 @@
+[
+ {
+  "capsule_default": true,
+  "description": "Hybrid code search (lexical + symbols + call graph + semantic). Supports defs:, callers:, imports:, pattern:, literal:, regex:, word: prefixes and natural-language queries.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "excerpt_lines": {
+     "description": "Inline up to N excerpt lines in capsule mode",
+     "minimum": 0,
+     "type": "integer"
+    },
+    "file_filter": {
+     "description": "Alias of in",
+     "type": "string"
+    },
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "in": {
+     "description": "Directory or glob bound (injected as in:path)",
+     "type": "string"
+    },
+    "lang": {
+     "description": "Language id or extension (rs, ts, py)",
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "description": "Search query",
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "semantic_only": {
+     "default": false,
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "search",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Lexical / identifier lookup (word:). Faster than hybrid search when you already know the token. Prefixed queries (defs:, callers:, blast:, literal:, regex:, pattern:) pass through. blast:Symbol reverse-walks callers; blast:path uses imports.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "excerpt_lines": {
+     "minimum": 0,
+     "type": "integer"
+    },
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "description": "Exact token or prefixed query",
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "find",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Batched line windows from the index (file_lines), with disk fallback. Prefer one read({ refs }) over N calls. Caps at 32 windows.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "context_lines": {
+     "minimum": 0,
+     "type": "integer"
+    },
+    "end": {
+     "minimum": 1,
+     "type": "integer"
+    },
+    "max_chars": {
+     "minimum": 1,
+     "type": "integer"
+    },
+    "path": {
+     "type": "string"
+    },
+    "ref": {
+     "description": "file#Lstart-Lend",
+     "type": "string"
+    },
+    "refs": {
+     "items": {
+      "oneOf": [
+       {
+        "type": "string"
+       },
+       {
+        "properties": {
+         "end": {
+          "type": "integer"
+         },
+         "path": {
+          "type": "string"
+         },
+         "ref": {
+          "type": "string"
+         },
+         "start": {
+          "type": "integer"
+         }
+        },
+        "type": "object"
+       }
+      ]
+     },
+     "type": "array"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "start": {
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "read",
+  "read_only": true
+ },
+ {
+  "capsule_default": false,
+  "description": "Unique string replace jailed to the session root, then targeted reindex of touched paths. oldText must match exactly once. Serial with other mutations.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "edits": {
+     "items": {
+      "properties": {
+       "newText": {
+        "type": "string"
+       },
+       "oldText": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path",
+       "oldText",
+       "newText"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "newText": {
+     "type": "string"
+    },
+    "oldText": {
+     "type": "string"
+    },
+    "path": {
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    }
+   },
+   "type": "object"
+  },
+  "kind": "index",
+  "name": "edit",
+  "read_only": false
+ },
+ {
+  "capsule_default": true,
+  "description": "Semantic/embed pass only. Prefer when query words may not appear in source (e.g. credential renewal \u2192 auth_refresh).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "excerpt_lines": {
+     "minimum": 0,
+     "type": "integer"
+    },
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "semantic",
+  "read_only": true
+ },
+ {
+  "capsule_default": false,
+  "description": "Expand a seed query into a callers/callees/imports neighborhood graph.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "limit": {
+     "default": 100,
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "max_depth": {
+     "default": 2,
+     "maximum": 8,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "top_n": {
+     "default": 20,
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "chain",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Definition lookup for a symbol (shorthand for search with defs: prefix).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "defs",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Caller lookup for a symbol (shorthand for search with callers: prefix).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "callers",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Import lookup (shorthand for search with imports: prefix).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "format": {
+     "default": "capsule",
+     "enum": [
+      "agent",
+      "capsule"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "module": {
+     "type": "string"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    }
+   },
+   "required": [
+    "module"
+   ],
+   "type": "object"
+  },
+  "kind": "search",
+  "name": "imports",
+  "read_only": true
+ },
+ {
+  "capsule_default": false,
+  "description": "Show index statistics for a project root (files, symbols, embed backend).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    }
+   },
+   "type": "object"
+  },
+  "kind": "index",
+  "name": "index_status",
+  "read_only": true
+ },
+ {
+  "capsule_default": false,
+  "description": "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild. Embeddings default to the session setting; pass use_embed=false for a lexical/AST-only refresh.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "force": {
+     "default": false,
+     "type": "boolean"
+    },
+    "paths": {
+     "description": "Known created, changed, or deleted paths under root",
+     "items": {
+      "minLength": 1,
+      "type": "string"
+     },
+     "maxItems": 1024,
+     "minItems": 1,
+     "type": "array"
+    },
+    "root": {
+     "description": "Optional subdirectory under the session workspace root (foreign paths are refused)",
+     "type": "string"
+    },
+    "use_embed": {
+     "description": "Compute semantic embeddings for this run (default: the session's setting)",
+     "type": "boolean"
+    }
+   },
+   "type": "object"
+  },
+  "kind": "index",
+  "name": "index_repo",
+  "read_only": false
+ },
+ {
+  "capsule_default": true,
+  "description": "Filter a previous search/capsule JSON by kind, path substring, or minimum score. Keeps intermediate work out of the model context.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "hits": {
+     "description": "Hit array or full agent/capsule response",
+     "type": "array"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "min_score": {
+     "type": "number"
+    },
+    "path_contains": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "hits"
+   ],
+   "type": "object"
+  },
+  "kind": "transform",
+  "name": "filter_hits",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Project fields from a JSON value (object or array of objects). Return only what the model needs.",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "fields": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "limit": {
+     "maximum": 500,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "value": {
+     "description": "Any JSON value"
+    }
+   },
+   "required": [
+    "value",
+    "fields"
+   ],
+   "type": "object"
+  },
+  "kind": "transform",
+  "name": "select",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Progressive discovery: find tools by keyword (Cloudflare-style codemode.search).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "query": {
+     "description": "Keyword(s) matched against name/description/kind",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "kind": "catalog",
+  "name": "catalog_search",
+  "read_only": true
+ },
+ {
+  "capsule_default": true,
+  "description": "Progressive discovery: return full schema for one tool (Cloudflare-style codemode.describe).",
+  "input_schema": {
+   "additionalProperties": false,
+   "properties": {
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  },
+  "kind": "catalog",
+  "name": "catalog_describe",
+  "read_only": true
+ }
+]

@@ -396,7 +396,7 @@ pub(crate) fn retain_member_link_trivia_free(
         let root = tree.root_node();
         out.retain(|m| {
             node_with_span(root, m.byte_start, m.byte_end)
-                .map_or(true, |candidate| !member_link_trivia_structural(&candidate))
+                .is_none_or(|candidate| !member_link_trivia_structural(&candidate))
         });
     }
 }

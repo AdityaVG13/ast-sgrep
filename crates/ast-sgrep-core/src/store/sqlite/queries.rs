@@ -570,9 +570,8 @@ impl IndexStore {
             }
         );
         let mut bind: Vec<&str> = paths.iter().map(String::as_str).collect();
-        match lang {
-            Some(language) => bind.push(language),
-            None => {}
+        if let Some(language) = lang {
+            bind.push(language)
         }
         query_cached_map(
             &self.conn,

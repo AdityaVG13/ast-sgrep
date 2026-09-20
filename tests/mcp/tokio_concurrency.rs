@@ -11,7 +11,7 @@ use ast_sgrep_testkit::{
     cancelled_notif, collect_responses, ping, response_by_id, small_tree, tool_body, tool_call,
     tool_text, tools_list, LiveSession,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::Duration;
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(15);
@@ -27,13 +27,29 @@ fn pipeline_integrity_tool_and_mixed_batches() {
 
     // Facet 1 (K1.1): 8 mixed tool calls, each matched by id with its own result.
     let batch = vec![
-        tool_call(1, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            1,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(2, "index_status", json!({})),
         tool_call(3, "code_read", json!({"ids": ["a.rs#L1-L1"]})),
-        tool_call(4, "keyword_search", json!({"query": "blueanvil", "limit": 4})),
-        tool_call(5, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            4,
+            "keyword_search",
+            json!({"query": "blueanvil", "limit": 4}),
+        ),
+        tool_call(
+            5,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(6, "index_status", json!({})),
-        tool_call(7, "keyword_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            7,
+            "keyword_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(
             8,
             "ast_search",
@@ -71,7 +87,9 @@ fn pipeline_integrity_tool_and_mixed_batches() {
     let ast = response_by_id(&responses, 8);
     assert_tool_success(ast);
     assert!(
-        tool_body(ast)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(ast)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{ast:#}"
     );
 
@@ -108,10 +126,7 @@ fn pipeline_integrity_tool_and_mixed_batches() {
     for (id, query) in call_ids {
         let response = response_by_id(&responses, id);
         assert_tool_success(response);
-        assert!(
-            tool_text(response).contains(query),
-            "id {id}: {response:#}"
-        );
+        assert!(tool_text(response).contains(query), "id {id}: {response:#}");
     }
 }
 
@@ -159,7 +174,11 @@ fn pipelined_error_does_not_poison_batch_or_session() {
     let mut session = LiveSession::spawn(Some(temp.path()));
     session.handshake();
     session.send(&tool_call(1, "no_such_tool", json!({})));
-    session.send(&tool_call(2, "keyword_search", json!({"query": "x", "limit": 0})));
+    session.send(&tool_call(
+        2,
+        "keyword_search",
+        json!({"query": "x", "limit": 0}),
+    ));
     session.send(&tool_call(
         3,
         "keyword_search",
@@ -173,7 +192,9 @@ fn pipelined_error_does_not_poison_batch_or_session() {
     let good = response_by_id(&responses, 3);
     assert_tool_success(good);
     assert!(
-        tool_body(good)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(good)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{good:#}"
     );
     assert_tool_success(response_by_id(&responses, 4));
@@ -253,11 +274,7 @@ fn served_during_activity_ping_list_tool_and_cancel() {
 
 /// Read until every id in `wants` arrives; any `forbidden` (cancelled) id
 /// fails the test immediately.
-fn recv_until_all(
-    session: &LiveSession,
-    wants: &[u32],
-    forbidden: &[u32],
-) -> Vec<Value> {
+fn recv_until_all(session: &LiveSession, wants: &[u32], forbidden: &[u32]) -> Vec<Value> {
     let mut out = Vec::with_capacity(wants.len());
     let mut pending: Vec<u32> = wants.to_vec();
     let started = std::time::Instant::now();

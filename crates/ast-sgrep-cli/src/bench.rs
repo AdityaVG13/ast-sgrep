@@ -318,7 +318,10 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
 /// as a measurement tool — the run is recorded but never blessed — while a
 /// measured regression always fails. `ASGREP_BENCH_STRICT=1` restores
 /// fail-hard for quarantines (future CI).
-fn enforce_bench_ratchet(history: &Option<serde_json::Value>, subject: &str) -> anyhow::Result<()> {
+pub fn enforce_bench_ratchet(
+    history: &Option<serde_json::Value>,
+    subject: &str,
+) -> anyhow::Result<()> {
     let Some(h) = history.as_ref() else {
         return Ok(());
     };
@@ -871,51 +874,4 @@ fn source_date_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn quarantine_history() -> serde_json::Value {
-        serde_json::json!({
-            "verdict": "quarantine_cv",
-            "cv_pct": 926.0,
-            "ratchet_ok": false,
-        })
-    }
-
-    fn regression_history() -> serde_json::Value {
-        serde_json::json!({
-            "verdict": "reject_regression",
-            "regression_pct": 42.0,
-            "ratchet_ok": false,
-        })
-    }
-
-    #[test]
-    fn ratchet_policy_quarantine_soft_regression_hard() {
-        // One test, sequential env states: nothing else touches
-        // ASGREP_BENCH_STRICT, so no inter-test race.
-        let quarantined = Some(quarantine_history());
-        let regressed = Some(regression_history());
-        std::env::set_var("ASGREP_BENCH_STRICT", "1");
-        assert!(
-            enforce_bench_ratchet(&quarantined, "test").is_err(),
-            "strict quarantine must fail hard"
-        );
-        assert!(
-            enforce_bench_ratchet(&regressed, "test").is_err(),
-            "regression must fail hard under strict"
-        );
-        std::env::remove_var("ASGREP_BENCH_STRICT");
-        assert!(
-            enforce_bench_ratchet(&quarantined, "test").is_ok(),
-            "default quarantine must warn, not fail"
-        );
-        assert!(
-            enforce_bench_ratchet(&regressed, "test").is_err(),
-            "regression must fail hard by default"
-        );
-    }
 }

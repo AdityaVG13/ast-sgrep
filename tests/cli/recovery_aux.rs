@@ -6,12 +6,12 @@
 //! fail-open, install config recovery, and killed-watch resume. Discriminants
 //! only (exit code, envelope, shapes, bytes) — never message text.
 
-use ast_sgrep_testkit::{
-    assert_doctor_unhealthy, assert_failure_envelope, assert_success, run_in, run_index,
-    run_reindex, run_search, run_status, seed_project, KillOnDrop, SOURCE, QUERY,
-};
 #[cfg(unix)]
 use ast_sgrep_testkit::kill9;
+use ast_sgrep_testkit::{
+    assert_doctor_unhealthy, assert_failure_envelope, assert_success, run_in, run_index,
+    run_reindex, run_search, run_status, seed_project, KillOnDrop, QUERY, SOURCE,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -40,9 +40,16 @@ fn doctor_verdicts_track_durable_state() {
     let root_s = root.to_str().unwrap();
 
     for db in [index.clone(), temp.path().join("nonexistent.db")] {
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", db.to_str().unwrap(), "--json", "doctor", root_s],
+            &[
+                "--index-path",
+                db.to_str().unwrap(),
+                "--json",
+                "doctor",
+                root_s,
+            ],
             &[],
         );
         assert_doctor_unhealthy(&output, &db.display().to_string());
@@ -50,13 +57,23 @@ fn doctor_verdicts_track_durable_state() {
 
     let healed = run_reindex(&asgrep(), &temp, &root, &index, &[]);
     assert_eq!(healed["files_indexed"], 1);
-    let output = run_in(&asgrep(), 
+    let output = run_in(
+        &asgrep(),
         temp.path(),
-        &["--index-path", index.to_str().unwrap(), "--json", "doctor", root_s],
+        &[
+            "--index-path",
+            index.to_str().unwrap(),
+            "--json",
+            "doctor",
+            root_s,
+        ],
         &[],
     );
     let doctor = assert_success(&output, "doctor");
-    assert_eq!(doctor["healthy"], true, "doctor must flip healthy after heal: {doctor}");
+    assert_eq!(
+        doctor["healthy"], true,
+        "doctor must flip healthy after heal: {doctor}"
+    );
     assert_eq!(doctor["issues"].as_array().unwrap().len(), 0);
 }
 
@@ -75,9 +92,17 @@ fn readonly_and_missing_paths_fail_closed() {
         let (temp, root, index) = seed_project();
         run_index(&asgrep(), &temp, &root, &index);
         let missing_root = temp.path().join("no-such-root");
-        let output = run_in(&asgrep(), 
+        let output = run_in(
+            &asgrep(),
             temp.path(),
-            &["--index-path", index.to_str().unwrap(), "--no-embed", "--json", "status", missing_root.to_str().unwrap()],
+            &[
+                "--index-path",
+                index.to_str().unwrap(),
+                "--no-embed",
+                "--json",
+                "status",
+                missing_root.to_str().unwrap(),
+            ],
             &[],
         );
         assert_failure_envelope(&output, "status", 2, "operational");
@@ -100,32 +125,67 @@ fn readonly_and_missing_paths_fail_closed() {
             let db_s = db.to_str().unwrap();
 
             fs::set_permissions(&state, fs::Permissions::from_mode(0o555)).unwrap();
-            let output = run_in(&asgrep(), 
+            let output = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", db_s, "--no-embed", "--json", "index", root_s],
+                &[
+                    "--index-path",
+                    db_s,
+                    "--no-embed",
+                    "--json",
+                    "index",
+                    root_s,
+                ],
                 &[],
             );
             assert_failure_envelope(&output, "index", 2, "operational");
-            assert!(!db.exists(), "the refused index must not leave a torn database behind");
+            assert!(
+                !db.exists(),
+                "the refused index must not leave a torn database behind"
+            );
             fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
 
-            let output = run_in(&asgrep(), 
+            let output = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", db_s, "--no-embed", "--json", "index", root_s],
+                &[
+                    "--index-path",
+                    db_s,
+                    "--no-embed",
+                    "--json",
+                    "index",
+                    root_s,
+                ],
                 &[],
             );
             assert_success(&output, "index");
             fs::set_permissions(&state, fs::Permissions::from_mode(0o555)).unwrap();
-            let status = run_in(&asgrep(), 
+            let status = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", db_s, "--no-embed", "--json", "status", root_s],
+                &[
+                    "--index-path",
+                    db_s,
+                    "--no-embed",
+                    "--json",
+                    "status",
+                    root_s,
+                ],
                 &[],
             );
             assert_failure_envelope(&status, "status", 2, "operational");
             fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
-            let status = run_in(&asgrep(), 
+            let status = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", db_s, "--no-embed", "--json", "status", root_s],
+                &[
+                    "--index-path",
+                    db_s,
+                    "--no-embed",
+                    "--json",
+                    "status",
+                    root_s,
+                ],
                 &[],
             );
             let status = assert_success(&status, "status");
@@ -133,9 +193,17 @@ fn readonly_and_missing_paths_fail_closed() {
 
             // The file/dir split: a read-only db FILE in a writable home serves.
             fs::set_permissions(&db, fs::Permissions::from_mode(0o444)).unwrap();
-            let status = run_in(&asgrep(), 
+            let status = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--index-path", db_s, "--no-embed", "--json", "status", root_s],
+                &[
+                    "--index-path",
+                    db_s,
+                    "--no-embed",
+                    "--json",
+                    "status",
+                    root_s,
+                ],
                 &[],
             );
             let status = assert_success(&status, "status");
@@ -152,10 +220,25 @@ fn readonly_and_missing_paths_fail_closed() {
             fs::set_permissions(&ro, fs::Permissions::from_mode(0o555)).unwrap();
             let hist_dir = temp.path().join("hist").to_str().unwrap().to_owned();
             let ro_history = ro.join("hist.json").to_str().unwrap().to_owned();
-            let output = run_in(&asgrep(), 
+            let output = run_in(
+                &asgrep(),
                 temp.path(),
-                &["--no-embed", "--index-path", index.to_str().unwrap(), "--json", "bench", "--query", QUERY, "--iterations", "1", root.to_str().unwrap()],
-                &[("ASGREP_BENCH_HISTORY_PATH", ro_history.as_str()), ("ASGREP_BENCH_HISTORY_DIR", hist_dir.as_str())],
+                &[
+                    "--no-embed",
+                    "--index-path",
+                    index.to_str().unwrap(),
+                    "--json",
+                    "bench",
+                    "--query",
+                    QUERY,
+                    "--iterations",
+                    "1",
+                    root.to_str().unwrap(),
+                ],
+                &[
+                    ("ASGREP_BENCH_HISTORY_PATH", ro_history.as_str()),
+                    ("ASGREP_BENCH_HISTORY_DIR", hist_dir.as_str()),
+                ],
             );
             assert_failure_envelope(&output, "bench", 2, "operational");
             fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
@@ -165,11 +248,32 @@ fn readonly_and_missing_paths_fail_closed() {
 
 /// One-use bench runner: the history-path envs differ per facet, so the closure
 /// shape stays local to this test rather than growing the shared harness.
-fn run_bench(temp: &TempDir, root_s: &str, index_s: &str, history_s: &str, hist_dir_s: &str) -> std::process::Output {
-    run_in(&asgrep(), 
+fn run_bench(
+    temp: &TempDir,
+    root_s: &str,
+    index_s: &str,
+    history_s: &str,
+    hist_dir_s: &str,
+) -> std::process::Output {
+    run_in(
+        &asgrep(),
         temp.path(),
-        &["--no-embed", "--index-path", index_s, "--json", "bench", "--query", QUERY, "--iterations", "1", root_s],
-        &[("ASGREP_BENCH_HISTORY_PATH", history_s), ("ASGREP_BENCH_HISTORY_DIR", hist_dir_s)],
+        &[
+            "--no-embed",
+            "--index-path",
+            index_s,
+            "--json",
+            "bench",
+            "--query",
+            QUERY,
+            "--iterations",
+            "1",
+            root_s,
+        ],
+        &[
+            ("ASGREP_BENCH_HISTORY_PATH", history_s),
+            ("ASGREP_BENCH_HISTORY_DIR", hist_dir_s),
+        ],
     )
 }
 
@@ -195,14 +299,25 @@ fn bench_history_fault_matrix() {
         assert!(!history.parent().unwrap().exists());
         let hist_dir = temp.path().join("hist").to_str().unwrap().to_owned();
         let value = assert_success(
-            &run_bench(&temp, root.to_str().unwrap(), index.to_str().unwrap(), history.to_str().unwrap(), &hist_dir),
+            &run_bench(
+                &temp,
+                root.to_str().unwrap(),
+                index.to_str().unwrap(),
+                history.to_str().unwrap(),
+                &hist_dir,
+            ),
             "bench",
         );
         assert_eq!(value["bench_history"]["verdict"], "establish_baseline");
         assert_eq!(value["bench_history"]["ratchet_ok"], true);
         let doc: Value = serde_json::from_str(&fs::read_to_string(&history).unwrap()).unwrap();
         assert_eq!(doc["schema_version"], "1");
-        assert!(doc["entries"]["query:probe_target"]["avg_search_ms"].as_f64().is_some(), "rebuilt history must carry the label entry: {doc}");
+        assert!(
+            doc["entries"]["query:probe_target"]["avg_search_ms"]
+                .as_f64()
+                .is_some(),
+            "rebuilt history must carry the label entry: {doc}"
+        );
     }
 
     // Torn aggregate fails loud, preserves bytes, then re-establishes identically.
@@ -213,20 +328,46 @@ fn bench_history_fault_matrix() {
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let history_s = history.to_str().unwrap().to_owned();
-        let fresh = assert_success(&run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir), "bench");
+        let fresh = assert_success(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir),
+            "bench",
+        );
         assert_eq!(fresh["bench_history"]["verdict"], "establish_baseline");
         let mut torn = fs::read(&history).unwrap();
         torn.truncate(torn.len() / 2);
-        assert!(serde_json::from_slice::<Value>(&torn).is_err(), "the harness must inject genuinely torn JSON");
+        assert!(
+            serde_json::from_slice::<Value>(&torn).is_err(),
+            "the harness must inject genuinely torn JSON"
+        );
         fs::write(&history, &torn).unwrap();
-        assert_failure_envelope(&run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir), "bench", 2, "operational");
-        assert_eq!(fs::read(&history).unwrap(), torn, "the torn aggregate is evidence and must not be reset");
+        assert_failure_envelope(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir),
+            "bench",
+            2,
+            "operational",
+        );
+        assert_eq!(
+            fs::read(&history).unwrap(),
+            torn,
+            "the torn aggregate is evidence and must not be reset"
+        );
         fs::remove_file(&history).unwrap();
-        let recovered = assert_success(&run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir), "bench");
-        assert_eq!(recovered["bench_history"]["verdict"], fresh["bench_history"]["verdict"], "recovered history must re-establish the fresh-run verdict");
+        let recovered = assert_success(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir),
+            "bench",
+        );
+        assert_eq!(
+            recovered["bench_history"]["verdict"], fresh["bench_history"]["verdict"],
+            "recovered history must re-establish the fresh-run verdict"
+        );
         let doc: Value = serde_json::from_str(&fs::read_to_string(&history).unwrap()).unwrap();
         assert_eq!(doc["schema_version"], "1");
-        assert!(doc["entries"]["query:probe_target"]["avg_search_ms"].as_f64().is_some(), "recovered history must carry the label entry: {doc}");
+        assert!(
+            doc["entries"]["query:probe_target"]["avg_search_ms"]
+                .as_f64()
+                .is_some(),
+            "recovered history must carry the label entry: {doc}"
+        );
     }
 
     // Committed prior: generous prior consulted (keep), corrupt prior fails open.
@@ -259,14 +400,32 @@ fn bench_history_fault_matrix() {
             .to_string(),
         )
         .unwrap();
-        let value = assert_success(&run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir_s), "bench");
-        assert_eq!(value["bench_history"]["verdict"], "keep", "the generous prior must be consulted (control arm): {value}");
+        let value = assert_success(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir_s),
+            "bench",
+        );
+        assert_eq!(
+            value["bench_history"]["verdict"], "keep",
+            "the generous prior must be consulted (control arm): {value}"
+        );
         fs::write(&prior, "{ corrupt json").unwrap();
-        let value = assert_success(&run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir_s), "bench");
-        assert_eq!(value["bench_history"]["verdict"], "establish_baseline", "a corrupt prior must fail open to a fresh baseline: {value}");
-        assert_eq!(fs::read_to_string(&prior).unwrap(), "{ corrupt json", "the corrupt prior is evidence and must not be rewritten");
-        let run_snapshot: Value =
-            serde_json::from_str(&fs::read_to_string(hist_dir.join("query-probe-target.run.json")).unwrap()).unwrap();
+        let value = assert_success(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir_s),
+            "bench",
+        );
+        assert_eq!(
+            value["bench_history"]["verdict"], "establish_baseline",
+            "a corrupt prior must fail open to a fresh baseline: {value}"
+        );
+        assert_eq!(
+            fs::read_to_string(&prior).unwrap(),
+            "{ corrupt json",
+            "the corrupt prior is evidence and must not be rewritten"
+        );
+        let run_snapshot: Value = serde_json::from_str(
+            &fs::read_to_string(hist_dir.join("query-probe-target.run.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(run_snapshot["label"], "query:probe_target");
         assert_eq!(run_snapshot["verdict"], "establish_baseline");
     }
@@ -287,23 +446,42 @@ fn install_config_missing_rebuilt_corrupt_refused() {
     let fake_bin_s = fake_bin.to_str().unwrap().to_owned();
     let config = temp.path().join("cursor").join("mcp.json");
 
-    let output = run_in(&asgrep(), 
+    let output = run_in(
+        &asgrep(),
         temp.path(),
         &["install", "--target", "cursor", "--yes"],
-        &[("CURSOR_CONFIG_DIR", cursor_dir.as_str()), ("ASGREP_MCP_BIN", fake_bin_s.as_str())],
+        &[
+            ("CURSOR_CONFIG_DIR", cursor_dir.as_str()),
+            ("ASGREP_MCP_BIN", fake_bin_s.as_str()),
+        ],
     );
-    assert_eq!(output.status.code(), Some(0), "missing config must be created: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "missing config must be created: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let doc: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
     assert_eq!(doc["mcpServers"]["asgrep"]["command"], fake_bin_s);
 
     fs::write(&config, "{ corrupt json").unwrap();
-    let output = run_in(&asgrep(), 
+    let output = run_in(
+        &asgrep(),
         temp.path(),
-        &["install", "--target", "cursor", "--yes", "--force", "--json"],
-        &[("CURSOR_CONFIG_DIR", cursor_dir.as_str()), ("ASGREP_MCP_BIN", fake_bin_s.as_str())],
+        &[
+            "install", "--target", "cursor", "--yes", "--force", "--json",
+        ],
+        &[
+            ("CURSOR_CONFIG_DIR", cursor_dir.as_str()),
+            ("ASGREP_MCP_BIN", fake_bin_s.as_str()),
+        ],
     );
     assert_failure_envelope(&output, "install", 2, "operational");
-    assert_eq!(fs::read_to_string(&config).unwrap(), "{ corrupt json", "a corrupt config must not be overwritten");
+    assert_eq!(
+        fs::read_to_string(&config).unwrap(),
+        "{ corrupt json",
+        "a corrupt config must not be overwritten"
+    );
 }
 
 /// INTENT: a `watch` loop killed mid-run resumes through the next plain `index`
@@ -323,7 +501,15 @@ fn killed_watch_resumes_via_next_index() {
     let index_s = index.to_str().unwrap().to_owned();
 
     let watch = Command::new(asgrep())
-        .args(["--index-path", &index_s, "--no-embed", "watch", "--debounce-ms", "50", &root_s])
+        .args([
+            "--index-path",
+            &index_s,
+            "--no-embed",
+            "watch",
+            "--debounce-ms",
+            "50",
+            &root_s,
+        ])
         .env("NO_COLOR", "1")
         .current_dir(temp.path())
         .stdout(Stdio::null())
@@ -349,8 +535,14 @@ fn killed_watch_resumes_via_next_index() {
         if text.contains("initial index") {
             break;
         }
-        assert!(Instant::now() < deadline, "watch never finished its initial index: {text}");
-        assert!(watch.child().try_wait().expect("try_wait watch").is_none(), "watch died before its initial index: {text}");
+        assert!(
+            Instant::now() < deadline,
+            "watch never finished its initial index: {text}"
+        );
+        assert!(
+            watch.child().try_wait().expect("try_wait watch").is_none(),
+            "watch died before its initial index: {text}"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -359,20 +551,40 @@ fn killed_watch_resumes_via_next_index() {
     assert_eq!(status["file_count"], 1);
 
     // The raced edit: it may or may not reach the loop before the shot.
-    fs::write(root.join("src/lib.rs"), "fn probe_target() { run(1); }\nfn raced_edit() {}\n").unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "fn probe_target() { run(1); }\nfn raced_edit() {}\n",
+    )
+    .unwrap();
     std::thread::sleep(Duration::from_millis(150));
     let pid = watch.child().id();
-    assert!(kill9(pid), "the SIGKILL fault must land on a live watch loop");
+    assert!(
+        kill9(pid),
+        "the SIGKILL fault must land on a live watch loop"
+    );
     let death = watch.child().wait().expect("wait watch");
-    assert!(death.code().is_none(), "watch must die by signal, got {death:?}");
+    assert!(
+        death.code().is_none(),
+        "watch must die by signal, got {death:?}"
+    );
 
     // Resume boundary: the next plain index converges, no reindex needed.
     run_index(&asgrep(), &temp, &root, &index);
     let status = run_status(&asgrep(), &temp, &root_s, &index_s, &[]);
     assert_eq!(status["file_count"], 1);
-    let search = run_search(&asgrep(), &temp, &root_s, &index_s, "raced_edit", &["--no-embed"], &[]);
+    let search = run_search(
+        &asgrep(),
+        &temp,
+        &root_s,
+        &index_s,
+        "raced_edit",
+        &["--no-embed"],
+        &[],
+    );
     assert!(
-        search["hits"].as_array().is_some_and(|hits| !hits.is_empty()),
+        search["hits"]
+            .as_array()
+            .is_some_and(|hits| !hits.is_empty()),
         "the resumed index must answer the raced edit: {search}"
     );
 }

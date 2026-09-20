@@ -17,6 +17,7 @@
 //!   `delta_order_independence_delete_vs_modify`.
 //! - M-idempotence absorbs `full_refresh_twice_identical_to_once`,
 //!   `incremental_refresh_twice_identical_to_once`.
+//!
 //! (The remaining I3 MERGEs — the two untouched-row tests — live in the
 //! M-untouched target in `invalidation_delta_matrix.rs`.)
 //!
@@ -91,8 +92,8 @@ fn generation_phase_exact_single_steps() {
 }
 
 /// Phase absorbed from `bulk_refresh_generation_delta_equals_mutated_file_count`:
-/// bulk refresh bumps generation by exactly the mutated-file count (3 upserts
-/// + 1 removal = +4).
+/// bulk refresh bumps generation by exactly the mutated-file count
+/// (3 upserts + 1 removal = +4).
 fn generation_phase_bulk_counts_mutations() {
     let fx = Fx::new();
     let abs_a = fx.write("src/a.rs", "fn i3_bulk_a() {}\n");
@@ -412,7 +413,10 @@ fn idempotence_phase_full_twice() {
     assert_eq!(first.files_indexed, 2);
     assert_eq!(first.files_removed, 1);
     let hits_once = fx.battery(BATTERY);
-    assert!(!hits_once.is_empty(), "idempotence battery must be non-vacuous");
+    assert!(
+        !hits_once.is_empty(),
+        "idempotence battery must be non-vacuous"
+    );
     let gen_once = fx.generation();
     let counts_once = fx.stored_counts();
 
@@ -482,7 +486,10 @@ fn idempotence_phase_incremental_twice() {
     std::fs::remove_file(&abs_b).unwrap();
     assert_eq!(fx.update(std::slice::from_ref(&abs_b)).files_removed, 1);
     let hits_once = fx.battery(BATTERY);
-    assert!(!hits_once.is_empty(), "idempotence battery must be non-vacuous");
+    assert!(
+        !hits_once.is_empty(),
+        "idempotence battery must be non-vacuous"
+    );
     let gen_after_del = fx.generation();
     let counts_once = fx.stored_counts();
     let repeat_del = fx.update(std::slice::from_ref(&abs_b));

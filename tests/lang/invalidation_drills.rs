@@ -59,11 +59,7 @@ fn rank(outcomes: &[FileOutcome]) -> Vec<&'static str> {
 fn run_cell(registry: &ParserRegistry, cell: &Cell) -> FileOutcome {
     let detected = detect_language(Path::new(cell.path), Some(cell.source));
     let extraction = registry.parse(cell.lang, cell.source).unwrap();
-    let symbols: Vec<String> = extraction
-        .symbols
-        .iter()
-        .map(|s| s.name.clone())
-        .collect();
+    let symbols: Vec<String> = extraction.symbols.iter().map(|s| s.name.clone()).collect();
     let mut hits_per_pattern = Vec::with_capacity(cell.patterns.len());
     let mut fallback_per_pattern = Vec::with_capacity(cell.patterns.len());
     let mut answerable_per_pattern = Vec::with_capacity(cell.patterns.len());
@@ -256,10 +252,7 @@ fn warmed_caches_match_fresh_thread_results() {
     let junk_sources = [
         (Language::Go, "package main\n\nfunc junk() {}\n"),
         (Language::Python, "def junk():\n    pass\n"),
-        (
-            Language::JavaScript,
-            "function junk() {\n  return 1;\n}\n",
-        ),
+        (Language::JavaScript, "function junk() {\n  return 1;\n}\n"),
     ];
     let junk_patterns = [
         "junk",
@@ -283,7 +276,10 @@ fn warmed_caches_match_fresh_thread_results() {
     let warmed_rust = run_workload(RUST_CORPUS, &canonical_order(n));
     let cold_rust = run_in_fresh_thread(move || run_workload(RUST_CORPUS, &canonical_order(n)));
     assert_eq!(warmed_rust, cold_rust);
-    assert_eq!(warmed_rust.0[3].symbols, vec!["Gadget", "alpha", "beta", "gamma"]);
+    assert_eq!(
+        warmed_rust.0[3].symbols,
+        vec!["Gadget", "alpha", "beta", "gamma"]
+    );
 
     // Leg 3 (unsupported-mix warmed): unsupported-first + junk warm-up, then
     // canonical, equals cold canonical.
@@ -338,7 +334,7 @@ fn unsupported_mix_supported_first_vs_unsupported_first() {
     assert!(a.0[0].answerable_per_pattern[0]);
     assert!(!a.0[1].answerable_per_pattern[0]);
     assert_eq!(a.0[0].hits_per_pattern[0], vec![1]);
-    assert_eq!(a.0[2].fallback_per_pattern[2], true);
+    assert!(a.0[2].fallback_per_pattern[2]);
 }
 
 /// INTENT: polyglot workload identical under canonical, hostile
@@ -356,8 +352,7 @@ fn adversarial_interleave_matches_canonical_pipeline() {
     // Leg 1 (anchor): hostile lane-alternating order with per-step junk
     // genus-poisoning equals the canonical run incl ranking.
     let n = POLYGLOT_CORPUS.len();
-    let canonical =
-        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
+    let canonical = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
     let adversarial = run_in_fresh_thread(move || {
         let registry = ParserRegistry::new();
         let junk = [
@@ -374,7 +369,7 @@ fn adversarial_interleave_matches_canonical_pipeline() {
             ),
             (Language::Python, "def junk():\n    pass\n", "class $NAME"),
         ];
-        let order = vec![4usize, 2, 0, 3, 1];
+        let order = [4usize, 2, 0, 3, 1];
         let mut back: Vec<Option<FileOutcome>> = Vec::from_iter((0..n).map(|_| None));
         for (step, cell_idx) in order.iter().enumerate() {
             let (lang, src, pattern) = junk[step % junk.len()];
@@ -403,8 +398,7 @@ fn adversarial_interleave_matches_canonical_pipeline() {
 
     // Leg 2 (round-robin): stride-2 schedule equals batched; literal cells
     // hit decl lines, languages detected.
-    let batched =
-        run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
+    let batched = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
     let rr_order = vec![0usize, 2, 4, 1, 3];
     let interleaved = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &rr_order));
     assert_eq!(batched, interleaved);
@@ -434,11 +428,7 @@ fn adversarial_interleave_matches_canonical_pipeline() {
     let fwd = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &canonical_order(n)));
     let rev = run_in_fresh_thread(move || run_workload(POLYGLOT_CORPUS, &reversed_order(n)));
     assert_eq!(fwd, rev);
-    assert!(
-        fwd.0
-            .iter()
-            .any(|o| !o.hits_per_pattern[1].is_empty())
-    );
+    assert!(fwd.0.iter().any(|o| !o.hits_per_pattern[1].is_empty()));
     assert_eq!(fwd.1.len(), n);
 
     // Leg 4 (repetition with hand oracles): three rounds on one warmed

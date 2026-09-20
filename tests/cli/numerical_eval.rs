@@ -19,7 +19,8 @@ mod common;
 
 use ast_sgrep_testkit::{
     asgrep_bin, assert_finite_unit, assert_operational_envelope, eval_project, f64_at,
-    parse_human_row, parse_human_summary, run, run_eval_ok, run_eval_raw, write_fixture, write_gold,
+    parse_human_row, parse_human_summary, run, run_eval_ok, run_eval_raw, write_fixture,
+    write_gold,
 };
 use common::rank_key;
 use tempfile::TempDir;
@@ -93,11 +94,14 @@ fn eval_k_sweep_found_and_recall_match_hand_values() {
     for name in ["w1.rs", "w2.rs", "w3.rs", "w4.rs"] {
         write_fixture(&root, name, "fn wobble_n4_sweep() {}\n");
     }
-    let relevant =
-        serde_json::json!([{"file": "w1.rs"}, {"file": "w2.rs"}, {"file": "w3.rs"}, {"file": "w4.rs"}]);
-    for (k, expected_found, expected_recall) in
-        [(1u64, 1u64, 0.25), (2, 2, 0.5), (3, 3, 0.75), (4, 4, 1.0), (5, 4, 1.0)]
-    {
+    let relevant = serde_json::json!([{"file": "w1.rs"}, {"file": "w2.rs"}, {"file": "w3.rs"}, {"file": "w4.rs"}]);
+    for (k, expected_found, expected_recall) in [
+        (1u64, 1u64, 0.25),
+        (2, 2, 0.5),
+        (3, 3, 0.75),
+        (4, 4, 1.0),
+        (5, 4, 1.0),
+    ] {
         let gold = write_gold(
             temp.path(),
             &format!("gold{k}.json"),
@@ -310,8 +314,16 @@ fn eval_human_and_json_metrics_agree() {
             q["first_rank"].as_u64().unwrap().to_string()
         };
         assert_eq!(rank, expected_rank, "{name}: first_rank must agree exactly");
-        assert_eq!(found, q["found"].as_u64().unwrap(), "{name}: found must agree exactly");
-        assert_eq!(relevant, q["relevant"].as_u64().unwrap(), "{name}: relevant must agree exactly");
+        assert_eq!(
+            found,
+            q["found"].as_u64().unwrap(),
+            "{name}: found must agree exactly"
+        );
+        assert_eq!(
+            relevant,
+            q["relevant"].as_u64().unwrap(),
+            "{name}: relevant must agree exactly"
+        );
         for (label, human, pointer) in [("rr", rr, "/rr"), ("ndcg", ndcg, "/ndcg")] {
             let machine = f64_at(&json_value, &format!("/queries/{qi}{pointer}"));
             assert!(
@@ -367,12 +379,18 @@ fn eval_recall_cutoffs_are_monotone() {
         let r1 = f64_at(&value, &format!("/queries/{qi}/recall_at/1"));
         let r5 = f64_at(&value, &format!("/queries/{qi}/recall_at/5"));
         let r20 = f64_at(&value, &format!("/queries/{qi}/recall_at/20"));
-        assert!(r1 <= r5 && r5 <= r20, "query {qi} cutoffs must be monotone: {r1} <= {r5} <= {r20}");
+        assert!(
+            r1 <= r5 && r5 <= r20,
+            "query {qi} cutoffs must be monotone: {r1} <= {r5} <= {r20}"
+        );
     }
     let a1 = f64_at(&value, "/aggregate/recall_at_1");
     let a5 = f64_at(&value, "/aggregate/recall_at_5");
     let a20 = f64_at(&value, "/aggregate/recall_at_20");
-    assert!(a1 <= a5 && a5 <= a20, "aggregate cutoffs must be monotone: {a1} <= {a5} <= {a20}");
+    assert!(
+        a1 <= a5 && a5 <= a20,
+        "aggregate cutoffs must be monotone: {a1} <= {a5} <= {a20}"
+    );
 }
 
 /// INTENT: eval k=0 succeeds with exact zeros; all floats JSON numbers (a
@@ -418,7 +436,11 @@ fn eval_degenerate_gold_fails_closed() {
     // Zero queries, or a non-usize k (1.5), is an operational failure (exit
     // 2), never ok:true with fabricated zeros.
     let (temp, root) = eval_project("wobblebuild_badgold");
-    let empty = write_gold(temp.path(), "empty.json", &serde_json::json!({"corpus": "n2", "queries": []}));
+    let empty = write_gold(
+        temp.path(),
+        "empty.json",
+        &serde_json::json!({"corpus": "n2", "queries": []}),
+    );
     let output = run_eval_raw(&empty, &root);
     let value = assert_operational_envelope(&output);
     assert_eq!(value["command"], "eval", "{value}");
@@ -700,8 +722,7 @@ fn eval_k_sweep_contract() {
         for name in ["k1.rs", "k2.rs", "k3.rs"] {
             write_fixture(&root, name, "fn wobblebuild_n3k() {}\n");
         }
-        let relevant =
-            serde_json::json!([{"file": "k1.rs"}, {"file": "k2.rs"}, {"file": "k3.rs"}]);
+        let relevant = serde_json::json!([{"file": "k1.rs"}, {"file": "k2.rs"}, {"file": "k3.rs"}]);
         let mut prev_found = 0u64;
         let mut prev_recall = 0.0f64;
         let mut prev_rank = usize::MAX;
@@ -717,9 +738,18 @@ fn eval_k_sweep_contract() {
             let found = value["queries"][0]["found"].as_u64().expect("found");
             let recall = f64_at(&value, "/aggregate/recall_at_k");
             let rank = rank_key(&value["queries"][0]["first_rank"]);
-            assert!(found >= prev_found, "found must not shrink with k: {prev_found} -> {found}");
-            assert!(recall >= prev_recall, "recall_at_k must not shrink with k: {prev_recall} -> {recall}");
-            assert!(rank <= prev_rank, "first_rank must not worsen with k: {prev_rank:?} -> {rank:?}");
+            assert!(
+                found >= prev_found,
+                "found must not shrink with k: {prev_found} -> {found}"
+            );
+            assert!(
+                recall >= prev_recall,
+                "recall_at_k must not shrink with k: {prev_recall} -> {recall}"
+            );
+            assert!(
+                rank <= prev_rank,
+                "first_rank must not worsen with k: {prev_rank:?} -> {rank:?}"
+            );
             prev_found = found;
             prev_recall = recall;
             prev_rank = rank;
@@ -871,7 +901,9 @@ fn unrounded_mean_contract() {
     );
     let value = run_eval_ok(&gold, &root);
     let per_query = |pointer: &str| -> Vec<f64> {
-        (0..2).map(|qi| f64_at(&value, &format!("/queries/{qi}{pointer}"))).collect()
+        (0..2)
+            .map(|qi| f64_at(&value, &format!("/queries/{qi}{pointer}")))
+            .collect()
     };
     for (per_q, agg) in [
         ("/rr", "/aggregate/mrr"),

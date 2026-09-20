@@ -295,7 +295,6 @@ pub struct SemanticFieldVectors {
     pub tests_examples: Option<Vec<u8>>,
 }
 
-
 /// Which per-field blobs a query actually needs (Door C). Zero-weight fields
 /// are not selected from SQLite and do not appear in `embed_field:` why terms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,9 +389,7 @@ fn comment_markers_for(language: Option<&str>) -> &'static [&'static str] {
         Some("php") => &["#", "//", "/**", "/*", "*/", "*"],
         Some("rust") | Some("typescript") | Some("javascript") | Some("java") | Some("go")
         | Some("csharp") | Some("c") | Some("cpp") | Some("kotlin") | Some("swift")
-        | Some("dart") | Some("moonbit") => {
-            &["///", "//!", "//", "/**", "/*", "*/", "*"]
-        }
+        | Some("dart") | Some("moonbit") => &["///", "//!", "//", "/**", "/*", "*/", "*"],
         // Unknown: C-style only — never bare `#`.
         _ => &["///", "//!", "//", "/**", "/*", "*/", "*", "--"],
     }

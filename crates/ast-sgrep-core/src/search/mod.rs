@@ -1,6 +1,6 @@
 pub(crate) mod conjunction;
-pub(crate) mod critic;
-pub(crate) mod field_weight;
+pub mod critic;
+pub mod field_weight;
 mod finish;
 mod fusion;
 pub mod passes;
@@ -14,9 +14,9 @@ pub use field_weight::EmbedFieldScores;
 pub use finish::finish_response;
 pub(crate) use finish::finish_response_checked;
 pub use fusion::dedup_hits;
+use passes::bmh::asgrep_line_hit;
 use passes::embed::{run_embed_pass_cached, SemanticCache};
 use passes::lexical::lexical_pass;
-use passes::bmh::asgrep_line_hit;
 use passes::literal::literal_pass;
 use passes::regex::regex_pass;
 use passes::symbol::{
@@ -327,9 +327,8 @@ impl Searcher {
         if !conn.is_autocommit() {
             return Ok(());
         }
-        conn.execute_batch("BEGIN DEFERRED").map_err(|e| {
-            crate::StoreError::Other(format!("failed to pin read snapshot: {e}"))
-        })?;
+        conn.execute_batch("BEGIN DEFERRED")
+            .map_err(|e| crate::StoreError::Other(format!("failed to pin read snapshot: {e}")))?;
         *held = true;
         *lock_clear_on_poison(&self.index_gen_memo, |memo| *memo = None) = None;
         Ok(())
@@ -826,11 +825,26 @@ impl Searcher {
                     // declaration (measured: word:SnapshotStamp put the struct's
                     // own file 6th, behind three other files that merely use it),
                     // and the hybrid lane already merges def hits for identifier
-                    // needles, so this lane does too.
+                    // needles, so this lane does too. One row per line (§41.3):
+                    // def rows lead and literal rows fill lines the defs lane
+                    // missed — a bare extend doubled every def line.
                     if let Some(spelling) = parsed.identifier_spelling() {
                         if spelling.chars().count() >= 3 {
                             let def_query = ParsedQuery::parse(&format!("defs:{spelling}"));
-                            hits.extend(search_defs(&self.store, &self.options, &def_query)?);
+                            let defs = search_defs(&self.store, &self.options, &def_query)?;
+                            if !defs.is_empty() {
+                                let mut seen: std::collections::HashSet<(String, u32)> = defs
+                                    .iter()
+                                    .map(|h| (h.file.clone(), h.line_start))
+                                    .collect();
+                                let mut merged = defs;
+                                for hit in hits {
+                                    if seen.insert((hit.file.clone(), hit.line_start)) {
+                                        merged.push(hit);
+                                    }
+                                }
+                                hits = merged;
+                            }
                         }
                     }
                     // The critic ran only on the hybrid lane, so every context
@@ -862,7 +876,12 @@ impl Searcher {
                                 "weighted RRF + critic",
                             );
                             crate::fusion::apply_weighted_rrf(&mut hits, &weights);
-                            critic::apply_critic(&parsed, intent, &mut hits, critic_vocabulary.as_ref());
+                            critic::apply_critic(
+                                &parsed,
+                                intent,
+                                &mut hits,
+                                critic_vocabulary.as_ref(),
+                            );
                         }
                         hits
                     }
@@ -1049,8 +1068,7 @@ impl Searcher {
         // edges (`chain_imports_edge_resolves_for_typescript`). The symbol
         // table is ground truth; NL queries are multi-token and never take
         // this upgrade, so the unique-hybrid p99 NL class is untouched.
-        if let (crate::intent::QueryIntent::Conceptual, [term]) =
-            (intent, parsed.terms.as_slice())
+        if let (crate::intent::QueryIntent::Conceptual, [term]) = (intent, parsed.terms.as_slice())
         {
             if term.chars().count() >= 3 && self.store.has_symbol_named(term)? {
                 intent = crate::intent::QueryIntent::Symbol;
@@ -1362,16 +1380,17 @@ fn conceptual_def_terms(query: &str) -> Vec<String> {
     // symbol LIKE was unique-hybrid p100 (auth NL) and a rarity cap on that
     // dump ranked auth_refresh for "durable session write".
     let user: HashSet<String> = ast_sgrep_embed::tokenize(query).into_iter().collect();
-    let mut terms: Vec<String> = ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
-        .into_iter()
-        .filter(|tok| {
-            tok.chars().count() >= 4
-                && !critic::is_generic_concept_token(tok)
-                && (tok.contains('_')
-                    || user.contains(tok)
-                    || user.iter().any(|u| u.contains(tok.as_str())))
-        })
-        .collect();
+    let mut terms: Vec<String> =
+        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
+            .into_iter()
+            .filter(|tok| {
+                tok.chars().count() >= 4
+                    && !critic::is_generic_concept_token(tok)
+                    && (tok.contains('_')
+                        || user.contains(tok)
+                        || user.iter().any(|u| u.contains(tok.as_str())))
+            })
+            .collect();
     terms.sort();
     terms.dedup();
     terms.truncate(8);
@@ -1453,7 +1472,7 @@ fn conceptual_fanout_pass(
         hits.extend(pattern_hits_for_symbol(
             store,
             options.lang_filter.as_deref(),
-            &symbol,
+            symbol,
         )?);
     }
     Ok(hits)
@@ -1494,7 +1513,6 @@ fn pattern_hits_for_symbol(
     }
     Ok(hits)
 }
-
 
 fn cascade_stopword(term: &str) -> bool {
     // English function words that match too many files and stall discovery
@@ -1565,9 +1583,11 @@ fn literal_prefilter_pass(
         let rare: Vec<_> = terms
             .iter()
             .copied()
-            .filter(|term| match store.trigram_df().min_df(store, term) {
-                Some(df) if df > CASCADE_COMMON_DF => false,
-                _ => true,
+            .filter(|term| {
+                !matches!(
+                    store.trigram_df().min_df(store, term),
+                    Some(df) if df > CASCADE_COMMON_DF
+                )
             })
             .collect();
         if rare.is_empty() {
@@ -1582,16 +1602,19 @@ fn literal_prefilter_pass(
     // leftover English term and *then* merging is equivalent for the 100
     // files kept, and it was the unique-hybrid p90: common terms still paid
     // a full literal_pass after the shortlist was already full.
-    terms.sort_by(|left, right| {
-        let left_extra = user_first.is_some_and(|user| !user.contains(*left));
-        let right_extra = user_first.is_some_and(|user| !user.contains(*right));
-        left_extra
-            .cmp(&right_extra)
-            .then_with(|| {
-                discovery_df(store, left).cmp(&discovery_df(store, right))
-            })
-            .then_with(|| left.cmp(right))
-    });
+    // Precompute sort keys once: the old comparator ran df lookups per
+    // comparison (O(n log n) probes) and dragged the df chain into the sort
+    // monomorphization (~23KiB of .text). Keys are deterministic within a
+    // query and the order is total, so decorate-sort-undecorate is identical.
+    let mut keyed: Vec<(bool, i64, &String)> = terms
+        .iter()
+        .map(|term| {
+            let extra = user_first.is_some_and(|user| !user.contains(*term));
+            (extra, discovery_df(store, term), *term)
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+    terms = keyed.into_iter().map(|(_, _, term)| term).collect();
     // Cached-only (one-shot literal discipline): the prefilter already
     // handles `None` via the per-term `literal_pass` fallback below.
     let corpus = store.line_corpus_if_cached()?;
@@ -1727,8 +1750,13 @@ fn structural_index_pass(
         );
         // Same row budget as the symbol/caller/anchor passes: enough to score
         // inside the 100-file cascade, never the whole node population.
-        let pattern_row_budget = crate::search::passes::bmh::retained_limit(options).max(32).min(500);
-        store.pattern_nodes_matching_for_files(&signatures, lang, allowed_files, pattern_row_budget)?
+        let pattern_row_budget = crate::search::passes::bmh::retained_limit(options).clamp(32, 500);
+        store.pattern_nodes_matching_for_files(
+            &signatures,
+            lang,
+            allowed_files,
+            pattern_row_budget,
+        )?
     };
     for (row, signature) in rows {
         if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {

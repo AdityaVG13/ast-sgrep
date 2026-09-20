@@ -99,8 +99,14 @@ fn outline_human_mode_prints_symbol_lines() {
     let session = outline_session();
     let (code, stdout, stderr) = run_outline(&session, &["src/a.rs"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("one"), "human view names symbols: {stdout:?}");
-    assert!(stdout.contains("two"), "human view names symbols: {stdout:?}");
+    assert!(
+        stdout.contains("one"),
+        "human view names symbols: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("two"),
+        "human view names symbols: {stdout:?}"
+    );
     assert!(
         stdout.contains("function"),
         "human view shows the stored kind vocabulary: {stdout:?}"

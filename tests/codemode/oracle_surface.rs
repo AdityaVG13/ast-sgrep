@@ -23,8 +23,8 @@ use ast_sgrep_codemode::{
 };
 use ast_sgrep_plugins::{MissReason, OutputFormat};
 use ast_sgrep_testkit::{
-    batch_request, canonicalize_text, catalog_call, config_at, sample_file, sample_root, session_at,
-    Scrubber,
+    batch_request, canonicalize_text, catalog_call, config_at, sample_file, sample_root,
+    session_at, Scrubber,
 };
 use serde_json::{json, Value};
 
@@ -44,28 +44,24 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
     // Rust-side pin for the R-CM-ROOT-POLICY contract NAPI inherits.
     let temp = tempfile::tempdir().expect("tempdir");
     let canonical = temp.path().canonicalize().expect("canonical");
-    let relative = ast_sgrep_codemode::CodeModeSession::new(
-        ast_sgrep_codemode::SessionConfig {
-            root: temp.path().to_path_buf(),
-            index_path: Some(std::path::PathBuf::from("custom-index")),
-            limit: 5,
-            use_embed: false,
-            default_format: OutputFormat::AgentCapsule,
-        },
-    );
+    let relative = ast_sgrep_codemode::CodeModeSession::new(ast_sgrep_codemode::SessionConfig {
+        root: temp.path().to_path_buf(),
+        index_path: Some(std::path::PathBuf::from("custom-index")),
+        limit: 5,
+        use_embed: false,
+        default_format: OutputFormat::AgentCapsule,
+    });
     assert_eq!(
         relative.config().index_path,
         Some(canonical.join("custom-index"))
     );
-    let absolute = ast_sgrep_codemode::CodeModeSession::new(
-        ast_sgrep_codemode::SessionConfig {
-            root: temp.path().to_path_buf(),
-            index_path: Some(std::path::PathBuf::from("/tmp/abs-index-pass2")),
-            limit: 5,
-            use_embed: false,
-            default_format: OutputFormat::AgentCapsule,
-        },
-    );
+    let absolute = ast_sgrep_codemode::CodeModeSession::new(ast_sgrep_codemode::SessionConfig {
+        root: temp.path().to_path_buf(),
+        index_path: Some(std::path::PathBuf::from("/tmp/abs-index-pass2")),
+        limit: 5,
+        use_embed: false,
+        default_format: OutputFormat::AgentCapsule,
+    });
     assert_eq!(
         absolute.config().index_path,
         Some(std::path::PathBuf::from("/tmp/abs-index-pass2"))
@@ -79,7 +75,10 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
         let err = session
             .call(unknown, json!({"query": "x"}))
             .expect_err("unknown tool");
-        assert!(matches!(err, CallError::UnknownTool(_)), "tool {unknown:?}: got {err:?}");
+        assert!(
+            matches!(err, CallError::UnknownTool(_)),
+            "tool {unknown:?}: got {err:?}"
+        );
     }
     let invalid: &[(&str, Value)] = &[
         ("catalog_search", json!({})),
@@ -99,12 +98,14 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
     ];
     for (tool, args) in invalid {
         let err = session.call(tool, args.clone()).expect_err("invalid args");
-        assert!(matches!(err, CallError::InvalidArgs(_)), "tool {tool}: got {err:?}");
+        assert!(
+            matches!(err, CallError::InvalidArgs(_)),
+            "tool {tool}: got {err:?}"
+        );
     }
     let mut bad = catalog_call("u", "search");
     bad.tool = "no-such-tool".to_string();
-    let dispatched =
-        run_batch(config_at(temp.path()), &batch_request(vec![bad])).expect("runs");
+    let dispatched = run_batch(config_at(temp.path()), &batch_request(vec![bad])).expect("runs");
     assert!(!dispatched.all_ok);
     assert!(!dispatched.results[0].ok);
     assert!(dispatched.results[0].error.is_some());
@@ -186,7 +187,7 @@ fn names_aliases_catalog_lookup_and_miss_labels_resolve_exactly() {
         assert_eq!(ToolName::parse(raw), *expected, "raw={raw:?}");
     }
     for def in tool_catalog() {
-        let parsed = ToolName::parse(&def.name).expect("catalog name parses");
+        let parsed = ToolName::parse(def.name).expect("catalog name parses");
         assert_eq!(parsed.as_str(), def.name);
     }
 
@@ -210,7 +211,12 @@ fn names_aliases_catalog_lookup_and_miss_labels_resolve_exactly() {
             MissReason::ChannelUnavailable.as_str(),
             MissReason::NoMatch.as_str(),
         ],
-        ["empty_index", "filters_excluded_all", "channel_unavailable", "no_match"]
+        [
+            "empty_index",
+            "filters_excluded_all",
+            "channel_unavailable",
+            "no_match"
+        ]
     );
     assert_eq!(
         MissReason::EmptyIndex.next_step(None),
@@ -289,8 +295,14 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
         let twice = canonicalize_text(&once);
         assert_eq!(once, twice, "not idempotent for {input:?}");
     }
-    assert_eq!(canonicalize_text("  indented\n\ttabbed  \n"), "  indented\n\ttabbed\n");
-    assert_eq!(canonicalize_text("héllo  \r\nwörld\t\n\n\n"), "héllo\nwörld\n");
+    assert_eq!(
+        canonicalize_text("  indented\n\ttabbed  \n"),
+        "  indented\n\ttabbed\n"
+    );
+    assert_eq!(
+        canonicalize_text("héllo  \r\nwörld\t\n\n\n"),
+        "héllo\nwörld\n"
+    );
 
     // Facet 3 (scrubber): version scrubs but schema_version survives;
     // UUIDs become placeholders; clean input and the none preset pass
@@ -303,7 +315,10 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
     assert!(uuid.contains("<UUID>"), "{uuid}");
     assert!(!uuid.contains("550e"), "{uuid}");
     assert_eq!(Scrubber::standard().apply("hello"), "hello");
-    assert_eq!(Scrubber::none().apply(r#"{"version": "2.0.0"}"#), r#"{"version": "2.0.0"}"#);
+    assert_eq!(
+        Scrubber::none().apply(r#"{"version": "2.0.0"}"#),
+        r#"{"version": "2.0.0"}"#
+    );
 
     // Facet 4 (empty edges): empty-plan and empty-batch runs fail with the
     // same discriminant on repeat (no state bleed); empty transform inputs
@@ -372,7 +387,9 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
     ]);
     let filter_args = json!({"hits": hits, "kind": "def", "path_contains": "src/", "min_score": 2.0, "limit": 10});
     let mut session = session_at(temp.path());
-    let direct = session.call("filter_hits", filter_args.clone()).expect("direct");
+    let direct = session
+        .call("filter_hits", filter_args.clone())
+        .expect("direct");
     assert_eq!(direct["hit_count"], json!(1));
     assert_eq!(direct["hits"][0]["file"], json!("src/a.rs"));
     let tight = session
@@ -402,18 +419,27 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
     assert!(batch.all_ok);
     assert_eq!(batch.results[0].value.as_ref().expect("value"), &direct);
     let projected = session
-        .call("select", json!({"value": {"a": 1, "b": 2}, "fields": ["a", "zzz"]}))
+        .call(
+            "select",
+            json!({"value": {"a": 1, "b": 2}, "fields": ["a", "zzz"]}),
+        )
         .expect("select");
     assert_eq!(projected, json!({"a": 1}));
     let truncated = session
-        .call("select", json!({"value": [{"a": 1}, {"a": 2}], "fields": ["a"], "limit": 1}))
+        .call(
+            "select",
+            json!({"value": [{"a": 1}, {"a": 2}], "fields": ["a"], "limit": 1}),
+        )
         .expect("select limit");
     assert_eq!(truncated, json!([{"a": 1}]));
     let via_session = session
         .call("catalog_search", json!({"query": "chain"}))
         .expect("catalog via session");
     let direct_tools = catalog_search("chain");
-    assert_eq!(via_session["tools"].as_array().expect("array").len(), direct_tools.len());
+    assert_eq!(
+        via_session["tools"].as_array().expect("array").len(),
+        direct_tools.len()
+    );
     assert_eq!(via_session["tools"][0]["name"], json!(direct_tools[0].name));
     assert!(!direct_tools.is_empty());
     let catalog_names: Vec<&str> = tool_catalog().iter().map(|t| t.name).collect();

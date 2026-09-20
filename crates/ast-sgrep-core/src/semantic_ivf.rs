@@ -51,8 +51,7 @@ pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
 fn is_in_memory_db(index_db: &Path) -> bool {
     let text = index_db.to_string_lossy();
     text == ":memory:"
-        || text.starts_with("file:")
-        && (text.contains("mode=memory") || text.contains("::memory:"))
+        || text.starts_with("file:") && (text.contains("mode=memory") || text.contains("::memory:"))
 }
 
 fn benign_invalidation_error(error: &std::io::Error) -> bool {

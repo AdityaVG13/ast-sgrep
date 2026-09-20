@@ -189,6 +189,7 @@ pub(crate) fn sg_preprocess_pattern(lang: Language, pattern: &str) -> String {
 /// - n==1/2 (`µA`, `µµA`): meta iff T = `[A-Z_][A-Z_0-9]*`;
 /// - n==3 (`µµµA`): meta iff T empty or `[A-Z_0-9]+` (digit-led included);
 /// - n>=4 or a non-matching tail: NOT a meta — matched literally.
+///
 /// Validation runs over the ENTIRE token text, so a token continuing past
 /// the prefix with an identifier char (`µAble`) is a LITERAL. A µ-run
 /// immediately followed by `$`s is ONE combined run (preprocessing maps
@@ -223,7 +224,7 @@ pub(crate) fn expando_meta_spans(
             continue;
         }
         let mut run = 0usize;
-        while pattern[i + run..].chars().next() == Some(expando) {
+        while pattern[i + run..].starts_with(expando) {
             run += expando.len_utf8();
         }
         let mut run_count = run / expando.len_utf8();

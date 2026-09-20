@@ -38,11 +38,24 @@ fn limit_zero_remaps_to_default() {
     let bin = asgrep_bin();
     let root_arg = root.to_str().unwrap();
     // Flag form.
-    let output = run(&bin, &["--json", "--no-embed", "--limit", "0", "qqqxq_missing_zzz", root_arg]);
+    let output = run(
+        &bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--limit",
+            "0",
+            "qqqxq_missing_zzz",
+            root_arg,
+        ],
+    );
     assert_eq!(output.status.code(), Some(0));
     let value = parse_stdout(&output);
     assert_eq!(value["ok"], true, "{value}");
-    assert_eq!(value["limit"], 16, "limit 0 must remap to default 16: {value}");
+    assert_eq!(
+        value["limit"], 16,
+        "limit 0 must remap to default 16: {value}"
+    );
     // Env form (testkit run_env: hermetic scrub, then ASGREP_LIMIT wins).
     let output = run_env(
         &bin,
@@ -52,7 +65,10 @@ fn limit_zero_remaps_to_default() {
     assert_eq!(output.status.code(), Some(0));
     let value = parse_stdout(&output);
     assert_eq!(value["ok"], true, "{value}");
-    assert_eq!(value["limit"], 16, "ASGREP_LIMIT=0 must remap to default 16: {value}");
+    assert_eq!(
+        value["limit"], 16,
+        "ASGREP_LIMIT=0 must remap to default 16: {value}"
+    );
 }
 
 /// INTENT: Non-numeric and 2^64 --limit values are exit-1 usage.
@@ -65,7 +81,10 @@ fn limit_nonnumeric_and_overflow_are_usage() {
     let root_arg = root.to_str().unwrap().to_owned();
     // "abc" is not an integer; 2^64 overflows u64/usize parsing.
     for raw in ["abc", "18446744073709551616"] {
-        let output = run(&bin, &["--json", "--no-embed", "--limit", raw, "q", &root_arg]);
+        let output = run(
+            &bin,
+            &["--json", "--no-embed", "--limit", raw, "q", &root_arg],
+        );
         assert_usage_envelope(&output);
     }
 }
@@ -80,7 +99,17 @@ fn zero_size_windows_are_accepted() {
     let bin = asgrep_bin();
     let root_arg = root.to_str().unwrap().to_owned();
     for flag in ["--excerpt-lines", "--snippet-tokens", "--budget-tokens"] {
-        let output = run(&bin, &["--json", "--no-embed", flag, "0", "qqqxq_missing_zzz", &root_arg]);
+        let output = run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                flag,
+                "0",
+                "qqqxq_missing_zzz",
+                &root_arg,
+            ],
+        );
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -134,7 +163,19 @@ fn call_path_bounds_reject_zero_and_over_max() {
         ("--max-edges", "0"),
         ("--max-edges", "500001"),
     ] {
-        let output = run(&bin, &["--json", "--no-embed", "call-path", "foo", "bar", &root_arg, flag, raw]);
+        let output = run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "call-path",
+                "foo",
+                "bar",
+                &root_arg,
+                flag,
+                raw,
+            ],
+        );
         let value = assert_usage_envelope(&output);
         assert_eq!(value["command"], "call-path", "{value}");
     }
@@ -159,13 +200,7 @@ fn budget_cap_contract() {
     }
     // Arm 2 (absorbed: response_snippet_tokens_cap_names_65536).
     {
-        let value = usage_message(&[
-            "--json",
-            "--response-snippet-tokens",
-            "65537",
-            "query",
-            ".",
-        ]);
+        let value = usage_message(&["--json", "--response-snippet-tokens", "65537", "query", "."]);
         let msg = value["error"]["message"].as_str().expect("message");
         assert!(
             msg.contains("--response-snippet-tokens must not exceed 65536"),
@@ -220,7 +255,16 @@ fn limit_parse_contract() {
     {
         let (_temp, root) = indexed_project("wobblebuild_limneg");
         let bin = asgrep_bin();
-        let output = run(&bin, &["--json", "--no-embed", "--limit=-1", "q", root.to_str().unwrap()]);
+        let output = run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                "--limit=-1",
+                "q",
+                root.to_str().unwrap(),
+            ],
+        );
         assert_usage_envelope(&output);
     }
     // Arm 2 (absorbed: env_limit_garbage_is_usage). ASGREP_LIMIT feeds the
@@ -231,7 +275,12 @@ fn limit_parse_contract() {
         let bin = asgrep_bin();
         let output = run_env(
             &bin,
-            &["--json", "--no-embed", "qqqxq_missing_zzz", root.to_str().unwrap()],
+            &[
+                "--json",
+                "--no-embed",
+                "qqqxq_missing_zzz",
+                root.to_str().unwrap(),
+            ],
             &[("ASGREP_LIMIT", "abc")],
         );
         assert_usage_envelope(&output);
@@ -250,7 +299,17 @@ fn zero_window_contract() {
     // Zero is accepted (--ann-probes 0 is documented adaptive;
     // --rerank-top-k 0 is clamped downstream; --ann-threshold 0 disables).
     for flag in ["--ann-probes", "--rerank-top-k", "--ann-threshold"] {
-        let output = run(&bin, &["--json", "--no-embed", flag, "0", "qqqxq_missing_zzz", &root_arg]);
+        let output = run(
+            &bin,
+            &[
+                "--json",
+                "--no-embed",
+                flag,
+                "0",
+                "qqqxq_missing_zzz",
+                &root_arg,
+            ],
+        );
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -263,7 +322,14 @@ fn zero_window_contract() {
     for flag in ["--ann-threshold", "--rerank-top-k", "--ann-probes"] {
         let output = run(
             &bin,
-            &["--json", "--no-embed", flag, "99999999999999999999", "qqqxq_missing_zzz", &root_arg],
+            &[
+                "--json",
+                "--no-embed",
+                flag,
+                "99999999999999999999",
+                "qqqxq_missing_zzz",
+                &root_arg,
+            ],
         );
         assert_usage_envelope(&output);
     }

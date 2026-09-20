@@ -673,7 +673,8 @@ pub(crate) fn substitute_general_metavariables(
             // single-namespace placeholder); only `$$$NAME` lands in the
             // multi namespace.
             .filter(|_| (1..=3).contains(&dollars));
-        if let Some(name) = canonical {
+        {
+            let name = canonical?;
             if dollars == 3 {
                 multi_names.insert(name.to_string());
             }
@@ -688,8 +689,6 @@ pub(crate) fn substitute_general_metavariables(
                     break;
                 }
             }
-        } else {
-            return None;
         }
     }
     Some((out, placeholders, multi_names))

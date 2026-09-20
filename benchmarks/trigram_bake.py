@@ -71,7 +71,9 @@ def main(roots, min_count):
     print("// Static trigram occurrence counts, sorted by packed key (binary search).")
     print("// Rank semantics: HIGHER count = more common. Absent = rarest.")
     print("#[rustfmt::skip]")
-    print(f"pub(crate) const TRIGRAM_BAKE: [(u32, u32); {len(kept)}] = [")
+    # `static`, not `const`: a 1.1MB const array risks per-use copies and trips
+    # clippy::large_const_arrays; a static lives at one address by construction.
+    print(f"pub(crate) static TRIGRAM_BAKE: [(u32, u32); {len(kept)}] = [")
     for key in kept:
         print(f"    (0x{key:06x}, {counts[key]}),")
     print("];")

@@ -92,8 +92,16 @@ fn drill_modify_add(ctx: &DrillCtx) {
     // is not served, while the old hit set is intact.
     let stale = run_status(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(stale["file_count"], 2, "{stale}");
-    assert_eq!(stale["symbol_count"], baseline["symbol_count"], "{stale} vs {baseline}");
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:i4_modify_added"));
+    assert_eq!(
+        stale["symbol_count"], baseline["symbol_count"],
+        "{stale} vs {baseline}"
+    );
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:i4_modify_added",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
@@ -136,7 +144,10 @@ fn drill_add_file(ctx: &DrillCtx) {
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"),
         "beta.rs",
     );
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
 
     // CHANGE: a third file appears.
     fs::write(
@@ -147,14 +158,26 @@ fn drill_add_file(ctx: &DrillCtx) {
 
     // DETECT (stale): status still reports the old file count, the new
     // symbol is served nowhere, and outline refuses the unindexed path.
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:i4_add_gamma"));
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:i4_add_gamma",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
     );
     let stale_outline = run_outline(&ctx.bin, &ctx.index_s, &ctx.root_s, "gamma.rs");
-    assert_eq!(stale_outline.status.code(), Some(2), "unindexed path must refuse");
+    assert_eq!(
+        stale_outline.status.code(),
+        Some(2),
+        "unindexed path must refuse"
+    );
     assert_eq!(parse_stdout(&stale_outline)["ok"], false);
 
     // REINDEX → SERVE: the added file is served exactly.
@@ -176,8 +199,15 @@ fn drill_add_file(ctx: &DrillCtx) {
     assert_eq!(outline.status.code(), Some(0));
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["i4_add_gamma"], "{outline_value}");
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 3);
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["i4_add_gamma"],
+        "{outline_value}"
+    );
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        3
+    );
 }
 
 // why: DELETE lifecycle incl. stale-still-served no-implicit-refresh proof.
@@ -199,7 +229,10 @@ fn drill_delete_file(ctx: &DrillCtx) {
     // symbol is STILL served — no implicit refresh happened.
     let stale = run_status(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(stale["file_count"], 2, "{stale}");
-    assert_eq!(stale["symbol_count"], baseline["symbol_count"], "{stale} vs {baseline}");
+    assert_eq!(
+        stale["symbol_count"], baseline["symbol_count"],
+        "{stale} vs {baseline}"
+    );
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"),
         "beta.rs",
@@ -209,7 +242,12 @@ fn drill_delete_file(ctx: &DrillCtx) {
     // is intact.
     let rebuilt = run_reindex(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(rebuilt["files_indexed"], 1, "{rebuilt}");
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:beta_one",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
@@ -237,16 +275,26 @@ fn drill_rename_file(ctx: &DrillCtx) {
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"),
         "beta.rs",
     );
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
 
     // CHANGE: beta moves to a new path with identical content.
     fs::rename(ctx.root.join("beta.rs"), ctx.root.join("beta_moved.rs")).expect("rename beta");
 
     // DETECT (stale): the hit is still served at the OLD path only.
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
     let stale = run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one");
     assert_served_only_at(&stale, "beta.rs");
-    assert_eq!(hits_in(&stale, "beta_moved.rs"), 0, "unrefreshed new path: {stale}");
+    assert_eq!(
+        hits_in(&stale, "beta_moved.rs"),
+        0,
+        "unrefreshed new path: {stale}"
+    );
 
     // REINDEX → SERVE: the hit follows the new path exactly.
     let rebuilt = run_reindex(&ctx.bin, &ctx.index_s, &ctx.root_s);
@@ -261,8 +309,15 @@ fn drill_rename_file(ctx: &DrillCtx) {
     assert_eq!(outline.status.code(), Some(0));
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["beta_one"], "{outline_value}");
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["beta_one"],
+        "{outline_value}"
+    );
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
 }
 
 // why: MODIFY-remove lifecycle: stale old-served/new-absent → swapped after
@@ -287,21 +342,37 @@ fn drill_modify_remove(ctx: &DrillCtx) {
     // is served nowhere; status counts are still pre-change.
     let stale = run_status(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(stale["file_count"], 2, "{stale}");
-    assert_eq!(stale["symbol_count"], baseline["symbol_count"], "{stale} vs {baseline}");
+    assert_eq!(
+        stale["symbol_count"], baseline["symbol_count"],
+        "{stale} vs {baseline}"
+    );
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
     );
-    assert_served_nowhere(
-        &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:i4_modify_replacement"),
-    );
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:i4_modify_replacement",
+    ));
 
     // REINDEX → SERVE: old token gone, new token served, outline exact.
     let rebuilt = run_reindex(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(rebuilt["files_indexed"], 2, "{rebuilt}");
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:alpha_one",
+    ));
     assert_served_only_at(
-        &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:i4_modify_replacement"),
+        &run_search(
+            &ctx.bin,
+            &ctx.index_s,
+            &ctx.root_s,
+            "word:i4_modify_replacement",
+        ),
         "alpha.rs",
     );
     assert_served_only_at(
@@ -317,7 +388,10 @@ fn drill_modify_remove(ctx: &DrillCtx) {
         vec!["i4_modify_replacement"],
         "{outline_value}"
     );
-    assert_eq!(run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"], 2);
+    assert_eq!(
+        run_status(&ctx.bin, &ctx.index_s, &ctx.root_s)["file_count"],
+        2
+    );
 }
 
 // why: single dispatch over the five drill rows so the matrix test cannot
@@ -463,7 +537,11 @@ fn poll_search_until(
 /// (I4 MERGE→matrix/drill-lifecycle ×5).
 #[test]
 fn matrix_drill_lifecycle() {
-    assert_eq!(DrillKind::ALL.len(), 5, "the I4 single-kind set is 5 drills");
+    assert_eq!(
+        DrillKind::ALL.len(),
+        5,
+        "the I4 single-kind set is 5 drills"
+    );
     for kind in DrillKind::ALL {
         let ctx = DrillCtx::fresh();
         run_drill(*kind, &ctx);

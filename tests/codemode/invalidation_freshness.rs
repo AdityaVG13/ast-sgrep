@@ -76,13 +76,19 @@ fn m_stale_pinned_until_stamp() {
         write_py(root.path(), "alpha.py", BETA);
         external_reindex(root.path(), &index_db_path(&index_dir), "alpha.py");
         let after = generation(&session);
-        assert_ne!(before, after, "durable external write must stamp a new epoch");
+        assert_ne!(
+            before, after,
+            "durable external write must stamp a new epoch"
+        );
     }
     // LEG 3 — post-stamp search reopens: BETA served, ALPHA evicted.
     {
         let (root, index_dir, mut session) = setup();
         let warm = session
-            .call("search", json!({"query": format!("word:{ALPHA}"), "limit": 8}))
+            .call(
+                "search",
+                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
+            )
             .expect("warm search");
         assert!(hits_file(&warm, "alpha.py"), "{warm}");
 
@@ -90,11 +96,17 @@ fn m_stale_pinned_until_stamp() {
         external_reindex(root.path(), &index_db_path(&index_dir), "alpha.py");
 
         let fresh = session
-            .call("search", json!({"query": format!("word:{BETA}"), "limit": 8}))
+            .call(
+                "search",
+                json!({"query": format!("word:{BETA}"), "limit": 8}),
+            )
             .expect("fresh search");
         assert!(hits_file(&fresh, "alpha.py"), "{fresh}");
         let gone = session
-            .call("search", json!({"query": format!("word:{ALPHA}"), "limit": 8}))
+            .call(
+                "search",
+                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
+            )
             .expect("evicted search");
         assert!(hit_files(&gone).is_empty(), "{gone}");
     }
@@ -141,14 +153,14 @@ fn m_render_never_serve_stale() {
         let (root, index_dir, mut session) = setup();
         let args = json!({"query": format!("word:{ALPHA}"), "limit": 8});
         session.call("search", args.clone()).expect("warm search");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
 
         write_py(root.path(), "alpha.py", BETA);
         external_reindex(root.path(), &index_db_path(&index_dir), "alpha.py");
 
-        assert!(matches!(session.peek_cached_search(&args), None));
+        assert!(session.peek_cached_search(&args).is_none());
         session.call("search", args.clone()).expect("reopen search");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
     }
     // LEG 2 — delete-refresh trigger: warm render drops, post-delete search
     // serves freshly computed emptiness, re-add repopulates.
@@ -157,11 +169,11 @@ fn m_render_never_serve_stale() {
         let args = json!({"query": format!("word:{ALPHA}"), "limit": 8});
         let warm = session.call("search", args.clone()).expect("warm search");
         assert!(hits_file(&warm, "alpha.py"), "{warm}");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
 
         fs::remove_file(root.path().join("alpha.py")).expect("delete fixture");
         refresh(&mut session, &["alpha.py"]);
-        assert!(matches!(session.peek_cached_search(&args), None));
+        assert!(session.peek_cached_search(&args).is_none());
         let fresh = session
             .call("search", args.clone())
             .expect("post-delete search");
@@ -169,12 +181,12 @@ fn m_render_never_serve_stale() {
 
         write_py(root.path(), "alpha.py", ALPHA);
         refresh(&mut session, &["alpha.py"]);
-        assert!(matches!(session.peek_cached_search(&args), None));
+        assert!(session.peek_cached_search(&args).is_none());
         let revived = session
             .call("search", args.clone())
             .expect("post-add search");
         assert!(hits_file(&revived, "alpha.py"), "{revived}");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
     }
     // LEG 3 — modify-refresh trigger: cache answers stale pre-refresh, drops
     // on refresh, repopulates with freshly computed emptiness.
@@ -186,25 +198,27 @@ fn m_render_never_serve_stale() {
             hit_name_set(&warm),
             BTreeSet::from(["alpha.py".to_string()])
         );
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
 
         write_py(root.path(), "alpha.py", BETA);
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
 
         refresh(&mut session, &["alpha.py"]);
-        assert!(matches!(session.peek_cached_search(&args), None));
+        assert!(session.peek_cached_search(&args).is_none());
 
-        let fresh = session.call("search", args.clone()).expect("post-drill search");
+        let fresh = session
+            .call("search", args.clone())
+            .expect("post-drill search");
         assert!(hit_name_set(&fresh).is_empty());
         assert_eq!(hit_bytes(&fresh), b"".as_slice());
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
 
         let beta_args = json!({"query": format!("word:{BETA}"), "limit": 8});
         let beta = session
             .call("search", beta_args.clone())
             .expect("beta search");
         assert_eq!(hit_bytes(&beta), b"alpha.py".as_slice());
-        assert!(matches!(session.peek_cached_search(&beta_args), Some(_)));
+        assert!(session.peek_cached_search(&beta_args).is_some());
     }
 }
 
@@ -292,7 +306,7 @@ fn m_pure_leaves_epoch_and_cache() {
         let (_root, _index, mut session) = setup();
         let args = json!({"query": format!("word:{ALPHA}"), "limit": 8});
         session.call("search", args.clone()).expect("warm search");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
         let stamp = generation(&session);
 
         let edited = session
@@ -304,20 +318,22 @@ fn m_pure_leaves_epoch_and_cache() {
         assert_eq!(edited["ok"], true);
         assert_eq!(edited["changed"], 0);
         assert_eq!(generation(&session), stamp);
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
     }
     // LEG 2 — pure tools never touch the index or the warm cache.
     {
         let (_root, _index, mut session) = setup();
         let args = json!({"query": format!("word:{ALPHA}"), "limit": 8});
         let first = session.call("search", args.clone()).expect("warm search");
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
         let stamp = generation(&session);
 
         let found = session
             .call("catalog_search", json!({"query": "index"}))
             .expect("catalog_search");
-        assert!(found["tools"].as_array().is_some_and(|tools| !tools.is_empty()));
+        assert!(found["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()));
         session
             .call("catalog_describe", json!({"name": "search"}))
             .expect("catalog_describe");
@@ -332,7 +348,7 @@ fn m_pure_leaves_epoch_and_cache() {
             .expect("select");
 
         assert_eq!(generation(&session), stamp);
-        assert!(matches!(session.peek_cached_search(&args), Some(_)));
+        assert!(session.peek_cached_search(&args).is_some());
     }
 }
 
@@ -364,5 +380,5 @@ fn index_repo_arg_conflicts_fail_with_other_discriminant() {
     assert!(matches!(traversal, CallError::Other(_)), "{traversal:?}");
 
     assert_eq!(generation(&session), stamp);
-    assert!(matches!(session.peek_cached_search(&args), Some(_)));
+    assert!(session.peek_cached_search(&args).is_some());
 }

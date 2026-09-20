@@ -1,4 +1,9 @@
+#![allow(unused_imports)]
 //! Shared kit for the MCP error-API suites (`error_api_pass1`–`error_api_pass4`).
+//!
+//! The `allow(unused_imports)` is load-bearing (mirrors core's kit): each pass
+//! file uses a subset of the re-exports, and an import unused in one target
+//! must not fail another (this bit --fix once: do not "clean" it).
 //!
 //! Thin facade: builders, extractors, shape asserts, fixtures, and the
 //! timeout-bounded one-shot drivers come from `ast_sgrep_testkit`

@@ -49,9 +49,7 @@ fn m7_full_arcs_per_delta_class() {
         let keep_before = session.search_text("alpha_marker");
         assert_hit_path_set(&parse(&keep_before), &["a.rs"]);
         let status_before = session.status_text();
-        let gen_before = parse(&status_before)["writer_generation"]
-            .as_u64()
-            .unwrap();
+        let gen_before = parse(&status_before)["writer_generation"].as_u64().unwrap();
         assert_ne!(gen_before, 0);
         assert_eq!(parse(&status_before)["file_count"], 1);
 
@@ -102,9 +100,7 @@ fn m7_full_arcs_per_delta_class() {
         let old_before = session.search_text("quarry_sphinx");
         assert_hit_path_set(&parse(&old_before), &["a.rs"]);
         let status_before = session.status_text();
-        let gen_before = parse(&status_before)["writer_generation"]
-            .as_u64()
-            .unwrap();
+        let gen_before = parse(&status_before)["writer_generation"].as_u64().unwrap();
 
         std::fs::write(temp.path().join("a.rs"), "fn vortex_elm() {}\n").unwrap();
 
@@ -137,7 +133,10 @@ fn m7_full_arcs_per_delta_class() {
         assert_miss_envelope(&parse(&gone), "no_match");
         let found = session.search_text("vortex_elm");
         assert_hit_path_set(&parse(&found), &["a.rs"]);
-        assert_ne!(found, old_before, "fresh bytes must differ from stale bytes");
+        assert_ne!(
+            found, old_before,
+            "fresh bytes must differ from stale bytes"
+        );
         assert_eq!(
             session.search_text("vortex_elm"),
             found,
@@ -160,9 +159,7 @@ fn m7_full_arcs_per_delta_class() {
         assert_hit_path_set(&parse(&keep_before), &["keep.rs"]);
         let status_before = session.status_text();
         assert_eq!(parse(&status_before)["file_count"], 2);
-        let gen_before = parse(&status_before)["writer_generation"]
-            .as_u64()
-            .unwrap();
+        let gen_before = parse(&status_before)["writer_generation"].as_u64().unwrap();
 
         std::fs::remove_file(temp.path().join("drop.rs")).unwrap();
 
@@ -209,9 +206,7 @@ fn m7_full_arcs_per_delta_class() {
         let stale_before = session.search_text("plumb_kiosk");
         assert_hit_path_set(&parse(&stale_before), &["old.rs"]);
         let status_before = session.status_text();
-        let gen_before = parse(&status_before)["writer_generation"]
-            .as_u64()
-            .unwrap();
+        let gen_before = parse(&status_before)["writer_generation"].as_u64().unwrap();
 
         std::fs::rename(temp.path().join("old.rs"), temp.path().join("new.rs")).unwrap();
 
@@ -238,7 +233,10 @@ fn m7_full_arcs_per_delta_class() {
 
         let moved = session.search_text("plumb_kiosk");
         assert_hit_path_set(&parse(&moved), &["new.rs"]);
-        assert_ne!(moved, stale_before, "fresh bytes must differ from stale bytes");
+        assert_ne!(
+            moved, stale_before,
+            "fresh bytes must differ from stale bytes"
+        );
         assert_eq!(
             session.search_text("plumb_kiosk"),
             moved,
@@ -314,11 +312,7 @@ fn drill_add_then_delete_before_refresh_is_net_zero() {
     assert_eq!(status_before["file_count"], 1, "{status_before:#}");
 
     // CHANGE then anti-change: add a file, then delete it before refresh.
-    std::fs::write(
-        temp.path().join("tmp.rs"),
-        "fn quixotic_zebroid() {}\n",
-    )
-    .unwrap();
+    std::fs::write(temp.path().join("tmp.rs"), "fn quixotic_zebroid() {}\n").unwrap();
     std::fs::remove_file(temp.path().join("tmp.rs")).unwrap();
 
     // DETECT: the never-indexed symbol misses and counts are untouched.

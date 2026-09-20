@@ -623,7 +623,11 @@ fn literal_answers_prefer_use_over_mention_and_reach_definitions() {
     assert!(
         first.file.ends_with("src/uses.rs"),
         "literal answer must prefer code over fixture/comments; got {:?}",
-        literal.hits.iter().map(|h| (h.file.clone(), h.excerpt.clone())).collect::<Vec<_>>()
+        literal
+            .hits
+            .iter()
+            .map(|h| (h.file.clone(), h.excerpt.clone()))
+            .collect::<Vec<_>>()
     );
     assert!(
         !first.excerpt.trim_start().starts_with("//"),
@@ -647,7 +651,10 @@ fn literal_answers_prefer_use_over_mention_and_reach_definitions() {
         first_word.symbol.as_deref(),
         Some("NeedleProbe"),
         "word:<Identifier> must surface the declaration first; got {:?}",
-        word.hits.iter().map(|h| (h.symbol.clone(), h.file.clone())).take(4).collect::<Vec<_>>()
+        word.hits
+            .iter()
+            .map(|h| (h.symbol.clone(), h.file.clone()))
+            .take(4)
+            .collect::<Vec<_>>()
     );
 }
-

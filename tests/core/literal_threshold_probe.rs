@@ -60,7 +60,7 @@ fn threshold_probe_runs_once_per_literal_pass_call() {
     // observable effect) and leave cost measurement to the flame harness.
     let parsed = ParsedQuery::literal("zebra_here");
     for _ in 0..50 {
-        let hits = literal_pass(searcher.store(), &searcher.options(), &parsed).unwrap();
+        let hits = literal_pass(searcher.store(), searcher.options(), &parsed).unwrap();
         assert!(!hits.is_empty());
     }
 }

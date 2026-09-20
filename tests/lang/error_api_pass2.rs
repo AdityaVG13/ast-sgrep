@@ -60,7 +60,10 @@ fn detect_some_always_parses_ok() {
     for (ext, lang) in Language::SOURCE_EXTENSIONS {
         let rel = format!("n.{ext}");
         assert_eq!(detect_language(Path::new(&rel), None), Some(*lang));
-        assert!(registry.parse(*lang, "{{{{\n\x00\x01garbage").is_ok(), "{lang}");
+        assert!(
+            registry.parse(*lang, "{{{{\n\x00\x01garbage").is_ok(),
+            "{lang}"
+        );
     }
     // Undetectable input propagates as None through detection, never a guess.
     assert!(detect_language(Path::new("n.fortran"), None).is_none());
@@ -98,7 +101,10 @@ fn unindexable_propagates_to_gate_denial_then_ok_match() {
     for pattern in ["fn $N($$$) { $B }", "fetch()?.$M($$$A)", "a.b($$$C).d()"] {
         assert!(cached_pattern_signatures(pattern).is_none(), "{pattern}");
         assert!(!index_can_serve_pattern(pattern, &[]), "{pattern}");
-        assert!(match_pattern(Language::Rust, "fn foo() { foo(1); }", pattern).is_ok(), "{pattern}");
+        assert!(
+            match_pattern(Language::Rust, "fn foo() { foo(1); }", pattern).is_ok(),
+            "{pattern}"
+        );
     }
     // Positive control: an indexable shape is serveable AND matchable.
     let sigs = cached_pattern_signatures("foo($$$)").unwrap();
@@ -124,7 +130,11 @@ fn prefilter_none_still_scans() {
     assert!(hits.is_empty());
     // Positive control: a concrete literal both prefilters and matches.
     assert_eq!(required_pattern_literal("foo($$$)").as_deref(), Some("foo"));
-    assert!(!match_pattern(Language::Rust, "fn f() { foo(1); }", "foo($$$)").unwrap().is_empty());
+    assert!(
+        !match_pattern(Language::Rust, "fn f() { foo(1); }", "foo($$$)")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// E2-LANG-05: match is total on user input. Hostile pattern x hostile
@@ -136,15 +146,38 @@ fn prefilter_none_still_scans() {
 #[test]
 fn match_never_errs_or_panics_on_hostile_input() {
     let patterns = [
-        ";;", "->", "::", ")))(((", "\x00\x01", "$Ü", "µµµ$A", "$A$$B", "a?.b($X)",
-        "$O.out\n.$M($A)", "if ($COND) { $A; $B }", "fn $N($$$) { $B }",
-        "namespace A { f(); $B }", "C::$s = 5", "del $X;", "return($X)", "\u{feff}foo",
+        ";;",
+        "->",
+        "::",
+        ")))(((",
+        "\x00\x01",
+        "$Ü",
+        "µµµ$A",
+        "$A$$B",
+        "a?.b($X)",
+        "$O.out\n.$M($A)",
+        "if ($COND) { $A; $B }",
+        "fn $N($$$) { $B }",
+        "namespace A { f(); $B }",
+        "C::$s = 5",
+        "del $X;",
+        "return($X)",
+        "\u{feff}foo",
     ];
-    let sources = ["", "{{{{ !!", "\x00\x01\x02", "fn f() { let x = (((1; }", ";;;\n;;"];
+    let sources = [
+        "",
+        "{{{{ !!",
+        "\x00\x01\x02",
+        "fn f() { let x = (((1; }",
+        ";;;\n;;",
+    ];
     for lang in Language::all() {
         for pattern in patterns {
             for source in sources {
-                assert!(match_pattern(*lang, source, pattern).is_ok(), "{lang} {pattern:?}");
+                assert!(
+                    match_pattern(*lang, source, pattern).is_ok(),
+                    "{lang} {pattern:?}"
+                );
                 assert!(
                     match_literal_pattern(*lang, source, pattern).is_ok(),
                     "{lang} {pattern:?}"
@@ -168,8 +201,14 @@ fn garbage_propagates_ok_empty_through_extract_and_match() {
         let extraction = registry.parse(*lang, "{{{{ !! not code").unwrap();
         assert!(extraction.symbols.is_empty(), "{lang}");
         assert!(!extraction.depth_truncated, "{lang}");
-        assert!(match_pattern(*lang, "{{{{ !! not code", "foo").is_ok(), "{lang}");
-        assert!(match_literal_pattern(*lang, "{{{{ !! not code", "foo").is_ok(), "{lang}");
+        assert!(
+            match_pattern(*lang, "{{{{ !! not code", "foo").is_ok(),
+            "{lang}"
+        );
+        assert!(
+            match_literal_pattern(*lang, "{{{{ !! not code", "foo").is_ok(),
+            "{lang}"
+        );
     }
 }
 
@@ -182,12 +221,18 @@ fn garbage_propagates_ok_empty_through_extract_and_match() {
 #[test]
 fn depth_breach_propagates_loud_flag_not_err() {
     let registry = ParserRegistry::new();
-    let deep_src = format!("fn f() {{ let x = {}1{}; }}", "(".repeat(300), ")".repeat(300));
+    let deep_src = format!(
+        "fn f() {{ let x = {}1{}; }}",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
     let extraction = registry.parse(Language::Rust, &deep_src).unwrap();
     assert!(extraction.depth_truncated);
     assert!(match_pattern(Language::Rust, &deep_src, "f").is_ok());
     // Shallow control: same stages, flag clear.
-    let shallow = registry.parse(Language::Rust, "fn f() { let x = (1 + (2 * 3)); }").unwrap();
+    let shallow = registry
+        .parse(Language::Rust, "fn f() { let x = (1 + (2 * 3)); }")
+        .unwrap();
     assert!(!shallow.depth_truncated);
 }
 
@@ -218,11 +263,21 @@ fn gate_denial_still_answers_via_walk() {
 #[test]
 fn fallback_loud_shapes_match_closed() {
     assert!(needs_ast_grep_fallback("greet($Ü)"));
-    assert!(match_pattern(Language::Rust, "fn f() { greet(x); }", "greet($Ü)").unwrap().is_empty());
+    assert!(
+        match_pattern(Language::Rust, "fn f() { greet(x); }", "greet($Ü)")
+            .unwrap()
+            .is_empty()
+    );
     assert!(!native_pattern_answerable(Language::Rust, ";;"));
-    assert!(match_pattern(Language::Rust, "fn f() {}", ";;").unwrap().is_empty());
+    assert!(match_pattern(Language::Rust, "fn f() {}", ";;")
+        .unwrap()
+        .is_empty());
     // Positive control: the same source answers a native shape.
-    assert!(!match_pattern(Language::Rust, "fn f() { greet(x); }", "greet($$$)").unwrap().is_empty());
+    assert!(
+        !match_pattern(Language::Rust, "fn f() { greet(x); }", "greet($$$)")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// E2-LANG-10: chain-span guards hold. Optional/member chains across the
@@ -242,8 +297,15 @@ fn chain_span_guards_hold() {
         (Language::Python, "a.b(1)\n", "a.b($X)"),
     ];
     for (lang, source, pattern) in cases {
-        assert!(match_pattern(lang, source, pattern).is_ok(), "{lang} {pattern}");
+        assert!(
+            match_pattern(lang, source, pattern).is_ok(),
+            "{lang} {pattern}"
+        );
     }
     // Positive control: a plain chain hit binds.
-    assert!(!match_pattern(Language::Rust, "fn f() { a.b(c); }", "a.b($X)").unwrap().is_empty());
+    assert!(
+        !match_pattern(Language::Rust, "fn f() { a.b(c); }", "a.b($X)")
+            .unwrap()
+            .is_empty()
+    );
 }

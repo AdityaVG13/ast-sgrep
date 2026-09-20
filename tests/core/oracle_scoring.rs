@@ -11,9 +11,9 @@ use ast_sgrep_core::intent::{
 };
 use ast_sgrep_core::rank::{
     best_symbol_score, best_symbol_score_normalized, coverage_symbol_score,
-    coverage_symbol_score_normalized, fuse_rrf, normalize_query_terms, rrf_score,
-    score_caller, score_caller_normalized, score_def, score_def_normalized, score_lexical_rrf,
-    score_symbol, LEXICAL_RRF_SCALE, RRF_K,
+    coverage_symbol_score_normalized, fuse_rrf, normalize_query_terms, rrf_score, score_caller,
+    score_caller_normalized, score_def, score_def_normalized, score_lexical_rrf, score_symbol,
+    LEXICAL_RRF_SCALE, RRF_K,
 };
 use ast_sgrep_core::search::{dedup_hits, SpanHitInput};
 use ast_sgrep_core::{
@@ -149,9 +149,18 @@ fn signal_ladder_confidence_and_dedup_merge() {
     // Empty in, empty out.
     assert!(dedup_hits(vec![]).is_empty());
     // Singletons keep their base confidence: exact .75 / structural .60 / semantic .35.
-    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 5.0)])[0].confidence, 0.75);
-    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Def, "a.rs", 1, 5.0)])[0].confidence, 0.60);
-    assert_eq!(dedup_hits(vec![mk_hit(HitKind::Embed, "a.rs", 1, 5.0)])[0].confidence, 0.35);
+    assert_eq!(
+        dedup_hits(vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 5.0)])[0].confidence,
+        0.75
+    );
+    assert_eq!(
+        dedup_hits(vec![mk_hit(HitKind::Def, "a.rs", 1, 5.0)])[0].confidence,
+        0.60
+    );
+    assert_eq!(
+        dedup_hits(vec![mk_hit(HitKind::Embed, "a.rs", 1, 5.0)])[0].confidence,
+        0.35
+    );
 
     // Same location merges: best score wins regardless of input order.
     let low = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
@@ -163,7 +172,10 @@ fn signal_ladder_confidence_and_dedup_merge() {
     let swapped = dedup_hits(vec![high, low]);
     assert_eq!(swapped.len(), 1);
     assert_eq!(swapped[0].score, 5.0);
-    assert_eq!(sorted_contributors(&merged[0]), sorted_contributors(&swapped[0]));
+    assert_eq!(
+        sorted_contributors(&merged[0]),
+        sorted_contributors(&swapped[0])
+    );
     assert_eq!(sorted_contributors(&merged[0]), vec!["asgrep", "def"]);
     // Agreement bonus: one extra contributor adds .08 to the exact base.
     assert!((merged[0].confidence - 0.83).abs() < 1e-12);
@@ -179,10 +191,16 @@ fn signal_ladder_confidence_and_dedup_merge() {
         HitKind::Embed,
     ];
     let four = dedup_hits(
-        kinds[..4].iter().map(|kind| mk_hit(*kind, "a.rs", 1, 2.0)).collect(),
+        kinds[..4]
+            .iter()
+            .map(|kind| mk_hit(*kind, "a.rs", 1, 2.0))
+            .collect(),
     );
     let eight = dedup_hits(
-        kinds.iter().map(|kind| mk_hit(*kind, "a.rs", 1, 2.0)).collect(),
+        kinds
+            .iter()
+            .map(|kind| mk_hit(*kind, "a.rs", 1, 2.0))
+            .collect(),
     );
     assert_eq!(four.len(), 1);
     assert_eq!(eight.len(), 1);
@@ -232,14 +250,13 @@ fn signal_ladder_confidence_and_dedup_merge() {
     assert_eq!(hit_why(&bare_caller), vec!["caller_edge"]);
     let mut noted = mk_hit(HitKind::Asgrep, "a.rs", 1, 1.0);
     noted.critic = vec![CriticNote::ChannelAgreement];
-    assert_eq!(hit_why(&noted), vec!["exact_text", "critic:channel_agreement"]);
+    assert_eq!(
+        hit_why(&noted),
+        vec!["exact_text", "critic:channel_agreement"]
+    );
 
     // format_hit_line: one hand-pinned prefix per kind.
-    assert_eq!(
-        format_hit_line(&mk_hit(HitKind::Asgrep, "f.rs", 1, 1.0))
-            .starts_with("ASGREP: "),
-        true
-    );
+    assert!(format_hit_line(&mk_hit(HitKind::Asgrep, "f.rs", 1, 1.0)).starts_with("ASGREP: "));
     let mut def = mk_hit(HitKind::Def, "f.rs", 1, 1.0);
     def.line_end = 2;
     def.excerpt = "exc".to_string();
@@ -276,32 +293,80 @@ fn signal_ladder_confidence_and_dedup_merge() {
 #[test]
 fn intent_classify_weights_routing_and_scoring() {
     // Mode prefixes route to fixed intents.
-    assert_eq!(classify(&ParsedQuery::parse("defs:foo")), QueryIntent::Symbol);
-    assert_eq!(classify(&ParsedQuery::parse("callers:Bar")), QueryIntent::Symbol);
-    assert_eq!(classify(&ParsedQuery::parse("imports:os")), QueryIntent::Symbol);
-    assert_eq!(classify(&ParsedQuery::parse("pattern:$A")), QueryIntent::Structural);
-    assert_eq!(classify(&ParsedQuery::parse("literal:Foo")), QueryIntent::Literal);
-    assert_eq!(classify(&ParsedQuery::parse("word:Foo")), QueryIntent::Literal);
-    assert_eq!(classify(&ParsedQuery::parse("regex:A+")), QueryIntent::Literal);
+    assert_eq!(
+        classify(&ParsedQuery::parse("defs:foo")),
+        QueryIntent::Symbol
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("callers:Bar")),
+        QueryIntent::Symbol
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("imports:os")),
+        QueryIntent::Symbol
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("pattern:$A")),
+        QueryIntent::Structural
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("literal:Foo")),
+        QueryIntent::Literal
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("word:Foo")),
+        QueryIntent::Literal
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("regex:A+")),
+        QueryIntent::Literal
+    );
     // Hybrid heuristics: quoted → literal; markers → structural; idents → symbol.
-    assert_eq!(classify(&ParsedQuery::parse("\"exact phrase\"")), QueryIntent::Literal);
-    assert_eq!(classify(&ParsedQuery::parse("foo {")), QueryIntent::Structural);
-    assert_eq!(classify(&ParsedQuery::parse("a => b")), QueryIntent::Structural);
-    assert_eq!(classify(&ParsedQuery::parse("foo_bar")), QueryIntent::Symbol);
+    assert_eq!(
+        classify(&ParsedQuery::parse("\"exact phrase\"")),
+        QueryIntent::Literal
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("foo {")),
+        QueryIntent::Structural
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("a => b")),
+        QueryIntent::Structural
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("foo_bar")),
+        QueryIntent::Symbol
+    );
     assert_eq!(classify(&ParsedQuery::parse("Foo")), QueryIntent::Symbol);
-    assert_eq!(classify(&ParsedQuery::parse("café_au_lait")), QueryIntent::Symbol);
+    assert_eq!(
+        classify(&ParsedQuery::parse("café_au_lait")),
+        QueryIntent::Symbol
+    );
     // Longer prose and empty queries fall through to conceptual.
-    assert_eq!(classify(&ParsedQuery::parse("hello world foo")), QueryIntent::Conceptual);
-    assert_eq!(classify(&ParsedQuery::parse("héllo wörld foo bar")), QueryIntent::Conceptual);
+    assert_eq!(
+        classify(&ParsedQuery::parse("hello world foo")),
+        QueryIntent::Conceptual
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("héllo wörld foo bar")),
+        QueryIntent::Conceptual
+    );
     assert_eq!(classify(&ParsedQuery::parse("")), QueryIntent::Conceptual);
-    assert_eq!(classify(&ParsedQuery::parse("   ")), QueryIntent::Conceptual);
+    assert_eq!(
+        classify(&ParsedQuery::parse("   ")),
+        QueryIntent::Conceptual
+    );
     assert_eq!(QueryIntent::Literal.as_str(), "literal");
     assert_eq!(QueryIntent::Symbol.as_str(), "symbol");
     assert_eq!(QueryIntent::Structural.as_str(), "structural");
     assert_eq!(QueryIntent::Conceptual.as_str(), "conceptual");
     // Determinism under repetition.
     for raw in ["defs:foo", "foo {", "\"q\"", "hello world foo", ""] {
-        assert_eq!(classify(&ParsedQuery::parse(raw)), classify(&ParsedQuery::parse(raw)));
+        assert_eq!(
+            classify(&ParsedQuery::parse(raw)),
+            classify(&ParsedQuery::parse(raw))
+        );
     }
 
     // Weight tables are hand-pinned; literal/structural use the uniform default.
@@ -331,8 +396,14 @@ fn intent_classify_weights_routing_and_scoring() {
             import: 0.5,
         }
     );
-    assert_eq!(default_weights(QueryIntent::Literal), ChannelWeights::default());
-    assert_eq!(default_weights(QueryIntent::Structural), ChannelWeights::default());
+    assert_eq!(
+        default_weights(QueryIntent::Literal),
+        ChannelWeights::default()
+    );
+    assert_eq!(
+        default_weights(QueryIntent::Structural),
+        ChannelWeights::default()
+    );
     // Without an override spec, weights_for is exactly the default table.
     std::env::remove_var("ASGREP_INTENT_WEIGHTS");
     for intent in [
@@ -428,8 +499,14 @@ fn intent_classify_weights_routing_and_scoring() {
         let pre = normalize_query_terms(terms);
         for symbol in ["foo", "Foo", "foobar", "xyz", "école", "a", "foo_bar"] {
             assert_eq!(score_def(terms, symbol), score_def_normalized(&pre, symbol));
-            assert_eq!(score_caller(terms, symbol), score_caller_normalized(&pre, symbol));
-            assert_eq!(best_symbol_score(terms, symbol), best_symbol_score_normalized(&pre, symbol));
+            assert_eq!(
+                score_caller(terms, symbol),
+                score_caller_normalized(&pre, symbol)
+            );
+            assert_eq!(
+                best_symbol_score(terms, symbol),
+                best_symbol_score_normalized(&pre, symbol)
+            );
             assert_eq!(
                 coverage_symbol_score(terms, symbol),
                 coverage_symbol_score_normalized(&pre, symbol)

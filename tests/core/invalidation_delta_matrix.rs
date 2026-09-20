@@ -76,7 +76,9 @@ impl MatrixFixtureExt for Fx {
                     let nanos: i64 = row.get(3)?;
                     let hash: String = row.get(4)?;
                     let trunc: i64 = row.get(5)?;
-                    Ok(format!("files|{path}|{lang:?}|{secs}|{nanos}|{hash}|{trunc}"))
+                    Ok(format!(
+                        "files|{path}|{lang:?}|{secs}|{nanos}|{hash}|{trunc}"
+                    ))
                 },
             )
             .unwrap(),
@@ -188,13 +190,19 @@ fn defs_phase_add() {
     fx.write("src/a.rs", "fn i2_alpha_one() {}\n");
     assert_eq!(fx.reindex().files_indexed, 1);
     let sibling_before = fx.def_files("i2_alpha_one");
-    assert!(!sibling_before.is_empty(), "precondition: initial symbol indexed");
+    assert!(
+        !sibling_before.is_empty(),
+        "precondition: initial symbol indexed"
+    );
 
     fx.write("src/b.rs", "fn i2_beta_two() {}\n");
     assert_eq!(fx.reindex().files_indexed, 1);
 
     let added = fx.def_files("i2_beta_two");
-    assert!(!added.is_empty(), "ADD must make the new file's symbol searchable");
+    assert!(
+        !added.is_empty(),
+        "ADD must make the new file's symbol searchable"
+    );
     assert!(
         added.iter().all(|f| f == "src/b.rs"),
         "added symbol hits only under the new path: {added:?}"
@@ -259,7 +267,10 @@ fn defs_phase_delete() {
 /// indexed=1).
 fn defs_phase_rename() {
     let fx = Fx::new();
-    fx.write("src/old_name.rs", "fn i2_moved_sym() { let _t = \"tokmovezz\"; }\n");
+    fx.write(
+        "src/old_name.rs",
+        "fn i2_moved_sym() { let _t = \"tokmovezz\"; }\n",
+    );
     assert_eq!(fx.reindex().files_indexed, 1);
     let defs_before = fx.def_files("i2_moved_sym");
     assert!(!defs_before.is_empty());
@@ -377,7 +388,10 @@ fn literals_matrix_per_path_counts_exact() {
     assert!(count_in(&before, "src/a.rs") > 0);
     assert!(count_in(&before, "src/b.rs") > 0);
 
-    fx.write("src/a.rs", "fn i2_cnt_a() {}\n// scrubbed line one\n// scrubbed line two\n");
+    fx.write(
+        "src/a.rs",
+        "fn i2_cnt_a() {}\n// scrubbed line one\n// scrubbed line two\n",
+    );
     set_mtime_secs(&abs, WHOLE_SECOND_T1);
     assert_eq!(fx.reindex().files_indexed, 1);
 
@@ -414,7 +428,10 @@ fn callers_phase_add() {
     assert_eq!(fx.reindex().files_indexed, 1);
 
     let callers = fx.caller_files("i2_add_callee");
-    assert!(!callers.is_empty(), "ADD must expose the new file's caller edge");
+    assert!(
+        !callers.is_empty(),
+        "ADD must expose the new file's caller edge"
+    );
     assert!(
         callers.iter().all(|f| f == "src/b.rs"),
         "new caller hits only under the new path: {callers:?}"
@@ -462,7 +479,10 @@ fn callers_phase_noop() {
     assert_eq!(fx.reindex().files_indexed, 2);
     let callers_before = fx.caller_files("i2_callee_zz");
     let defs_before = fx.def_files("i2_callee_zz");
-    assert!(!callers_before.is_empty(), "precondition: caller edge indexed");
+    assert!(
+        !callers_before.is_empty(),
+        "precondition: caller edge indexed"
+    );
     assert!(callers_before.iter().all(|f| f == "src/b.rs"));
     assert!(!defs_before.is_empty());
 
@@ -510,7 +530,10 @@ fn untouched_phase_add() {
     let defs_before = fx.def_files("i2_keep_me");
     let lits_before = fx.literal_spots("tokkeepzz");
     assert!(!defs_before.is_empty(), "precondition: sibling def indexed");
-    assert!(!lits_before.is_empty(), "precondition: sibling literal indexed");
+    assert!(
+        !lits_before.is_empty(),
+        "precondition: sibling literal indexed"
+    );
 
     fx.write("src/b.rs", "fn i2_newcomer() { let _t = \"toknewzz\"; }\n");
     assert_eq!(fx.reindex().files_indexed, 1);
@@ -539,13 +562,19 @@ fn untouched_phase_modify() {
         "fn i2_churn_old() { let _t = \"tokchurnold\"; }\n",
     );
     set_mtime_secs(&abs, WHOLE_SECOND_T0);
-    fx.write("src/b.rs", "fn i2_stable_sib() { let _t = \"tokstablezz\"; }\n");
+    fx.write(
+        "src/b.rs",
+        "fn i2_stable_sib() { let _t = \"tokstablezz\"; }\n",
+    );
     assert_eq!(fx.reindex().files_indexed, 2);
     let sib_defs = fx.def_files("i2_stable_sib");
     let sib_lits = fx.literal_spots("tokstablezz");
     assert!(!sib_defs.is_empty() && !sib_lits.is_empty());
 
-    fx.write("src/a.rs", "fn i2_churn_new() { let _t = \"tokchurnnew\"; }\n");
+    fx.write(
+        "src/a.rs",
+        "fn i2_churn_new() { let _t = \"tokchurnnew\"; }\n",
+    );
     set_mtime_secs(&abs, WHOLE_SECOND_T1);
     assert_eq!(fx.reindex().files_indexed, 1);
 
@@ -692,7 +721,10 @@ fn untouched_phase_full_refresh_rows() {
     let rows_before = fx.file_rows("src/keep.rs");
     let hash_before = fx.open_store().file_hash("src/keep.rs").unwrap();
     let battery_before = only_file(&fx.battery(BATTERY), "src/keep.rs");
-    assert!(!battery_before.is_empty(), "anchor hits must be non-vacuous");
+    assert!(
+        !battery_before.is_empty(),
+        "anchor hits must be non-vacuous"
+    );
 
     // Full-refresh churn across every delta class at once.
     fx.write("src/churn1.rs", CHURN1_V2);

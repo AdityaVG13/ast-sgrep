@@ -119,7 +119,10 @@ impl DrillFixtureExt for Fx {
 /// invisible) → +1 refresh → exact new serve.
 fn drill_phase_add() {
     let fx = Fx::new();
-    fx.write("src/a.rs", "fn i4_add_alpha() { let _t = \"tokalphaa\"; }\n");
+    fx.write(
+        "src/a.rs",
+        "fn i4_add_alpha() { let _t = \"tokalphaa\"; }\n",
+    );
     assert_eq!(fx.reindex().files_indexed, 1);
 
     // SERVE baseline: exact hit sets from the populated index.
@@ -246,7 +249,10 @@ fn drill_phase_modify() {
 fn drill_phase_delete() {
     let fx = Fx::new();
     fx.write("src/a.rs", "fn i4_doomed() { let _t = \"tokdoomed\"; }\n");
-    fx.write("src/b.rs", "fn i4_survivor() { let _t = \"toksurvive\"; }\n");
+    fx.write(
+        "src/b.rs",
+        "fn i4_survivor() { let _t = \"toksurvive\"; }\n",
+    );
     assert_eq!(fx.reindex().files_indexed, 2);
 
     // SERVE baseline.
@@ -393,10 +399,7 @@ fn drill_chained_multi_change_single_refresh() {
     // SERVE baseline: exact pre-chain hit sets, including the caller edge.
     assert_eq!(fx.def_files("i4_chain_old"), vec!["src/a.rs".to_string()]);
     assert_eq!(fx.def_files("i4_chain_gone"), vec!["src/b.rs".to_string()]);
-    assert_eq!(
-        fx.def_files("i4_chain_roam"),
-        vec!["src/c.rs".to_string()]
-    );
+    assert_eq!(fx.def_files("i4_chain_roam"), vec!["src/c.rs".to_string()]);
     assert_eq!(
         fx.caller_files("i4_chain_old"),
         vec!["src/c.rs".to_string()]
@@ -404,7 +407,10 @@ fn drill_chained_multi_change_single_refresh() {
     let snap = fx.snapshot();
 
     // CHAIN: one of every delta class lands before any refresh runs.
-    fx.write("src/a.rs", "fn i4_chain_new() { let _t = \"tokchainnew\"; }\n");
+    fx.write(
+        "src/a.rs",
+        "fn i4_chain_new() { let _t = \"tokchainnew\"; }\n",
+    );
     set_mtime_secs(&abs_a, WHOLE_SECOND_T1);
     std::fs::remove_file(fx.root.join("src/b.rs")).unwrap();
     std::fs::rename(fx.root.join("src/c.rs"), fx.root.join("src/z.rs")).unwrap();
@@ -442,16 +448,10 @@ fn drill_chained_multi_change_single_refresh() {
         fx.literal_spots("tokchainnew"),
         vec![("src/a.rs".to_string(), 1)]
     );
-    assert_eq!(
-        fx.def_files("i4_chain_added"),
-        vec!["src/d.rs".to_string()]
-    );
+    assert_eq!(fx.def_files("i4_chain_added"), vec!["src/d.rs".to_string()]);
     // The renamed file carries its caller edge to the new path, still
     // pointing at the (now retired) callee name.
-    assert_eq!(
-        fx.def_files("i4_chain_roam"),
-        vec!["src/z.rs".to_string()]
-    );
+    assert_eq!(fx.def_files("i4_chain_roam"), vec!["src/z.rs".to_string()]);
     assert_eq!(
         fx.caller_files("i4_chain_old"),
         vec!["src/z.rs".to_string()]
@@ -528,10 +528,7 @@ fn drill_delete_then_readd_same_path_end_to_end() {
     fx.write("src/a.rs", "fn i4_first_life() {}\n");
     fx.write("src/b.rs", "fn i4_res_anchor() {}\n");
     assert_eq!(fx.reindex().files_indexed, 2);
-    assert_eq!(
-        fx.def_files("i4_first_life"),
-        vec!["src/a.rs".to_string()]
-    );
+    assert_eq!(fx.def_files("i4_first_life"), vec!["src/a.rs".to_string()]);
     let snap0 = fx.snapshot();
 
     // First life ends: delete -> detect -> refresh -> serve proves removal.
@@ -546,7 +543,10 @@ fn drill_delete_then_readd_same_path_end_to_end() {
     let snap1 = fx.snapshot();
 
     // Second life: re-add the SAME path with different content.
-    fx.write("src/a.rs", "fn i4_second_life() { let _t = \"toksecond\"; }\n");
+    fx.write(
+        "src/a.rs",
+        "fn i4_second_life() { let _t = \"toksecond\"; }\n",
+    );
     fx.assert_frozen(&snap1);
     assert_eq!(
         fx.live_rs_files().len(),
@@ -565,10 +565,7 @@ fn drill_delete_then_readd_same_path_end_to_end() {
     assert_eq!(fx.generation(), snap1.generation + 1);
     assert_ne!(fx.writer_epoch(), snap1.writer);
     assert_eq!(fx.stored_counts().0, 2);
-    assert_eq!(
-        fx.def_files("i4_second_life"),
-        vec!["src/a.rs".to_string()]
-    );
+    assert_eq!(fx.def_files("i4_second_life"), vec!["src/a.rs".to_string()]);
     assert_eq!(
         fx.literal_spots("toksecond"),
         vec![("src/a.rs".to_string(), 1)]

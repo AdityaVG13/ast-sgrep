@@ -106,12 +106,12 @@ fn bounded_io_paths_and_line_splitting() {
         "hello"
     );
     // Exact-cap content is accepted; one byte over is refused.
-    let at_cap = write_temp(&vec![b'a'; 8]);
+    let at_cap = write_temp(&[b'a'; 8]);
     assert_eq!(
         read_text_capped(at_cap.path(), 8).expect("at-cap ok").len(),
         8
     );
-    let over_cap = write_temp(&vec![b'a'; 9]);
+    let over_cap = write_temp(&[b'a'; 9]);
     assert!(read_text_capped(over_cap.path(), 8).is_err());
     // Invalid UTF-8 fails closed (binary), never lossy-decoded.
     let binary = write_temp(&[0xff, 0xfe, 0x00, b'a']);
@@ -128,13 +128,23 @@ fn bounded_io_paths_and_line_splitting() {
 
     // Facet 3: indexed rel paths — accept table, refuse table, determinism.
     use std::path::Path;
-    assert_eq!(indexed_rel_path(Path::new("src/main.rs")).expect("ok"), "src/main.rs");
+    assert_eq!(
+        indexed_rel_path(Path::new("src/main.rs")).expect("ok"),
+        "src/main.rs"
+    );
     assert_eq!(indexed_rel_path(Path::new("a.rs")).expect("ok"), "a.rs");
     assert_eq!(
         indexed_rel_path(Path::new("src/µ.rs")).expect("unicode ok"),
         "src/µ.rs"
     );
-    for bad in ["", "/abs/x.rs", "../up.rs", "a/../b.rs", "a/../../b.rs", "a\0b.rs"] {
+    for bad in [
+        "",
+        "/abs/x.rs",
+        "../up.rs",
+        "a/../b.rs",
+        "a/../../b.rs",
+        "a\0b.rs",
+    ] {
         assert!(
             indexed_rel_path(Path::new(bad)).is_err(),
             "must refuse {bad:?}"
@@ -354,7 +364,10 @@ fn excerpt_wire_and_finish_gates() {
     // Score order decides rank; excerpt bytes are exactly the survivors' sum.
     let two = finish_response(&parsed, &finish_options(dir.path(), 2), hits(), true);
     assert_eq!(
-        two.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        two.hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>(),
         vec!["s1.rs", "s2.rs"]
     );
     assert_eq!(two.returned_excerpt_bytes, 4);
@@ -391,7 +404,12 @@ fn excerpt_wire_and_finish_gates() {
         scored("d.rs", 4.0, "x"),
         scored("e.rs", 1.0, "y"),
     ];
-    let with_dedup = finish_response(&parsed, &finish_options(dir.path(), 10), dupes.clone(), true);
+    let with_dedup = finish_response(
+        &parsed,
+        &finish_options(dir.path(), 10),
+        dupes.clone(),
+        true,
+    );
     let without_dedup = finish_response(&parsed, &finish_options(dir.path(), 10), dupes, false);
     assert_eq!(with_dedup.hits.len(), 2);
     assert_eq!(without_dedup.hits.len(), 3);
@@ -406,7 +424,11 @@ fn excerpt_wire_and_finish_gates() {
     filtered.file_filter = Some("src/**".to_string());
     let response = finish_response(&parsed, &filtered, mixed.clone(), true);
     assert_eq!(
-        response.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        response
+            .hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>(),
         vec!["src/a.rs", "src/b.rs"]
     );
     // Legacy compat: an invalid (empty / control-char) filter is ignored, never fatal.
@@ -421,7 +443,11 @@ fn excerpt_wire_and_finish_gates() {
     let via_scope = finish_response(&scoped, &finish_options(dir.path(), 10), mixed, true);
     assert_eq!(via_scope.query, "needle");
     assert_eq!(
-        via_scope.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        via_scope
+            .hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>(),
         vec!["src/a.rs", "src/b.rs"]
     );
 
@@ -443,12 +469,20 @@ fn excerpt_wire_and_finish_gates() {
     };
     let promoted = finish_response(&hybrid, &finish_options(dir.path(), 2), hybrid_hits(), true);
     assert_eq!(
-        promoted.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        promoted
+            .hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>(),
         vec!["t1.rs", "d.rs"]
     );
     let promoted = finish_response(&hybrid, &finish_options(dir.path(), 3), hybrid_hits(), true);
     assert_eq!(
-        promoted.hits.iter().map(|hit| hit.file.as_str()).collect::<Vec<_>>(),
+        promoted
+            .hits
+            .iter()
+            .map(|hit| hit.file.as_str())
+            .collect::<Vec<_>>(),
         vec!["t1.rs", "t2.rs", "d.rs"]
     );
 }
@@ -466,7 +500,12 @@ fn excerpt_wire_and_finish_gates() {
 #[test]
 fn planner_resolution_and_file_filters() {
     // Facet 1: causal planner — decisive boundary, follow-ups, suggestions, pool floor.
-    fn hit_with(symbol: Option<&str>, contributors: Vec<HitKind>, score: f64, margin: f64) -> SearchHit {
+    fn hit_with(
+        symbol: Option<&str>,
+        contributors: Vec<HitKind>,
+        score: f64,
+        margin: f64,
+    ) -> SearchHit {
         let mut hit = mk_hit(HitKind::Asgrep, "a.rs", 1, score);
         hit.symbol = symbol.map(str::to_string);
         hit.contributors = contributors;
@@ -474,12 +513,42 @@ fn planner_resolution_and_file_filters() {
         hit
     }
     // Decisive boundary is 10% of score: at-ratio true, below false, zero never.
-    assert!(margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 1.0)));
-    assert!(margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 2.0)));
-    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 0.9)));
-    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 10.0, 0.0)));
-    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], 0.0, 0.0)));
-    assert!(!margin_is_decisive(&hit_with(None, vec![HitKind::Asgrep], -5.0, 1.0)));
+    assert!(margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        10.0,
+        1.0
+    )));
+    assert!(margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        10.0,
+        2.0
+    )));
+    assert!(!margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        10.0,
+        0.9
+    )));
+    assert!(!margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        10.0,
+        0.0
+    )));
+    assert!(!margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        0.0,
+        0.0
+    )));
+    assert!(!margin_is_decisive(&hit_with(
+        None,
+        vec![HitKind::Asgrep],
+        -5.0,
+        1.0
+    )));
 
     // No symbol anywhere: no drill-down exists.
     assert!(follow_ups_for_hit("foo", &hit_with(None, vec![HitKind::Asgrep], 5.0, 0.0)).is_empty());
@@ -488,7 +557,10 @@ fn planner_resolution_and_file_filters() {
     assert!(follow_ups_for_hit("foo", &settled).is_empty());
     // Missing definition and usage: both drill-downs, in defs/callers order.
     let bare = hit_with(Some("foo"), vec![HitKind::Asgrep], 5.0, 0.0);
-    assert_eq!(follow_ups_for_hit("foo", &bare), vec!["defs:foo", "callers:foo"]);
+    assert_eq!(
+        follow_ups_for_hit("foo", &bare),
+        vec!["defs:foo", "callers:foo"]
+    );
     // Definition present but usage missing: only the usage drill-down.
     let def_only = hit_with(Some("foo"), vec![HitKind::Def], 10.0, 1.0);
     assert_eq!(follow_ups_for_hit("foo", &def_only), vec!["callers:foo"]);
@@ -503,7 +575,10 @@ fn planner_resolution_and_file_filters() {
         vec!["defs:auth_refresh", "callers:auth_refresh"]
     );
     // Determinism under repetition.
-    assert_eq!(follow_ups_for_hit("foo", &bare), follow_ups_for_hit("foo", &bare));
+    assert_eq!(
+        follow_ups_for_hit("foo", &bare),
+        follow_ups_for_hit("foo", &bare)
+    );
 
     fn response(query: &str, hits: Vec<SearchHit>) -> SearchResponse {
         SearchResponse {
@@ -528,7 +603,7 @@ fn planner_resolution_and_file_filters() {
     );
     // Top hit with gaps and no semantic evidence anywhere: full causal chain.
     assert_eq!(
-        plan_suggested_next(&response("q", vec![bare])) ,
+        plan_suggested_next(&response("q", vec![bare])),
         vec![
             "asgrep 'defs:foo'",
             "asgrep 'callers:foo'",
@@ -557,12 +632,18 @@ fn planner_resolution_and_file_filters() {
     // Lexical pool: floor 100, identity above, monotone non-decreasing.
     assert_eq!(LEXICAL_POOL_FLOOR, 100);
     for (limit, expected) in [(0, 100), (5, 100), (99, 100), (100, 100), (500, 500)] {
-        let options = SearchOptions { limit, ..SearchOptions::default() };
+        let options = SearchOptions {
+            limit,
+            ..SearchOptions::default()
+        };
         assert_eq!(lexical_pool_limit(&options), expected, "limit={limit}");
     }
     let mut previous = 0;
     for limit in [0, 1, 50, 99, 100, 101, 1000] {
-        let options = SearchOptions { limit, ..SearchOptions::default() };
+        let options = SearchOptions {
+            limit,
+            ..SearchOptions::default()
+        };
         let pool = lexical_pool_limit(&options);
         assert!(pool >= previous, "monotone at {limit}");
         previous = pool;
@@ -643,7 +724,10 @@ fn planner_resolution_and_file_filters() {
         Resolution::from_candidates(5, 9, three),
         Resolution::Ambiguous { candidates } if candidates.len() == 3
     ));
-    let six: Vec<SymbolId> = ["a", "b", "c", "d", "e", "f"].iter().map(|n| id("m", n)).collect();
+    let six: Vec<SymbolId> = ["a", "b", "c", "d", "e", "f"]
+        .iter()
+        .map(|n| id("m", n))
+        .collect();
     assert!(matches!(
         Resolution::from_candidates(2, 9, six),
         Resolution::Ambiguous { candidates } if candidates.len() == 4
@@ -731,7 +815,13 @@ fn planner_resolution_and_file_filters() {
     assert!(!matcher.is_ignored(Path::new("important.log")));
     assert!(!matcher.is_ignored(Path::new("src/main.rs")));
     // Differential: the free function agrees with the matcher on every probe.
-    for probe in ["a.log", "sub/a.log", "important.log", "src/main.rs", ".git/config"] {
+    for probe in [
+        "a.log",
+        "sub/a.log",
+        "important.log",
+        "src/main.rs",
+        ".git/config",
+    ] {
         assert_eq!(
             is_ignored(dir.path(), Path::new(probe)),
             matcher.is_ignored(Path::new(probe)),
@@ -793,7 +883,10 @@ fn lexicon_and_scip_knowledge() {
     assert_eq!(associations.len(), 4);
     for association in &associations {
         assert_eq!(association.support, 3);
-        assert!((association.ppmi - 2.0f64.ln()).abs() < 1e-12, "{association:?}");
+        assert!(
+            (association.ppmi - 2.0f64.ln()).abs() < 1e-12,
+            "{association:?}"
+        );
     }
     // Emission order is deterministic: sorted by (term, related).
     let pairs: Vec<(&str, &str)> = associations
@@ -823,14 +916,41 @@ fn lexicon_and_scip_knowledge() {
 
     // Expansion is prefix-stable under max_added growth (sorted, then truncated).
     let weighted = Lexicon::from_associations(vec![
-        Association { term: "a".into(), related: "b".into(), ppmi: 3.0, support: 5 },
-        Association { term: "a".into(), related: "c".into(), ppmi: 2.0, support: 5 },
-        Association { term: "a".into(), related: "d".into(), ppmi: 1.0, support: 5 },
+        Association {
+            term: "a".into(),
+            related: "b".into(),
+            ppmi: 3.0,
+            support: 5,
+        },
+        Association {
+            term: "a".into(),
+            related: "c".into(),
+            ppmi: 2.0,
+            support: 5,
+        },
+        Association {
+            term: "a".into(),
+            related: "d".into(),
+            ppmi: 1.0,
+            support: 5,
+        },
     ]);
-    let related: Vec<&str> = weighted.related("a").iter().map(|a| a.related.as_str()).collect();
+    let related: Vec<&str> = weighted
+        .related("a")
+        .iter()
+        .map(|a| a.related.as_str())
+        .collect();
     assert_eq!(related, vec!["b", "c", "d"]);
-    let two: Vec<String> = weighted.expand(&["a".to_string()], 2).iter().map(|a| a.related.clone()).collect();
-    let three: Vec<String> = weighted.expand(&["a".to_string()], 3).iter().map(|a| a.related.clone()).collect();
+    let two: Vec<String> = weighted
+        .expand(&["a".to_string()], 2)
+        .iter()
+        .map(|a| a.related.clone())
+        .collect();
+    let three: Vec<String> = weighted
+        .expand(&["a".to_string()], 3)
+        .iter()
+        .map(|a| a.related.clone())
+        .collect();
     assert_eq!(two, vec!["b", "c"]);
     assert_eq!(three, vec!["b", "c", "d"]);
     assert_eq!(&three[..two.len()], two.as_slice());
@@ -865,10 +985,18 @@ fn lexicon_and_scip_knowledge() {
     assert_eq!(SCIP_ROLE_DEFINITION, 1);
 
     // Every hostile input degrades with a reason; none of them errors.
-    let missing = load_scip_index(std::path::Path::new("/nonexistent-dir-7f3a/index.scip.json"));
+    let missing = load_scip_index(std::path::Path::new(
+        "/nonexistent-dir-7f3a/index.scip.json",
+    ));
     assert!(!missing.is_loaded());
     assert!(missing.degraded_reason().is_some());
-    for bytes in [b"".as_slice(), b"  \n\t ", b"not json at all", b"{oops", b"\xff\xfe{binary}"] {
+    for bytes in [
+        b"".as_slice(),
+        b"  \n\t ",
+        b"not json at all",
+        b"{oops",
+        b"\xff\xfe{binary}",
+    ] {
         let file = write_temp(bytes);
         let loaded = load_scip_index(file.path());
         assert!(!loaded.is_loaded(), "must degrade for {bytes:?}");
@@ -876,7 +1004,9 @@ fn lexicon_and_scip_knowledge() {
     }
     // Minimal valid JSON loads with zero documents.
     let minimal = write_temp(b"{}");
-    assert!(matches!(load_scip_index(minimal.path()), ScipLoad::Loaded(index) if index.documents.is_empty()));
+    assert!(
+        matches!(load_scip_index(minimal.path()), ScipLoad::Loaded(index) if index.documents.is_empty())
+    );
     // A document round-trips its relative path.
     let doc = write_temp(br#"{"documents":[{"relativePath":"a.rs","occurrences":[]}]}"#);
     match load_scip_index(doc.path()) {
@@ -903,17 +1033,37 @@ fn lexicon_and_scip_knowledge() {
     assert_eq!(scip_symbol_ident("..."), None);
     // Definition bit: only bit 0 marks a definition.
     for (roles, expected) in [(0u32, false), (1, true), (2, false), (3, true)] {
-        let occurrence = ScipOccurrence { symbol: "s".into(), symbol_roles: roles, range: vec![0] };
+        let occurrence = ScipOccurrence {
+            symbol: "s".into(),
+            symbol_roles: roles,
+            range: vec![0],
+        };
         assert_eq!(occurrence.is_definition(), expected, "roles={roles}");
     }
     // Ranges are 0-based; indexed lines are 1-based with saturating add.
-    let at_zero = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![0] };
+    let at_zero = ScipOccurrence {
+        symbol: "s".into(),
+        symbol_roles: 0,
+        range: vec![0],
+    };
     assert_eq!(at_zero.start_line_1based(), Some(1));
-    let at_41 = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![41, 2, 41, 9] };
+    let at_41 = ScipOccurrence {
+        symbol: "s".into(),
+        symbol_roles: 0,
+        range: vec![41, 2, 41, 9],
+    };
     assert_eq!(at_41.start_line_1based(), Some(42));
-    let unranged = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![] };
+    let unranged = ScipOccurrence {
+        symbol: "s".into(),
+        symbol_roles: 0,
+        range: vec![],
+    };
     assert_eq!(unranged.start_line_1based(), None);
-    let saturated = ScipOccurrence { symbol: "s".into(), symbol_roles: 0, range: vec![u32::MAX] };
+    let saturated = ScipOccurrence {
+        symbol: "s".into(),
+        symbol_roles: 0,
+        range: vec![u32::MAX],
+    };
     assert_eq!(saturated.start_line_1based(), Some(u32::MAX));
 }
 

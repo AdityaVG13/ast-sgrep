@@ -12,12 +12,12 @@
 //! text, never durations.
 
 use ast_sgrep_testkit::{
-    TESTKIT_CLIENT_NAME, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
-    assert_tools_list_ok, cancelled_notif, collect_responses, index_tree, init_payload,
-    initialized_notif, mcp_bin, ping, response_by_id, small_tree, tool_body, tool_call, tool_text,
-    tools_list, LiveSession,
+    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
+    cancelled_notif, collect_responses, index_tree, init_payload, initialized_notif, mcp_bin, ping,
+    response_by_id, small_tree, tool_body, tool_call, tool_text, tools_list, LiveSession,
+    TESTKIT_CLIENT_NAME,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -344,13 +344,29 @@ fn canon_no_id(response: &Value) -> String {
 /// (`index_status` at ids 2 and 6).
 fn tool_script() -> Vec<Value> {
     vec![
-        tool_call(1, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            1,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(2, "index_status", json!({})),
         tool_call(3, "code_read", json!({"ids": ["a.rs#L1-L1"]})),
-        tool_call(4, "keyword_search", json!({"query": "blueanvil", "limit": 4})),
-        tool_call(5, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            4,
+            "keyword_search",
+            json!({"query": "blueanvil", "limit": 4}),
+        ),
+        tool_call(
+            5,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(6, "index_status", json!({})),
-        tool_call(7, "keyword_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            7,
+            "keyword_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(
             8,
             "ast_search",
@@ -372,11 +388,7 @@ fn assert_tool_responses_equivalent(a: &Value, b: &Value, id: u32) {
     if a["result"]["isError"] == true {
         assert_tool_error_shape(a);
         assert_tool_error_shape(b);
-        assert_eq!(
-            tool_text(a),
-            tool_text(b),
-            "id {id} error bytes diverged"
-        );
+        assert_eq!(tool_text(a), tool_text(b), "id {id} error bytes diverged");
         return;
     }
     assert_tool_success(a);
@@ -423,11 +435,19 @@ fn canonical_script() -> Vec<Value> {
     vec![
         ping(1),
         tools_list(2),
-        tool_call(3, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            3,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(4, "index_status", json!({})),
         tool_call(5, "code_search", json!({"query": "blueanvil", "limit": 4})),
         tool_call(6, "code_read", json!({"ids": ["c.rs#L1-L2"]})),
-        tool_call(7, "keyword_search", json!({"query": "greenchisel", "limit": 8})),
+        tool_call(
+            7,
+            "keyword_search",
+            json!({"query": "greenchisel", "limit": 8}),
+        ),
         ping(8),
     ]
 }
@@ -522,18 +542,32 @@ fn sequential_vs_pipelined_equivalence() {
     let pipelined = ast_sgrep_testkit::rpc_pipeline(script.clone(), Some(temp.path()));
     assert_eq!(pipelined.len(), script.len());
     for id in 1..=script.len() as u32 {
-        assert_tool_responses_equivalent(response_by_id(&sequential, id), response_by_id(&pipelined, id), id);
+        assert_tool_responses_equivalent(
+            response_by_id(&sequential, id),
+            response_by_id(&pipelined, id),
+            id,
+        );
     }
     let searches = [1u32, 5, 7, 8];
-    let refs_seq: Vec<&Value> = searches.iter().map(|id| response_by_id(&sequential, *id)).collect();
-    let refs_pipe: Vec<&Value> = searches.iter().map(|id| response_by_id(&pipelined, *id)).collect();
+    let refs_seq: Vec<&Value> = searches
+        .iter()
+        .map(|id| response_by_id(&sequential, *id))
+        .collect();
+    let refs_pipe: Vec<&Value> = searches
+        .iter()
+        .map(|id| response_by_id(&pipelined, *id))
+        .collect();
     assert_snippet_conservation(&refs_seq, &refs_pipe);
 
     // Facet 2 (K3.2): mixed ping/list/call script, per-id identical.
     let script = vec![
         ping(1),
         tools_list(2),
-        tool_call(3, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            3,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         ping(4),
         tool_call(5, "index_status", json!({})),
         tools_list(6),
@@ -564,23 +598,38 @@ fn sequential_vs_pipelined_equivalence() {
     assert_tool_success(b);
     assert_eq!(tool_text(a), tool_text(b), "id 3 diverged");
     assert!(tool_text(a).contains("redhammer"), "{a:#}");
-    assert_status_counts_eq(response_by_id(&sequential, 5), response_by_id(&pipelined, 5));
+    assert_status_counts_eq(
+        response_by_id(&sequential, 5),
+        response_by_id(&pipelined, 5),
+    );
     let read_a = response_by_id(&sequential, 7);
     let read_b = response_by_id(&pipelined, 7);
     assert_tool_success(read_a);
     assert_tool_success(read_b);
-    assert_eq!(tool_text(read_a), tool_text(read_b), "{read_a:#} vs {read_b:#}");
+    assert_eq!(
+        tool_text(read_a),
+        tool_text(read_b),
+        "{read_a:#} vs {read_b:#}"
+    );
     assert_eq!(tool_body(read_a)["nodes"][0]["id"], "c.rs#L1-L2");
 
     // Facet 3 (K3.3): schedule equivalence holds with errors in the batch:
     // per-id success/error shapes agree and bodies are byte-identical.
     let script = vec![
         tool_call(1, "no_such_tool", json!({})),
-        tool_call(2, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            2,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(3, "keyword_search", json!({"query": "x", "limit": 0})),
         tool_call(4, "index_status", json!({})),
         tool_call(5, "code_read", json!({"ids": ["zzz-missing.rs#L1-L1"]})),
-        tool_call(6, "keyword_search", json!({"query": "blueanvil", "limit": 4})),
+        tool_call(
+            6,
+            "keyword_search",
+            json!({"query": "blueanvil", "limit": 4}),
+        ),
     ];
     let sequential = ast_sgrep_testkit::rpc_session(script.clone(), Some(temp.path()));
     let pipelined = ast_sgrep_testkit::rpc_pipeline(script.clone(), Some(temp.path()));
@@ -655,17 +704,33 @@ fn repeat_determinism_rapid_fire_and_rerun() {
     let first_run = vec![
         ping(1),
         tools_list(2),
-        tool_call(3, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            3,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(4, "code_read", json!({"ids": ["a.rs#L1-L1"]})),
-        tool_call(5, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            5,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(6, "index_status", json!({})),
     ];
     let second_run = vec![
         ping(11),
         tools_list(12),
-        tool_call(13, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            13,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(14, "code_read", json!({"ids": ["a.rs#L1-L1"]})),
-        tool_call(15, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            15,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         tool_call(16, "index_status", json!({})),
     ];
     let first = run_sequential(&mut session, &first_run);
@@ -734,7 +799,11 @@ fn restart_equivalence_fresh_servers_and_batches() {
     let script = vec![
         ping(1),
         tools_list(2),
-        tool_call(3, "keyword_search", json!({"query": "greenchisel", "limit": 8})),
+        tool_call(
+            3,
+            "keyword_search",
+            json!({"query": "greenchisel", "limit": 8}),
+        ),
         tool_call(4, "code_search", json!({"query": "blueanvil", "limit": 4})),
         tool_call(5, "code_read", json!({"ids": ["b.rs#L1-L1"]})),
         tool_call(6, "index_status", json!({})),
@@ -788,11 +857,21 @@ fn restart_equivalence_fresh_servers_and_batches() {
     assert_eq!(run_a.len(), script.len());
     assert_eq!(run_b.len(), script.len());
     for id in 1..=script.len() as u32 {
-        assert_tool_responses_equivalent(response_by_id(&run_a, id), response_by_id(&run_b, id), id);
+        assert_tool_responses_equivalent(
+            response_by_id(&run_a, id),
+            response_by_id(&run_b, id),
+            id,
+        );
     }
     let searches = [1u32, 5, 7, 8];
-    let refs_a: Vec<&Value> = searches.iter().map(|id| response_by_id(&run_a, *id)).collect();
-    let refs_b: Vec<&Value> = searches.iter().map(|id| response_by_id(&run_b, *id)).collect();
+    let refs_a: Vec<&Value> = searches
+        .iter()
+        .map(|id| response_by_id(&run_a, *id))
+        .collect();
+    let refs_b: Vec<&Value> = searches
+        .iter()
+        .map(|id| response_by_id(&run_b, *id))
+        .collect();
     assert_snippet_conservation(&refs_a, &refs_b);
 }
 
@@ -911,7 +990,9 @@ fn soak_mixed_calls_and_repeated_search_stable() {
     let baseline_snippets = hit_snippets(&tool_body(&first));
     assert!(
         !baseline_snippets.is_empty()
-            && baseline_snippets.iter().any(|s| s != ELIDED && !s.is_empty()),
+            && baseline_snippets
+                .iter()
+                .any(|s| s != ELIDED && !s.is_empty()),
         "cold search delivered no full snippets: {first:#}"
     );
     const REPEATS: u32 = 39;
@@ -1046,7 +1127,11 @@ fn interleave_stability_ping_list_and_cancel() {
     assert_eq!(responses.len(), expected);
     for request in &tools {
         let id = request["id"].as_u64().unwrap() as u32;
-        assert_matches_baseline(request, response_by_id(&baseline, id), response_by_id(&responses, id));
+        assert_matches_baseline(
+            request,
+            response_by_id(&baseline, id),
+            response_by_id(&responses, id),
+        );
     }
     assert_tool_success(response_by_id(&responses, 5));
     for id in ping_ids {
@@ -1074,7 +1159,11 @@ fn burst_mixed_calls_and_error_accounting() {
     assert_id_set_complete(&burst, script.len() as u32);
     for request in &script {
         let id = request["id"].as_u64().unwrap() as u32;
-        assert_matches_baseline(request, response_by_id(&baseline, id), response_by_id(&burst, id));
+        assert_matches_baseline(
+            request,
+            response_by_id(&baseline, id),
+            response_by_id(&burst, id),
+        );
     }
 
     // Facet 2 (K4.7): a burst mixing unknown tools, invalid arguments, and
@@ -1085,13 +1174,25 @@ fn burst_mixed_calls_and_error_accounting() {
     session.handshake();
     let requests = vec![
         tool_call(1, "no_such_tool", json!({})),
-        tool_call(2, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        tool_call(
+            2,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         tool_call(3, "keyword_search", json!({"query": "x", "limit": 0})),
         tool_call(4, "index_status", json!({})),
         tool_call(5, "code_read", json!({"ids": ["zzz-missing.rs#L1-L1"]})),
-        tool_call(6, "keyword_search", json!({"query": "blueanvil", "limit": 4})),
+        tool_call(
+            6,
+            "keyword_search",
+            json!({"query": "blueanvil", "limit": 4}),
+        ),
         tool_call(7, "no_such_tool", json!({})),
-        tool_call(8, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            8,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
         ping(9),
         tools_list(10),
         tool_call(11, "code_read", json!({"ids": ["a.rs#L1-L1"]})),
@@ -1124,20 +1225,26 @@ fn burst_mixed_calls_and_error_accounting() {
     let red = response_by_id(&responses, 2);
     assert_tool_success(red);
     assert!(
-        tool_body(red)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(red)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{red:#}"
     );
     assert_tool_success(response_by_id(&responses, 4));
     let blue = response_by_id(&responses, 6);
     assert_tool_success(blue);
     assert!(
-        tool_body(blue)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(blue)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{blue:#}"
     );
     let green = response_by_id(&responses, 8);
     assert_tool_success(green);
     assert!(
-        tool_body(green)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(green)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{green:#}"
     );
     assert_ping_ok(response_by_id(&responses, 9), 9);
@@ -1150,7 +1257,10 @@ fn burst_mixed_calls_and_error_accounting() {
     let missing = response_by_id(&responses, 5);
     assert_eq!(missing["id"], 5, "{missing:#}");
     assert!(missing.get("error").is_none(), "{missing:#}");
-    assert!(missing["result"]["content"][0]["type"] == "text", "{missing:#}");
+    assert!(
+        missing["result"]["content"][0]["type"] == "text",
+        "{missing:#}"
+    );
     session.send(&ping(13));
     assert_ping_ok(&session.recv(), 13);
     session.close_stdin();
@@ -1174,8 +1284,7 @@ fn restart_kill9_fresh_server_serves_identical_baseline() {
         victim.send(request);
         let response = victim.recv();
         assert_eq!(
-            response["id"],
-            request["id"],
+            response["id"], request["id"],
             "pre-kill response mismatch: {response:#}"
         );
     }
@@ -1209,7 +1318,11 @@ fn slow_client_byte_trickle_assembles_correct_requests() {
     session.send_trickle(&initialized_notif(), CHUNK, PACE);
 
     session.send_trickle(
-        &tool_call(1, "keyword_search", json!({"query": "redhammer", "limit": 4})),
+        &tool_call(
+            1,
+            "keyword_search",
+            json!({"query": "redhammer", "limit": 4}),
+        ),
         CHUNK,
         PACE,
     );
@@ -1217,7 +1330,9 @@ fn slow_client_byte_trickle_assembles_correct_requests() {
     assert_eq!(first["id"], 1, "{first:#}");
     assert_tool_success(&first);
     assert!(
-        tool_body(&first)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(&first)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{first:#}"
     );
     assert!(tool_text(&first).contains("redhammer"), "{first:#}");
@@ -1236,9 +1351,17 @@ fn slow_client_byte_trickle_assembles_correct_requests() {
     assert_eq!(tool_body(&read)["nodes"][0]["id"], "b.rs#L1-L1");
 
     let stream = vec![
-        tool_call(4, "keyword_search", json!({"query": "blueanvil", "limit": 4})),
+        tool_call(
+            4,
+            "keyword_search",
+            json!({"query": "blueanvil", "limit": 4}),
+        ),
         tools_list(5),
-        tool_call(6, "code_search", json!({"query": "greenchisel", "limit": 4})),
+        tool_call(
+            6,
+            "code_search",
+            json!({"query": "greenchisel", "limit": 4}),
+        ),
     ];
     session.send_trickle_stream(&stream, CHUNK, PACE);
     let mut responses = Vec::new();
@@ -1251,7 +1374,9 @@ fn slow_client_byte_trickle_assembles_correct_requests() {
     let blue = response_by_id(&responses, 4);
     assert_tool_success(blue);
     assert!(
-        tool_body(blue)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(blue)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{blue:#}"
     );
     assert!(tool_text(blue).contains("blueanvil"), "{blue:#}");
@@ -1259,7 +1384,9 @@ fn slow_client_byte_trickle_assembles_correct_requests() {
     let green = response_by_id(&responses, 6);
     assert_tool_success(green);
     assert!(
-        tool_body(green)["h"].as_array().is_some_and(|h| !h.is_empty()),
+        tool_body(green)["h"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty()),
         "{green:#}"
     );
 }

@@ -204,8 +204,6 @@ pub(crate) enum PreviewMode {
     Full,
 }
 
-
-
 #[derive(Args, Clone, Debug)]
 pub(crate) struct IndexCmd {
     #[command(flatten)]
@@ -352,7 +350,8 @@ pub(crate) struct Cli {
         long,
         global = true,
         env = "ASGREP_INDEX_PATH",
-        help = "Override index database path"
+        value_parser = parse_cwd_absolute_index_path,
+        help = "Override index database path (relative paths resolve against the shell cwd)"
     )]
     pub(crate) index_path: Option<PathBuf>,
     #[arg(
@@ -540,6 +539,20 @@ fn parse_durability(raw: &str) -> Result<ast_sgrep_core::Durability, String> {
     ast_sgrep_core::Durability::parse(raw).ok_or_else(|| {
         format!("unknown durability '{raw}' (expected strict, balanced, or fast-unsafe)")
     })
+}
+
+/// A user-typed `--index-path` (or `ASGREP_INDEX_PATH`) resolves against the
+/// shell CWD at the arg boundary, so every subcommand agrees on one absolute
+/// path. Core's `try_index_db_path` root-joins RELATIVE paths, which is the
+/// library contract — the CLI must never hand it a relative one.
+fn parse_cwd_absolute_index_path(raw: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .map_err(|error| format!("cannot resolve relative --index-path: {error}"))
 }
 
 /// m38g: bounded like the other token knobs so a hostile value cannot make the

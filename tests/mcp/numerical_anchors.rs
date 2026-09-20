@@ -128,10 +128,26 @@ fn full_preview_defaults_to_8192_while_unbudgeted_short_has_no_zd() {
     )]);
     let responses = rpc_session(
         vec![
-            tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "full"})),
-            tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "full", "budget_tokens": 100})),
-            tool_call(3, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true})),
-            tool_call(4, "keyword_search", json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "none"})),
+            tool_call(
+                1,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "full"}),
+            ),
+            tool_call(
+                2,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "full", "budget_tokens": 100}),
+            ),
+            tool_call(
+                3,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4, "resend_seen": true}),
+            ),
+            tool_call(
+                4,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4, "resend_seen": true, "preview": "none"}),
+            ),
         ],
         Some(temp.path()),
     );
@@ -148,7 +164,10 @@ fn full_preview_defaults_to_8192_while_unbudgeted_short_has_no_zd() {
         "unbudgeted short must omit zd: {short:#}"
     );
     let none = tool_body(&responses[3]);
-    assert!(none.get("zd").is_none(), "preview=none must omit zd: {none:#}");
+    assert!(
+        none.get("zd").is_none(),
+        "preview=none must omit zd: {none:#}"
+    );
 }
 
 /// INTENT=same calls in fresh processes are byte-identical.
@@ -158,11 +177,26 @@ fn full_preview_defaults_to_8192_while_unbudgeted_short_has_no_zd() {
 #[test]
 fn rerun_is_byte_identical_across_sessions() {
     let temp = indexed_tree(&[
-        ("src/a.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/b.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/c.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/d.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/e.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+        (
+            "src/a.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/b.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/c.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/d.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/e.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
     ]);
     std::fs::write(temp.path().join("pin.rs"), "aaa\nbbb\n").unwrap();
     let search_args =
@@ -203,14 +237,31 @@ fn rerun_is_byte_identical_across_sessions() {
 #[test]
 fn elision_chain_exact_counts_and_bytes() {
     let temp = indexed_tree(&[
-        ("src/f0.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/f1.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/f2.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+        (
+            "src/f0.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/f1.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/f2.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
     ]);
     let responses = rpc_session(
         vec![
-            tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 4})),
-            tool_call(2, "keyword_search", json!({"query": "target_symbol", "limit": 4})),
+            tool_call(
+                1,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4}),
+            ),
+            tool_call(
+                2,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 4}),
+            ),
             tool_call(
                 3,
                 "keyword_search",
@@ -226,7 +277,10 @@ fn elision_chain_exact_counts_and_bytes() {
     let first = tool_body(&responses[0]);
     assert_eq!(first["h"].as_array().unwrap().len(), 3, "{first:#}");
     assert_eq!(first["zn"], 3, "{first:#}");
-    assert!(first.get("ze").is_none(), "first send must omit ze: {first:#}");
+    assert!(
+        first.get("ze").is_none(),
+        "first send must omit ze: {first:#}"
+    );
     let first_bytes: usize = snippet_bytes(&first).iter().sum();
     assert_eq!(first_bytes, 96, "{first:#}");
 
@@ -245,7 +299,10 @@ fn elision_chain_exact_counts_and_bytes() {
     let resent = tool_body(&responses[2]);
     assert_eq!(resent["h"].as_array().unwrap().len(), 3, "{resent:#}");
     assert_eq!(resent["zn"], 3, "{resent:#}");
-    assert!(resent.get("ze").is_none(), "resend must omit ze: {resent:#}");
+    assert!(
+        resent.get("ze").is_none(),
+        "resend must omit ze: {resent:#}"
+    );
     let resent_bytes: usize = snippet_bytes(&resent).iter().sum();
     assert_eq!(resent_bytes, 96, "{resent:#}");
     for hit in resent["h"].as_array().unwrap() {
@@ -337,11 +394,26 @@ fn search_to_read_handoff_exact_window_and_bytes() {
 #[test]
 fn rerun_folded_within_and_across_contract() {
     let temp = indexed_tree(&[
-        ("src/a.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/b.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/c.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/d.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
-        ("src/e.rs", "fn target_symbol() { helper(); }\nfn helper() {}\n"),
+        (
+            "src/a.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/b.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/c.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/d.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
+        (
+            "src/e.rs",
+            "fn target_symbol() { helper(); }\nfn helper() {}\n",
+        ),
     ]);
     std::fs::write(temp.path().join("pin.rs"), "aaa\nbbb\n").unwrap();
     let search_args =
@@ -398,7 +470,10 @@ fn rerun_folded_within_and_across_contract() {
         tool_text(&second[0]).to_owned(),
     ];
     for other in &reads[1..] {
-        assert_eq!(*other, reads[0], "all code_read legs must be byte-identical");
+        assert_eq!(
+            *other, reads[0],
+            "all code_read legs must be byte-identical"
+        );
     }
     let searches = [
         tool_text(&within[2]).to_owned(),

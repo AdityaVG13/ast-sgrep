@@ -28,10 +28,7 @@ fn dot_contract() {
     // SIMD-width lane (len 64): true sum 6.4e61 unrepresentable in f32
     // under either accumulation (f32 inf, or f64 6.4e61 -> `as f32` inf),
     // so both the simd and the scalar-fallback arm collapse to 0.0.
-    assert_eq!(
-        dot_similarity(&vec![1e30f32; 64], &vec![1e30f32; 64]),
-        0.0
-    );
+    assert_eq!(dot_similarity(&vec![1e30f32; 64], &vec![1e30f32; 64]), 0.0);
     // Dyadic-exact: 0.25+0.25+0.25+0.25 = 1.0, no rounding. BIT-EXACT.
     assert_eq!(
         dot_similarity(&[0.5, 0.5, 0.5, 0.5], &[0.5, 0.5, 0.5, 0.5]),
@@ -48,7 +45,10 @@ fn dot_contract() {
         0.0
     );
     // MIN_POSITIVE * 1.0 is exactly representable. BIT-EXACT.
-    assert_eq!(dot_similarity(&[f32::MIN_POSITIVE], &[1.0]), f32::MIN_POSITIVE);
+    assert_eq!(
+        dot_similarity(&[f32::MIN_POSITIVE], &[1.0]),
+        f32::MIN_POSITIVE
+    );
     // Signed-zero payloads survive the finite gate; pin the BITS.
     assert_eq!(
         dot_similarity(&[-0.0], &[1.0]).to_bits(),
@@ -109,12 +109,12 @@ fn dot_contract() {
     // ── Clause dot_rescale (N3): positive preserves, negative reverses ──
     // Well-separated dyadic dots: exact in f32, so scaling the query by k>0
     // keeps the order and scaling by k<0 reverses it — bit-exact.
-    let aq = vec![1.0, 2.0];
-    let corpus = vec![
-        vec![3.0, 4.0],  // 11
-        vec![1.0, 1.0],  // 3
-        vec![0.0, 0.0],  // 0
-        vec![-1.0, 0.0], // -1
+    let aq = [1.0, 2.0];
+    let corpus = [
+        [3.0, 4.0],  // 11
+        [1.0, 1.0],  // 3
+        [0.0, 0.0],  // 0
+        [-1.0, 0.0], // -1
     ];
     let order_of = |q: &[f32]| {
         let scored: Vec<(usize, f32)> = corpus

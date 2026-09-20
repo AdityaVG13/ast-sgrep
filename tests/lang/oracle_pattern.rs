@@ -62,26 +62,30 @@ fn native_gates_and_literal_matching_stay_total() {
     }
     // Literal present hits; ws-only/BOM/absent behave (Ok-empty, never Err).
     let source = "fn foo() { foo(); }\n";
-    assert!(!match_pattern(Language::Rust, source, "foo").expect("literal").is_empty());
-    assert!(match_pattern(Language::Rust, source, "   ").expect("ws").is_empty());
-    assert!(!match_pattern(Language::Rust, source, "\u{feff}foo").expect("bom").is_empty());
-    assert!(match_pattern(Language::Rust, source, "absent_ident").expect("absent").is_empty());
+    assert!(!match_pattern(Language::Rust, source, "foo")
+        .expect("literal")
+        .is_empty());
+    assert!(match_pattern(Language::Rust, source, "   ")
+        .expect("ws")
+        .is_empty());
+    assert!(!match_pattern(Language::Rust, source, "\u{feff}foo")
+        .expect("bom")
+        .is_empty());
+    assert!(match_pattern(Language::Rust, source, "absent_ident")
+        .expect("absent")
+        .is_empty());
     // Differential: unified and direct literal lanes agree bit-exactly.
     let unified = match_pattern(Language::Rust, source, "foo").expect("unified");
     let direct = match_literal_pattern(Language::Rust, source, "foo").expect("direct");
     assert!(!unified.is_empty());
     assert_eq!(unified, direct);
     // Empty source: both lanes agree on the honest empty.
-    assert!(
-        match_pattern(Language::Rust, "", "foo")
-            .expect("empty unified")
-            .is_empty()
-    );
-    assert!(
-        match_literal_pattern(Language::Rust, "", "foo")
-            .expect("empty direct")
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Rust, "", "foo")
+        .expect("empty unified")
+        .is_empty());
+    assert!(match_literal_pattern(Language::Rust, "", "foo")
+        .expect("empty direct")
+        .is_empty());
     // Monotonicity: appending another occurrence strictly grows the hit set.
     let one = match_pattern(Language::Rust, "fn foo() {}\n", "foo").expect("one");
     let two = match_pattern(Language::Rust, "fn foo() {}\nfn foo() {}\n", "foo").expect("two");
@@ -131,10 +135,7 @@ fn keyword_ident_and_classify_admission_tables() {
     );
     assert!(classify_native("fn $NAME($$$)").is_some());
     // Declaration modifiers strip to the bare spelling.
-    assert_eq!(
-        classify_native("pub fn $NAME"),
-        classify_native("fn $NAME")
-    );
+    assert_eq!(classify_native("pub fn $NAME"), classify_native("fn $NAME"));
     assert_eq!(
         classify_native("export function $NAME"),
         classify_native("function $NAME")
@@ -169,7 +170,10 @@ fn signature_serve_and_prefilter_keys_are_byte_exact() {
         cached_pattern_signatures("fn greet"),
         Some(vec!["decl:fn:greet".to_string()])
     );
-    assert!(index_can_serve_pattern("fn greet", &["decl:fn:greet".to_string()]));
+    assert!(index_can_serve_pattern(
+        "fn greet",
+        &["decl:fn:greet".to_string()]
+    ));
     // Kind-only shapes always need native confirmation.
     let kinds = vec![
         "kind:function_item".to_string(),
@@ -182,7 +186,10 @@ fn signature_serve_and_prefilter_keys_are_byte_exact() {
     assert!(!index_can_serve_pattern("fn $NAME() { $$$BODY }", &[]));
     // Statement keywords escape ident-serve even with ident rows.
     assert!(!index_can_serve_pattern("return", &["return".to_string()]));
-    assert!(!index_can_serve_pattern("debugger", &["debugger".to_string()]));
+    assert!(!index_can_serve_pattern(
+        "debugger",
+        &["debugger".to_string()]
+    ));
     assert_eq!(cached_pattern_signatures(""), Some(vec![]));
     // Prefilter literals: exact ident, longest token, meta-name hole, if head.
     assert_eq!(required_pattern_literal("foo"), Some("foo".to_string()));
@@ -197,10 +204,7 @@ fn signature_serve_and_prefilter_keys_are_byte_exact() {
     );
     assert_eq!(required_pattern_literal(""), None);
     // Braced decl templates narrow by kind but never serve exactly.
-    assert_eq!(
-        candidate_kind_signatures("fn $N($$$) { $$$ }"),
-        Some(kinds)
-    );
+    assert_eq!(candidate_kind_signatures("fn $N($$$) { $$$ }"), Some(kinds));
     assert_eq!(candidate_kind_signatures(""), None);
     // Structural boost keys stay byte-identical.
     assert_eq!(
@@ -312,10 +316,7 @@ fn codec_language_and_hostile_inputs_stay_total() {
         Some(Language::Php)
     );
     // Unknown extension and unrecognized content stay silent None.
-    assert_eq!(
-        detect_language(std::path::Path::new("x.zzz"), None),
-        None
-    );
+    assert_eq!(detect_language(std::path::Path::new("x.zzz"), None), None);
     assert_eq!(detect_language(no_ext, Some("just text")), None);
     assert_eq!(Language::parse(""), None);
     assert_eq!(Language::parse("fortran"), None);
@@ -338,11 +339,17 @@ fn codec_language_and_hostile_inputs_stay_total() {
     // Extraction: shallow file is complete; 300-deep parens breach the
     // 256 cap (loud truncation flag, still Ok); empty is Ok-empty.
     let registry = ParserRegistry::new();
-    let shallow = registry.parse(Language::Rust, "fn f() {}\n").expect("shallow");
+    let shallow = registry
+        .parse(Language::Rust, "fn f() {}\n")
+        .expect("shallow");
     assert!(!shallow.depth_truncated);
     assert_eq!(shallow.symbols.len(), 1);
     assert_eq!(shallow.symbols[0].name, "f");
-    let deep_src = format!("fn f() {{ let x = {}1{}; }}\n", "(".repeat(300), ")".repeat(300));
+    let deep_src = format!(
+        "fn f() {{ let x = {}1{}; }}\n",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
     let deep = registry.parse(Language::Rust, &deep_src).expect("deep ok");
     assert!(deep.depth_truncated, "300-deep parens must truncate");
     let empty = registry.parse(Language::Rust, "").expect("empty ok");

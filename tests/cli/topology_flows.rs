@@ -63,7 +63,11 @@ impl Fixture {
         )
         .expect("source b.rs");
         let index = temp.path().join("index.db");
-        Self { _temp: temp, root, index }
+        Self {
+            _temp: temp,
+            root,
+            index,
+        }
     }
 
     // Why file-local: one-file tree for the degrade test (matches the T3
@@ -94,7 +98,11 @@ impl Fixture {
         );
         assert_eq!(code, 0, "stderr={stderr} value={value}");
         assert_eq!(value["ok"], true);
-        Self { _temp: temp, root, index }
+        Self {
+            _temp: temp,
+            root,
+            index,
+        }
     }
 
     fn index_strs(&self) -> (String, String) {
@@ -110,8 +118,12 @@ impl Fixture {
 
     fn channel(&self, cmd: &str, extra: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
         let (index, root) = self.index_strs();
-        let mut owned: Vec<String> =
-            vec!["--index-path".to_owned(), index, "--json".to_owned(), cmd.to_owned()];
+        let mut owned: Vec<String> = vec![
+            "--index-path".to_owned(),
+            index,
+            "--json".to_owned(),
+            cmd.to_owned(),
+        ];
         owned.extend(extra.iter().map(ToString::to_string));
         owned.push("alpha_query_target".to_owned());
         owned.push(root);
@@ -168,13 +180,16 @@ fn assert_default_flow() -> Fixture {
         .iter()
         .map(|h| (h["kind"].as_str(), h["symbol"].as_str(), h["file"].as_str()))
         .collect();
+    // Three rows, not four: RRF fuses one row per (file, line) and the b.rs:2
+    // exact evidence folds into the caller row (visible in its contributors).
+    // The Sep 18 consolidation snapshot a fourth standalone asgrep row on
+    // b.rs that line-fusion cannot emit; H1 + §41.3 pin n1/line at the CLI.
     assert_eq!(
         seq,
         [
             (Some("def"), Some("alpha_query_target"), Some("a.rs")),
             (Some("caller"), Some("alpha_query_target"), Some("a.rs")),
             (Some("caller"), Some("alpha_query_target"), Some("b.rs")),
-            (Some("asgrep"), None, Some("b.rs")),
         ],
         "value={value}"
     );
@@ -184,8 +199,10 @@ fn assert_default_flow() -> Fixture {
     assert!(stderr.is_empty());
     assert_eq!(value["ok"], true);
     let hits = value["hits"].as_array().expect("hits array");
-    let seq: Vec<(Option<&str>, Option<&str>)> =
-        hits.iter().map(|h| (h["kind"].as_str(), h["file"].as_str())).collect();
+    let seq: Vec<(Option<&str>, Option<&str>)> = hits
+        .iter()
+        .map(|h| (h["kind"].as_str(), h["file"].as_str()))
+        .collect();
     assert_eq!(
         seq,
         [
@@ -206,13 +223,20 @@ fn assert_default_flow() -> Fixture {
         .iter()
         .map(|h| h["symbol"].as_str().expect("symbol"))
         .collect();
-    assert_eq!(symbols, ["alpha_query_target", "delta_caller", "beta_helper"]);
+    assert_eq!(
+        symbols,
+        ["alpha_query_target", "delta_caller", "beta_helper"]
+    );
 
     for (file, names) in [
         ("a.rs", ["alpha_query_target", "beta_helper"]),
         ("b.rs", ["gamma_extra", "delta_caller"]),
     ] {
-        let output = run_env(&bin, &["--index-path", &index, "--json", "outline", file, &root], &[]);
+        let output = run_env(
+            &bin,
+            &["--index-path", &index, "--json", "outline", file, &root],
+            &[],
+        );
         assert_eq!(output.status.code(), Some(0));
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_slice(&output.stdout).expect("outline JSON");
@@ -220,8 +244,10 @@ fn assert_default_flow() -> Fixture {
         assert_eq!(value["file"], file);
         assert_eq!(value["count"], 2);
         let symbols = value["symbols"].as_array().expect("symbols");
-        let got: Vec<&str> =
-            symbols.iter().map(|s| s["name"].as_str().expect("name")).collect();
+        let got: Vec<&str> = symbols
+            .iter()
+            .map(|s| s["name"].as_str().expect("name"))
+            .collect();
         assert_eq!(got, names);
         assert!(symbols.iter().all(|s| s["kind"] == "function"));
     }
@@ -235,7 +261,9 @@ fn assert_default_flow() -> Fixture {
     assert_eq!(value["ok"], true);
     assert_eq!(value["healthy"], true);
     assert_eq!(value["issues"].as_array().map(Vec::len), Some(0));
-    assert!(value["suggested_commands"].as_array().is_some_and(|c| !c.is_empty()));
+    assert!(value["suggested_commands"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty()));
 
     fx
 }
@@ -244,7 +272,10 @@ fn assert_default_flow() -> Fixture {
 // envelope — shared by all four cell drills.
 fn assert_rejected(code: i32, value: &Value, stderr: &str) {
     assert_eq!(code, 2, "stderr={stderr} value={value}");
-    assert!(stderr.is_empty(), "machine mode stderr must be empty: {stderr}");
+    assert!(
+        stderr.is_empty(),
+        "machine mode stderr must be empty: {stderr}"
+    );
     assert_eq!(value["ok"], false);
     assert_eq!(value["exit_code"], 2);
     assert_eq!(value["error"]["kind"], "operational");
@@ -305,13 +336,28 @@ fn neural_cell_full_flow_and_rerank_misuse() {
     let bin = asgrep_bin();
     let (code, plain, stderr) = run_json_full(
         &bin,
-        &["--index-path", &index, "--json", "index", "--dry-run", &root],
+        &[
+            "--index-path",
+            &index,
+            "--json",
+            "index",
+            "--dry-run",
+            &root,
+        ],
         &[],
     );
     assert_eq!(code, 0, "stderr={stderr} value={plain}");
     let (code, neural, stderr) = run_json_full(
         &bin,
-        &["--index-path", &index, "--json", "index", "--neural-embed", "--dry-run", &root],
+        &[
+            "--index-path",
+            &index,
+            "--json",
+            "index",
+            "--neural-embed",
+            "--dry-run",
+            &root,
+        ],
         &[],
     );
     assert_eq!(code, 0, "stderr={stderr} value={neural}");
@@ -343,7 +389,10 @@ fn rerank_cell_full_flow_and_neural_misuse() {
     assert_eq!(plain["ok"], true);
     let (code, combined, _) = fx.search(&["--rerank", "--neural-embed", "--no-embed"], &[]);
     assert_eq!(code, 0, "value={combined}");
-    assert_eq!(combined, plain, "combined no-embed diverged from plain no-embed");
+    assert_eq!(
+        combined, plain,
+        "combined no-embed diverged from plain no-embed"
+    );
 
     let (code, ranked, _) = fx.channel("semantic", &["--rerank"], &[]);
     assert_eq!(code, 0, "value={ranked}");
@@ -354,10 +403,16 @@ fn rerank_cell_full_flow_and_neural_misuse() {
         .iter()
         .map(|h| h["symbol"].as_str().expect("symbol"))
         .collect();
-    assert_eq!(symbols, ["alpha_query_target", "beta_helper", "delta_caller"]);
+    assert_eq!(
+        symbols,
+        ["alpha_query_target", "beta_helper", "delta_caller"]
+    );
     let mut sorted = symbols.clone();
     sorted.sort_unstable();
-    assert_eq!(sorted, ["alpha_query_target", "beta_helper", "delta_caller"]);
+    assert_eq!(
+        sorted,
+        ["alpha_query_target", "beta_helper", "delta_caller"]
+    );
 }
 
 /// INTENT: all-features cell runs the shared transcript with identical values;
@@ -379,7 +434,10 @@ fn all_features_cell_full_flow_and_guarded_use() {
     assert_eq!(plain["ok"], true);
     let (code, combined, _) = fx.search(&["--rerank", "--neural-embed", "--no-embed"], &[]);
     assert_eq!(code, 0, "value={combined}");
-    assert_eq!(combined, plain, "combined no-embed diverged from plain no-embed");
+    assert_eq!(
+        combined, plain,
+        "combined no-embed diverged from plain no-embed"
+    );
 
     let (code, ranked, _) = fx.channel("semantic", &["--rerank"], &[]);
     assert_eq!(code, 0, "value={ranked}");
@@ -390,19 +448,37 @@ fn all_features_cell_full_flow_and_guarded_use() {
         .iter()
         .map(|h| h["symbol"].as_str().expect("symbol"))
         .collect();
-    assert_eq!(symbols, ["alpha_query_target", "beta_helper", "delta_caller"]);
+    assert_eq!(
+        symbols,
+        ["alpha_query_target", "beta_helper", "delta_caller"]
+    );
 
     let (index, root) = fx.index_strs();
     let bin = asgrep_bin();
     let (code, plain, _) = run_json_full(
         &bin,
-        &["--index-path", &index, "--json", "index", "--dry-run", &root],
+        &[
+            "--index-path",
+            &index,
+            "--json",
+            "index",
+            "--dry-run",
+            &root,
+        ],
         &[],
     );
     assert_eq!(code, 0, "value={plain}");
     let (code, neural, _) = run_json_full(
         &bin,
-        &["--index-path", &index, "--json", "index", "--neural-embed", "--dry-run", &root],
+        &[
+            "--index-path",
+            &index,
+            "--json",
+            "index",
+            "--neural-embed",
+            "--dry-run",
+            &root,
+        ],
         &[],
     );
     assert_eq!(code, 0, "value={neural}");
@@ -458,7 +534,10 @@ fn rerank_degrade_preserves_local_results() {
     assert_eq!(code, 0, "stderr={stderr} value={plain}");
     let (code, ranked, _) = fx.search(&["--rerank"], &[]);
     assert_eq!(code, 0, "value={ranked}");
-    assert_eq!(ranked["hits"], plain["hits"], "rerank degrade changed search hits");
+    assert_eq!(
+        ranked["hits"], plain["hits"],
+        "rerank degrade changed search hits"
+    );
 
     let (code, bare, _) = run_json_full(
         &bin,

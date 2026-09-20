@@ -350,8 +350,14 @@ fn record_crash_variants_recover_to_identical_serve() {
         .map(|_| ())
         .expect_err("missing batch must fail");
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-    testkit::write_file(&plan_path, &serde_json::to_vec(&plan_raw).expect("plan json"));
-    testkit::write_file(&batch_path, &serde_json::to_vec(&batch_raw).expect("batch json"));
+    testkit::write_file(
+        &plan_path,
+        &serde_json::to_vec(&plan_raw).expect("plan json"),
+    );
+    testkit::write_file(
+        &batch_path,
+        &serde_json::to_vec(&batch_raw).expect("batch json"),
+    );
     let plan_repaired = testkit::load_plan_file(&plan_path).expect("repaired plan loads");
     let batch_repaired = testkit::load_batch_file(&batch_path).expect("repaired batch loads");
     prove_full_function(
@@ -390,8 +396,14 @@ fn stale_schema_crash_recovers_to_identical_serve() {
     assert!(matches!(err, CallError::Other(_)), "got {err:?}");
 
     // Documented recovery: the writer migrates in place.
-    stale.call("index_status", json!({})).expect("writer migrates");
-    assert_eq!(testkit::db_user_version(&db), current, "writer must stamp current");
+    stale
+        .call("index_status", json!({}))
+        .expect("writer migrates");
+    assert_eq!(
+        testkit::db_user_version(&db),
+        current,
+        "writer must stamp current"
+    );
 
     prove_full_function(
         &config,
@@ -448,7 +460,10 @@ fn double_crash_index_then_plan_recovers_to_original_baseline() {
     assert!(matches!(err, CallError::Json(_)), "got {err:?}");
 
     // Recovery 2: rewrite the original bytes, resume.
-    testkit::write_file(&plan_path, &serde_json::to_vec(&plan_raw).expect("plan json"));
+    testkit::write_file(
+        &plan_path,
+        &serde_json::to_vec(&plan_raw).expect("plan json"),
+    );
     let plan_repaired = testkit::load_plan_file(&plan_path).expect("repaired plan loads");
 
     // Final proof against the ORIGINAL baseline: no residue from either crash.

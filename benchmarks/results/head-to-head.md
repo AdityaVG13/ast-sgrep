@@ -7,6 +7,28 @@
 This file reports only measurements already recorded in repository artifacts.
 It does not combine or extrapolate runs. Lower latency is better.
 
+## 2026-09-20 2.5.0 re-pin (self corpus, 702 tracked / 650 indexed files, working tree)
+
+**Status: `reproducible-in-tree`.** Same protocol as the September fix
+row, re-run on the 2.5.0 release tree. Raw protocol:
+[`speed.md`](speed.md) (2.5.0 re-pin section; working tree atop
+`b23a2454` — re-run after commit to re-pin).
+
+| Win class | asgrep p95 | Comparator p95 | Result |
+|---|---:|---:|---|
+| Warm lexical (`literal:SearchHit`, one-shot) | 8.5 ms | ripgrep 13.1 ms | **asgrep** (1.54×) |
+| Warm lexical (one-shot vs warm servers) | 8.5 ms | tgrep 5.8 ms, fff 0.4 ms | warm servers lead; fff ranked 20/50, latency-only |
+| Plain scan (`grep -rn`) | 8.5 ms | grep 58.1 ms | **asgrep** (6.8×) |
+| Structural (`pattern:SearchHit`, hand-written code) | 9.5 ms | ast-grep 61.3 ms (excl. generated file) | **asgrep** (6.5×); latency-only, not match-set |
+| Structural (generated file included) | 9.5 ms | ast-grep 279.8 ms | **asgrep** (29×); indexed-vs-parse-per-query, not general superiority |
+| Warm semantic NL | 15.5 ms | — | indexed semantic; no scan-tool analogue |
+| Cold index | 14.9 s | — | no scan-tool analogue |
+
+Warm lexical is indexed-vs-scan: asgrep's index is built before timing;
+ripgrep/grep scan on each query. The ast-grep full-tree cell is driven
+by one generated 1 MB+ Rust file (control without it: 61.3 ms, same as
+September's 63.3); quote the 6.5× cell for hand-written code.
+
 ## 2026-09-20 measured (self corpus, ~650 tracked files, working tree)
 
 **Status: `reproducible-in-tree`.** CLI `hyperfine` on a `git ls-files` copy

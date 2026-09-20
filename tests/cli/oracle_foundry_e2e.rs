@@ -52,7 +52,10 @@ fn keyword_face_is_coherent() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["ok"], true);
     let json_hits = value["hits"].as_array().expect("hits array").len();
-    assert!(json_hits >= 3, "corpus must yield >=3 hits, got {json_hits}");
+    assert!(
+        json_hits >= 3,
+        "corpus must yield >=3 hits, got {json_hits}"
+    );
     let (hcode, hstdout, hstderr) = corpus.query_human("keyword", "sentinel_alpha", &[]);
     assert_eq!(hcode, 0, "stderr={hstderr}");
     assert!(hstderr.is_empty(), "clean run stays silent: {hstderr}");
@@ -68,7 +71,13 @@ fn keyword_face_is_coherent() {
         corpus.query_json("keyword", "sentinel_alpha", &["--files-with-matches"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let files = value["files"].as_array().expect("files array").clone();
-    assert_eq!(files, vec![serde_json::Value::from("a.rs"), serde_json::Value::from("b.rs")]);
+    assert_eq!(
+        files,
+        vec![
+            serde_json::Value::from("a.rs"),
+            serde_json::Value::from("b.rs")
+        ]
+    );
     let (hcode, hstdout, hstderr) =
         corpus.query_human("keyword", "sentinel_alpha", &["--files-with-matches"]);
     assert_eq!(hcode, 0, "stderr={hstderr}");
@@ -99,8 +108,7 @@ fn keyword_face_is_coherent() {
     let (code, value, _, _) = corpus.query_json("keyword", "sentinel_alpha", &[]);
     assert_eq!(code, 0);
     let all = json_hit_keys(&value);
-    let files: std::collections::BTreeSet<&str> =
-        all.iter().map(|k| k.file.as_str()).collect();
+    let files: std::collections::BTreeSet<&str> = all.iter().map(|k| k.file.as_str()).collect();
     assert!(
         files.len() >= 2,
         "corpus must span >=2 files, got {files:?}"
@@ -110,11 +118,7 @@ fn keyword_face_is_coherent() {
     assert_eq!(fcode, 0, "stderr={fstderr}");
     assert_eq!(fvalue["ok"], true);
     let filtered = json_hit_keys(&fvalue);
-    let expected: Vec<SurfaceHitKey> = all
-        .iter()
-        .filter(|k| k.file == "a.rs")
-        .cloned()
-        .collect();
+    let expected: Vec<SurfaceHitKey> = all.iter().filter(|k| k.file == "a.rs").cloned().collect();
     assert!(!expected.is_empty(), "a.rs must match");
     assert_eq!(filtered, expected);
     assert!(filtered.len() < all.len(), "narrowing must shrink the set");
@@ -177,7 +181,9 @@ fn search_face_is_coherent() {
     assert_eq!(hits[0]["file"], "a.rs");
     assert_eq!(hits[0]["line_start"], 1);
     assert_eq!(hits[0]["line_end"], 1);
-    assert!(hits.iter().all(|h| h["symbol"].is_string() && h["file"].is_string()));
+    assert!(hits
+        .iter()
+        .all(|h| h["symbol"].is_string() && h["file"].is_string()));
 
     // Facet 2: human search rows == JSON hits count, clean stderr.
     let (code, value, _, stderr) = corpus.query_json("search", "pass4_alpha", &[]);
@@ -208,7 +214,13 @@ fn search_face_is_coherent() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["ok"], true);
     let files = value["files"].as_array().expect("files array").clone();
-    assert_eq!(files, vec![serde_json::Value::from("a.rs"), serde_json::Value::from("b.rs")]);
+    assert_eq!(
+        files,
+        vec![
+            serde_json::Value::from("a.rs"),
+            serde_json::Value::from("b.rs")
+        ]
+    );
     let mut hit_files: Vec<String> = value["hits"]
         .as_array()
         .expect("hits")
@@ -217,7 +229,8 @@ fn search_face_is_coherent() {
         .collect();
     hit_files.sort();
     hit_files.dedup();
-    let hit_files: Vec<serde_json::Value> = hit_files.into_iter().map(serde_json::Value::from).collect();
+    let hit_files: Vec<serde_json::Value> =
+        hit_files.into_iter().map(serde_json::Value::from).collect();
     assert_eq!(files, hit_files);
     let (zcode, zvalue, _, _) = corpus.query_json(
         "search",
@@ -231,8 +244,7 @@ fn search_face_is_coherent() {
     // Facet 5: no-hits is ok:true exit 0 with empty hits/human-stdout —
     // looped over BOTH channels in this one test.
     for channel in ["search", "keyword"] {
-        let (code, value, _, stderr) =
-            corpus.query_json(channel, "zzz_no_such_symbol_zzz", &[]);
+        let (code, value, _, stderr) = corpus.query_json(channel, "zzz_no_such_symbol_zzz", &[]);
         assert_eq!(code, 0, "channel={channel} stderr={stderr}");
         assert_eq!(value["ok"], true, "channel={channel}");
         assert_eq!(value["exit_code"], 0, "channel={channel}");
@@ -241,8 +253,7 @@ fn search_face_is_coherent() {
             0,
             "channel={channel}"
         );
-        let (hcode, hstdout, hstderr) =
-            corpus.query_human(channel, "zzz_no_such_symbol_zzz", &[]);
+        let (hcode, hstdout, hstderr) = corpus.query_human(channel, "zzz_no_such_symbol_zzz", &[]);
         assert_eq!(hcode, 0, "channel={channel} stderr={hstderr}");
         assert!(hstdout.is_empty(), "channel={channel}");
         assert!(hstderr.is_empty(), "channel={channel}");
@@ -272,7 +283,10 @@ fn outline_face_is_coherent() {
     assert_eq!(value["count"], 3);
     let symbols = value["symbols"].as_array().expect("symbols");
     assert_eq!(symbols.len(), 3);
-    let names: Vec<&str> = symbols.iter().map(|s| s["name"].as_str().expect("name")).collect();
+    let names: Vec<&str> = symbols
+        .iter()
+        .map(|s| s["name"].as_str().expect("name"))
+        .collect();
     assert_eq!(names, vec!["alpha", "beta", "gamma"]);
     let starts: Vec<u64> = symbols
         .iter()
@@ -295,10 +309,13 @@ fn outline_face_is_coherent() {
     assert_eq!(first, second, "repeated outline must be byte-identical");
 
     // Facet 3: struct line 1 kind type + fn line 2 kind function, line order.
-    let (mixed, _) = OracleCorpus::index_files(&asgrep(), &[(
-        "s.rs",
-        b"struct Pass4Thing { x: i32 }\nfn pass4_method() {}\n".as_slice(),
-    )]);
+    let (mixed, _) = OracleCorpus::index_files(
+        &asgrep(),
+        &[(
+            "s.rs",
+            b"struct Pass4Thing { x: i32 }\nfn pass4_method() {}\n".as_slice(),
+        )],
+    );
     let (code, value, _, stderr) = mixed.outline_json("s.rs");
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["command"], "outline");
@@ -330,13 +347,16 @@ fn outline_face_is_coherent() {
 #[test]
 fn index_status_chain_flows() {
     // Facets 1-3 share one hand corpus: 2 files, 3 symbols, 1 caller edge.
-    let (corpus, index_value) = OracleCorpus::index_files(&asgrep(), &[
-        (
-            "a.rs",
-            b"fn pass4_alpha() {}\nfn pass4_beta() { pass4_alpha(); }\n".as_slice(),
-        ),
-        ("b.rs", b"fn pass4_gamma() {}\n".as_slice()),
-    ]);
+    let (corpus, index_value) = OracleCorpus::index_files(
+        &asgrep(),
+        &[
+            (
+                "a.rs",
+                b"fn pass4_alpha() {}\nfn pass4_beta() { pass4_alpha(); }\n".as_slice(),
+            ),
+            ("b.rs", b"fn pass4_gamma() {}\n".as_slice()),
+        ],
+    );
 
     // Facet 1: index envelope hand counts 2 files / 0 failed / 3 symbols.
     assert_eq!(index_value["command"], "index");
@@ -385,14 +405,16 @@ fn index_status_chain_flows() {
     assert_eq!(scode, 0, "stderr={sstderr}");
     let hits = svalue["hits"].as_array().expect("hits");
     assert!(
-        hits.iter().any(|h| h["symbol"] == "pass4_newcomer" && h["file"] == "b.rs"),
+        hits.iter()
+            .any(|h| h["symbol"] == "pass4_newcomer" && h["file"] == "b.rs"),
         "reindex must surface the added file: {hits:?}"
     );
 
     // Facet 5: index and search on a missing root are exit 2 ok:false operational.
     let missing = corpus.temp.path().join("does-not-exist");
     let missing = missing.to_str().unwrap();
-    let (icode, ivalue, _, _) = oracle_run_json(&asgrep(), 
+    let (icode, ivalue, _, _) = oracle_run_json(
+        &asgrep(),
         &[
             "--json",
             "--no-embed",
@@ -451,17 +473,19 @@ fn index_status_chain_flows() {
 /// KILLS: path-mangling/non-UTF8-loss, fail-open-on-empty,
 /// CRLF line-split, line-length truncation/OOM-path, crash-on-invalid-UTF8/
 /// result-poisoning, depth-limit/walk-prune mutants.
-/// ABSORBS: unicode_paths_index_search_and_outline +
-/// empty_file_indexes_searches_and_outline_refuses +
-/// crlf_line_spans_are_hand_computed + huge_single_line_is_stable_and_located
-/// + invalid_utf8_is_stable_with_valid_json_output +
+/// ABSORBS: unicode_paths_index_search_and_outline,
+/// empty_file_indexes_searches_and_outline_refuses,
+/// crlf_line_spans_are_hand_computed, huge_single_line_is_stable_and_located,
+/// invalid_utf8_is_stable_with_valid_json_output,
 /// deep_directories_index_and_search.
 #[test]
 fn adversarial_files_stay_stable() {
     // Facet 1: non-ASCII filename round-trips through index, search, outline.
     let name = "héllo_世界.rs";
-    let (corpus, _) =
-        OracleCorpus::index_files(&asgrep(), &[(name, b"fn unicode_sentinel_fn() {}\n".as_slice())]);
+    let (corpus, _) = OracleCorpus::index_files(
+        &asgrep(),
+        &[(name, b"fn unicode_sentinel_fn() {}\n".as_slice())],
+    );
     let (code, value, _, stderr) = corpus.query_json("keyword", "unicode_sentinel_fn", &[]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["ok"], true);
@@ -476,10 +500,13 @@ fn adversarial_files_stay_stable() {
     assert_eq!(ovalue["count"], 1);
 
     // Facet 2: empty file coexists with search; outline on it is exit 2 ok:false.
-    let (corpus, _) = OracleCorpus::index_files(&asgrep(), &[
-        ("empty.rs", b"".as_slice()),
-        ("full.rs", b"fn full_fn() {}\n".as_slice()),
-    ]);
+    let (corpus, _) = OracleCorpus::index_files(
+        &asgrep(),
+        &[
+            ("empty.rs", b"".as_slice()),
+            ("full.rs", b"fn full_fn() {}\n".as_slice()),
+        ],
+    );
     let (code, value, _, stderr) = corpus.query_json("keyword", "full_fn", &[]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["ok"], true);
@@ -489,10 +516,13 @@ fn adversarial_files_stay_stable() {
     assert_eq!(ovalue["exit_code"], 2);
 
     // Facet 3: CRLF file outlines count 2 with starts [1,2].
-    let (corpus, _) = OracleCorpus::index_files(&asgrep(), &[(
-        "crlf.rs",
-        b"fn crlf_one() {}\r\nfn crlf_two() {}\r\n".as_slice(),
-    )]);
+    let (corpus, _) = OracleCorpus::index_files(
+        &asgrep(),
+        &[(
+            "crlf.rs",
+            b"fn crlf_one() {}\r\nfn crlf_two() {}\r\n".as_slice(),
+        )],
+    );
     let (code, value, _, stderr) = corpus.outline_json("crlf.rs");
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["count"], 2);
@@ -523,13 +553,16 @@ fn adversarial_files_stay_stable() {
     // JSON, clean file searchable. The corpus carries a clean file because
     // a lone hostile file would leave the index EMPTY (skipped as binary),
     // tripping the documented empty-index fail-closed (exit 2).
-    let (corpus, index_value) = OracleCorpus::index_files(&asgrep(), &[
-        (
-            "broken.rs",
-            b"fn broken_one() {}\n\xff\xfe\x00bad\x80bytes\nfn broken_two() {}\n".as_slice(),
-        ),
-        ("clean.rs", b"fn clean_sentinel() {}\n".as_slice()),
-    ]);
+    let (corpus, index_value) = OracleCorpus::index_files(
+        &asgrep(),
+        &[
+            (
+                "broken.rs",
+                b"fn broken_one() {}\n\xff\xfe\x00bad\x80bytes\nfn broken_two() {}\n".as_slice(),
+            ),
+            ("clean.rs", b"fn clean_sentinel() {}\n".as_slice()),
+        ],
+    );
     assert_eq!(index_value["ok"], true);
     assert_eq!(index_value["files_failed"], 1);
     assert_eq!(index_value["files_indexed"], 1);
@@ -554,16 +587,17 @@ fn adversarial_files_stay_stable() {
         rel.push_str(&format!("d{depth}/"));
     }
     rel.push_str("leaf.rs");
-    let (corpus, _) =
-        OracleCorpus::index_files(&asgrep(), &[(rel.as_str(), b"fn deep_leaf_fn() {}\n".as_slice())]);
+    let (corpus, _) = OracleCorpus::index_files(
+        &asgrep(),
+        &[(rel.as_str(), b"fn deep_leaf_fn() {}\n".as_slice())],
+    );
     let (code, value, _, stderr) = corpus.query_json("keyword", "deep_leaf_fn", &[]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(value["ok"], true);
     let hits = value["hits"].as_array().expect("hits");
     assert!(
-        hits.iter().any(|h| h["file"]
-            .as_str()
-            .is_some_and(|f| f.ends_with("leaf.rs"))),
+        hits.iter()
+            .any(|h| h["file"].as_str().is_some_and(|f| f.ends_with("leaf.rs"))),
         "deep leaf must be found: {hits:?}"
     );
 }

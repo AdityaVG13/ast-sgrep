@@ -33,17 +33,22 @@ const SUPPORTED: &[&str] = &[
 ///   match a pattern without `pub`); the native engine matches any function.
 /// - `struct AppContext`: the bodyless struct pattern does not match
 ///   `struct AppContext {}` in ast-grep; the native engine matches the decl.
+/// - `if (x > 0) { $BODY }`: concrete-condition ifs ride the native if lane
+///   since f131e (130A-F6, sg-agreeing at the walk); the UNSUPPORTED entry
+///   predates that expansion (Aug 15). ast-grep answers [] (paren-form is
+///   token-exact there), so it stays out of the equality list with its
+///   `$COND` sibling.
 const SUPPORTED_NATIVE_NORMALIZED: &[&str] = &[
     "if ($COND) { $BODY }",
     "if $COND: $BODY",
     "fn $NAME($$$)",
     "fn $N($$$) { $STMT }",
     "struct AppContext",
+    "if (x > 0) { $BODY }",
 ];
 
 const UNSUPPORTED: &[&str] = &[
     "if ($COND) { $A; $B }",
-    "if (x > 0) { $BODY }",
     "foo($X + 1)",
     "rule:\n  pattern: fn $A\n  fix: fn $B\n",
     "$A == $B",

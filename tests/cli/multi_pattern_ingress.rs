@@ -28,14 +28,11 @@ fn hits_by_pattern(envelope: &Value) -> BTreeMap<String, Vec<(String, i64, i64)>
     let mut by_pattern: BTreeMap<String, Vec<(String, i64, i64)>> = BTreeMap::new();
     for hit in envelope["hits"].as_array().unwrap_or(&vec![]) {
         let pattern = hit["symbol"].as_str().unwrap_or("").to_string();
-        by_pattern
-            .entry(pattern)
-            .or_default()
-            .push((
-                hit["file"].as_str().unwrap_or("").to_string(),
-                hit["line_start"].as_i64().unwrap_or_default(),
-                hit["line_end"].as_i64().unwrap_or_default(),
-            ));
+        by_pattern.entry(pattern).or_default().push((
+            hit["file"].as_str().unwrap_or("").to_string(),
+            hit["line_start"].as_i64().unwrap_or_default(),
+            hit["line_end"].as_i64().unwrap_or_default(),
+        ));
     }
     for set in by_pattern.values_mut() {
         set.sort();
@@ -81,11 +78,13 @@ fn batch_is_tagged_union_of_sequential() {
         "console.log($$$A)",
     ];
     let args = batch_args(&session, &patterns);
-    let out = session
-        .run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    let out = session.run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
     let envelope: Value = serde_json::from_slice(&out.stdout).expect("batch envelope json");
 
-    assert_eq!(envelope["command"], "search", "batch keeps the search command");
+    assert_eq!(
+        envelope["command"], "search",
+        "batch keeps the search command"
+    );
     assert_eq!(envelope["ok"], true, "batch envelope ok");
     let batch_by_pattern = hits_by_pattern(&envelope);
     for pattern in patterns {
@@ -96,7 +95,10 @@ fn batch_is_tagged_union_of_sequential() {
             .unwrap_or_else(|| panic!("batch hits missing tag for pattern {pattern}"));
         assert_eq!(
             batch_set,
-            sequential_sets.get(pattern).map(Vec::as_slice).unwrap_or(&[]),
+            sequential_sets
+                .get(pattern)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
             "per-pattern set differs from sequential for {pattern}"
         );
         assert!(
@@ -121,8 +123,7 @@ fn batch_is_tagged_union_of_sequential() {
 fn batch_envelope_query_lists_all_pattern_tokens() {
     let session = CliSession::sample(asgrep_bin());
     let args = batch_args(&session, &["validate_input($$$A)", "console.log($$$A)"]);
-    let out = session
-        .run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    let out = session.run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
     let envelope: Value = serde_json::from_slice(&out.stdout).expect("batch envelope json");
     let query = envelope["query"].as_str().expect("query field");
     assert!(
@@ -138,8 +139,7 @@ fn batch_accepts_pattern_prefixed_values() {
     let session = CliSession::sample(asgrep_bin());
     let run = |pattern: &str| {
         let args = batch_args(&session, &[pattern]);
-        let out = session
-            .run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        let out = session.run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
         let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
         hits_by_pattern(&envelope)
     };
@@ -168,8 +168,7 @@ fn batch_limit_applies_per_pattern() {
     let pos = args.iter().position(|a| a == "--no-auto-index").unwrap() + 1;
     args.insert(pos, "1".into());
     args.insert(pos, "--limit".into());
-    let out = session
-        .run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    let out = session.run_success(&args.iter().map(String::as_str).collect::<Vec<_>>());
     let envelope: Value = serde_json::from_slice(&out.stdout).expect("batch envelope json");
     let by_pattern = hits_by_pattern(&envelope);
     let def_hits = by_pattern.get("def $A").expect("decl pattern tag");
@@ -190,10 +189,12 @@ fn batch_limit_applies_per_pattern() {
 fn batch_fails_closed_on_fallback_pattern() {
     let session = CliSession::sample(asgrep_bin());
     let args = batch_args(&session, &["console.log($$$A)", "$A += $B"]);
-    let out = session
-        .run_failure(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    let out = session.run_failure(&args.iter().map(String::as_str).collect::<Vec<_>>());
     let envelope: Value = serde_json::from_slice(&out.stdout).expect("error envelope json");
-    assert_eq!(envelope["ok"], false, "batch with a fallback pattern is loud");
+    assert_eq!(
+        envelope["ok"], false,
+        "batch with a fallback pattern is loud"
+    );
     let message = envelope["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.contains("structural fallback"),
@@ -201,9 +202,7 @@ fn batch_fails_closed_on_fallback_pattern() {
     );
     // And the same shape fails when run singly (contract mirrored, not invented).
     let single_args = batch_args(&session, &["$A += $B"]);
-    let single = session.run_failure(
-        &single_args.iter().map(String::as_str).collect::<Vec<_>>(),
-    );
+    let single = session.run_failure(&single_args.iter().map(String::as_str).collect::<Vec<_>>());
     let single_envelope: Value = serde_json::from_slice(&single.stdout).unwrap();
     assert_eq!(single_envelope["ok"], false);
 }

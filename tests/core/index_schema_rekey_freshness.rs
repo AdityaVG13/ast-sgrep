@@ -188,7 +188,10 @@ fn writable_open_migrates_then_reindex_rebuilds_scoped_call_rows_and_answers_fac
                 |r| r.get(0),
             )
             .expect("count regressed rows");
-        assert_eq!(stale, 2, "both scoped calls must present the stale call:bar key");
+        assert_eq!(
+            stale, 2,
+            "both scoped calls must present the stale call:bar key"
+        );
     }
 
     // Step 3 — writable open auto-migrates: stamp advances, stale rows are
@@ -210,14 +213,20 @@ fn writable_open_migrates_then_reindex_rebuilds_scoped_call_rows_and_answers_fac
             stale_rows, 0,
             "pre-rekey signature rows must not survive the migration"
         );
-        let hash = store.file_hash("probe.php").expect("file hash").expect("row");
+        let hash = store
+            .file_hash("probe.php")
+            .expect("file hash")
+            .expect("row");
         assert!(
             hash.starts_with("schema15-rekey:"),
             "stored content identity must be prefixed so the hash fast path cannot skip: {hash}"
         );
         for key in ["body:probe.php", "struct:probe.php"] {
             assert!(
-                store.get_meta(key).expect("read fingerprint meta").is_none(),
+                store
+                    .get_meta(key)
+                    .expect("read fingerprint meta")
+                    .is_none(),
                 "F76c-1: the migration must discard the {key} structure fingerprint; \
                  a surviving fingerprint routes the next pass to refresh_lines_only, \
                  which rewrites the plain hash WITHOUT reparsing and leaves \
@@ -263,7 +272,10 @@ fn writable_open_migrates_then_reindex_rebuilds_scoped_call_rows_and_answers_fac
                 |r| r.get(0),
             )
             .expect("count bare-callee rows");
-        assert_eq!(bare, 0, "no bare bar() call exists, so no call:bar row may exist");
+        assert_eq!(
+            bare, 0,
+            "no bare bar() call exists, so no call:bar row may exist"
+        );
     }
 
     // Step 5 — F72a-1 faces on the rebuilt index (build + search cycle):
@@ -277,8 +289,14 @@ fn writable_open_migrates_then_reindex_rebuilds_scoped_call_rows_and_answers_fac
         let exact = searcher.search("pattern:Foo::bar($A)").expect("exact face");
         let mut lines: Vec<u32> = exact.hits.iter().map(|hit| hit.line_start).collect();
         lines.sort_unstable();
-        assert_eq!(lines, vec![7, 8], "Foo::bar($A) must answer both scoped calls");
-        let overmatch = searcher.search("pattern:bar($$$A)").expect("over-match face");
+        assert_eq!(
+            lines,
+            vec![7, 8],
+            "Foo::bar($A) must answer both scoped calls"
+        );
+        let overmatch = searcher
+            .search("pattern:bar($$$A)")
+            .expect("over-match face");
         assert!(
             overmatch.hits.is_empty(),
             "bar($$$A) must answer empty on a fresh index: {:?}",

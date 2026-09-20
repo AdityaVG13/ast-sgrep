@@ -134,15 +134,15 @@ fn static_match_equivalence_battery() {
     })
     .unwrap();
     for needle in [
-        "zzquux_marker",                          // rare multi-trigram
-        "beta_shared_rare_token",                 // shared across files
-        "ALPHA_ZZQUUX_MARKER_PAYLOAD",            // mixed case, present
-        "fill_7_13",                              // exact identifier
-        "sentinel",                               // single-file term
-        "payload",                                // four-file term
-        "no_such_needle_xyzzy_qq",                // absent
-        "zz",                                     // too short for trigram
-        "Flöral",                                 // non-ASCII takes Full
+        "zzquux_marker",                                        // rare multi-trigram
+        "beta_shared_rare_token",                               // shared across files
+        "ALPHA_ZZQUUX_MARKER_PAYLOAD",                          // mixed case, present
+        "fill_7_13",                                            // exact identifier
+        "sentinel",                                             // single-file term
+        "payload",                                              // four-file term
+        "no_such_needle_xyzzy_qq",                              // absent
+        "zz",                                                   // too short for trigram
+        "Flöral",                                               // non-ASCII takes Full
         "a_very_long_needle_with_many_trigrams_over_budget_zz", // over budget
     ] {
         let query = format!("literal:{needle}");
@@ -232,7 +232,11 @@ fn cold_search_skips_vocab_ensure_until_warmed() {
             )
             .unwrap()
     };
-    assert_eq!(vocab_tables(), 0, "precondition: no vocab before any search");
+    assert_eq!(
+        vocab_tables(),
+        0,
+        "precondition: no vocab before any search"
+    );
     // Cold one-shot path: correct results with NO vocab creation (no preload tax).
     assert_eq!(
         hit_files(&searcher, "literal:beta_shared_rare_token").len(),
@@ -251,11 +255,7 @@ fn cold_search_skips_vocab_ensure_until_warmed() {
         3,
         "warmed search stays correct with the df vocab engaged"
     );
-    assert_eq!(
-        vocab_tables(),
-        1,
-        "warmed session must engage the df vocab"
-    );
+    assert_eq!(vocab_tables(), 1, "warmed session must engage the df vocab");
 }
 
 #[test]

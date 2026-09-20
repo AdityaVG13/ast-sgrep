@@ -33,7 +33,10 @@ fn second_root_positional_teaches_one_root_per_query() {
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["error"]["kind"], "usage");
     assert!(
-        value["error"]["message"].as_str().unwrap_or("").contains("one ROOT per query"),
+        value["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("one ROOT per query"),
         "{value}"
     );
 }

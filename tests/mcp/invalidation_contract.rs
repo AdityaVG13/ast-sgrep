@@ -48,10 +48,7 @@ fn index_status_discriminates_missing_unindexed_and_fresh() {
     assert_tool_success(&fresh);
     let body = tool_body(&fresh);
     assert_eq!(body["file_count"], 1, "{body:#}");
-    assert!(
-        body["symbol_count"].as_u64().unwrap_or(0) >= 1,
-        "{body:#}"
-    );
+    assert!(body["symbol_count"].as_u64().unwrap_or(0) >= 1, "{body:#}");
     assert_ne!(body["writer_generation"], 0, "{body:#}");
 }
 
@@ -70,20 +67,23 @@ fn search_on_stale_index_serves_pre_change_hits_without_flag() {
     assert_tool_success(&before);
     let before_text = tool_text(&before).to_owned();
     assert_hit_envelope(&tool_body(&before));
-    let status_before = tool_body(&rpc_at(tool_call(2, "index_status", json!({})), temp.path()));
+    let status_before = tool_body(&rpc_at(
+        tool_call(2, "index_status", json!({})),
+        temp.path(),
+    ));
 
     // Edit without reindexing: the file now names beta, the index still alpha.
-    std::fs::write(
-        temp.path().join("lib.rs"),
-        "fn zebroid_quixotic() {}\n",
-    )
-    .unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "fn zebroid_quixotic() {}\n").unwrap();
 
     // Contract: search serves the stale index with success shape, byte-identical
     // to before the edit, and the envelope carries no staleness discriminant.
     let stale = rpc_at(search_call(3, "alpha_marker"), temp.path());
     assert_tool_success(&stale);
-    assert_eq!(tool_text(&stale), before_text, "stale search must serve old rows");
+    assert_eq!(
+        tool_text(&stale),
+        before_text,
+        "stale search must serve old rows"
+    );
     let body = tool_body(&stale);
     assert_hit_envelope(&body);
     for key in ["stale", "fresh", "dirty", "generation", "writer_generation"] {
@@ -95,7 +95,10 @@ fn search_on_stale_index_serves_pre_change_hits_without_flag() {
     assert_miss_envelope(&tool_body(&unseen), "no_match");
 
     // A bare file edit moves no index discriminant.
-    let status_after = tool_body(&rpc_at(tool_call(5, "index_status", json!({})), temp.path()));
+    let status_after = tool_body(&rpc_at(
+        tool_call(5, "index_status", json!({})),
+        temp.path(),
+    ));
     assert_eq!(status_after["file_count"], status_before["file_count"]);
     assert_eq!(
         status_after["writer_generation"], status_before["writer_generation"],
@@ -115,19 +118,21 @@ fn external_reindex_invalidates_warm_session_searcher() {
 
     // Warm the session Searcher, then mutate the index out of band.
     let mut session = Session::spawn(temp.path());
-    let first = session.call("keyword_search", json!({"query": "alpha_marker", "limit": 8}));
+    let first = session.call(
+        "keyword_search",
+        json!({"query": "alpha_marker", "limit": 8}),
+    );
     assert_tool_success(&first);
     assert_hit_envelope(&tool_body(&first));
 
-    std::fs::write(
-        temp.path().join("lib.rs"),
-        "fn zebroid_quixotic() {}\n",
-    )
-    .unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "fn zebroid_quixotic() {}\n").unwrap();
     index_tree(temp.path());
 
     // The same session must serve fresh rows, not its warm snapshot.
-    let gone = session.call("keyword_search", json!({"query": "alpha_marker", "limit": 8}));
+    let gone = session.call(
+        "keyword_search",
+        json!({"query": "alpha_marker", "limit": 8}),
+    );
     assert_tool_success(&gone);
     assert_miss_envelope(&tool_body(&gone), "no_match");
     let found = session.call(
@@ -151,16 +156,14 @@ fn restart_picks_up_fresh_state() {
 
     let first = rpc_at(search_call(1, "alpha_marker"), temp.path());
     assert_hit_envelope(&tool_body(&first));
-    let gen_before =
-        tool_body(&rpc_at(tool_call(2, "index_status", json!({})), temp.path()))["writer_generation"]
-            .as_u64()
-            .unwrap();
+    let gen_before = tool_body(&rpc_at(
+        tool_call(2, "index_status", json!({})),
+        temp.path(),
+    ))["writer_generation"]
+        .as_u64()
+        .unwrap();
 
-    std::fs::write(
-        temp.path().join("lib.rs"),
-        "fn zebroid_quixotic() {}\n",
-    )
-    .unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "fn zebroid_quixotic() {}\n").unwrap();
     index_tree(temp.path());
 
     // A restarted process observes the new epoch and the new rows.
@@ -169,7 +172,10 @@ fn restart_picks_up_fresh_state() {
     let found = rpc_at(search_call(4, "zebroid_quixotic"), temp.path());
     assert_tool_success(&found);
     assert_hit_envelope(&tool_body(&found));
-    let status = tool_body(&rpc_at(tool_call(5, "index_status", json!({})), temp.path()));
+    let status = tool_body(&rpc_at(
+        tool_call(5, "index_status", json!({})),
+        temp.path(),
+    ));
     assert_eq!(status["file_count"], 1);
     assert_ne!(status["writer_generation"].as_u64().unwrap(), 0);
     assert_ne!(
@@ -193,7 +199,10 @@ fn index_repo_heals_empty_index_miss_within_session() {
     std::fs::write(temp.path().join("lib.rs"), "fn target_symbol() {}\n").unwrap();
 
     let mut session = Session::spawn(temp.path());
-    let miss = session.call("keyword_search", json!({"query": "target_symbol", "limit": 8}));
+    let miss = session.call(
+        "keyword_search",
+        json!({"query": "target_symbol", "limit": 8}),
+    );
     assert_tool_success(&miss);
     assert_miss_envelope(&tool_body(&miss), "empty_index");
 
@@ -206,7 +215,10 @@ fn index_repo_heals_empty_index_miss_within_session() {
     );
     assert_eq!(stats["files_failed"], 0, "{stats:#}");
 
-    let found = session.call("keyword_search", json!({"query": "target_symbol", "limit": 8}));
+    let found = session.call(
+        "keyword_search",
+        json!({"query": "target_symbol", "limit": 8}),
+    );
     assert_tool_success(&found);
     assert_hit_envelope(&tool_body(&found));
     let status = session.call("index_status", json!({}));

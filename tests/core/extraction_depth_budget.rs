@@ -109,7 +109,10 @@ fn truncated_files_answers_come_from_the_native_walk_not_the_index() {
 fn files_within_the_budget_keep_their_index_lane() {
     let (_temp, _stats, searcher) = indexed_depth_corpus();
     // shallow.rs was not truncated, so its markers must still resolve.
-    for (pattern, needle) in [("pattern:shallow_marker", "shallow.rs"), ("pattern:mid_marker", "shallow.rs")] {
+    for (pattern, needle) in [
+        ("pattern:shallow_marker", "shallow.rs"),
+        ("pattern:mid_marker", "shallow.rs"),
+    ] {
         let response = searcher.search(pattern).expect("search");
         let file = first_hit_file(&response.hits, needle);
         assert_eq!(

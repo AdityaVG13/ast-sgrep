@@ -26,7 +26,10 @@ fn filter_hits_contract() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut session = testkit::session_at(temp.path());
         let out = session
-            .call("filter_hits", json!({"hits": hits_fixture(), "min_score": 2.0}))
+            .call(
+                "filter_hits",
+                json!({"hits": hits_fixture(), "min_score": 2.0}),
+            )
             .expect("filter runs");
         assert_eq!(out["hit_count"], json!(2));
         assert_eq!(out["hits"][0]["file"], json!("src/a.rs"));
@@ -46,7 +49,10 @@ fn filter_hits_contract() {
             .expect("min 0 runs");
         assert_eq!(at_zero["hit_count"], json!(2));
         let negative = session
-            .call("filter_hits", json!({"hits": hits_fixture(), "min_score": -1.0}))
+            .call(
+                "filter_hits",
+                json!({"hits": hits_fixture(), "min_score": -1.0}),
+            )
             .expect("negative min runs");
         assert_eq!(negative["hit_count"], json!(3));
         let positive = session
@@ -66,7 +72,10 @@ fn filter_hits_contract() {
         assert_eq!(floored["hit_count"], json!(1));
         assert_eq!(floored["hits"][0]["file"], json!("src/a.rs"));
         let capped = session
-            .call("filter_hits", json!({"hits": hits_fixture(), "limit": 99999}))
+            .call(
+                "filter_hits",
+                json!({"hits": hits_fixture(), "limit": 99999}),
+            )
             .expect("huge limit runs");
         assert_eq!(capped["hit_count"], json!(3));
     }
@@ -85,7 +94,10 @@ fn filter_hits_contract() {
         ];
         for min in thresholds {
             let out = session
-                .call("filter_hits", json!({"hits": hits_fixture(), "min_score": min}))
+                .call(
+                    "filter_hits",
+                    json!({"hits": hits_fixture(), "min_score": min}),
+                )
                 .expect("non-numeric min runs");
             assert_eq!(out["hit_count"], json!(3));
             assert_eq!(out["hits"].as_array().expect("hits").len(), 3);
@@ -132,7 +144,10 @@ fn filter_hits_contract() {
         ];
         for limit in limits {
             let out = session
-                .call("filter_hits", json!({"hits": hits_fixture(), "limit": limit}))
+                .call(
+                    "filter_hits",
+                    json!({"hits": hits_fixture(), "limit": limit}),
+                )
                 .expect("degenerate limit runs");
             assert_eq!(out["hit_count"], json!(3));
         }
@@ -211,7 +226,9 @@ fn filter_hits_contract() {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut session = testkit::session_at(temp.path());
         let args = json!({"hits": scored_hits5(), "min_score": 3.0, "limit": 10});
-        let first = session.call("filter_hits", args.clone()).expect("first runs");
+        let first = session
+            .call("filter_hits", args.clone())
+            .expect("first runs");
         let second = session.call("filter_hits", args).expect("second runs");
         assert_eq!(first, second);
     }
@@ -239,12 +256,22 @@ fn filter_hits_contract() {
                 .expect("filter runs");
             assert_eq!(out["hit_count"], json!(count), "min {min}");
             assert_eq!(testkit::hit_files(&out).len(), count);
-            assert_eq!(testkit::hit_files(&out)[0], "f6.rs".to_string(), "min {min}");
+            assert_eq!(
+                testkit::hit_files(&out)[0],
+                "f6.rs".to_string(),
+                "min {min}"
+            );
         }
         let out = session
-            .call("filter_hits", json!({"hits": scored_hits6(), "min_score": 3.0}))
+            .call(
+                "filter_hits",
+                json!({"hits": scored_hits6(), "min_score": 3.0}),
+            )
             .expect("mid threshold reruns");
-        assert_eq!(testkit::hit_files(&out), vec!["f6.rs", "f5.rs", "f4.rs", "f3.rs"]);
+        assert_eq!(
+            testkit::hit_files(&out),
+            vec!["f6.rs", "f5.rs", "f4.rs", "f3.rs"]
+        );
         assert_eq!(session.call_count(), 8);
     }
 }

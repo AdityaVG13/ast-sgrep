@@ -85,7 +85,9 @@ fn drill_corrupt_index_open_fails_database_then_force_reindex_recovers() {
             force_reindex: true,
             ..IndexOptions::default()
         })
-        .unwrap_or_else(|err| panic!("{trigger}: force_reindex must quarantine and recover, got {err:?}"));
+        .unwrap_or_else(|err| {
+            panic!("{trigger}: force_reindex must quarantine and recover, got {err:?}")
+        });
         indexer
             .index_all()
             .unwrap_or_else(|err| panic!("{trigger}: recovery index_all failed, got {err:?}"));

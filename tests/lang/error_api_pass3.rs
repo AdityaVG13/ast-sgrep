@@ -26,9 +26,8 @@ use ast_sgrep_lang::{
     cached_pattern_signatures, candidate_kind_signatures, classify_native, detect_language,
     index_can_serve_pattern, is_pattern_ident, is_universal_root_pattern,
     literal_trailing_comment_lane, match_literal_pattern, match_pattern, native_pattern_answerable,
-    needs_ast_grep_fallback, pattern_is_keyword_literal_root,
-    php_comment_transparent_operand_lane, required_pattern_literal,
-    Language, ParserRegistry,
+    needs_ast_grep_fallback, pattern_is_keyword_literal_root, php_comment_transparent_operand_lane,
+    required_pattern_literal, Language, ParserRegistry,
 };
 use std::path::Path;
 
@@ -37,8 +36,8 @@ use std::path::Path;
 // `degenerate_inputs_total_and_stable` no-panic sweep). Kept here, not
 // promoted: only these two tests sweep it.
 const DEGENERATE_PATTERNS: &[&str] = &[
-    "", " ", "\t\n", "\x00", "µ", "$", "$$$", "$Ü", "💥", "\u{feff}", "(", ")", "{", "}",
-    ";", ";;", "->", "&&", ".", "$A$$B",
+    "", " ", "\t\n", "\x00", "µ", "$", "$$$", "$Ü", "💥", "\u{feff}", "(", ")", "{", "}", ";",
+    ";;", "->", "&&", ".", "$A$$B",
 ];
 
 /// E3-LANG-01: match entry-point agreement + repetition determinism.
@@ -77,7 +76,9 @@ fn match_entries_agree_and_repeat_deterministically() {
     // The empty-pattern degenerate agrees as Ok + empty in BOTH entries.
     for lang in Language::all() {
         assert!(match_pattern(*lang, "fn f() {}", "").unwrap().is_empty());
-        assert!(match_literal_pattern(*lang, "fn f() {}", "").unwrap().is_empty());
+        assert!(match_literal_pattern(*lang, "fn f() {}", "")
+            .unwrap()
+            .is_empty());
     }
     // Absorbed degenerate leg: no-panic sweep — both match entries stay Ok
     // with identical results across repetitions, and extraction treats the
@@ -111,7 +112,11 @@ fn language_id_entries_agree() {
         assert_eq!(Language::from_extension(ext), Some(*lang), "{ext}");
         assert_eq!(Language::parse(ext), Language::from_extension(ext), "{ext}");
         // Case + padding invariance across entries.
-        assert_eq!(Language::from_extension(&ext.to_ascii_uppercase()), Some(*lang), "{ext}");
+        assert_eq!(
+            Language::from_extension(&ext.to_ascii_uppercase()),
+            Some(*lang),
+            "{ext}"
+        );
         assert_eq!(Language::parse(&format!("  {ext}  ")), Some(*lang), "{ext}");
         assert_eq!(
             Language::canonical_filter(Some(ext)).as_deref(),
@@ -119,12 +124,20 @@ fn language_id_entries_agree() {
             "{ext}"
         );
         assert_eq!(Language::normalize_id(ext), lang.as_str(), "{ext}");
-        assert_eq!(Language::normalize_id(&ext.to_ascii_uppercase()), lang.as_str(), "{ext}");
+        assert_eq!(
+            Language::normalize_id(&ext.to_ascii_uppercase()),
+            lang.as_str(),
+            "{ext}"
+        );
         // Detection agrees with the extension table, case-insensitively.
         let rel = format!("n.{ext}");
         assert_eq!(detect_language(Path::new(&rel), None), Some(*lang), "{ext}");
         let upper = format!("n.{}", ext.to_ascii_uppercase());
-        assert_eq!(detect_language(Path::new(&upper), None), Some(*lang), "{ext}");
+        assert_eq!(
+            detect_language(Path::new(&upper), None),
+            Some(*lang),
+            "{ext}"
+        );
         // Repetition determinism.
         assert_eq!(
             detect_language(Path::new(&rel), None),
@@ -143,7 +156,10 @@ fn language_id_entries_agree() {
         );
         assert_eq!(Language::normalize_id(unknown), lowered, "{unknown:?}");
         let rel = format!("n.{unknown}");
-        assert!(detect_language(Path::new(&rel), None).is_none(), "{unknown:?}");
+        assert!(
+            detect_language(Path::new(&rel), None).is_none(),
+            "{unknown:?}"
+        );
     }
     // Blank input is the no-filter degenerate in every entry.
     for blank in ["", "   "] {
@@ -189,8 +205,7 @@ fn classifier_acceptance_implies_downstream_presence() {
         if cached_pattern_signatures(pattern).is_some() {
             // Exact contract: the dollar-less ident fast path serves
             // without classifying; every other served shape must classify.
-            let fast_path =
-                !pattern.contains('$') && is_pattern_ident(pattern.trim());
+            let fast_path = !pattern.contains('$') && is_pattern_ident(pattern.trim());
             assert!(
                 classified || fast_path,
                 "cached Some without classify: {pattern:?}"
@@ -200,7 +215,10 @@ fn classifier_acceptance_implies_downstream_presence() {
             assert!(classified, "candidate Some without classify: {pattern:?}");
         }
         if classified {
-            assert!(!needs_ast_grep_fallback(pattern), "classified yet fallback: {pattern:?}");
+            assert!(
+                !needs_ast_grep_fallback(pattern),
+                "classified yet fallback: {pattern:?}"
+            );
         }
         // Repetition determinism across the linked entries.
         assert_eq!(
@@ -224,10 +242,22 @@ fn classifier_acceptance_implies_downstream_presence() {
 /// ABSORBS: none (relation pin; nothing merged).
 #[test]
 fn gate_denial_is_total_and_order_invariant() {
-    let patterns = ["foo", "foo($$$)", "fn $N($$$)", "", "->", ";;", "$F($$$)", "break"];
+    let patterns = [
+        "foo",
+        "foo($$$)",
+        "fn $N($$$)",
+        "",
+        "->",
+        ";;",
+        "$F($$$)",
+        "break",
+    ];
     for pattern in patterns {
         assert!(!index_can_serve_pattern(pattern, &[]), "{pattern:?}");
-        assert!(!index_can_serve_pattern(pattern, &["kind:call".to_string()]), "{pattern:?}");
+        assert!(
+            !index_can_serve_pattern(pattern, &["kind:call".to_string()]),
+            "{pattern:?}"
+        );
         assert!(
             !index_can_serve_pattern(pattern, &["foo".to_string(), "kind:call".to_string()]),
             "{pattern:?}"
@@ -247,8 +277,14 @@ fn gate_denial_is_total_and_order_invariant() {
         "go", "delete", "lock", "using", "var", "unsafe", "debugger", "throw", "yield",
     ] {
         assert!(!index_can_serve_pattern(kw, &[kw.to_string()]), "{kw}");
-        assert!(!index_can_serve_pattern(kw, &["call:foo".to_string()]), "{kw}");
-        assert!(!index_can_serve_pattern(kw, &["decl:fn:foo".to_string()]), "{kw}");
+        assert!(
+            !index_can_serve_pattern(kw, &["call:foo".to_string()]),
+            "{kw}"
+        );
+        assert!(
+            !index_can_serve_pattern(kw, &["decl:fn:foo".to_string()]),
+            "{kw}"
+        );
     }
     // Signature-order invariance, both verdicts.
     let serving = ["call:foo".to_string(), "decl:fn:foo".to_string()];
@@ -330,7 +366,11 @@ fn semicolon_count_boundary_consistent_across_languages() {
         );
         // The 2+ family is one equivalence class per language.
         for member in family {
-            assert_eq!(native_pattern_answerable(*lang, member), verdict, "{lang} {member:?}");
+            assert_eq!(
+                native_pattern_answerable(*lang, member),
+                verdict,
+                "{lang} {member:?}"
+            );
             // Repetition determinism.
             assert_eq!(
                 native_pattern_answerable(*lang, member),
@@ -364,7 +404,12 @@ fn semicolon_count_boundary_consistent_across_languages() {
 fn depth_cap_monotone_with_loud_flip() {
     let registry = ParserRegistry::new();
     let rust_src = |n: usize| format!("fn f() {{ let x = {}1{}; }}", "(".repeat(n), ")".repeat(n));
-    let flag = |n: usize| registry.parse(Language::Rust, &rust_src(n)).unwrap().depth_truncated;
+    let flag = |n: usize| {
+        registry
+            .parse(Language::Rust, &rust_src(n))
+            .unwrap()
+            .depth_truncated
+    };
     // Anchor the bracket: clear at 1, breached at 300 (E1 pins the points;
     // E3 pins the monotone relation between them).
     assert!(!flag(1));
@@ -393,13 +438,23 @@ fn depth_cap_monotone_with_loud_flip() {
     // Determinism + match totality on both sides of the flip.
     for n in [1usize, flip - 1, flip, 300] {
         assert_eq!(flag(n), flag(n), "flag must repeat at depth {n}");
-        assert!(match_pattern(Language::Rust, &rust_src(n), "f").is_ok(), "depth {n}");
-        assert!(match_literal_pattern(Language::Rust, &rust_src(n), "f").is_ok(), "depth {n}");
+        assert!(
+            match_pattern(Language::Rust, &rust_src(n), "f").is_ok(),
+            "depth {n}"
+        );
+        assert!(
+            match_literal_pattern(Language::Rust, &rust_src(n), "f").is_ok(),
+            "depth {n}"
+        );
     }
     // Same monotone contract in a second grammar (shared walk, own syntax).
     let js_src = |n: usize| format!("function f(){{var x={}1{};}}", "(".repeat(n), ")".repeat(n));
-    let js_flag =
-        |n: usize| registry.parse(Language::JavaScript, &js_src(n)).unwrap().depth_truncated;
+    let js_flag = |n: usize| {
+        registry
+            .parse(Language::JavaScript, &js_src(n))
+            .unwrap()
+            .depth_truncated
+    };
     let mut prev_js = false;
     for n in [1usize, 150, 300] {
         let f = js_flag(n);
@@ -452,10 +507,22 @@ fn padding_invariant_entries_vs_sensitive_ident() {
             classify_native(&padded).is_some(),
             "{pattern:?}"
         );
-        assert_eq!(cached_pattern_signatures(pattern), cached_pattern_signatures(&padded));
-        assert_eq!(candidate_kind_signatures(pattern), candidate_kind_signatures(&padded));
-        assert_eq!(required_pattern_literal(pattern), required_pattern_literal(&padded));
-        assert_eq!(needs_ast_grep_fallback(pattern), needs_ast_grep_fallback(&padded));
+        assert_eq!(
+            cached_pattern_signatures(pattern),
+            cached_pattern_signatures(&padded)
+        );
+        assert_eq!(
+            candidate_kind_signatures(pattern),
+            candidate_kind_signatures(&padded)
+        );
+        assert_eq!(
+            required_pattern_literal(pattern),
+            required_pattern_literal(&padded)
+        );
+        assert_eq!(
+            needs_ast_grep_fallback(pattern),
+            needs_ast_grep_fallback(&padded)
+        );
         assert_eq!(
             native_pattern_answerable(Language::Rust, pattern),
             native_pattern_answerable(Language::Rust, &padded)
@@ -493,11 +560,26 @@ fn padding_invariant_entries_vs_sensitive_ident() {
     // called twice on each degenerate pattern agrees with itself (never
     // panics, never drifts).
     for pattern in DEGENERATE_PATTERNS {
-        assert_eq!(classify_native(pattern).is_some(), classify_native(pattern).is_some());
-        assert_eq!(cached_pattern_signatures(pattern), cached_pattern_signatures(pattern));
-        assert_eq!(candidate_kind_signatures(pattern), candidate_kind_signatures(pattern));
-        assert_eq!(required_pattern_literal(pattern), required_pattern_literal(pattern));
-        assert_eq!(needs_ast_grep_fallback(pattern), needs_ast_grep_fallback(pattern));
+        assert_eq!(
+            classify_native(pattern).is_some(),
+            classify_native(pattern).is_some()
+        );
+        assert_eq!(
+            cached_pattern_signatures(pattern),
+            cached_pattern_signatures(pattern)
+        );
+        assert_eq!(
+            candidate_kind_signatures(pattern),
+            candidate_kind_signatures(pattern)
+        );
+        assert_eq!(
+            required_pattern_literal(pattern),
+            required_pattern_literal(pattern)
+        );
+        assert_eq!(
+            needs_ast_grep_fallback(pattern),
+            needs_ast_grep_fallback(pattern)
+        );
         assert_eq!(
             pattern_is_keyword_literal_root(pattern),
             pattern_is_keyword_literal_root(pattern)

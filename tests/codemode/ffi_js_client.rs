@@ -10,9 +10,9 @@
 //! per-call batch shapes, and cancellation (`AbortSignal` has no Rust
 //! constructor) — all live inside `compute()` on libuv.
 //!
-//! Link note (macOS): `RUSTFLAGS="-C link-arg=-undefined -C
-//! link-arg=dynamic_lookup" cargo test -p ast-sgrep-codemode-napi --test
-//! ffi_js_client`. Tests never call Node FFI.
+//! Link note: node symbols stay unresolved via the napi crate's build.rs
+//! (tests never call Node FFI); plain `cargo test -p
+//! ast-sgrep-codemode-napi` works on macOS/Linux.
 
 use ast_sgrep_codemode_napi::Session;
 use ast_sgrep_testkit::{
@@ -50,7 +50,10 @@ fn full_flow_choreography_pins_values_and_counts() {
 
     // find with zero hits: exact capsule shape.
     let found = session
-        .call_now("find".to_string(), Some(json!({"query": "zzz_flow_needle"})))
+        .call_now(
+            "find".to_string(),
+            Some(json!({"query": "zzz_flow_needle"})),
+        )
         .expect("find");
     assert_eq!(found["mode"], json!("capsule"));
     assert_eq!(found["hit_count"], json!(0));

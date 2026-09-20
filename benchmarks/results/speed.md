@@ -6,6 +6,57 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
+## 2026-09-20 2.5.0 re-pin (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Same workdir protocol as the one-shot
+literal fix row below (bake-off reproduce block), re-run on the 2.5.0
+release tree. Binary built from a working tree atop `b23a2454` with the
+2.5.0 changes uncommitted — re-run after commit to re-pin.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | working tree atop `b23a2454` (2.5.0: test relocation, moonbit fix, version bump; uncommitted) |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | tracked files → rsync workdir: **702 tracked, 650 indexed** (48 skipped by size/extension rules) |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| rustc | 1.98.0 |
+| tools | ripgrep 15.1.0, BSD grep 2.6.0, ast-grep 0.45.3, tgrep 1.0.9 (warm server, client timing), fff-mcp 0.10.6 (warm server, `benchmarks/fff_grep_leg.mjs`), hyperfine 1.20.0 |
+| index | schema 16, hashed semantic embedder; 6,275 symbols; `index.db` **292 MiB** |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | comparator p95 | note |
+|---------|--:|----:|----:|-------------:|------|
+| warm `literal:SearchHit` | 15 | 8.1 ms | **8.5 ms** | rg 13.1 ms, grep 58.1 ms, tgrep 5.8 ms | asgrep beats rg 1.54×; tgrep warm server leads (1.47×) |
+| fff warm `grep SearchHit` | 15 | 0.3 ms | **0.4 ms** | — | ranked 20/50 shown vs ~300 literal lines — latency-only, not match-set |
+| warm `pattern:SearchHit` | 12 | 9.0 ms | **9.5 ms** | ast-grep 279.8 ms full tree, 61.3 ms excl. generated | indexed path immune to generated-file parse cost; see note |
+| warm `semantic 'credential renewal'` | 12 | 14.1 ms | **15.5 ms** | — | range 13.0–17.2 ms, tight |
+| cold index (`asgrep index .`) | 8 | 14.6 s | **14.9 s** | — | tight σ; no load outliers this run |
+| serve distinct-query p50/p99 | 240×2 | 0.75/0.79 ms | (p99) 2.7/2.8 ms | — | `warm_distinct.mjs`, 2 rounds; ~2× faster than the fix row |
+
+Notes:
+
+- The ast-grep jump (63.3 → 279.8 ms) is corpus drift, isolated by
+  control: excluding the generated `trigram_static_data.rs` (1 MB+,
+  new since September), ast-grep times 59.9/61.3 ms (n=8) — identical
+  to September's 63.3. asgrep's indexed pattern path is unaffected
+  (10.2 → 9.5 ms). Fair cells: **6.5×** on hand-written code
+  (61.3/9.5), **29×** with generated files included (279.8/9.5) —
+  the second number measures indexed-vs-parse-per-query on
+  generated-code-heavy trees, not general structural superiority.
+- The grep leg first ran at 130.9 ms with the `.tgrep/` sidecar
+  present (BSD grep reads the 10 MiB trigram binaries; rg skips
+  them). Re-ran clean after removing the sidecar: 55.8/58.1 ms.
+  Only the clean number is quoted.
+- fff's first invocation timed 1.2/1.4 ms (server settling); the
+  re-run settled at 0.3/0.4 ms, same class as September's 0.4/0.5.
+  Only the settled number is quoted.
+- tgrep timed 5.5/5.8 ms (tight σ) vs 7.5 p95 in September; same
+  1.0.9 binary, warm server, no-watch. Taken as measured.
+- Hit counts verified non-empty on every timed query; `files` 650 /
+  `symbols` 6275 confirmed after the literal block.
+
 ## 2026-09-20 static trigram prior: cold one-shot Match (self corpus, working tree)
 
 **Status: `reproducible-in-tree`.** Cold one-shot search answers from a

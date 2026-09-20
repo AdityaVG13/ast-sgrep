@@ -40,7 +40,9 @@ pub type CallRow = (String, u32, String, String);
 /// not this project's checkout and must not capture a new project.
 /// Silent when an env override moves indexes elsewhere.
 fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
-    if std::env::var_os("ASGREP_INDEX_PATH").is_some() || std::env::var_os("ASGREP_USE_CACHE").is_some() {
+    if std::env::var_os("ASGREP_INDEX_PATH").is_some()
+        || std::env::var_os("ASGREP_USE_CACHE").is_some()
+    {
         return None;
     }
     let start = if root.is_file() { root.parent()? } else { root };
@@ -78,7 +80,10 @@ fn missing_index_error(root: &Path, db_path: &Path) -> crate::StoreError {
 /// create a second `.asgrep` under the tree. The caller either works at the
 /// checkout root or asks for a deliberate separate index path.
 fn second_index_error(root: &Path, db_path: &Path, enclosing: &Path) -> crate::StoreError {
-    let enclosing_root = enclosing.parent().and_then(|dir| dir.parent()).unwrap_or(enclosing);
+    let enclosing_root = enclosing
+        .parent()
+        .and_then(|dir| dir.parent())
+        .unwrap_or(enclosing);
     crate::StoreError::Other(format!(
         "refusing to create a second index at {} (root {}): the enclosing checkout is already indexed at {} -- run: asgrep index {} --json, or pass --index-path for a separate index",
         db_path.display(),
@@ -131,7 +136,8 @@ fn ensure_depth_truncated_column(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
+fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(semantic_chunks)")?;
     let existing = stmt
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1049,7 +1055,8 @@ impl IndexStore {
             .get_meta("index_data_version")?
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
-        self.index_data_version_memo.set((foreign_stamp, Some(version)));
+        self.index_data_version_memo
+            .set((foreign_stamp, Some(version)));
         Ok(version)
     }
 

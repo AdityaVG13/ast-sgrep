@@ -106,10 +106,7 @@ fn budget_contract() {
             .expect("step 2 runs");
         assert_eq!(session.call_count(), 2);
         session
-            .call(
-                "select",
-                json!({"value": [{"a": 1}], "fields": ["a"]}),
-            )
+            .call("select", json!({"value": [{"a": 1}], "fields": ["a"]}))
             .expect("step 3 runs");
         assert_eq!(session.call_count(), 3);
         session

@@ -76,8 +76,16 @@ fn mutate_add_single(ctx: &DeltaCtx) {
 }
 
 fn mutate_add_two(ctx: &DeltaCtx) {
-    fs::write(ctx.root.join("file_cee.rs"), "pub fn cee_sym() -> u32 { 7 }\n").expect("add cee");
-    fs::write(ctx.root.join("file_dee.rs"), "pub fn dee_sym() -> u32 { 8 }\n").expect("add dee");
+    fs::write(
+        ctx.root.join("file_cee.rs"),
+        "pub fn cee_sym() -> u32 { 7 }\n",
+    )
+    .expect("add cee");
+    fs::write(
+        ctx.root.join("file_dee.rs"),
+        "pub fn dee_sym() -> u32 { 8 }\n",
+    )
+    .expect("add dee");
 }
 
 fn mutate_modify_add(ctx: &DeltaCtx) {
@@ -92,7 +100,10 @@ fn mutate_modify_remove(ctx: &DeltaCtx) {
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
     );
-    rewrite_with_mtime_bump(&ctx.root.join("alpha.rs"), "pub fn alpha_two() -> u32 { 2 }\n");
+    rewrite_with_mtime_bump(
+        &ctx.root.join("alpha.rs"),
+        "pub fn alpha_two() -> u32 { 2 }\n",
+    );
 }
 
 fn mutate_modify_rename(ctx: &DeltaCtx) {
@@ -122,7 +133,12 @@ fn mutate_delete(ctx: &DeltaCtx) {
 fn mutate_delete_readd(ctx: &DeltaCtx) {
     fs::remove_file(ctx.root.join("beta.rs")).expect("delete beta");
     ctx.refresh();
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:beta_one",
+    ));
     fs::write(ctx.root.join("beta.rs"), "pub fn beta_one() -> u32 { 2 }\n").expect("re-add beta");
 }
 
@@ -150,7 +166,10 @@ fn mutate_noop_rewrite(ctx: &DeltaCtx) {
     );
     // Same bytes, fresh mtime: even if the mtime fast path fires, the served
     // output must be byte-identical to before the rewrite.
-    rewrite_with_mtime_bump(&ctx.root.join("alpha.rs"), "pub fn alpha_one() -> u32 { 1 }\n");
+    rewrite_with_mtime_bump(
+        &ctx.root.join("alpha.rs"),
+        "pub fn alpha_one() -> u32 { 1 }\n",
+    );
 }
 
 // --- row search checks ---
@@ -193,7 +212,12 @@ fn search_modify_add(ctx: &DeltaCtx, _refreshed: &Value) {
 }
 
 fn search_modify_remove(ctx: &DeltaCtx, _refreshed: &Value) {
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:alpha_one",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_two"),
         "alpha.rs",
@@ -201,7 +225,12 @@ fn search_modify_remove(ctx: &DeltaCtx, _refreshed: &Value) {
 }
 
 fn search_modify_rename(ctx: &DeltaCtx, _refreshed: &Value) {
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:alpha_one",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_renamed"),
         "alpha.rs",
@@ -218,7 +247,12 @@ fn search_modify_shift(ctx: &DeltaCtx, _refreshed: &Value) {
 }
 
 fn search_delete(ctx: &DeltaCtx, _refreshed: &Value) {
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:beta_one",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:alpha_one"),
         "alpha.rs",
@@ -239,7 +273,12 @@ fn search_rename(ctx: &DeltaCtx, _refreshed: &Value) {
 }
 
 fn search_rename_edit(ctx: &DeltaCtx, _refreshed: &Value) {
-    assert_served_nowhere(&run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:beta_one"));
+    assert_served_nowhere(&run_search(
+        &ctx.bin,
+        &ctx.index_s,
+        &ctx.root_s,
+        "word:beta_one",
+    ));
     assert_served_only_at(
         &run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:moved_sym"),
         "moved.rs",
@@ -270,7 +309,11 @@ fn outline_add_single(ctx: &DeltaCtx) {
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["ok"], true, "{outline_value}");
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["gamma_new"], "{outline_value}");
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["gamma_new"],
+        "{outline_value}"
+    );
 }
 
 fn outline_add_two(ctx: &DeltaCtx) {
@@ -302,7 +345,11 @@ fn outline_modify_remove(ctx: &DeltaCtx) {
     assert_eq!(outline.status.code(), Some(0));
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["alpha_two"], "{outline_value}");
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["alpha_two"],
+        "{outline_value}"
+    );
 }
 
 fn outline_modify_rename(ctx: &DeltaCtx) {
@@ -340,7 +387,11 @@ fn outline_delete_readd(ctx: &DeltaCtx) {
     assert_eq!(outline.status.code(), Some(0));
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["beta_one"], "{outline_value}");
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["beta_one"],
+        "{outline_value}"
+    );
 }
 
 fn outline_rename(ctx: &DeltaCtx) {
@@ -351,7 +402,11 @@ fn outline_rename(ctx: &DeltaCtx) {
     assert_eq!(moved.status.code(), Some(0));
     let moved_value = parse_stdout(&moved);
     assert_eq!(moved_value["count"], 1, "{moved_value}");
-    assert_eq!(outline_names(&moved_value), vec!["beta_one"], "{moved_value}");
+    assert_eq!(
+        outline_names(&moved_value),
+        vec!["beta_one"],
+        "{moved_value}"
+    );
 }
 
 fn outline_rename_edit(ctx: &DeltaCtx) {
@@ -362,7 +417,11 @@ fn outline_rename_edit(ctx: &DeltaCtx) {
     assert_eq!(moved.status.code(), Some(0));
     let moved_value = parse_stdout(&moved);
     assert_eq!(moved_value["count"], 1, "{moved_value}");
-    assert_eq!(outline_names(&moved_value), vec!["moved_sym"], "{moved_value}");
+    assert_eq!(
+        outline_names(&moved_value),
+        vec!["moved_sym"],
+        "{moved_value}"
+    );
 }
 
 fn outline_noop_rewrite(ctx: &DeltaCtx) {
@@ -370,7 +429,11 @@ fn outline_noop_rewrite(ctx: &DeltaCtx) {
     assert_eq!(outline.status.code(), Some(0));
     let outline_value = parse_stdout(&outline);
     assert_eq!(outline_value["count"], 1, "{outline_value}");
-    assert_eq!(outline_names(&outline_value), vec!["alpha_one"], "{outline_value}");
+    assert_eq!(
+        outline_names(&outline_value),
+        vec!["alpha_one"],
+        "{outline_value}"
+    );
 }
 
 static DELTA_ROWS: &[DeltaRow] = &[

@@ -49,10 +49,11 @@ fn noop_refresh_skips_fresh_sidecar_and_real_change_rebuilds() {
     assert_eq!(stats.files_indexed, 2);
 
     // Warm lexical search is served from the fresh sidecar.
-    let warm = pass17_searcher(root)
-        .search_lexical("alpha_token")
-        .unwrap();
-    assert!(warm.hits.iter().any(|hit| hit.excerpt.contains("alpha_token")));
+    let warm = pass17_searcher(root).search_lexical("alpha_token").unwrap();
+    assert!(warm
+        .hits
+        .iter()
+        .any(|hit| hit.excerpt.contains("alpha_token")));
 
     // In-band tamper: empty the sidecar but stamp it with the CURRENT
     // generation, so the skip predicate's freshness equality holds.
@@ -97,9 +98,15 @@ fn noop_refresh_skips_fresh_sidecar_and_real_change_rebuilds() {
     assert_eq!(beta_hits.len(), 1, "rebuilt sidecar must hold the new line");
     let searcher = pass17_searcher(root);
     let fresh = searcher.search_lexical("beta_replacement").unwrap();
-    assert!(fresh.hits.iter().any(|hit| hit.excerpt.contains("beta_replacement")));
+    assert!(fresh
+        .hits
+        .iter()
+        .any(|hit| hit.excerpt.contains("beta_replacement")));
     let gone = searcher.search_lexical("alpha_token").unwrap();
-    assert!(gone.hits.is_empty(), "replaced content must leave the index");
+    assert!(
+        gone.hits.is_empty(),
+        "replaced content must leave the index"
+    );
 }
 
 /// The lever's correctness predicate: search output is byte-identical
@@ -225,7 +232,11 @@ fn git_head_stamp_tracks_branch_switch_within_one_searcher() {
         "2222222222222222222222222222222222222222\n",
     )
     .unwrap();
-    std::fs::write(root.join("alpha_token.rs"), "fn alpha_token() -> u32 { 1 }\n").unwrap();
+    std::fs::write(
+        root.join("alpha_token.rs"),
+        "fn alpha_token() -> u32 { 1 }\n",
+    )
+    .unwrap();
     pass17_indexer(root).index_all().unwrap();
     let second = searcher.search("alpha_token").unwrap();
     assert_eq!(

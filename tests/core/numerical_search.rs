@@ -93,7 +93,10 @@ fn search_flat_contract() {
     // dim 0 is guarded before any `/ dim` (no integer-div panic); a huge
     // limit is just a cap, not an allocation.
     assert!(index.search_flat(&flat, 0, &[1.0, 0.0], 5).is_empty());
-    assert_eq!(index.search_flat(&flat, 2, &[1.0, 0.0], usize::MAX).len(), 2);
+    assert_eq!(
+        index.search_flat(&flat, 2, &[1.0, 0.0], usize::MAX).len(),
+        2
+    );
     // build_from_flat on all-NaN vectors: rows zero-fill, k-means runs on
     // zeros deterministically, search still gates everything to empty.
     let nan_index = SemanticAnnIndex::build_from_flat(&[f32::NAN; 8], 2);
@@ -124,7 +127,12 @@ fn finish_margin_contract() {
         HitKind::Embed,
     ];
     let mut y1 = mk_hit(HitKind::Asgrep, "g.rs", 1, 0.0625);
-    y1.contributors = vec![HitKind::Def, HitKind::Caller, HitKind::Graph, HitKind::Anchor];
+    y1.contributors = vec![
+        HitKind::Def,
+        HitKind::Caller,
+        HitKind::Graph,
+        HitKind::Anchor,
+    ];
     let mut d1 = mk_hit(HitKind::Def, "d.rs", 1, 1.0);
     d1.contributors = vec![HitKind::Caller, HitKind::Embed];
     let hits = vec![
@@ -151,9 +159,9 @@ fn finish_margin_contract() {
     // Bases: Exact 0.75, Structural 0.60, Semantic 0.35.
     assert_eq!(by_file("a.rs").confidence, 0.75); // Exact, no contributors
     assert_eq!(by_file("e.rs").confidence, 0.60); // Structural, none
-    // d.rs: strongest Structural, 2 contributors -> 0.60 + 1*0.08 ~= 0.68.
-    // Epsilon 1e-12: 0.6 and 0.08 are inexact in binary; the sum is within
-    // 1 ulp of the 0.68 literal either way.
+                                                  // d.rs: strongest Structural, 2 contributors -> 0.60 + 1*0.08 ~= 0.68.
+                                                  // Epsilon 1e-12: 0.6 and 0.08 are inexact in binary; the sum is within
+                                                  // 1 ulp of the 0.68 literal either way.
     assert!((by_file("d.rs").confidence - 0.68).abs() < 1e-12);
     // f.rs: Exact base + min(5-1,3)=3 steps: 0.75 + 3*0.08 == 0.99 exactly
     // in IEEE double (verified), then clamped to exactly 0.99.
@@ -193,7 +201,11 @@ fn finish_margin_contract() {
         mk_hit(HitKind::Caller, "tiny.rs", 2, 5e-324),
     ];
     let response = finish_response(&parsed, &finish_options(dir.path(), 10), hits, false);
-    assert_eq!(response.hits.len(), 7, "finish must not drop hostile scores");
+    assert_eq!(
+        response.hits.len(),
+        7,
+        "finish must not drop hostile scores"
+    );
     let by_file = |f: &str| response.hits.iter().find(|h| h.file == f).unwrap();
     assert_eq!(by_file("e1.rs").margin, 0.25); // 0.75-0.5 exact in binary
     assert_eq!(by_file("e2.rs").margin, 0.0); // last finite in group
@@ -224,8 +236,8 @@ fn finish_margin_contract() {
     h.score = 1e308;
     h.margin = 1e308;
     assert!(margin_is_decisive(&h)); // 1e308 >= ~1.0000000000000001e307
-    // 0.1 * 5e-324 underflows to exactly 0.0, so any positive margin wins
-    // while the score>0 gate still holds.
+                                     // 0.1 * 5e-324 underflows to exactly 0.0, so any positive margin wins
+                                     // while the score>0 gate still holds.
     h.score = 5e-324;
     h.margin = 5e-324;
     assert!(margin_is_decisive(&h));
@@ -247,7 +259,7 @@ fn ann_threshold_boundary_table() {
     assert_eq!(DEFAULT_ADAPTIVE_PROBE_PERCENT, 90);
     assert_eq!(ann_threshold(None), 2000);
     assert_eq!(ann_threshold(Some(5)), 5); // explicit override wins
-    // should_use_ann is `count >= threshold` (inclusive lower edge).
+                                           // should_use_ann is `count >= threshold` (inclusive lower edge).
     assert!(!should_use_ann(1999, None));
     assert!(should_use_ann(2000, None));
     assert!(!should_use_ann(9, Some(10)));
@@ -293,7 +305,10 @@ fn chain_decay_hostile_propagates_without_panic() {
         )
         .unwrap();
         assert!(
-            response.seeds.iter().any(|n| n.symbol.as_deref() == Some("FooBar")),
+            response
+                .seeds
+                .iter()
+                .any(|n| n.symbol.as_deref() == Some("FooBar")),
             "fixture must seed FooBar (decay {decay})"
         );
         assert!(
@@ -342,14 +357,7 @@ fn chain_decay_hostile_propagates_without_panic() {
         .unwrap()
         .nodes
         .iter()
-        .map(|n| {
-            (
-                n.file.clone(),
-                n.symbol.clone(),
-                n.depth,
-                n.score.to_bits(),
-            )
-        })
+        .map(|n| (n.file.clone(), n.symbol.clone(), n.depth, n.score.to_bits()))
         .collect::<Vec<_>>()
     };
     assert_eq!(key(&store), key(&store));

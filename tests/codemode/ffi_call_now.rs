@@ -9,15 +9,14 @@
 //! Honestly out of scope (require Node): slow-tool execution and unique-search
 //! dispatch live behind `call()` on libuv; `call_now` only pins their gate.
 //!
-//! Link note (macOS): `RUSTFLAGS="-C link-arg=-undefined -C
-//! link-arg=dynamic_lookup" cargo test -p ast-sgrep-codemode-napi --test
-//! ffi_call_now`. Tests never call Node FFI.
+//! Link note: node symbols stay unresolved via the napi crate's build.rs
+//! (tests never call Node FFI); plain `cargo test -p
+//! ast-sgrep-codemode-napi` works on macOS/Linux.
 
 use ast_sgrep_codemode::CallError;
 use ast_sgrep_codemode_napi::{JsSessionConfig, Session};
 use ast_sgrep_testkit::{
-    session_at_indexed, write_file, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS,
-    SESSION_BUSY,
+    session_at_indexed, write_file, CALL_NOW_ONLY, DEFS_NEEDS_SYMBOL, MAX_QUERY_CHARS, SESSION_BUSY,
 };
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -44,10 +43,7 @@ fn fast_slow_partition_is_exact() {
     // Every fast lookup succeeds here (never the gate reason): 8 sync tools.
     let fast: &[(&str, Value)] = &[
         ("find", json!({"query": "zzz_no_such_needle"})),
-        (
-            "read",
-            json!({"path": "hello.rs", "start": 1, "end": 1}),
-        ),
+        ("read", json!({"path": "hello.rs", "start": 1, "end": 1})),
         ("defs", json!({"symbol": "ZzzNoSuchSymbol"})),
         ("callers", json!({"symbol": "ZzzNoSuchSymbol"})),
         ("imports", json!({"module": "zzz_no_such_module"})),
@@ -325,7 +321,10 @@ fn string_args_roundtrip_and_fail_closed_by_name() {
     assert_eq!(value["mode"], json!("capsule"));
     // Unicode flows through the pure catalog path too.
     let value = session
-        .call_now("catalog_search".to_string(), Some(json!({"query": "séarch"})))
+        .call_now(
+            "catalog_search".to_string(),
+            Some(json!({"query": "séarch"})),
+        )
         .expect("unicode catalog_search");
     assert!(value["tools"].is_array());
 

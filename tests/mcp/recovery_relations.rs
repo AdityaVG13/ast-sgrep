@@ -29,7 +29,11 @@ fn two_symbol_tree() -> tempfile::TempDir {
 }
 
 fn search_call(id: u32, query: &str) -> Value {
-    tool_call(id, "keyword_search", json!({"query": query, "limit": 4, "resend_seen": true}))
+    tool_call(
+        id,
+        "keyword_search",
+        json!({"query": query, "limit": 4, "resend_seen": true}),
+    )
 }
 
 fn index_db(root: &Path) -> std::path::PathBuf {
@@ -66,7 +70,9 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
             tool_call(6, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]})),
         ]
     };
-    let runs: Vec<Vec<Value>> = (0..3).map(|_| rpc_session(chain(), Some(temp.path()))).collect();
+    let runs: Vec<Vec<Value>> = (0..3)
+        .map(|_| rpc_session(chain(), Some(temp.path())))
+        .collect();
     for run in &runs {
         assert_eq!(run.len(), 6);
     }
@@ -108,12 +114,20 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
     assert!(error["error"]["code"].is_i64(), "{error:#}");
     assert!(error.get("result").is_none(), "{error:#}");
     session.send(&tools_list(2));
-    assert_eq!(catalog_bytes(&session.recv()), baseline, "catalog drifted across envelope fault");
+    assert_eq!(
+        catalog_bytes(&session.recv()),
+        baseline,
+        "catalog drifted across envelope fault"
+    );
     let db = index_db(temp.path());
     assert!(std::fs::metadata(&db).expect("stat db").len() > 4096);
     truncate_file(&db, 7);
     session.send(&tools_list(3));
-    assert_eq!(catalog_bytes(&session.recv()), baseline, "catalog drifted across index tear");
+    assert_eq!(
+        catalog_bytes(&session.recv()),
+        baseline,
+        "catalog drifted across index tear"
+    );
     session.send(&tool_call(4, "index_status", json!({})));
     let status = session.recv();
     assert_eq!(status["id"], 4, "{status:#}");
@@ -123,7 +137,11 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
     std::fs::remove_file(index_db(temp.path())).expect("remove db");
     index_tree(temp.path());
     let restarted = rpc_session(vec![tools_list(1)], Some(temp.path()));
-    assert_eq!(catalog_bytes(&restarted[0]), baseline, "catalog drifted across heal+restart");
+    assert_eq!(
+        catalog_bytes(&restarted[0]),
+        baseline,
+        "catalog drifted across heal+restart"
+    );
 
     // Root-fault cycle on a second tree: discovery answers identically while
     // the workspace is deleted, after live recreation, and after a restart.
@@ -165,7 +183,11 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
     // errors in every fresh process; every failure keeps the uniform shape.
     let chain = || {
         vec![
-            tool_call(1, "keyword_search", json!({"query": "target_symbol", "limit": 0})),
+            tool_call(
+                1,
+                "keyword_search",
+                json!({"query": "target_symbol", "limit": 0}),
+            ),
             tool_call(2, "keyword_search", json!({"query": "", "limit": 4})),
             tool_call(3, "code_read", json!({"ids": ["src/lib.rs#L1-L99"]})),
             tool_call(4, "no_such_tool", json!({})),
@@ -222,7 +244,11 @@ fn search_read_link_resend_seen_and_root_equivalence_invariants() {
         "first-search bytes differ between fresh sessions"
     );
     let probe_b = rpc_session(vec![search_call(1, "target_symbol")], Some(temp.path()));
-    assert_eq!(tool_text(&probe_b[0]), tool_text(&probe_a[0]), "search drifted across restarts");
+    assert_eq!(
+        tool_text(&probe_b[0]),
+        tool_text(&probe_a[0]),
+        "search drifted across restarts"
+    );
     let compact_b = tool_body(&probe_b[0])["h"][0][0]
         .as_str()
         .expect("compact id")
@@ -261,10 +287,17 @@ fn search_read_link_resend_seen_and_root_equivalence_invariants() {
     // position, interleaved with other calls, and across restarts, with no
     // elision markers anywhere.
     let pair = rpc_session(
-        vec![search_call(1, "target_symbol"), search_call(2, "target_symbol")],
+        vec![
+            search_call(1, "target_symbol"),
+            search_call(2, "target_symbol"),
+        ],
         Some(temp.path()),
     );
-    assert_eq!(tool_text(&pair[0]), tool_text(&pair[1]), "resend_seen bytes differ by position");
+    assert_eq!(
+        tool_text(&pair[0]),
+        tool_text(&pair[1]),
+        "resend_seen bytes differ by position"
+    );
     let restarted = rpc_session(vec![search_call(1, "target_symbol")], Some(temp.path()));
     assert_eq!(
         tool_text(&restarted[0]),
@@ -290,12 +323,21 @@ fn search_read_link_resend_seen_and_root_equivalence_invariants() {
         tool_text(&pair[0]),
         "resend_seen bytes differ at a later position"
     );
-    for response in [&pair[0], &pair[1], &restarted[0], &interleaved[1], &interleaved[3]] {
+    for response in [
+        &pair[0],
+        &pair[1],
+        &restarted[0],
+        &interleaved[1],
+        &interleaved[3],
+    ] {
         assert_tool_success(response);
         let envelope = tool_body(response);
         let hits = envelope["h"].as_array().unwrap();
         assert!(!hits.is_empty(), "{envelope:#}");
-        assert!(envelope.get("ze").is_none(), "stateless encoding must not elide: {envelope:#}");
+        assert!(
+            envelope.get("ze").is_none(),
+            "stateless encoding must not elide: {envelope:#}"
+        );
         for hit in hits {
             assert_ne!(hit[4], "~", "snippet elided despite resend_seen: {hit:#}");
         }
@@ -371,15 +413,25 @@ fn source_fault_tracked_across_restarts_restore_recovers_baseline() {
     let mut faulty = Vec::new();
     for _ in 0..2 {
         let responses = rpc_session(
-            vec![tool_call(1, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]}))],
+            vec![tool_call(
+                1,
+                "code_read",
+                json!({"ids": ["src/lib.rs#L1-L1"]}),
+            )],
             Some(temp.path()),
         );
         faulty.push(tool_text(&responses[0]).to_owned());
         assert_tool_success(&responses[0]);
-        assert_eq!(tool_body(&responses[0])["nodes"][0]["id"], "src/lib.rs#L1-L1");
+        assert_eq!(
+            tool_body(&responses[0])["nodes"][0]["id"],
+            "src/lib.rs#L1-L1"
+        );
     }
     assert_eq!(faulty[0], faulty[1], "fault must reproduce across restarts");
-    assert_ne!(faulty[0], baseline_read, "reads must track the live tree under fault");
+    assert_ne!(
+        faulty[0], baseline_read,
+        "reads must track the live tree under fault"
+    );
 
     std::fs::write(&lib, FIXTURE_SOURCE).expect("restore source");
     let healed = rpc_session(
@@ -389,6 +441,14 @@ fn source_fault_tracked_across_restarts_restore_recovers_baseline() {
         ],
         Some(temp.path()),
     );
-    assert_eq!(tool_text(&healed[0]), baseline_search, "search drifted after fault roundtrip");
-    assert_eq!(tool_text(&healed[1]), baseline_read, "read drifted after fault roundtrip");
+    assert_eq!(
+        tool_text(&healed[0]),
+        baseline_search,
+        "search drifted after fault roundtrip"
+    );
+    assert_eq!(
+        tool_text(&healed[1]),
+        baseline_read,
+        "read drifted after fault roundtrip"
+    );
 }

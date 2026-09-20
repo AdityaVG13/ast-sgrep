@@ -324,9 +324,7 @@ impl OracleCorpus {
 /// INTENT: order-free surface-key sort for the limit/filter/differential
 /// facets; the backend's served order is pinned elsewhere (prefix-stability
 /// facet). Pure.
-pub fn sorted_surface_keys(
-    mut keys: Vec<crate::index::HitKey>,
-) -> Vec<crate::index::HitKey> {
+pub fn sorted_surface_keys(mut keys: Vec<crate::index::HitKey>) -> Vec<crate::index::HitKey> {
     keys.sort();
     keys
 }
@@ -353,13 +351,16 @@ pub fn oracle_keyword_corpus(bin: &Path) -> OracleCorpus {
 /// graph (beta calls alpha; gamma isolated): 2 files, 3 symbols, 1 caller
 /// edge. Panics when indexing fails or reports `ok: false`.
 pub fn oracle_search_corpus(bin: &Path) -> OracleCorpus {
-    let (corpus, value) = OracleCorpus::index_files(bin, &[
-        (
-            "a.rs",
-            b"fn pass4_alpha() {}\nfn pass4_beta() { pass4_alpha(); }\n".as_slice(),
-        ),
-        ("b.rs", b"fn pass4_gamma() {}\n".as_slice()),
-    ]);
+    let (corpus, value) = OracleCorpus::index_files(
+        bin,
+        &[
+            (
+                "a.rs",
+                b"fn pass4_alpha() {}\nfn pass4_beta() { pass4_alpha(); }\n".as_slice(),
+            ),
+            ("b.rs", b"fn pass4_gamma() {}\n".as_slice()),
+        ],
+    );
     assert_eq!(value["ok"], true);
     corpus
 }
@@ -367,9 +368,12 @@ pub fn oracle_search_corpus(bin: &Path) -> OracleCorpus {
 /// INTENT: hand-corpus seed for the outline-agreement facet — exactly three
 /// one-line fns in line order. Panics when indexing fails.
 pub fn oracle_outline_corpus(bin: &Path) -> OracleCorpus {
-    let (corpus, _) = OracleCorpus::index_files(bin, &[(
-        "src/main.rs",
-        b"fn alpha() {}\nfn beta() {}\nfn gamma() {}\n".as_slice(),
-    )]);
+    let (corpus, _) = OracleCorpus::index_files(
+        bin,
+        &[(
+            "src/main.rs",
+            b"fn alpha() {}\nfn beta() {}\nfn gamma() {}\n".as_slice(),
+        )],
+    );
     corpus
 }

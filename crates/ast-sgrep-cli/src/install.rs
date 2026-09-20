@@ -166,15 +166,9 @@ fn dirs_home() -> anyhow::Result<PathBuf> {
         .context("HOME / USERPROFILE is unset")
 }
 
-fn install_target(
-    target: Target,
-    path: &Path,
-    command: &str,
-    force: bool,
-) -> anyhow::Result<()> {
+fn install_target(target: Target, path: &Path, command: &str, force: bool) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     match target {
         Target::Codex => install_codex_toml(path, command, force),
@@ -192,12 +186,7 @@ fn mcp_server_entry(command: &str) -> Value {
     })
 }
 
-fn install_json_mcp(
-    path: &Path,
-    command: &str,
-    force: bool,
-    target: Target,
-) -> anyhow::Result<()> {
+fn install_json_mcp(path: &Path, command: &str, force: bool, target: Target) -> anyhow::Result<()> {
     let mut root = read_json_object(path)?;
     let servers = match target {
         Target::Claude => {

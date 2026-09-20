@@ -5,7 +5,7 @@ mod math;
 mod neural;
 #[cfg(feature = "rerank")]
 mod rerank;
-mod semantic;
+pub mod semantic;
 pub use embedder::{
     configured_backend_model_id, default_semantic_dim, embed_batch_with_chain, embed_query,
     embed_with_chain, embedder_for, CostHint, EmbedBackendKind, EmbedPreference, EmbedResult,
@@ -23,9 +23,7 @@ pub use neural::{
 };
 #[cfg(feature = "rerank")]
 pub use rerank::{rerank, RerankScore};
-pub use semantic::{
-    expand_concepts, split_ident, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM,
-};
+pub use semantic::{expand_concepts, split_ident, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM};
 pub trait EmbeddingProvider: Send + Sync {
     fn embed_text(&self, text: &str) -> Vec<f32>;
     fn similarity(&self, a: &[f32], b: &[f32]) -> f32;
@@ -46,8 +44,10 @@ pub fn embed_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, &'static str> {
         return Err("embedding byte length is not a multiple of 4");
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect())
 }
 pub type SemanticChunkRow = (String, u32, u32, String, String, Vec<f32>);

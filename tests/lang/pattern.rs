@@ -1,6 +1,6 @@
 use ast_sgrep_lang::{
-    classify_native, match_pattern, native_pattern_answerable,
-    needs_ast_grep_fallback, Language, NativeKind,
+    classify_native, match_pattern, native_pattern_answerable, needs_ast_grep_fallback, Language,
+    NativeKind,
 };
 use ast_sgrep_testkit::sample_file;
 #[test]
@@ -138,7 +138,11 @@ fn ts_and_swift_fn_templates_require_return_type_agreement() {
         "TS return-typed function must not match: {:?}",
         hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
     );
-    assert!(hits[0].excerpt.contains("function keep"), "{:?}", hits[0].excerpt);
+    assert!(
+        hits[0].excerpt.contains("function keep"),
+        "{:?}",
+        hits[0].excerpt
+    );
 
     let swift = "func greet(name: String) -> String {\n    return name\n}\n\nfunc run() {\n    let _ = greet(name: \"x\")\n}\n";
     let hits = match_pattern(Language::Swift, swift, "func $A() { $$$B }").unwrap();
@@ -148,7 +152,11 @@ fn ts_and_swift_fn_templates_require_return_type_agreement() {
         "swift return-typed func must not match: {:?}",
         hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
     );
-    assert!(hits[0].excerpt.contains("func run"), "{:?}", hits[0].excerpt);
+    assert!(
+        hits[0].excerpt.contains("func run"),
+        "{:?}",
+        hits[0].excerpt
+    );
 }
 
 // Pass 22 (H-CONF-009): dotted member-chain call patterns. Every expected set
@@ -412,9 +420,9 @@ fn literal_content_return_statement_matches_python() {
 #[test]
 fn literal_content_pattern_without_equal_node_stays_ok_empty() {
     let source = "fn main() {}\n";
-    assert!(
-        match_pattern(Language::Rust, source, "zzz_no_such_content").unwrap().is_empty()
-    );
+    assert!(match_pattern(Language::Rust, source, "zzz_no_such_content")
+        .unwrap()
+        .is_empty());
 }
 
 /// Identifier-literal lane is unchanged: exact ident text still matches
@@ -485,7 +493,8 @@ fn dupmeta_py_nested_call_argument_matches_with_unification() {
 #[test]
 fn dupmeta_rust_typed_param_return_body_unifies() {
     assert!(!needs_ast_grep_fallback("fn $A($A: u32) -> u32 { $A }"));
-    let source = "fn dup(dup: u32) -> u32 {\n    dup\n}\n\nfn other(name: u32) -> u32 {\n    name\n}\n";
+    let source =
+        "fn dup(dup: u32) -> u32 {\n    dup\n}\n\nfn other(name: u32) -> u32 {\n    name\n}\n";
     let hits = match_pattern(Language::Rust, source, "fn $A($A: u32) -> u32 { $A }").unwrap();
     assert_eq!(
         lines_of(&hits),
@@ -502,7 +511,8 @@ fn dupmeta_rust_typed_param_return_body_unifies() {
 #[test]
 fn dupmeta_rust_method_chain_on_call_unifies() {
     assert!(!needs_ast_grep_fallback("Some($A).unwrap_or($A)"));
-    let source = "fn main() {\n    let v = Some(7).unwrap_or(7);\n    let w = Some(7).unwrap_or(9);\n}\n";
+    let source =
+        "fn main() {\n    let v = Some(7).unwrap_or(7);\n    let w = Some(7).unwrap_or(9);\n}\n";
     let hits = match_pattern(Language::Rust, source, "Some($A).unwrap_or($A)").unwrap();
     assert_eq!(lines_of(&hits), vec![2u32], "{:?}", hits);
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("7"));
@@ -516,8 +526,12 @@ fn dupmeta_rust_method_chain_on_call_unifies() {
 fn dupmeta_ts_return_body_unifies_and_binds_whole_param() {
     assert!(!needs_ast_grep_fallback("function $A($B) { return $A; }"));
     let source = "function rec(pivot: number) {\n  return rec;\n}\n\nfunction other(pivot: number) {\n  return rec;\n}\n\nfunction rec2(p: number) {\n  rec2;\n}\n";
-    let hits =
-        match_pattern(Language::TypeScript, source, "function $A($B) { return $A; }").unwrap();
+    let hits = match_pattern(
+        Language::TypeScript,
+        source,
+        "function $A($B) { return $A; }",
+    )
+    .unwrap();
     assert_eq!(
         lines_of(&hits),
         vec![1u32],
@@ -541,7 +555,10 @@ fn dupmeta_go_blank_assignment_body_unifies() {
     let hits = match_pattern(Language::Go, source, "func $A() { _ = $A }").unwrap();
     assert_eq!(lines_of(&hits), vec![1u32, 5], "{:?}", hits);
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("dup"));
-    assert_eq!(hits[1].captures.get("A").map(String::as_str), Some("helper"));
+    assert_eq!(
+        hits[1].captures.get("A").map(String::as_str),
+        Some("helper")
+    );
 }
 
 /// P48-V3 (ledger `p48-dollarO-dollarO-py-positive-face-overmatch`):
@@ -598,7 +615,10 @@ fn registered_fail_closed_spellings_stay_fail_closed() {
         "if ($COND) { $A; $B }",
         "$)(",
     ] {
-        assert!(needs_ast_grep_fallback(pattern), "{pattern} must stay fail-closed");
+        assert!(
+            needs_ast_grep_fallback(pattern),
+            "{pattern} must stay fail-closed"
+        );
         assert!(
             match_pattern(Language::Rust, "fn foo() {}", pattern)
                 .unwrap()
@@ -646,7 +666,8 @@ fn registered_fail_closed_spellings_stay_fail_closed() {
 #[test]
 fn metavar_v2_lowercase_arg_is_never_match_not_wildcard() {
     assert!(!needs_ast_grep_fallback("greet($a)"), "valid ingress");
-    let source = "def greet(name):\n    return name\nr1 = greet(\"world\")\nr2 = greet(  \"world\"  )\n";
+    let source =
+        "def greet(name):\n    return name\nr1 = greet(\"world\")\nr2 = greet(  \"world\"  )\n";
     let hits = match_pattern(Language::Python, source, "greet($a)").unwrap();
     assert!(
         hits.is_empty(),
@@ -680,11 +701,9 @@ fn metavar_v2_lowercase_callee_never_match() {
 fn metavar_v2_lowercase_stmt_leading_never_match() {
     assert!(!needs_ast_grep_fallback("$a = 1"));
     let source = "a = 1\nb = 2\n";
-    assert!(
-        match_pattern(Language::Python, source, "$a = 1")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Python, source, "$a = 1")
+        .unwrap()
+        .is_empty());
 }
 
 /// v2 row 5: lowercase in a declaration-name position with a canonical `$$$`
@@ -695,11 +714,9 @@ fn metavar_v2_lowercase_stmt_leading_never_match() {
 fn metavar_v2_lowercase_decl_ingress_native_zero_hits() {
     assert!(!needs_ast_grep_fallback("def $a(x): $$$B"));
     let source = "def a(x):\n    a = 1\n    return a\n";
-    assert!(
-        match_pattern(Language::Python, source, "def $a(x): $$$B")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Python, source, "def $a(x): $$$B")
+        .unwrap()
+        .is_empty());
 }
 
 /// v2 rows 4/5: lowercase after `$$$` and mixed-case tails. `foo($$$a)` was a
@@ -726,11 +743,9 @@ fn metavar_v2_lowercase_multi_and_mixed_never_match() {
 #[test]
 fn metavar_v2_non_ascii_metavar_closes_overmatch_and_stays_loud() {
     let source = "def greet(name):\n    return name\nr = greet(\"world\")\n";
-    assert!(
-        match_pattern(Language::Python, source, "greet($Ü)")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Python, source, "greet($Ü)")
+        .unwrap()
+        .is_empty());
     assert!(needs_ast_grep_fallback("greet($Ü)"));
 }
 
@@ -758,7 +773,8 @@ fn metavar_v2_garbage_fn_head_is_loud_reject_never_wildcard() {
 #[test]
 fn metavar_v2_universal_dollar_dollar_matches_every_node() {
     let source = "x = 1\ny = greet(\"world\")\n";
-    let docstring_src = "\"\"\"module docstring\nline two\n\"\"\"\n# a comment\nz = greet(\"world\")\n";
+    let docstring_src =
+        "\"\"\"module docstring\nline two\n\"\"\"\n# a comment\nz = greet(\"world\")\n";
     let hits = match_pattern(Language::Python, source, "$$A").unwrap();
     assert!(
         !hits.is_empty(),
@@ -821,11 +837,9 @@ fn metavar_v2_universal_match_reserved_key_overwrite_preserved() {
 fn metavar_v2_dollar_garbage_stay_loud() {
     for pattern in ["$$", "$", "$$$"] {
         assert!(needs_ast_grep_fallback(pattern), "{pattern} must stay loud");
-        assert!(
-            match_pattern(Language::Rust, "fn x() {}\n", pattern)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(match_pattern(Language::Rust, "fn x() {}\n", pattern)
+            .unwrap()
+            .is_empty());
     }
     for pattern in ["$$a", "$$x"] {
         assert!(
@@ -870,11 +884,9 @@ fn metavar_v2_lowercase_def_empty_literal_def_control_unchanged() {
     assert!(!needs_ast_grep_fallback("def $a(x): $$$B"));
     assert!(needs_ast_grep_fallback("def a(x): $$$B"));
     let source = "def a(x):\n    a = 1\n    return a\n";
-    assert!(
-        match_pattern(Language::Python, source, "def $a(x): $$$B")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Python, source, "def $a(x): $$$B")
+        .unwrap()
+        .is_empty());
 }
 
 // -- H-CONF-021 rule R3 (literal isomorphic matching) -----------------------
@@ -1035,7 +1047,11 @@ fn hconf026_single_and_rest_namespaces_are_distinct() {
     // one name bound to two different texts still rejects.
     let twin = "fn main() {\n    main();\n}\nfn other() {\n    main();\n}\n";
     let uni = match_pattern(Language::Rust, twin, "fn $A() { $A(); }").unwrap();
-    assert_eq!(lines_of(&uni), vec![1u32], "single-single unification survives");
+    assert_eq!(
+        lines_of(&uni),
+        vec![1u32],
+        "single-single unification survives"
+    );
 }
 
 /// F58-3: the whole-receiver binding must be FAITHFUL to the receiver node.
@@ -1113,7 +1129,10 @@ fn hconf027_meta_head_literal_tail_matches_java() {
         "meta head + literal member tail must bind O=System and match: {:?}",
         hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
     );
-    assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("System"));
+    assert_eq!(
+        hits[0].captures.get("O").map(String::as_str),
+        Some("System")
+    );
 }
 
 /// H-CONF-028: java expression CONTENT answers through the general lane
@@ -1176,7 +1195,8 @@ fn hconf030_ii_comment_text_is_invisible_inside_arguments() {
         Some("area"),
         "comment text leaked into the byte prefilter"
     );
-    let src = "fn area(r: i32) -> i32 {\n    r * r\n}\nfn main() {\n    let d = area( /* mid */ 9);\n}\n";
+    let src =
+        "fn area(r: i32) -> i32 {\n    r * r\n}\nfn main() {\n    let d = area( /* mid */ 9);\n}\n";
     let hits = match_pattern(Language::Rust, src, "area( /* note */ 9)").unwrap();
     assert_eq!(
         lines_of(&hits),
@@ -1204,7 +1224,8 @@ fn hconf030_iii_let_rooted_literal_matches_structurally() {
 /// pattern matches its site instead of degrading to a silent empty.
 #[test]
 fn hconf030_iv_bom_led_pattern_is_stripped() {
-    let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn main() {\n    let r = add(1, 2);\n}\n";
+    let src =
+        "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn main() {\n    let r = add(1, 2);\n}\n";
     let hits = match_pattern(Language::Rust, src, "\u{feff}add(1, 2)").unwrap();
     assert_eq!(
         lines_of(&hits),
@@ -1213,7 +1234,11 @@ fn hconf030_iv_bom_led_pattern_is_stripped() {
         hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
     );
     let bare = match_pattern(Language::Rust, src, "add(1, 2)").unwrap();
-    assert_eq!(lines_of(&hits), lines_of(&bare), "BOM twin must equal the bare set");
+    assert_eq!(
+        lines_of(&hits),
+        lines_of(&bare),
+        "BOM twin must equal the bare set"
+    );
 }
 
 /// PASS 60 (fuzz F26-0601 family): a PATTERN-side comment inside an argument
@@ -1223,7 +1248,8 @@ fn hconf030_iv_bom_led_pattern_is_stripped() {
 fn pass60_pattern_comment_is_a_required_slot() {
     // Slot absent in source: no match (pre-pass-60 the whole-text prefilter
     // masked this over-match; the prefilter must stay sound without it).
-    let src = "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn main() {\n    let s = add(1, 2);\n}\n";
+    let src =
+        "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn main() {\n    let s = add(1, 2);\n}\n";
     let hits = match_pattern(Language::Rust, src, "add(1, /* NOTE */ 2)").unwrap();
     assert!(
         hits.is_empty(),
@@ -1261,7 +1287,10 @@ fn pass60_registered_comment_and_statement_rows_stay_fail_closed() {
         "int $A($B) { $$$C }",
         "RETURN $A",
     ] {
-        assert!(needs_ast_grep_fallback(pattern), "{pattern} must stay fail-closed");
+        assert!(
+            needs_ast_grep_fallback(pattern),
+            "{pattern} must stay fail-closed"
+        );
     }
     // The if-template lane keeps multi-statement bodies loud.
     assert!(needs_ast_grep_fallback("if ($COND) { $A; $B }"));
@@ -1292,13 +1321,25 @@ fn hconf029_per_language_answerability_matches_recorded_faces() {
         "1_000 ($A) { $B }"
     ));
     // comment-glued python shapes (F26 comment faces; `#` outside strings)
-    assert!(!native_pattern_answerable(Language::Python, "$A + $A# note"));
+    assert!(!native_pattern_answerable(
+        Language::Python,
+        "$A + $A# note"
+    ));
     // misrepresentative java template: `$O.IF ($A) { $B }` parses as a
     // `block`, not the call the pattern text advertises — unanswerable.
-    assert!(!native_pattern_answerable(Language::Java, "$O.IF ($A) { $B }"));
+    assert!(!native_pattern_answerable(
+        Language::Java,
+        "$O.IF ($A) { $B }"
+    ));
     // dup-meta family stays answerable (pass-51 faces keep serving)
-    assert!(native_pattern_answerable(Language::Python, "$A == $A == $A"));
-    assert!(native_pattern_answerable(Language::Python, "foo($A, bar($A))"));
+    assert!(native_pattern_answerable(
+        Language::Python,
+        "$A == $A == $A"
+    ));
+    assert!(native_pattern_answerable(
+        Language::Python,
+        "foo($A, bar($A))"
+    ));
     assert!(native_pattern_answerable(
         Language::Rust,
         "Some($A).unwrap_or($A)"
@@ -1398,7 +1439,10 @@ fn f62_1_rust_attribute_templates_match() {
     let src = "#![allow(dead_code)]\n#[derive(Debug)]\n#[serde(rename = \"x\")]\nstruct S;\n";
     let derive = match_pattern(Language::Rust, src, "#[derive($A)]").unwrap();
     assert_eq!(lines_of(&derive), vec![2u32], "{derive:?}");
-    assert_eq!(derive[0].captures.get("A").map(String::as_str), Some("Debug"));
+    assert_eq!(
+        derive[0].captures.get("A").map(String::as_str),
+        Some("Debug")
+    );
     let any_attr = match_pattern(Language::Rust, src, "#[$A]").unwrap();
     assert_eq!(lines_of(&any_attr), vec![2u32, 3], "{any_attr:?}");
     let inner = match_pattern(Language::Rust, src, "#![allow($A)]").unwrap();
@@ -1413,7 +1457,10 @@ fn f62_1_raw_string_metavar_is_literal_text_like_sg() {
     let src = "fn f() {\n    tag(r#\"hi\")\n    tag(r#\"bye\")\n}\n";
     assert!(!needs_ast_grep_fallback("tag(r#\"$A\"#)"));
     let hits = match_pattern(Language::Rust, src, "tag(r#\"$A\"#)").unwrap();
-    assert!(hits.is_empty(), "raw-string metavar must bind nothing: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "raw-string metavar must bind nothing: {hits:?}"
+    );
 }
 
 #[test]
@@ -1423,7 +1470,10 @@ fn f62_1_c_preprocessor_templates_match() {
     assert_eq!(lines_of(&includes), vec![1u32, 2, 4], "{includes:?}");
     let defines = match_pattern(Language::C, src, "#define $X $Y").unwrap();
     assert_eq!(lines_of(&defines), vec![3u32], "{defines:?}");
-    assert_eq!(defines[0].captures.get("X").map(String::as_str), Some("MAX"));
+    assert_eq!(
+        defines[0].captures.get("X").map(String::as_str),
+        Some("MAX")
+    );
 }
 
 #[test]
@@ -1438,10 +1488,14 @@ fn f62_1_js_private_field_assignment_matches() {
 /// (raise/yield py+rb, throw ts+java, await js, bare break/continue js).
 #[test]
 fn f62_2_statement_head_family_answers() {
-    let py = "def f(cond):\n    if cond:\n        raise ValueError('bad')\n    yield 1\n    yield 2\n";
+    let py =
+        "def f(cond):\n    if cond:\n        raise ValueError('bad')\n    yield 1\n    yield 2\n";
     let raises = match_pattern(Language::Python, py, "raise $A").unwrap();
     assert_eq!(lines_of(&raises), vec![3u32], "{raises:?}");
-    assert_eq!(raises[0].captures.get("A").map(String::as_str), Some("ValueError('bad')"));
+    assert_eq!(
+        raises[0].captures.get("A").map(String::as_str),
+        Some("ValueError('bad')")
+    );
     let yields = match_pattern(Language::Python, py, "yield $A").unwrap();
     assert_eq!(lines_of(&yields), vec![4u32, 5], "{yields:?}");
 
@@ -1503,15 +1557,24 @@ fn f62_3_nonfaithful_receivers_bind_by_text_duplicates_still_reject() {
     let src = "fn demo(arr: Vec<u32>, w: Vec2) -> usize {\n    let a = arr[0].len();\n    let b = w.v[1].len();\n    let c = vec![1, 2].len();\n    a + b + c\n}\n";
     let wild = match_pattern(Language::Rust, src, "$O.$M($$$A)").unwrap();
     assert_eq!(lines_of(&wild), vec![2u32, 3, 4], "{wild:?}");
-    assert_eq!(wild[0].captures.get("O").map(String::as_str), Some("arr[0]"));
+    assert_eq!(
+        wild[0].captures.get("O").map(String::as_str),
+        Some("arr[0]")
+    );
     assert_eq!(wild[0].captures.get("M").map(String::as_str), Some("len"));
-    assert_eq!(wild[2].captures.get("O").map(String::as_str), Some("vec![1, 2]"));
+    assert_eq!(
+        wild[2].captures.get("O").map(String::as_str),
+        Some("vec![1, 2]")
+    );
 
     let named = match_pattern(Language::Rust, src, "$A.$B($$$C)").unwrap();
     assert_eq!(lines_of(&named), vec![2u32, 3, 4], "{named:?}");
 
     let dup = match_pattern(Language::Rust, src, "$O.$O($$$A)").unwrap();
-    assert!(dup.is_empty(), "same-name chains must stay rejected: {dup:?}");
+    assert!(
+        dup.is_empty(),
+        "same-name chains must stay rejected: {dup:?}"
+    );
 }
 
 /// F58-3 control (kept green by capture equality, not the blanket veto):
@@ -1535,16 +1598,23 @@ fn f62_3_receiver_call_chains_still_reject_same_name() {
 fn f62_4_comment_slots_align_by_comma_adjacency() {
     let src = "fn calc(a: u32, b: u32) -> u32 { a + b }\n\nfn demo() -> u32 {\n    let x = calc(1 /* mid */, 2);\n    let y = calc(1, /* n */ 2);\n    let z = calc(3, 7);\n    x + y + z\n}\n";
     let n_slot = match_pattern(Language::Rust, src, "calc(1, /* n */ 2)").unwrap();
-    assert_eq!(lines_of(&n_slot), vec![5u32], "post-comma slot must answer only the /* n */ line: {n_slot:?}");
+    assert_eq!(
+        lines_of(&n_slot),
+        vec![5u32],
+        "post-comma slot must answer only the /* n */ line: {n_slot:?}"
+    );
     let mid_slot = match_pattern(Language::Rust, src, "calc(1 /* mid */, 2)").unwrap();
-    assert_eq!(lines_of(&mid_slot), vec![4u32], "glued slot keeps its own face: {mid_slot:?}");
+    assert_eq!(
+        lines_of(&mid_slot),
+        vec![4u32],
+        "glued slot keeps its own face: {mid_slot:?}"
+    );
     let no_comment = match_pattern(Language::Rust, src, "calc($A, $B)").unwrap();
     assert_eq!(lines_of(&no_comment), vec![4u32, 5, 6], "{no_comment:?}");
     // Different comment text in the SAME slot still answers (pass-60 030-ii).
     let other_text = match_pattern(Language::Rust, src, "calc(1, /* NOTE */ 2)").unwrap();
     assert_eq!(lines_of(&other_text), vec![5u32], "{other_text:?}");
 }
-
 
 // ---------------------------------------------------------------------------
 // PASS 65 (r15-remediation) — failure-first RED tests for the pass-64
@@ -1586,8 +1656,12 @@ fn f64_1_statement_head_siblings_answer_await_throw_defer_go() {
     assert_eq!(lines_of(&gos), vec![7u32, 9], "{gos:?}");
 
     // Registered statement-head faces keep their pass-62 answers.
-    let py_raise =
-        match_pattern(Language::Python, "def g():\n    raise ValueError\n", "raise $A").unwrap();
+    let py_raise = match_pattern(
+        Language::Python,
+        "def g():\n    raise ValueError\n",
+        "raise $A",
+    )
+    .unwrap();
     assert_eq!(lines_of(&py_raise), vec![2u32], "{py_raise:?}");
     let java_throw = match_pattern(
         Language::Java,
@@ -1607,22 +1681,42 @@ fn f64_1_statement_head_siblings_answer_await_throw_defer_go() {
 fn f64_2_three_segment_receiver_chains_bind_like_sg() {
     let rs = "struct Alpha;\nstruct Beta;\nstruct Gamma;\n\nimpl Alpha {\n    fn first(&self) -> Beta { Beta }\n}\n\nimpl Beta {\n    fn second(&self) -> Gamma { Gamma }\n}\n\nimpl Gamma {\n    fn third(&self) -> u32 { 3 }\n}\n\nfn main() {\n    let alpha = Alpha;\n    let x = alpha.first().second();\n    let y = alpha.first().third();\n    let b = Beta;\n    let z = b.second().third();\n    let dup = b.second().second();\n    let deep = alpha.first().second().third();\n}\n";
     let three = match_pattern(Language::Rust, rs, "$O.$M1($$$A).$M2($$$B)").unwrap();
-    assert_eq!(klass_lines(&three), vec![19u32, 20, 22, 23, 24], "{three:?}");
+    assert_eq!(
+        klass_lines(&three),
+        vec![19u32, 20, 22, 23, 24],
+        "{three:?}"
+    );
 
-    let dup_src = "fn main() {\n    let y = Y;\n    let a = y.y().y();\n    let b = y.y().z();\n}\n";
+    let dup_src =
+        "fn main() {\n    let y = Y;\n    let a = y.y().y();\n    let b = y.y().z();\n}\n";
     let dup = match_pattern(Language::Rust, dup_src, "$O.$O($$$A).$O($$$B)").unwrap();
-    assert_eq!(lines_of(&dup), vec![3u32], "same-name veto: only y.y().y(): {dup:?}");
+    assert_eq!(
+        lines_of(&dup),
+        vec![3u32],
+        "same-name veto: only y.y().y(): {dup:?}"
+    );
     let two = match_pattern(Language::Rust, dup_src, "$O.$M($$$A)").unwrap();
     // sg answers BOTH chain nodes per line (JSON probe 0.45.2: 4 rows —
     // outer cols 12-21 with O=y.y(), inner cols 12-17 with O=y); the subject
     // keeps that exact multiplicity on the two-segment contract.
-    assert_eq!(lines_of(&two), vec![3u32, 3, 4, 4], "two-segment contract unchanged: {two:?}");
+    assert_eq!(
+        lines_of(&two),
+        vec![3u32, 3, 4, 4],
+        "two-segment contract unchanged: {two:?}"
+    );
 
     let py = "class Alpha:\n    def first(self):\n        return Beta()\n\nclass Beta:\n    def second(self):\n        return Gamma()\n\n    def second_more(self, extra):\n        return Gamma()\n\nclass Gamma:\n    def third(self):\n        return 3\n\ndef main():\n    alpha = Alpha()\n    x = alpha.first().second()\n    y = alpha.first().third()\n    b = Beta()\n    z = b.second().third()\n    dup = b.second().second()\n    deep = alpha.first().second().third()\n    argd = alpha.first().second_more(9)\n";
     let py_three = match_pattern(Language::Python, py, "$O.$M1($$$A).$M2($$$B)").unwrap();
-    assert_eq!(klass_lines(&py_three), vec![18u32, 19, 21, 22, 23, 24], "{py_three:?}");
+    assert_eq!(
+        klass_lines(&py_three),
+        vec![18u32, 19, 21, 22, 23, 24],
+        "{py_three:?}"
+    );
     let py_dup = match_pattern(Language::Python, py, "$O.$O($$$A).$O($$$B)").unwrap();
-    assert!(py_dup.is_empty(), "same-name three-seg must veto: {py_dup:?}");
+    assert!(
+        py_dup.is_empty(),
+        "same-name three-seg must veto: {py_dup:?}"
+    );
 
     let ts = "class Alpha {\n  first(): Beta { return new Beta(); }\n}\nclass Beta {\n  second(): Gamma { return new Gamma(); }\n}\nclass Gamma {\n  third(): number { return 3; }\n}\nfunction main(): void {\n  const alpha = new Alpha();\n  const x = alpha.first().second();\n  const y = alpha.first().third();\n  const b = new Beta();\n  const z = b.second().third();\n  const opt = maybe()?.load();\n  const opt2 = user?.profile?.load();\n}\n";
     let ts_three = match_pattern(Language::TypeScript, ts, "$O.$M1($$$A).$M2($$$B)").unwrap();
@@ -1638,7 +1732,10 @@ fn f64_3_preproc_directive_family_answers_like_sg() {
     let cpp = "#include <vector>\n#ifdef FEATURE\n#define TWICE(x) ((x) * 2)\n#endif\n#ifndef MISSING\n#pragma once\n#endif\nint main() { return TWICE(2); }\n";
     let ifdef = match_pattern(Language::Cpp, cpp, "#ifdef $A").unwrap();
     assert_eq!(lines_of(&ifdef), vec![2u32], "{ifdef:?}");
-    assert_eq!(ifdef[0].captures.get("A").map(String::as_str), Some("FEATURE"));
+    assert_eq!(
+        ifdef[0].captures.get("A").map(String::as_str),
+        Some("FEATURE")
+    );
     let ifndef = match_pattern(Language::Cpp, cpp, "#ifndef $A").unwrap();
     assert_eq!(lines_of(&ifndef), vec![5u32], "{ifndef:?}");
     let concrete = match_pattern(Language::Cpp, cpp, "#ifdef FEATURE").unwrap();
@@ -1650,7 +1747,10 @@ fn f64_3_preproc_directive_family_answers_like_sg() {
     let define = match_pattern(Language::Cpp, cpp, "#define TWICE(x) ((x) * 2)").unwrap();
     assert_eq!(lines_of(&define), vec![3u32], "{define:?}");
     let endif = match_pattern(Language::Cpp, cpp, "#endif").unwrap();
-    assert!(endif.is_empty(), "#endif (sg-empty) must not answer: {endif:?}");
+    assert!(
+        endif.is_empty(),
+        "#endif (sg-empty) must not answer: {endif:?}"
+    );
 
     let c = "#include \"local.h\"\n#ifdef FEATURE\n#define WICE(y) ((y) * 3)\n#endif\n#if defined(FEATURE)\nint w = 1;\n#endif\nint main() { return 0; }\n";
     let c_ifdef = match_pattern(Language::C, c, "#ifdef $A").unwrap();
@@ -1689,15 +1789,24 @@ fn f64_4_ruby_interpolation_metavar_binds() {
     let rb = "name = \"user-#{session.user}\"\nother = \"plain\"\ngreeting = \"hello-#{user.name}-bye\"\nid = \"##{serial}\"\ndef render(x)\n  \"v=#{x}\"\nend\n";
     let user = match_pattern(Language::Ruby, rb, "name = \"user-#{$N}\"").unwrap();
     assert_eq!(lines_of(&user), vec![1u32], "{user:?}");
-    assert_eq!(user[0].captures.get("N").map(String::as_str), Some("session.user"));
+    assert_eq!(
+        user[0].captures.get("N").map(String::as_str),
+        Some("session.user")
+    );
 
     let hello = match_pattern(Language::Ruby, rb, "\"hello-#{$A}-bye\"").unwrap();
     assert_eq!(lines_of(&hello), vec![3u32], "{hello:?}");
-    assert_eq!(hello[0].captures.get("A").map(String::as_str), Some("user.name"));
+    assert_eq!(
+        hello[0].captures.get("A").map(String::as_str),
+        Some("user.name")
+    );
 
     let serial = match_pattern(Language::Ruby, rb, "\"##{$D}\"").unwrap();
     assert_eq!(lines_of(&serial), vec![4u32], "{serial:?}");
-    assert_eq!(serial[0].captures.get("D").map(String::as_str), Some("serial"));
+    assert_eq!(
+        serial[0].captures.get("D").map(String::as_str),
+        Some("serial")
+    );
 
     // Concrete interpolation-free literals keep matching exactly.
     let plain = match_pattern(Language::Ruby, rb, "other = \"plain\"").unwrap();
@@ -1727,7 +1836,8 @@ fn f64_5_literal_lane_answers_member_call_valued_roots() {
     let tt = match_pattern(Language::Python, py, "t = \"a#b\".split(\"#\")").unwrap();
     assert_eq!(lines_of(&tt), vec![3u32], "{tt:?}");
 
-    let ts = "const maybe = { load: () => 1 };\nconst v1 = maybe.load();\nconst v2 = maybe?.load();\n";
+    let ts =
+        "const maybe = { load: () => 1 };\nconst v1 = maybe.load();\nconst v2 = maybe?.load();\n";
     let v1 = match_pattern(Language::TypeScript, ts, "const v1 = maybe.load();").unwrap();
     assert_eq!(lines_of(&v1), vec![2u32], "{v1:?}");
 
@@ -1747,36 +1857,85 @@ fn f64_5_literal_lane_answers_member_call_valued_roots() {
 #[test]
 fn f64_6_bare_statement_heads_answer_kind_level() {
     let java = "class Main {\n    void run() {\n        for (int i = 0; i < 3; i++) {\n            continue;\n        }\n        while (true) {\n            break;\n        }\n        throw new RuntimeException();\n    }\n}\n";
-    assert_eq!(lines_of(&match_pattern(Language::Java, java, "break").unwrap()), vec![7u32]);
-    assert_eq!(lines_of(&match_pattern(Language::Java, java, "break;").unwrap()), vec![7u32]);
-    assert_eq!(lines_of(&match_pattern(Language::Java, java, "continue").unwrap()), vec![4u32]);
-    assert_eq!(lines_of(&match_pattern(Language::Java, java, "continue;").unwrap()), vec![4u32]);
-    assert_eq!(lines_of(&match_pattern(Language::Java, java, "throw").unwrap()), vec![9u32]);
+    assert_eq!(
+        lines_of(&match_pattern(Language::Java, java, "break").unwrap()),
+        vec![7u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Java, java, "break;").unwrap()),
+        vec![7u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Java, java, "continue").unwrap()),
+        vec![4u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Java, java, "continue;").unwrap()),
+        vec![4u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Java, java, "throw").unwrap()),
+        vec![9u32]
+    );
 
     // csharp bare heads (sg: break {8}/{7}, continue {4}, throw kind-level
     // over every throw_statement incl. `throw new ...`).
     let cs = "class Store {\n    void Load() {\n        throw new SystemException();\n        throw new Exception(\"bad\");\n    }\n    int Pick() {\n        if (true) { return 1; }\n        break\n    }\n}\n";
     let cs2 = "class C {\n    void M() {\n        for (int i = 0; i < 3; i++) {\n            continue;\n        }\n        while (true) {\n            break;\n        }\n        throw new Exception();\n    }\n}\n";
-    assert_eq!(lines_of(&match_pattern(Language::CSharp, cs, "break").unwrap()), vec![8u32]);
-    assert_eq!(lines_of(&match_pattern(Language::CSharp, cs2, "break").unwrap()), vec![7u32]);
-    assert_eq!(lines_of(&match_pattern(Language::CSharp, cs2, "continue").unwrap()), vec![4u32]);
-    assert_eq!(lines_of(&match_pattern(Language::CSharp, cs, "throw").unwrap()), vec![3u32, 4]);
-    assert_eq!(lines_of(&match_pattern(Language::CSharp, cs2, "throw").unwrap()), vec![9u32]);
+    assert_eq!(
+        lines_of(&match_pattern(Language::CSharp, cs, "break").unwrap()),
+        vec![8u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::CSharp, cs2, "break").unwrap()),
+        vec![7u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::CSharp, cs2, "continue").unwrap()),
+        vec![4u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::CSharp, cs, "throw").unwrap()),
+        vec![3u32, 4]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::CSharp, cs2, "throw").unwrap()),
+        vec![9u32]
+    );
 
     // rust break is kind-level over `break 9;` and `break;` (sg {3,6}).
-    let rs = "fn f() {\n    loop {\n        break 9;\n    }\n    loop {\n        break;\n    }\n}\n";
-    assert_eq!(lines_of(&match_pattern(Language::Rust, rs, "break").unwrap()), vec![3u32, 6]);
+    let rs =
+        "fn f() {\n    loop {\n        break 9;\n    }\n    loop {\n        break;\n    }\n}\n";
+    assert_eq!(
+        lines_of(&match_pattern(Language::Rust, rs, "break").unwrap()),
+        vec![3u32, 6]
+    );
 
     // python bare yield / raise (sg kind-level {2,3,4} / {7,8}).
     let py = "def gen():\n    yield\n    yield 1\n    yield 2\n\ndef risky():\n    raise\n    raise ValueError\n\ndef loopy():\n    for i in range(3):\n        break\n    return i\n";
-    assert_eq!(lines_of(&match_pattern(Language::Python, py, "yield").unwrap()), vec![2u32, 3, 4]);
-    assert_eq!(lines_of(&match_pattern(Language::Python, py, "raise").unwrap()), vec![7u32, 8]);
-    assert_eq!(lines_of(&match_pattern(Language::Python, py, "raise $A").unwrap()), vec![8u32]);
+    assert_eq!(
+        lines_of(&match_pattern(Language::Python, py, "yield").unwrap()),
+        vec![2u32, 3, 4]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Python, py, "raise").unwrap()),
+        vec![7u32, 8]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::Python, py, "raise $A").unwrap()),
+        vec![8u32]
+    );
 
     // Registered pass-63 js faces stay green.
     let js = "function loopy() {\n  for (let i = 0; i < 3; i++) {\n    if (i === 1) { break; }\n    if (i === 2) { continue; }\n  }\n}\n";
-    assert_eq!(lines_of(&match_pattern(Language::JavaScript, js, "break").unwrap()), vec![3u32]);
-    assert_eq!(lines_of(&match_pattern(Language::JavaScript, js, "continue").unwrap()), vec![4u32]);
+    assert_eq!(
+        lines_of(&match_pattern(Language::JavaScript, js, "break").unwrap()),
+        vec![3u32]
+    );
+    assert_eq!(
+        lines_of(&match_pattern(Language::JavaScript, js, "continue").unwrap()),
+        vec![4u32]
+    );
 }
 
 /// F64-7 (registered adjudication, scoped back): ts optional-chain segments
@@ -1792,7 +1951,9 @@ fn f64_7_ts_optional_chain_receivers_stay_unbound() {
 
     let opt_src = "const a = b()?.c();\nconst d = e?.f();\n";
     assert!(
-        match_pattern(Language::TypeScript, opt_src, "$O.$M($$$A)").unwrap().is_empty(),
+        match_pattern(Language::TypeScript, opt_src, "$O.$M($$$A)")
+            .unwrap()
+            .is_empty(),
         "optional-chain sources must not answer a plain-dot template"
     );
 
@@ -1880,9 +2041,18 @@ fn f64_7_scopeback_optional_template_answers_optional_chains() {
         Some("user?.profile"),
         "wildcard head folds the nested chain exactly like sg (no trailing ?)"
     );
-    assert_eq!(by_line(3).captures.get("M").map(String::as_str), Some("load"));
-    assert_eq!(by_line(6).captures.get("O").map(String::as_str), Some("cfg"));
-    assert_eq!(by_line(6).captures.get("M").map(String::as_str), Some("get"));
+    assert_eq!(
+        by_line(3).captures.get("M").map(String::as_str),
+        Some("load")
+    );
+    assert_eq!(
+        by_line(6).captures.get("O").map(String::as_str),
+        Some("cfg")
+    );
+    assert_eq!(
+        by_line(6).captures.get("M").map(String::as_str),
+        Some("get")
+    );
     assert_eq!(
         by_line(6).captures.get("$$$A").map(String::as_str),
         Some("\"k\""),
@@ -1907,8 +2077,10 @@ fn f64_7_scopeback_optional_template_answers_optional_chains() {
 fn f64_7_scopeback_optional_head_folding_and_nesting() {
     let src = "const x = alpha.first().second();\nconst opt = maybe()?.load();\nconst z = b.second().third();\nconst opt2 = user?.profile?.load();\nconst nest = conn?.open()?.send(1);\nconst mixed = a.b?.c();\n";
     let hits = match_pattern(Language::TypeScript, src, "$O?.$M($$$A)").unwrap();
-    let rows: Vec<(u32, &str)> =
-        hits.iter().map(|h| (h.line_start, h.excerpt.as_str())).collect();
+    let rows: Vec<(u32, &str)> = hits
+        .iter()
+        .map(|h| (h.line_start, h.excerpt.as_str()))
+        .collect();
     assert_eq!(
         rows,
         vec![
@@ -1926,7 +2098,10 @@ fn f64_7_scopeback_optional_head_folding_and_nesting() {
             .unwrap_or_else(|| panic!("missing row {line} {text}"))
     };
     assert_eq!(
-        by(2, "maybe()?.load()").captures.get("O").map(String::as_str),
+        by(2, "maybe()?.load()")
+            .captures
+            .get("O")
+            .map(String::as_str),
         Some("maybe()"),
         "call receiver folds whole (sg O=maybe())"
     );
@@ -2001,14 +2176,16 @@ fn f64_7_scopeback_js_connector_token_exact() {
 #[test]
 fn f64_7_scopeback_captures_are_rewrite_safe() {
     // Plain faces rewrite to `log(a, b)` — the bytes sg writes.
-    let plain_hits =
-        match_pattern(Language::TypeScript, F64_7_TS_CORPUS, "$O.$M($$$A)").unwrap();
+    let plain_hits = match_pattern(Language::TypeScript, F64_7_TS_CORPUS, "$O.$M($$$A)").unwrap();
     assert_eq!(lines_of(&plain_hits), vec![1u32, 4, 5, 7, 8, 9]);
     let first = &plain_hits[0];
     let o = first.captures.get("O").map(String::as_str).unwrap();
     let m = first.captures.get("M").map(String::as_str).unwrap();
     let rewrite = format!("log({o}, {m})");
-    assert_eq!(rewrite, "log(a, b)", "plain face must rewrite to sg's bytes");
+    assert_eq!(
+        rewrite, "log(a, b)",
+        "plain face must rewrite to sg's bytes"
+    );
     assert!(!rewrite.contains('?'), "no ? may glue into a plain rewrite");
 
     // Zero plain-template matches on optional receivers = zero planned edits
@@ -2024,8 +2201,7 @@ fn f64_7_scopeback_captures_are_rewrite_safe() {
     // The explicit optional template rewrites through clean captures: no
     // capture value ends with `?` (the glued-? class), so interpolating any
     // capture is syntactically valid.
-    let opt_hits =
-        match_pattern(Language::TypeScript, F64_7_TS_CORPUS, "$O?.$M($$$A)").unwrap();
+    let opt_hits = match_pattern(Language::TypeScript, F64_7_TS_CORPUS, "$O?.$M($$$A)").unwrap();
     assert!(!opt_hits.is_empty());
     for hit in &opt_hits {
         for (name, value) in &hit.captures {
@@ -2065,12 +2241,18 @@ fn f64_7_scopeback_other_languages_unaffected() {
         !native_pattern_answerable(Language::Rust, "$O?.$M($$$A)"),
         "rust ? is the try operator, not a member connector — refusal unchanged"
     );
-    assert!(match_pattern(Language::Python, "y = plain.value()\n", "$O?.$M($$$A)")
-        .unwrap()
-        .is_empty());
-    assert!(match_pattern(Language::Rust, "fn f() {\n    let y = a?.b();\n}\n", "$O?.$M($$$A)")
-        .unwrap()
-        .is_empty());
+    assert!(
+        match_pattern(Language::Python, "y = plain.value()\n", "$O?.$M($$$A)")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(match_pattern(
+        Language::Rust,
+        "fn f() {\n    let y = a?.b();\n}\n",
+        "$O?.$M($$$A)"
+    )
+    .unwrap()
+    .is_empty());
 
     // rust plain template on try-chains: sg answers all three rows (the ?
     // belongs to the receiver expression, not the connector).
@@ -2136,8 +2318,7 @@ fn f64_walk_universal_dedup_preserves_order_and_uniqueness() {
     for pattern in ["alpha", "$$A"] {
         let hits = match_pattern(Language::Rust, src, pattern).unwrap();
         assert!(!hits.is_empty(), "{pattern} must answer");
-        let ranges: Vec<(usize, usize)> =
-            hits.iter().map(|h| (h.byte_start, h.byte_end)).collect();
+        let ranges: Vec<(usize, usize)> = hits.iter().map(|h| (h.byte_start, h.byte_end)).collect();
         // The sound pre-order invariant: starts never decrease; on a tie the
         // OUTER (longer) range comes first (parents precede children); and no
         // byte range repeats. The duplicate clause is the dedup contract's
@@ -2145,16 +2326,19 @@ fn f64_walk_universal_dedup_preserves_order_and_uniqueness() {
         // bare `alpha` expression_statement spans exactly its identifier)
         // answer once, so the drop-dedup mutant doubles a range and dies.
         assert!(
-            ranges.windows(2).all(|w| {
-                w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 > w[1].1)
-            }),
+            ranges
+                .windows(2)
+                .all(|w| { w[0].0 < w[1].0 || (w[0].0 == w[1].0 && w[0].1 > w[1].1) }),
             "{pattern} emission must stay in pre-order and duplicate-free: {ranges:?}"
         );
         let unique: std::collections::HashSet<(usize, usize)> = ranges.iter().copied().collect();
-        assert_eq!(unique.len(), ranges.len(), "{pattern} duplicated a byte range");
+        assert_eq!(
+            unique.len(),
+            ranges.len(),
+            "{pattern} duplicated a byte range"
+        );
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // PASS 67a — r17 remediation of the pass-66a findings (RED-first pins).
@@ -2213,7 +2397,12 @@ fn f66a_1_chain_heads_absorb_property_receivers() {
     assert_eq!(prop.captures.get("M1").map(String::as_str), Some("y"));
     assert_eq!(prop.captures.get("M2").map(String::as_str), Some("z"));
 
-    let ts_three = match_pattern(Language::TypeScript, F66A_TS_CORPUS, "$O.$M1($$$A).$M2($$$B)").unwrap();
+    let ts_three = match_pattern(
+        Language::TypeScript,
+        F66A_TS_CORPUS,
+        "$O.$M1($$$A).$M2($$$B)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&ts_three),
         vec![1u32, 2, 9],
@@ -2229,7 +2418,12 @@ fn f66a_1_chain_heads_absorb_property_receivers() {
     // Literal head pins the exact length: sg answers line 1 (M1=first) and
     // line 2 ONLY through the exact-length inner node (M1=beta M2=gamma) —
     // never the absorbed outer row (M1=gamma). One row per line.
-    let lit = match_pattern(Language::TypeScript, F66A_TS_CORPUS, "alpha.$M1($$$A).$M2($$$B)").unwrap();
+    let lit = match_pattern(
+        Language::TypeScript,
+        F66A_TS_CORPUS,
+        "alpha.$M1($$$A).$M2($$$B)",
+    )
+    .unwrap();
     let lit_rows: Vec<(u32, &str, &str)> = lit
         .iter()
         .map(|h| {
@@ -2250,7 +2444,8 @@ fn f66a_1_chain_heads_absorb_property_receivers() {
     // `$O.$O($$$A).$O($$$B)` on `y.f().y().y()` (absorbed head O=y.f can
     // never equal the tail O bindings) while the exact-length `y.y().y()`
     // face keeps answering.
-    let dup = "fn main() {\n    let y = Y;\n    let a = y.y().y();\n    let b = y.f().y().y();\n}\n";
+    let dup =
+        "fn main() {\n    let y = Y;\n    let a = y.y().y();\n    let b = y.f().y().y();\n}\n";
     let dup_hits = match_pattern(Language::Rust, dup, "$O.$O($$$A).$O($$$B)").unwrap();
     assert_eq!(
         klass_lines(&dup_hits),
@@ -2331,10 +2526,21 @@ fn f66a_3_optional_chains_answer_mid_chain_faces() {
         !needs_ast_grep_fallback("$O?.$M1($$$A).$M2($$$B)"),
         "the 3-seg optional chain must be native (sg 0.45.2 answers it)"
     );
-    assert!(native_pattern_answerable(Language::TypeScript, "$O?.$M1($$$A).$M2($$$B)"));
-    assert!(native_pattern_answerable(Language::JavaScript, "$O?.$M1($$$A).$M2($$$B)"));
+    assert!(native_pattern_answerable(
+        Language::TypeScript,
+        "$O?.$M1($$$A).$M2($$$B)"
+    ));
+    assert!(native_pattern_answerable(
+        Language::JavaScript,
+        "$O?.$M1($$$A).$M2($$$B)"
+    ));
 
-    let hits = match_pattern(Language::TypeScript, F66A_TS_CORPUS, "$O?.$M1($$$A).$M2($$$B)").unwrap();
+    let hits = match_pattern(
+        Language::TypeScript,
+        F66A_TS_CORPUS,
+        "$O?.$M1($$$A).$M2($$$B)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![5u32],
@@ -2382,7 +2588,12 @@ fn f66a_3_optional_chains_answer_mid_chain_faces() {
     );
 
     // The plain template keeps its veto (connector-scoped, both directions).
-    let plain = match_pattern(Language::TypeScript, F66A_TS_CORPUS, "$O.$M1($$$A).$M2($$$B)").unwrap();
+    let plain = match_pattern(
+        Language::TypeScript,
+        F66A_TS_CORPUS,
+        "$O.$M1($$$A).$M2($$$B)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&plain),
         vec![1u32, 2, 9],
@@ -2431,7 +2642,12 @@ fn f66a_3_optional_chains_answer_mid_chain_faces() {
         "the 3-seg optional template answers the deep face only: {span_hits:?}"
     );
     assert_eq!(
-        span_hits.first().unwrap().captures.get("O").map(String::as_str),
+        span_hits
+            .first()
+            .unwrap()
+            .captures
+            .get("O")
+            .map(String::as_str),
         Some("a.b()"),
         "the folded call head keeps its argument list (sg capture)"
     );
@@ -2452,8 +2668,12 @@ fn f66a_3_optional_chains_answer_mid_chain_faces() {
         "the 4-seg optional chain must be native"
     );
     let deep = "const p1 = a?.b().c().d();\nconst p3 = a.b()?.c().d();\nconst p6 = a.b.c().d();\n";
-    let deep_hits = match_pattern(Language::TypeScript, deep, "$O?.$M1($$$A).$M2($$$B).$M3($$$C)")
-        .unwrap();
+    let deep_hits = match_pattern(
+        Language::TypeScript,
+        deep,
+        "$O?.$M1($$$A).$M2($$$B).$M3($$$C)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&deep_hits),
         vec![1u32],
@@ -2476,7 +2696,11 @@ fn f66a_3_optional_chains_answer_mid_chain_faces() {
 fn f66a_2_c_ifndef_answers_through_shared_kind() {
     let c = "#define FEATURE_A 1\n#define FEATURE_B 1\n\nint main(void) {\n#if defined(FEATURE_A) && defined(FEATURE_B)\n    return 1;\n#elif defined(FEATURE_A)\n    return 2;\n#else\n    return 3;\n#endif\n}\n\n#ifdef FEATURE_A\n#ifdef FEATURE_B\nint nested_both(void) { return 0; }\n#endif\nint nested_outer(void) { return 1; }\n#endif\n\n#ifndef MISSING\nint has_not(void) { return 2; }\n#endif\n\n#if FEATURE_A\nint plain_if(void) { return 3; }\n#endif\n\n#undef FEATURE_B\nint after_undef(void) { return 4; }\n";
     let ifndef = match_pattern(Language::C, c, "#ifndef $A").unwrap();
-    assert_eq!(lines_of(&ifndef), vec![21u32], "c #ifndef must answer like sg: {ifndef:?}");
+    assert_eq!(
+        lines_of(&ifndef),
+        vec![21u32],
+        "c #ifndef must answer like sg: {ifndef:?}"
+    );
     assert_eq!(
         ifndef[0].captures.get("A").map(String::as_str),
         Some("MISSING"),
@@ -2493,7 +2717,10 @@ fn f66a_2_c_ifndef_answers_through_shared_kind() {
         "#ifdef must not reach the #ifndef region: {ifdef:?}"
     );
     let wrong = match_pattern(Language::C, c, "#ifdef MISSING").unwrap();
-    assert!(wrong.is_empty(), "#ifdef must not answer the ifndef region: {wrong:?}");
+    assert!(
+        wrong.is_empty(),
+        "#ifdef must not answer the ifndef region: {wrong:?}"
+    );
     let ifndef_wrong = match_pattern(Language::C, c, "#ifndef FEATURE_A").unwrap();
     assert!(
         ifndef_wrong.is_empty(),
@@ -2520,8 +2747,14 @@ fn f66a_4_compound_preproc_conditions_answer_like_sg() {
     let c = "#define FEATURE_A 1\n#define FEATURE_B 1\n\nint main(void) {\n#if defined(FEATURE_A) && defined(FEATURE_B)\n    return 1;\n#elif defined(FEATURE_A)\n    return 2;\n#else\n    return 3;\n#endif\n}\n\n#ifdef FEATURE_A\n#ifdef FEATURE_B\nint nested_both(void) { return 0; }\n#endif\nint nested_outer(void) { return 1; }\n#endif\n\n#ifndef MISSING\nint has_not(void) { return 2; }\n#endif\n\n#if FEATURE_A\nint plain_if(void) { return 3; }\n#endif\n\n#undef FEATURE_B\nint after_undef(void) { return 4; }\n";
     let both = match_pattern(Language::C, c, "#if defined($A) && defined($B)").unwrap();
     assert_eq!(lines_of(&both), vec![5u32], "{both:?}");
-    assert_eq!(both[0].captures.get("A").map(String::as_str), Some("FEATURE_A"));
-    assert_eq!(both[0].captures.get("B").map(String::as_str), Some("FEATURE_B"));
+    assert_eq!(
+        both[0].captures.get("A").map(String::as_str),
+        Some("FEATURE_A")
+    );
+    assert_eq!(
+        both[0].captures.get("B").map(String::as_str),
+        Some("FEATURE_B")
+    );
 
     // THE structural cell: `$A` = the whole left operand (sg 0.45.2).
     let mixed = match_pattern(Language::C, c, "#if $A && defined($B)").unwrap();
@@ -2531,14 +2764,20 @@ fn f66a_4_compound_preproc_conditions_answer_like_sg() {
         Some("defined(FEATURE_A)"),
         "sg binds the leading metavariable to the whole operand"
     );
-    assert_eq!(mixed[0].captures.get("B").map(String::as_str), Some("FEATURE_B"));
+    assert_eq!(
+        mixed[0].captures.get("B").map(String::as_str),
+        Some("FEATURE_B")
+    );
 
     // Parseable-but-unmatched compound conditions are answerable-and-empty.
     assert!(
         !needs_ast_grep_fallback("#if defined($A) || defined($B)"),
         "the || compound parses in sg (exit 0, empty) — must be native"
     );
-    assert!(native_pattern_answerable(Language::C, "#if defined($A) || defined($B)"));
+    assert!(native_pattern_answerable(
+        Language::C,
+        "#if defined($A) || defined($B)"
+    ));
     assert!(
         match_pattern(Language::C, c, "#if defined($A) || defined($B)")
             .unwrap()
@@ -2590,7 +2829,8 @@ fn f66a_4_compound_preproc_conditions_answer_like_sg() {
 /// answering a valueless define); drop the lane (RED silent-0).
 #[test]
 fn f66a_5_object_like_define_answers_like_sg() {
-    let src = "#define PLAIN\n#define VAL 1\n#define FUNC(x) ((x)+1)\n#define OTHER 2\nint v = VAL;\n";
+    let src =
+        "#define PLAIN\n#define VAL 1\n#define FUNC(x) ((x)+1)\n#define OTHER 2\nint v = VAL;\n";
     let name = match_pattern(Language::C, src, "#define $A").unwrap();
     assert_eq!(
         lines_of(&name),
@@ -2608,7 +2848,10 @@ fn f66a_5_object_like_define_answers_like_sg() {
     );
     assert_eq!(valued[0].captures.get("A").map(String::as_str), Some("VAL"));
     assert_eq!(valued[0].captures.get("B").map(String::as_str), Some("1"));
-    assert_eq!(valued[1].captures.get("A").map(String::as_str), Some("OTHER"));
+    assert_eq!(
+        valued[1].captures.get("A").map(String::as_str),
+        Some("OTHER")
+    );
     assert_eq!(valued[1].captures.get("B").map(String::as_str), Some("2"));
 
     let concrete = match_pattern(Language::C, src, "#define VAL").unwrap();
@@ -2623,7 +2866,12 @@ fn f66a_5_object_like_define_answers_like_sg() {
     let cpp = "#define FEATURE_A 1\n#define FEATURE_B 1\nint main() { return 0; }\n";
     let cpp_defines = match_pattern(Language::Cpp, cpp, "#define $A").unwrap();
     assert_eq!(lines_of(&cpp_defines), vec![1u32, 2], "{cpp_defines:?}");
-    let maxes = match_pattern(Language::C, "#include <a.h>\n#define MAX 3\n", "#define $X $Y").unwrap();
+    let maxes = match_pattern(
+        Language::C,
+        "#include <a.h>\n#define MAX 3\n",
+        "#define $X $Y",
+    )
+    .unwrap();
     assert_eq!(lines_of(&maxes), vec![2u32], "{maxes:?}");
     assert_eq!(maxes[0].captures.get("X").map(String::as_str), Some("MAX"));
     assert_eq!(maxes[0].captures.get("Y").map(String::as_str), Some("3"));
@@ -2643,7 +2891,8 @@ fn f66a_6_php_nullsafe_connector_answers_token_exact() {
         native_pattern_answerable(Language::Php, "$O?->$M($$$A)"),
         "php nullsafe must be native (sg 0.45.2 answers it)"
     );
-    let php = "<?php\n$a1 = a->b();\n$a2 = a?->b();\n$a3 = $cfg?->get(\"k\", 1);\n$a4 = g?->h?->i();\n";
+    let php =
+        "<?php\n$a1 = a->b();\n$a2 = a?->b();\n$a3 = $cfg?->get(\"k\", 1);\n$a4 = g?->h?->i();\n";
     let hits = match_pattern(Language::Php, php, "$O?->$M($$$A)").unwrap();
     assert_eq!(
         klass_lines(&hits),
@@ -2657,8 +2906,14 @@ fn f66a_6_php_nullsafe_connector_answers_token_exact() {
     };
     assert_eq!(by_line(3).captures.get("O").map(String::as_str), Some("a"));
     assert_eq!(by_line(3).captures.get("M").map(String::as_str), Some("b"));
-    assert_eq!(by_line(4).captures.get("O").map(String::as_str), Some("$cfg"));
-    assert_eq!(by_line(4).captures.get("M").map(String::as_str), Some("get"));
+    assert_eq!(
+        by_line(4).captures.get("O").map(String::as_str),
+        Some("$cfg")
+    );
+    assert_eq!(
+        by_line(4).captures.get("M").map(String::as_str),
+        Some("get")
+    );
     assert_eq!(
         by_line(5).captures.get("O").map(String::as_str),
         Some("g?->h"),
@@ -2674,7 +2929,8 @@ fn f66a_6_php_nullsafe_connector_answers_token_exact() {
         dot.is_empty(),
         "php dot templates must never answer -> or ?-> receivers: {dot:?}"
     );
-    let opt_on_plain = match_pattern(Language::Php, "<?php\n$p = a->b();\n", "$O?->$M($$$A)").unwrap();
+    let opt_on_plain =
+        match_pattern(Language::Php, "<?php\n$p = a->b();\n", "$O?->$M($$$A)").unwrap();
     assert!(
         opt_on_plain.is_empty(),
         "the ?-> template must not answer plain -> receivers (token-exact): {opt_on_plain:?}"
@@ -3128,7 +3384,6 @@ fn f70c_f3_two_and_three_dollar_literal_cells_match_sg() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // PASS 73 (r23 remediation): F72a-1, F72a-2, F-72c-1.
 // sg = ast-grep 0.45.2; every line set and capture below was probed live
@@ -3206,12 +3461,20 @@ fn f72a_1_php_static_call_meta_args_answer_sg_exact() {
     // holds for split-field callees (only the PLAIN helper call answers);
     // and the trailing-name over-match face is gone (sg answers []).
     let lit = match_pattern(Language::Php, php, "Foo::bar(1)").unwrap();
-    assert_eq!(klass_lines(&lit), vec![2u32], "literal lane control: {lit:?}");
+    assert_eq!(
+        klass_lines(&lit),
+        vec![2u32],
+        "literal lane control: {lit:?}"
+    );
     // Empty-args `::` face (the idxgate_php line-3 shape, sg {3}): the
     // literal lane keeps answering it after the fix.
     let empty_php = "<?php\nFoo::bar(1);\nFoo::bar();\n";
     let empty = match_pattern(Language::Php, empty_php, "Foo::bar()").unwrap();
-    assert_eq!(klass_lines(&empty), vec![3u32], "empty-args control: {empty:?}");
+    assert_eq!(
+        klass_lines(&empty),
+        vec![3u32],
+        "empty-args control: {empty:?}"
+    );
     let lone = match_pattern(Language::Php, php, "$F($$$A)").unwrap();
     assert_eq!(
         klass_lines(&lone),
@@ -3289,8 +3552,14 @@ fn f72a_2_nested_call_rest_args_answer_sg_exact() {
         .iter()
         .find(|h| h.line_start == 11)
         .expect("line 11 must answer");
-    assert_eq!(eleven.captures.get("$$$A").map(String::as_str), Some("a, b"));
-    assert_eq!(eleven.captures.get("B").map(String::as_str), Some("send(c)"));
+    assert_eq!(
+        eleven.captures.get("$$$A").map(String::as_str),
+        Some("a, b")
+    );
+    assert_eq!(
+        eleven.captures.get("B").map(String::as_str),
+        Some("send(c)")
+    );
     let three = hits
         .iter()
         .find(|h| h.line_start == 3)
@@ -3312,7 +3581,11 @@ fn f72a_2_nested_call_rest_args_answer_sg_exact() {
     }
     // The no-rest nested twin keeps its pre-existing general-lane answer.
     let twin = match_pattern(Language::TypeScript, ts, "g(fetch($A))").unwrap();
-    assert_eq!(klass_lines(&twin), vec![2u32, 6, 12], "twin control: {twin:?}");
+    assert_eq!(
+        klass_lines(&twin),
+        vec![2u32, 6, 12],
+        "twin control: {twin:?}"
+    );
 }
 
 /// F-72c-1 (LOW, pass 72c): the index-serve gate (`has_multiple_call_segments`)
@@ -3651,9 +3924,10 @@ fn f74c_f4_all_meta_scoped_call_answers_sg_exact() {
     let php = "<?php\nFoo::bar($u);\n\\Foo::bar($u);\nself::bar($u);\nstatic::bar($u);\nparent::bar($u);\n$obj::bar($u);\nApp\\Models\\User::find($u);\nFoo::bar();\nFoo::bar(1);\nFoo::bar($u, $v);\nFoo::bar($u)->baz();\nFoo::$dyn($u);\nFoo::bar(\n    $u\n);\nFoo::bar($v);\n$svc->run($u);\necho strtoupper($w);\n";
     for (pattern, want) in [
         ("$A::$B(1)", vec![10u32]),
-        ("$A::$B($C)", vec![
-            2u32, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 17,
-        ]),
+        (
+            "$A::$B($C)",
+            vec![2u32, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 17],
+        ),
     ] {
         assert!(!needs_ast_grep_fallback(pattern), "{pattern} classifies");
         assert!(native_pattern_answerable(Language::Php, pattern));
@@ -3789,7 +4063,10 @@ fn f76_php_member_chains_and_member_two_dollar_answer_sg_exact() {
     let fifteen = chain.iter().find(|h| h.line_start == 15).expect("line 15");
     assert_eq!(fifteen.captures.get("A").map(String::as_str), Some("$w"));
     let two_dollar = match_pattern(Language::Php, a, "$svc->run($$A)").unwrap();
-    let two = two_dollar.iter().find(|h| h.line_start == 2).expect("line 2");
+    let two = two_dollar
+        .iter()
+        .find(|h| h.line_start == 2)
+        .expect("line 2");
     assert_eq!(two.captures.get("A").map(String::as_str), Some("$u"));
     let weird = two_dollar
         .iter()
@@ -3846,10 +4123,7 @@ fn f76_two_dollar_flip_cells_answer_sg_exact() {
     // FLIP-1: `g(1, $$A)` / `add(1, $$A)` — trailing 2-dollar rest sibling;
     // sg binds `$$A` to ANY single argument (literal `2` included).
     let ts = "g(1, fetch(a));\nadd(1, 2);\ng(1, 2);\nadd(1, fetch(a));\n";
-    for (pattern, want) in [
-        ("g(1, $$A)", vec![1u32, 3]),
-        ("add(1, $$A)", vec![2u32, 4]),
-    ] {
+    for (pattern, want) in [("g(1, $$A)", vec![1u32, 3]), ("add(1, $$A)", vec![2u32, 4])] {
         assert!(
             !needs_ast_grep_fallback(pattern),
             "{pattern} must be admitted (FLIP-1: sg answers the face)"
@@ -3944,7 +4218,10 @@ fn f78_property_segment_member_chains_answer_sg_exact() {
     let five = chain.iter().find(|h| h.line_start == 5).expect("line 5");
     assert_eq!(five.captures.get("A").map(String::as_str), Some("$w"));
     let meta_prop = match_pattern(Language::Php, a, "$svc->c1()->$P->c2($A)").unwrap();
-    let prop = meta_prop.iter().find(|h| h.line_start == 2).expect("line 2");
+    let prop = meta_prop
+        .iter()
+        .find(|h| h.line_start == 2)
+        .expect("line 2");
     assert_eq!(prop.captures.get("P").map(String::as_str), Some("prop"));
 
     // Independent fixture (byte-identical to /tmp/p79_probes/fix/b.php):
@@ -4865,7 +5142,10 @@ fn f83a_member_chain_arg_slots_bind_mixed_lists() {
     let six = single.iter().find(|h| h.line_start == 6).expect("line 6");
     assert_eq!(six.captures.get("A").map(String::as_str), Some("$u"));
     let positional = match_pattern(Language::Php, b4, "$w->q2($A, $B)->r2()").unwrap();
-    let seven = positional.iter().find(|h| h.line_start == 7).expect("line 7");
+    let seven = positional
+        .iter()
+        .find(|h| h.line_start == 7)
+        .expect("line 7");
     assert_eq!(seven.captures.get("A").map(String::as_str), Some("$u"));
     assert_eq!(seven.captures.get("B").map(String::as_str), Some("$v"));
     // Dotted java regression control (served lane untouched, sg {3}).
@@ -4944,7 +5224,10 @@ fn f83a_php_assignment_semicolon_span_consumed() {
         (6, 18),
         "the ;-terminated pattern's span consumes the trailing ; (sg -U parity)"
     );
-    assert_eq!(semi[0].captures.get("MATCH").map(String::as_str), Some("$alpha = $v;"));
+    assert_eq!(
+        semi[0].captures.get("MATCH").map(String::as_str),
+        Some("$alpha = $v;")
+    );
     assert_eq!(semi[0].captures.get("V").map(String::as_str), Some("$v"));
     let bare = match_pattern(Language::Php, b6, "$alpha = $V").unwrap();
     assert_eq!(bare.len(), 1);
@@ -4953,7 +5236,10 @@ fn f83a_php_assignment_semicolon_span_consumed() {
         (6, 17),
         "the ;-less pattern keeps the assignment-node span (; preserved, sg parity)"
     );
-    assert_eq!(bare[0].captures.get("MATCH").map(String::as_str), Some("$alpha = $v"));
+    assert_eq!(
+        bare[0].captures.get("MATCH").map(String::as_str),
+        Some("$alpha = $v")
+    );
 }
 
 /// 86a-M3 + 86c-L (r36→r37, silent FP): the r34 doubled-sign refusal was
@@ -5138,8 +5424,9 @@ fn f87b_php_meta_only_flat_member_calls_answer_sg_exact() {
 /// `$a = $V /*++*/ - 1;` {13}, and a doubled pair per comment
 /// `$a = $V /* a--b--c */ + 1;` {15}. Comment CONTENT is not an operand —
 /// §28.3's registered class is a `--`/`++` token tight to an OPERAND.
-/// Controls that must NOT move: the spaced-in-comment face `$a = $V /* -- */
-/// + 1;` {7}, single-sign `$a = $V /*-*/ + 1;` {11}, the r37 tight/refuse
+/// Controls that must NOT move: the spaced-in-comment face
+/// `$a = $V /* -- */ + 1;` {7}, single-sign `$a = $V /*-*/ + 1;` {11},
+/// the r37 tight/refuse
 /// matrix (`$a = $V-- + 1;` [], the REAL tight operator beside a comment
 /// `$a = $V -- /* x */ 1;` [] — sg rc1), the string-literal face
 /// `$a = "x--y";` {10}, and the spaced/paren answer faces. `//`/`#`
@@ -5558,7 +5845,6 @@ fn f91b_degenerate_semicolon_only_patterns_refuse_where_sg_rejects() {
     assert!(native_pattern_answerable(Language::JavaScript, "$A;"));
 }
 
-
 // ---------------------------------------------------------------------------
 // PASS 92 (F-r41-2): fuzz face F26-0614 — ts `1_000 ($A) { $_0x1F }` (no
 // newline). The pattern classifies NeverMatches (MixedCase `$_0x1F` token)
@@ -5825,10 +6111,17 @@ fn f94b_py_floor_div_faces_answer_where_sg_answers() {
     let hits = match_pattern(Language::Python, src, "$A // 2").unwrap();
     assert_eq!(klass_lines(&hits), vec![3], "$A // 2: sg answers line 3");
     let hits = match_pattern(Language::Python, src, "a // b").unwrap();
-    assert_eq!(klass_lines(&hits), vec![1, 2], "a // b: sg answers lines 1,2");
+    assert_eq!(
+        klass_lines(&hits),
+        vec![1, 2],
+        "a // b: sg answers lines 1,2"
+    );
     // the `/*` arm stays refused for python (no block-comment syntax; the
     // registered py comment faces keep their contract).
-    assert!(!native_pattern_answerable(Language::Python, "$A /* c */ $B"));
+    assert!(!native_pattern_answerable(
+        Language::Python,
+        "$A /* c */ $B"
+    ));
 }
 
 /// RED (FB-93A-4): candidate-side comment transparency gaps — sg answers
@@ -5845,27 +6138,27 @@ fn f94b_candidate_comment_transparency_matches_sg() {
         (
             "$x = $v + 1;",
             vec![5, 6],
-            "mid-comment candidate answers (comment is inside the binary)"
+            "mid-comment candidate answers (comment is inside the binary)",
         ),
         (
             "$a = $V;",
             vec![2, 3, 4, 8, 9, 10],
-            "bare-meta RHS swallows candidate head comments"
+            "bare-meta RHS swallows candidate head comments",
         ),
         (
             "$a = /* a */ /* b */ $V + 1;",
             vec![4],
-            "double head-comment slot demand"
+            "double head-comment slot demand",
         ),
         (
             "$a = /* a */ $V + 1;",
             vec![],
-            "text-exact slot: no line carries exactly /* a */ (sg rc1)"
+            "text-exact slot: no line carries exactly /* a */ (sg rc1)",
         ),
         (
             "$a = $V + 1;",
             vec![10],
-            "comment-free expr pattern: head comments refuse, mid stays"
+            "comment-free expr pattern: head comments refuse, mid stays",
         ),
     ] {
         let hits = match_pattern(Language::Php, php, pattern).unwrap();
@@ -5917,10 +6210,12 @@ fn f94b_php_flat_member_meta_name_faces_answer_sg() {
 /// so the expected line sets below ARE the recorded oracle truth.
 const F96_RUST_SRC: &str = "fn main() {\n    \u{b5}A + 1;\n    x + 1;\n    \u{b5} + 1;\n    f(9);\n    f(y);\n    \u{b5}A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n}\n";
 const F96_GO_SRC: &str = "package main\n\nfunc main() {\n    \u{b5}A + 1\n    x + 1\n    \u{b5} + 1\n    f(9)\n    f(y)\n    \u{b5}A\n    zz\n    g(\"hw\")\n    g(\"other\")\n    w = v\n}\n";
-const F96_PY_SRC: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
+const F96_PY_SRC: &str =
+    "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
 const F96_C_SRC: &str = "void main() {\n    \u{10000}A + 1;\n    x + 1;\n    \u{10000} + 1;\n    f(9);\n    f(y);\n    \u{10000}A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n}\n";
 const F96_JAVA_SRC: &str = "class T {\n    void m() {\n    \u{b5}A + 1;\n    x + 1;\n    \u{b5} + 1;\n    f(9);\n    f(y);\n    \u{b5}A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n    }\n}\n";
-const F96_JS_SRC: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
+const F96_JS_SRC: &str =
+    "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nzz\ng(\"hw\")\ng(\"other\")\nw = v\n";
 
 /// RED (F-95A-1): sg 0.45.2 treats expando-spelled metavariables
 /// (`extract_meta_var(src, expando_char)`, meta_var.rs:235) as METAs: for the
@@ -5935,18 +6230,60 @@ const F96_JS_SRC: &str = "\u{b5}A + 1\nx + 1\n\u{b5} + 1\nf(9)\nf(y)\n\u{b5}A\nz
 #[test]
 fn f96_expando_meta_spelling_matches_dollar_semantics() {
     for (lang, src, expando_pattern, dollar_pattern, want) in [
-        (Language::Rust, F96_RUST_SRC, "µA + 1", "$A + 1", vec![2, 3, 4]),
-        (Language::Rust, F96_RUST_SRC, "µ_ + 1", "$_ + 1", vec![2, 3, 4]),
+        (
+            Language::Rust,
+            F96_RUST_SRC,
+            "µA + 1",
+            "$A + 1",
+            vec![2, 3, 4],
+        ),
+        (
+            Language::Rust,
+            F96_RUST_SRC,
+            "µ_ + 1",
+            "$_ + 1",
+            vec![2, 3, 4],
+        ),
         (Language::Rust, F96_RUST_SRC, "f(µA)", "f($A)", vec![5, 6]),
         (Language::Rust, F96_RUST_SRC, "f(µµµ)", "f($$$)", vec![5, 6]),
-        (Language::Rust, F96_RUST_SRC, "$A + µB", "$A + $B", vec![2, 3, 4]),
-        (Language::Rust, F96_RUST_SRC, "µµA", "$$A", vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        (
+            Language::Rust,
+            F96_RUST_SRC,
+            "$A + µB",
+            "$A + $B",
+            vec![2, 3, 4],
+        ),
+        (
+            Language::Rust,
+            F96_RUST_SRC,
+            "µµA",
+            "$$A",
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        ),
         (Language::Go, F96_GO_SRC, "µA + 1", "$A + 1", vec![4, 5, 6]),
         (Language::Go, F96_GO_SRC, "f(µA)", "f($A)", vec![7, 8]),
-        (Language::Python, F96_PY_SRC, "µA + 1", "$A + 1", vec![1, 2, 3]),
+        (
+            Language::Python,
+            F96_PY_SRC,
+            "µA + 1",
+            "$A + 1",
+            vec![1, 2, 3],
+        ),
         (Language::Python, F96_PY_SRC, "f(µA)", "f($A)", vec![4, 5]),
-        (Language::C, F96_C_SRC, "\u{10000}A + 1", "$A + 1", vec![2, 3, 4]),
-        (Language::C, F96_C_SRC, "\u{10000}_ + 1", "$_ + 1", vec![2, 3, 4]),
+        (
+            Language::C,
+            F96_C_SRC,
+            "\u{10000}A + 1",
+            "$A + 1",
+            vec![2, 3, 4],
+        ),
+        (
+            Language::C,
+            F96_C_SRC,
+            "\u{10000}_ + 1",
+            "$_ + 1",
+            vec![2, 3, 4],
+        ),
     ] {
         let hits = match_pattern(lang, src, expando_pattern).unwrap();
         assert_eq!(
@@ -6024,9 +6361,8 @@ fn f96_expando_root_multi_meta_stays_loud_like_sg() {
         (Language::Cpp, "\u{10000}\u{10000}\u{10000}", "\u{10000}A"),
     ] {
         for expando_pattern in [expando_multi, &format!("{expando_multi}A")] {
-            assert_eq!(
-                native_pattern_answerable(lang, expando_pattern),
-                false,
+            assert!(
+                !native_pattern_answerable(lang, expando_pattern),
                 "{lang:?} {expando_pattern:?}: sg rc8 RootMultiMetaVar — must be \
                  unanswerable so the census keeps the face loud"
             );
@@ -6119,7 +6455,8 @@ fn f96_bracket_fragment_faces_accepted_empty_like_sg() {
     // and the `$f($A) …` compounds are served by the classifier/general-lane
     // early returns, not the fragment admission, so they cannot discriminate
     // here; `$A +` DOES reach the fragment arm and must stay refused.)
-    for pattern in ["$A +"] {
+    {
+        let pattern = "$A +";
         assert!(
             needs_ast_grep_fallback(pattern),
             "{pattern:?}: the registered loud class (trailing-operator) must \
@@ -6230,7 +6567,8 @@ const F98_CSHARP_SRC: &str = "class T {\n    void M() {\n    \u{b5}A + 1;\n    x
 const F98_JAVA_JNAME_SRC: &str = "class T {\n    void m() {\n    $A + 1;\n    x + 1;\n    $Bx + 1;\n    f(9);\n    f(y);\n    $A;\n    zz;\n    g(\"hw\");\n    g(\"other\");\n    w = v;\n    $Bx + 2;\n    k($Bx);\n    f(\"$Ax\");\n    $Bx;\n    k($Bx, 1);\n    }\n}\n";
 /// µ-before-$ composition corpora (F97X-0072): assignment rows.
 const F98_COMPOSE_PY: &str = "msg = \"hello \" + name\nw = v\ny = z + 1\n";
-const F98_COMPOSE_RS: &str = "fn main() {\n    msg = \"hello \" + name;\n    w = v;\n    y = z + 1;\n}\n";
+const F98_COMPOSE_RS: &str =
+    "fn main() {\n    msg = \"hello \" + name;\n    w = v;\n    y = z + 1;\n}\n";
 
 /// RED (F-97A-1 layer 1 / FB-97B-1): sg 0.45.2 validates the meta grammar over
 /// the ENTIRE parsed node text (meta_var.rs:260-264 — any invalid char in the
@@ -6460,7 +6798,10 @@ fn f98_mu_before_dollar_composes_like_sg() {
         );
     }
     // Expression composition: µ$A + 1 ≡ $$A + 1 (m3c sg {3}/{4} rows).
-    for (lang, src) in [(Language::Rust, F98_COMPOSE_RS), (Language::Python, F98_COMPOSE_PY)] {
+    for (lang, src) in [
+        (Language::Rust, F98_COMPOSE_RS),
+        (Language::Python, F98_COMPOSE_PY),
+    ] {
         assert_eq!(
             klass_lines(&match_pattern(lang, src, "µ$A + 1").unwrap()),
             klass_lines(&match_pattern(lang, src, "$$A + 1").unwrap()),
@@ -6565,7 +6906,13 @@ fn f100_error_glued_fragment_metas_bind_like_sg() {
         (Language::Go, F100_GLU_GO, vec![4, 5, 6, 7, 8, 11, 12]),
         (Language::Swift, F100_GLU_SWIFT, vec![2, 3, 4, 5, 6, 9, 10]),
     ] {
-        for pattern in ["\u{b5}A_ + 1", "\u{b5}A1 + 1", "\u{b5}_AB + 1", "\u{b5}$A + 1", "$$A + 1"] {
+        for pattern in [
+            "\u{b5}A_ + 1",
+            "\u{b5}A1 + 1",
+            "\u{b5}_AB + 1",
+            "\u{b5}$A + 1",
+            "$$A + 1",
+        ] {
             let hits = match_pattern(lang, src, pattern).unwrap();
             assert_eq!(
                 klass_lines(&hits),
@@ -6695,7 +7042,11 @@ fn f100_ruby_question_suffix_literal_like_sg() {
     // (`µAb?`); the `!` twin keeps its sg-rc8-equivalent loud fold (the
     // search layer surfaces it — here the meta fold must answer nothing).
     let hits = match_pattern(Language::Ruby, F100_RUBY_SRC, "\u{b5}Ab?").unwrap();
-    assert_eq!(klass_lines(&hits), vec![3u32], "µAb?: pre-existing exact literal face must not move");
+    assert_eq!(
+        klass_lines(&hits),
+        vec![3u32],
+        "µAb?: pre-existing exact literal face must not move"
+    );
     let hits = match_pattern(Language::Ruby, F100_RUBY_SRC, "\u{b5}A!").unwrap();
     assert!(
         klass_lines(&hits).is_empty(),
@@ -6836,10 +7187,7 @@ fn f102_ruby_paren_call_gate_like_sg() {
     }
     // Parenthesized rows: sg answers (m3 oracle SG_EXACT cells) — must keep
     // answering after the gate.
-    for (src, want) in [
-        ("q(µµµ$A)\n", vec![1u32]),
-        ("q(x)\n", vec![1u32]),
-    ] {
+    for (src, want) in [("q(µµµ$A)\n", vec![1u32]), ("q(x)\n", vec![1u32])] {
         for pattern in ["q(µA_)", "q($A_)", "q(µA)"] {
             let hits = match_pattern(Language::Ruby, src, pattern).unwrap();
             assert_eq!(
@@ -7036,7 +7384,12 @@ fn f105_bare_ident_lhs_binary_pattern_answers_sg_aligned() {
          ingress-loud"
     );
     // Aligned face answers (swift compound-callee alignment, m2 oracle H).
-    let hits = match_pattern(Language::Swift, "x * q(\u{b5}\u{b5}\u{b5}$A)\n", "x * q($A)").unwrap();
+    let hits = match_pattern(
+        Language::Swift,
+        "x * q(\u{b5}\u{b5}\u{b5}$A)\n",
+        "x * q($A)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![1u32],
@@ -7049,13 +7402,23 @@ fn f105_bare_ident_lhs_binary_pattern_answers_sg_aligned() {
         "swift x + q($A) on the clean ident row: m2 oracle answers"
     );
     // Leaf mismatches stay empty (m2 oracle: op mismatch / LHS mismatch []).
-    let hits = match_pattern(Language::Swift, "x * q(\u{b5}\u{b5}\u{b5}$A)\n", "x + q($A)").unwrap();
+    let hits = match_pattern(
+        Language::Swift,
+        "x * q(\u{b5}\u{b5}\u{b5}$A)\n",
+        "x + q($A)",
+    )
+    .unwrap();
     assert!(
         hits.is_empty(),
         "swift op mismatch must answer []: {:?}",
         klass_lines(&hits)
     );
-    let hits = match_pattern(Language::Swift, "1 * q(\u{b5}\u{b5}\u{b5}$A)\n", "x * q($A)").unwrap();
+    let hits = match_pattern(
+        Language::Swift,
+        "1 * q(\u{b5}\u{b5}\u{b5}$A)\n",
+        "x * q($A)",
+    )
+    .unwrap();
     assert!(
         hits.is_empty(),
         "swift LHS mismatch must answer []: {:?}",
@@ -7167,10 +7530,7 @@ fn f105_parenless_rest_call_candidates_refused_like_sg() {
     );
     // Swift brace call: sg [] (m4 swbrace row).
     let hits = match_pattern(Language::Swift, "q { x }\n", "q($$$A)").unwrap();
-    assert!(
-        hits.is_empty(),
-        "swift brace call row: sg [] (m4 oracle)"
-    );
+    assert!(hits.is_empty(), "swift brace call row: sg [] (m4 oracle)");
     // Parenthesized controls answer (m4 rbparen/swparen oracle H).
     let hits = match_pattern(Language::Ruby, "q(1)\n", "q($$$A)").unwrap();
     assert_eq!(
@@ -7310,12 +7670,7 @@ fn f107_swift_member_chain_pattern_answers_sg_aligned() {
         vec![1u32],
         "swift a.b.c($A) on the 3-chain row: sg answers {{1}} (m3_chains)"
     );
-    let hits = match_pattern(
-        Language::Swift,
-        "let r = a.b.c.d(1)\n",
-        "a.b.c.d($A)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Swift, "let r = a.b.c.d(1)\n", "a.b.c.d($A)").unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![1u32],
@@ -7421,12 +7776,7 @@ fn f107_ruby_operator_continuation_answers_sg_aligned() {
         klass_lines(&hits)
     );
     // JavaScript control: the same face was already sg-exact (registered).
-    let hits = match_pattern(
-        Language::JavaScript,
-        "let y = x * q(1);\n",
-        "x * q($A)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::JavaScript, "let y = x * q(1);\n", "x * q($A)").unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![1u32],
@@ -7487,12 +7837,7 @@ fn f107_three_rest_lists_bind_like_sg() {
 /// must join them via the tag-wrap build retry.
 #[test]
 fn f107_php_operator_continuation_answers_sg_aligned() {
-    let hits = match_pattern(
-        Language::Php,
-        "<?php\n$y = x * q(1);\n",
-        "x * q($A)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Php, "<?php\n$y = x * q(1);\n", "x * q($A)").unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![2u32],
@@ -7500,24 +7845,14 @@ fn f107_php_operator_continuation_answers_sg_aligned() {
          phpbare_tag oracle)"
     );
     // The $-headed faces keep their operand-lane answers (m4_php_op controls).
-    let hits = match_pattern(
-        Language::Php,
-        "<?php\n$y = $x * q(1);\n",
-        "$x * q($A)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Php, "<?php\n$y = $x * q(1);\n", "$x * q($A)").unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![2u32],
         "php $x * q($A) control keeps the operand-lane answer (m4_php_op \
          phpmul_tag HIT_AGREE)"
     );
-    let hits = match_pattern(
-        Language::Php,
-        "<?php\n$y = $x * q(1);\n",
-        "$x + q($A)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Php, "<?php\n$y = $x * q(1);\n", "$x + q($A)").unwrap();
     assert!(
         hits.is_empty(),
         "php op mismatch must answer [] (m4_php_op EMPTY_AGREE): {:?}",
@@ -8024,11 +8359,7 @@ fn f113a_optional_spelled_patterns_refuse_junction_comment() {
     for (lang, src, pat) in [
         (Language::JavaScript, "a?.b(1);\n", "a?.b($A)"),
         (Language::TypeScript, "a?.b(1);\n", "a?.b($A)"),
-        (
-            Language::JavaScript,
-            "a?.b /*c*/ .c(1);\n",
-            "a?.b.c($A)",
-        ),
+        (Language::JavaScript, "a?.b /*c*/ .c(1);\n", "a?.b.c($A)"),
     ] {
         let hits = match_pattern(lang, src, pat).unwrap();
         assert_eq!(
@@ -8329,8 +8660,7 @@ fn f115a_property_segment_optional_chains_refuse_junction_and_trivia_faces() {
         // wrapper veto, 113's grammar rule); the js twin ANSWERS (anonymous
         // `?.` token grammar — asserted after the loop).
         if lang == Language::TypeScript {
-            let hits =
-                match_pattern(lang, "a?.b /*c1*/ ?. /*c2*/ c(1);\n", "a?.b?.c($X)").unwrap();
+            let hits = match_pattern(lang, "a?.b /*c1*/ ?. /*c2*/ c(1);\n", "a?.b?.c($X)").unwrap();
             assert!(
                 hits.is_empty(),
                 "{lang:?} a?.b?.c($X) on a?.b /*c1*/ ?. /*c2*/ c(1): the ts \
@@ -8342,8 +8672,7 @@ fn f115a_property_segment_optional_chains_refuse_junction_and_trivia_faces() {
     }
     // The js twin of the mid-chain trivia face must KEEP answering (oracle
     // HIT — anonymous `?.` token grammar).
-    let hits =
-        match_pattern(Language::JavaScript, "a?.b /*c*/ ?.c(1);\n", "a?.b?.c($X)").unwrap();
+    let hits = match_pattern(Language::JavaScript, "a?.b /*c*/ ?.c(1);\n", "a?.b?.c($X)").unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![1u32],
@@ -8359,7 +8688,11 @@ fn f115a_property_segment_optional_chains_refuse_junction_and_trivia_faces() {
         (Language::JavaScript, "x(1)?.b?.c(2);\n", "$A?.b?.c($X)"),
         (Language::JavaScript, "x.y?.b?.c(2);\n", "$A?.b?.c($X)"),
         // Multi-call face: a call AFTER a property link answers (oracle HIT).
-        (Language::JavaScript, "a?.b?.c(1)?.d(2);\n", "a?.b?.c(1)?.d($X)"),
+        (
+            Language::JavaScript,
+            "a?.b?.c(1)?.d(2);\n",
+            "a?.b?.c(1)?.d($X)",
+        ),
         // Mixed dotted/optional spellings (oracle HIT, both).
         (Language::JavaScript, "a.b?.c(1);\n", "a.b?.c($X)"),
         (Language::JavaScript, "a?.b.c(1);\n", "a?.b.c($X)"),
@@ -8386,14 +8719,19 @@ fn f115a_property_segment_optional_chains_refuse_junction_and_trivia_faces() {
     }
     // Dotted twins: ZERO movement (already sg-exact through the dotted lanes).
     for (lang, src, pat, want) in [
-        (Language::JavaScript, "a.b.c /*c*/ (1);\n", "a.b.c($X)", vec![]),
-        (Language::TypeScript, "a.b.c /*c*/ (1);\n", "a.b.c($X)", vec![]),
         (
             Language::JavaScript,
-            "a.b.c(1);\n",
+            "a.b.c /*c*/ (1);\n",
             "a.b.c($X)",
-            vec![1u32],
+            vec![],
         ),
+        (
+            Language::TypeScript,
+            "a.b.c /*c*/ (1);\n",
+            "a.b.c($X)",
+            vec![],
+        ),
+        (Language::JavaScript, "a.b.c(1);\n", "a.b.c($X)", vec![1u32]),
     ] {
         let hits = match_pattern(lang, src, pat).unwrap();
         assert_eq!(
@@ -8456,10 +8794,7 @@ fn f115b_rest_arg_optional_chains_classify_native_and_answer_sg_exact() {
         ("a?.b?.c(1, 2);\n", "n=2"),
         ("a?.b?.c();\n", "empty"),
     ] {
-        for (lang, lang_name) in [
-            (Language::JavaScript, "js"),
-            (Language::TypeScript, "ts"),
-        ] {
+        for (lang, lang_name) in [(Language::JavaScript, "js"), (Language::TypeScript, "ts")] {
             let hits = match_pattern(lang, src, "a?.b?.c($$$A)").unwrap();
             assert_eq!(
                 klass_lines(&hits),
@@ -8486,9 +8821,17 @@ fn f115b_rest_arg_optional_chains_classify_native_and_answer_sg_exact() {
         (Language::JavaScript, "a.b.c(1, 2);\n", "a?.b?.c($$$A)"),
         (Language::TypeScript, "a.b.c(1, 2);\n", "a?.b?.c($$$A)"),
         // Junction comment (f115a's rule at rest arity).
-        (Language::JavaScript, "a?.b?.c /*c*/ (1);\n", "a?.b?.c($$$A)"),
+        (
+            Language::JavaScript,
+            "a?.b?.c /*c*/ (1);\n",
+            "a?.b?.c($$$A)",
+        ),
         // ts type arguments in the candidate callee.
-        (Language::TypeScript, "a?.b?.c<number>(1);\n", "a?.b?.c($$$A)"),
+        (
+            Language::TypeScript,
+            "a?.b?.c<number>(1);\n",
+            "a?.b?.c($$$A)",
+        ),
         // Dotted pattern spelling refuses the optional file (connector
         // distinction, registered).
         (Language::JavaScript, "a?.b?.c(1);\n", "a.b.c($X)"),
@@ -8649,7 +8992,11 @@ fn f117a_non_family_chain_faces_obey_the_junction_and_trivia_gates() {
 #[test]
 fn f117b_mixed_rest_optional_chains_classify_and_answer_sg_exact() {
     // Ingress: the spellings must classify natively (stops the rc2 loud).
-    for pat in ["a?.b?.c($A, $$$B)", "a?.b?.c($$$A, $$$B)", "a?.b?.c($$$A, $B)"] {
+    for pat in [
+        "a?.b?.c($A, $$$B)",
+        "a?.b?.c($$$A, $$$B)",
+        "a?.b?.c($$$A, $B)",
+    ] {
         let kind = classify_native(pat);
         assert!(
             matches!(kind, Some(NativeKind::OptionalCallChain { .. })),
@@ -8681,8 +9028,12 @@ fn f117b_mixed_rest_optional_chains_classify_and_answer_sg_exact() {
         }
     }
     // js arity 4 too (grid row).
-    let hits = match_pattern(Language::JavaScript, "a?.b?.c(1, 2, 3, 4);\n", "a?.b?.c($A, $$$B)")
-        .unwrap();
+    let hits = match_pattern(
+        Language::JavaScript,
+        "a?.b?.c(1, 2, 3, 4);\n",
+        "a?.b?.c($A, $$$B)",
+    )
+    .unwrap();
     assert_eq!(
         klass_lines(&hits),
         vec![1u32],
@@ -8931,8 +9282,16 @@ fn f117e_mid_link_call_junctions_refuse_and_meta_mid_links_pin() {
     }
     // Clean controls keep answering (oracle HIT).
     for (lang, src, pat) in [
-        (Language::JavaScript, "a?.b?.c(1)?.d(2);\n", "a?.b?.c($X)?.d($Y)"),
-        (Language::TypeScript, "a?.b?.c(1)?.d(2);\n", "a?.b?.c($X)?.d($Y)"),
+        (
+            Language::JavaScript,
+            "a?.b?.c(1)?.d(2);\n",
+            "a?.b?.c($X)?.d($Y)",
+        ),
+        (
+            Language::TypeScript,
+            "a?.b?.c(1)?.d(2);\n",
+            "a?.b?.c($X)?.d($Y)",
+        ),
         (Language::JavaScript, "a?.b(1)?.c(2);\n", "a?.b($X)?.c($Y)"),
         (Language::JavaScript, "a(0)?.b?.c(1);\n", "a($P)?.b?.c($X)"),
     ] {
@@ -8980,7 +9339,11 @@ fn f117e_mid_link_call_junctions_refuse_and_meta_mid_links_pin() {
 fn f118a_callee_position_link_trivia_is_transparent() {
     // sg ANSWERS (oracle HIT): the 117-caused over-refusals must answer.
     for (src, pat, desc) in [
-        ("a?. /*c*/ b?.c(1);\n", "a?.b?.c($X)", "block comment after first ?."),
+        (
+            "a?. /*c*/ b?.c(1);\n",
+            "a?.b?.c($X)",
+            "block comment after first ?.",
+        ),
         (
             "a?.b?. /*c*/ c(1);\n",
             "a?.b?.c($X)",
@@ -9089,7 +9452,11 @@ fn f118a_callee_position_link_trivia_is_transparent() {
 #[test]
 fn f118b_kotlin_all_call_optional_chains_answer_sg_exact() {
     // Ingress: kotlin must stop refusing the all-call chain spellings.
-    for pat in ["a?.b($X)?.c($Y)", "a?.b($X)?.c($Y)?.d($Z)", "a?.b($X)?.c($$$A)"] {
+    for pat in [
+        "a?.b($X)?.c($Y)",
+        "a?.b($X)?.c($Y)?.d($Z)",
+        "a?.b($X)?.c($$$A)",
+    ] {
         assert!(
             native_pattern_answerable(Language::Kotlin, pat),
             "kotlin {pat}: all-call `?.` chains must be answerable — the \
@@ -9112,11 +9479,7 @@ fn f118b_kotlin_all_call_optional_chains_answer_sg_exact() {
             "a?.b($X)?.c($Y)",
             "3-link, binds X=1 Y=2",
         ),
-        (
-            "a?.b(1)?.c(2)?.d(3);\n",
-            "a?.b($X)?.c($Y)?.d($Z)",
-            "4-link",
-        ),
+        ("a?.b(1)?.c(2)?.d(3);\n", "a?.b($X)?.c($Y)?.d($Z)", "4-link"),
         (
             "a?.b(1)?.c(2, 3);\n",
             "a?.b($X)?.c($$$A)",
@@ -9133,12 +9496,7 @@ fn f118b_kotlin_all_call_optional_chains_answer_sg_exact() {
         );
     }
     // Negative control: connector/name mismatch stays empty (sg rc1-empty).
-    let hits = match_pattern(
-        Language::Kotlin,
-        "a?.b(1)?.d(2);\n",
-        "a?.b($X)?.c($Y)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Kotlin, "a?.b(1)?.d(2);\n", "a?.b($X)?.c($Y)").unwrap();
     assert!(
         hits.is_empty(),
         "kotlin negative control must stay empty: {:?}",
@@ -9146,12 +9504,7 @@ fn f118b_kotlin_all_call_optional_chains_answer_sg_exact() {
     );
     // Connector-flag exactness: an all-plain candidate never answers an
     // all-`?.` pattern (the ONE token-exact rule).
-    let hits = match_pattern(
-        Language::Kotlin,
-        "a.b(1)?.c(2);\n",
-        "a?.b($X)?.c($Y)",
-    )
-    .unwrap();
+    let hits = match_pattern(Language::Kotlin, "a.b(1)?.c(2);\n", "a?.b($X)?.c($Y)").unwrap();
     assert!(
         hits.is_empty(),
         "kotlin connector mismatch (plain head) must stay empty: {:?}",
@@ -9161,7 +9514,11 @@ fn f118b_kotlin_all_call_optional_chains_answer_sg_exact() {
     // keep riding the gated general arm.
     for (src, pat, desc) in [
         ("a?.b(1);\n", "a?.b($X)", "kt 2-link (OptionalCall lane)"),
-        ("a?.b?.c(1);\n", "a?.b?.c($X)", "property face (general arm)"),
+        (
+            "a?.b?.c(1);\n",
+            "a?.b?.c($X)",
+            "property face (general arm)",
+        ),
     ] {
         let hits = match_pattern(Language::Kotlin, src, pat).unwrap();
         assert_eq!(
@@ -9237,8 +9594,16 @@ fn f120a_kotlin_all_call_links_refuse_link_structural_trivia() {
     // position scope may not over-refuse (118 callee-internal doctrine).
     for (src, pat, desc) in [
         ("a?.b(1)?.c(2);\n", "a?.b($X)?.c($Y)", "clean 3-link"),
-        ("a?. /*c*/ b(1)?.c(2);\n", "a?.b($X)?.c($Y)", "callee-internal 3-link"),
-        (" /*c*/ a?.b(1)?.c(2);\n", "a?.b($X)?.c($Y)", "pre-chain trivia 3-link"),
+        (
+            "a?. /*c*/ b(1)?.c(2);\n",
+            "a?.b($X)?.c($Y)",
+            "callee-internal 3-link",
+        ),
+        (
+            " /*c*/ a?.b(1)?.c(2);\n",
+            "a?.b($X)?.c($Y)",
+            "pre-chain trivia 3-link",
+        ),
         ("a?.b(1);\n", "a?.b($X)", "clean 2-link"),
         ("a?. /*c*/ b(1);\n", "a?.b($X)", "callee-internal 2-link"),
         (" /*c*/ a?.b(1);\n", "a?.b($X)", "pre-chain trivia 2-link"),
@@ -9400,8 +9765,12 @@ fn f120b_expression_root_kinds_admitted_per_sg_grid() {
         );
     }
     // Negative: arity mismatch stays empty (sg rc1 [] on the twin file).
-    let hits = match_pattern(Language::JavaScript, "const x = new q(1);\n", "new q($A, $B)")
-        .unwrap();
+    let hits = match_pattern(
+        Language::JavaScript,
+        "const x = new q(1);\n",
+        "new q($A, $B)",
+    )
+    .unwrap();
     assert!(
         hits.is_empty(),
         "js new arity mismatch must stay empty: {:?}",
@@ -9489,12 +9858,14 @@ fn f120b_expression_root_kinds_admitted_per_sg_grid() {
 fn f122a_if_pattern_brace_ness_is_structural() {
     // Braced file answers; brace-less file refuses; mixed file answers only
     // the braced row.
-    let braced = match_pattern(Language::JavaScript, "if (a) { b(); }\n", "if ($X) { $B }")
-        .unwrap();
+    let braced =
+        match_pattern(Language::JavaScript, "if (a) { b(); }\n", "if ($X) { $B }").unwrap();
     assert_eq!(lines_of(&braced), vec![1]);
-    let braceless = match_pattern(Language::JavaScript, "if (c) d();\n", "if ($X) { $B }")
-        .unwrap();
-    assert!(braceless.is_empty(), "braced pattern must refuse brace-less if");
+    let braceless = match_pattern(Language::JavaScript, "if (c) d();\n", "if ($X) { $B }").unwrap();
+    assert!(
+        braceless.is_empty(),
+        "braced pattern must refuse brace-less if"
+    );
     let mixed = match_pattern(
         Language::JavaScript,
         "if (a) { b(); }\nif (c) d();\n",
@@ -9503,8 +9874,7 @@ fn f122a_if_pattern_brace_ness_is_structural() {
     .unwrap();
     assert_eq!(lines_of(&mixed), vec![1]);
     // The rest meta body carries the same brace-ness rule.
-    let rest = match_pattern(Language::JavaScript, "if (c) d();\n", "if ($X) { $$$B }")
-        .unwrap();
+    let rest = match_pattern(Language::JavaScript, "if (c) d();\n", "if ($X) { $$$B }").unwrap();
     assert!(rest.is_empty());
     // Brace-less else rows agree with the consequence rule (sg [] f1).
     let else_braceless = match_pattern(
@@ -9531,12 +9901,8 @@ fn f122a_if_pattern_brace_ness_is_structural() {
     )
     .unwrap();
     assert_eq!(lines_of(&go_paren), vec![2]);
-    let go_plain_cond = match_pattern(
-        Language::Go,
-        "if x {\n    y()\n}\n",
-        "if ($X) { $B }",
-    )
-    .unwrap();
+    let go_plain_cond =
+        match_pattern(Language::Go, "if x {\n    y()\n}\n", "if ($X) { $B }").unwrap();
     assert!(go_plain_cond.is_empty());
     let go_parenfree_pattern = match_pattern(
         Language::Go,
@@ -9545,12 +9911,8 @@ fn f122a_if_pattern_brace_ness_is_structural() {
     )
     .unwrap();
     assert_eq!(lines_of(&go_parenfree_pattern), vec![2]);
-    let py_braced_suite = match_pattern(
-        Language::Python,
-        "if x:\n    {q()}\n",
-        "if ($X) { $B }",
-    )
-    .unwrap();
+    let py_braced_suite =
+        match_pattern(Language::Python, "if x:\n    {q()}\n", "if ($X) { $B }").unwrap();
     assert!(py_braced_suite.is_empty());
     let py_braced_suite2 = match_pattern(
         Language::Python,
@@ -9584,18 +9946,18 @@ fn f122a_if_pattern_brace_ness_is_structural() {
     // PASS-127 loop-root admission (f127b). The if-family rows and the
     // concrete-body if row keep their registered loud classes (sg
     // refuses those spellings).
-    for pat in [
-        "if ($X) $B",
-        "if ($X) q($A)",
-        "if ($X) { q($A) }",
-    ] {
+    for pat in ["if ($X) $B", "if ($X) q($A)", "if ($X) { q($A) }"] {
         assert!(
             needs_ast_grep_fallback(pat),
             "{pat} must keep the registered census-loud class"
         );
     }
-    let while_braced = match_pattern(Language::JavaScript, "while (a) { b(); }\n", "while ($X) { $B }")
-        .unwrap();
+    let while_braced = match_pattern(
+        Language::JavaScript,
+        "while (a) { b(); }\n",
+        "while ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&while_braced), vec![1]);
 }
 
@@ -9606,21 +9968,33 @@ fn f122a_if_pattern_brace_ness_is_structural() {
 /// the body, and outside the if are transparent (sg n1 each, grid f1).
 #[test]
 fn f122a_if_lane_direct_trivia_before_consequence_refuses() {
-    let refused1 =
-        match_pattern(Language::JavaScript, "if (a) /*c*/ { b(); }\n", "if ($X) { $B }")
-            .unwrap();
+    let refused1 = match_pattern(
+        Language::JavaScript,
+        "if (a) /*c*/ { b(); }\n",
+        "if ($X) { $B }",
+    )
+    .unwrap();
     assert!(refused1.is_empty(), "comment before the block must refuse");
-    let refused2 =
-        match_pattern(Language::JavaScript, "if /*c*/ (a) { b(); }\n", "if ($X) { $B }")
-            .unwrap();
+    let refused2 = match_pattern(
+        Language::JavaScript,
+        "if /*c*/ (a) { b(); }\n",
+        "if ($X) { $B }",
+    )
+    .unwrap();
     assert!(refused2.is_empty());
-    let transparent_body =
-        match_pattern(Language::JavaScript, "if (a) { /*c*/ b(); }\n", "if ($X) { $B }")
-            .unwrap();
+    let transparent_body = match_pattern(
+        Language::JavaScript,
+        "if (a) { /*c*/ b(); }\n",
+        "if ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&transparent_body), vec![1]);
-    let transparent_cond =
-        match_pattern(Language::JavaScript, "if (a /*c*/) { b(); }\n", "if ($X) { $B }")
-            .unwrap();
+    let transparent_cond = match_pattern(
+        Language::JavaScript,
+        "if (a /*c*/) { b(); }\n",
+        "if ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&transparent_cond), vec![1]);
     let transparent_preelse = match_pattern(
         Language::JavaScript,
@@ -9638,8 +10012,12 @@ fn f122a_if_lane_direct_trivia_before_consequence_refuses() {
 fn f122a_bodyless_if_template_answers_named_if_nodes_only() {
     let go = match_pattern(Language::Go, "if x {\n    y()\n}\n", "if $X").unwrap();
     assert_eq!(lines_of(&go), vec![1]);
-    let py = match_pattern(Language::Python, "if x:\n    q()\nif y:\n    r()\n", "if $X")
-        .unwrap();
+    let py = match_pattern(
+        Language::Python,
+        "if x:\n    q()\nif y:\n    r()\n",
+        "if $X",
+    )
+    .unwrap();
     assert_eq!(lines_of(&py), vec![1, 3]);
 }
 
@@ -9670,8 +10048,7 @@ fn f122b_swift_link_structural_trivia_refuses_and_transparent_keeps() {
     // not ancestor-chain; the ancestor-chain form over-refused (RED: the
     // asserts below failed against it) and was removed. The OUTER `.c(2)`
     // call still refuses: its own suffix path carries the trivia.
-    let inner = match_pattern(Language::Swift, "let r = a.b(1) /*c*/ .c(2)\n", "a.b($X)")
-        .unwrap();
+    let inner = match_pattern(Language::Swift, "let r = a.b(1) /*c*/ .c(2)\n", "a.b($X)").unwrap();
     assert_eq!(lines_of(&inner), vec![1]);
     let inner_meta =
         match_pattern(Language::Swift, "let r = a.b(x) /*c*/ .c(y)\n", "$A.b($X)").unwrap();
@@ -9732,7 +10109,9 @@ fn f122c_literal_roots_answer_leaf_nodes() {
     // The keyword-literal class the core ingress must route to the walk.
     // PASS 124 (f124g): `False`/`super` added — a mutant deleting either arm
     // previously survived the whole suite (123B-F3 test hole).
-    for kw in ["null", "true", "false", "None", "True", "this", "False", "super"] {
+    for kw in [
+        "null", "true", "false", "None", "True", "this", "False", "super",
+    ] {
         assert!(
             ast_sgrep_lang::pattern_is_keyword_literal_root(kw),
             "{kw} must be keyword-literal"
@@ -9795,15 +10174,16 @@ fn f122d_root_kind_admissions_per_sg_grid() {
     assert!(!needs_ast_grep_fallback("let $A = $B"));
     assert!(!needs_ast_grep_fallback("const $A = $B"));
     assert!(!needs_ast_grep_fallback("var $A = $B"));
-    let let_hits = match_pattern(Language::JavaScript, "let a = b();\n", "let $A = $B")
-        .unwrap();
+    let let_hits = match_pattern(Language::JavaScript, "let a = b();\n", "let $A = $B").unwrap();
     assert_eq!(lines_of(&let_hits), vec![1]);
-    assert_eq!(let_hits[0].captures.get("B").map(String::as_str), Some("b()"));
-    let const_hits = match_pattern(Language::JavaScript, "const a = b();\n", "const $A = $B")
-        .unwrap();
+    assert_eq!(
+        let_hits[0].captures.get("B").map(String::as_str),
+        Some("b()")
+    );
+    let const_hits =
+        match_pattern(Language::JavaScript, "const a = b();\n", "const $A = $B").unwrap();
     assert_eq!(lines_of(&const_hits), vec![1]);
-    let var_hits = match_pattern(Language::JavaScript, "var a = b();\n", "var $A = $B")
-        .unwrap();
+    let var_hits = match_pattern(Language::JavaScript, "var a = b();\n", "var $A = $B").unwrap();
     assert_eq!(lines_of(&var_hits), vec![1]);
     assert!(!native_pattern_answerable(Language::Rust, "let $A = $B"));
     // collection-literal roots (sg n1 js/py/swift, grid f4).
@@ -9813,8 +10193,7 @@ fn f122d_root_kind_admissions_per_sg_grid() {
     assert_eq!(lines_of(&arr), vec![1]);
     let py_arr = match_pattern(Language::Python, "a = [x, y]\n", "[$A, $B]").unwrap();
     assert_eq!(lines_of(&py_arr), vec![1]);
-    let obj = match_pattern(Language::JavaScript, "const o = { a: x };\n", "{ a: $A }")
-        .unwrap();
+    let obj = match_pattern(Language::JavaScript, "const o = { a: x };\n", "{ a: $A }").unwrap();
     assert_eq!(lines_of(&obj), vec![1]);
     // Registered census-loud faces keep their class (F4 residual bundle).
     // CORRECTED PASS 137: `export const $A = $B` is REFUTED as loud — the
@@ -9849,13 +10228,11 @@ fn f122d_root_kind_admissions_per_sg_grid() {
         !native_pattern_answerable(Language::Rust, "q!($A)"),
         "rust macro face must keep the registered census-loud class"
     );
-    let rust_macro = match_pattern(
-        Language::Rust,
-        "fn f() {\n    q!(x);\n}\n",
-        "q!($A)",
-    )
-    .unwrap();
-    assert!(rust_macro.is_empty(), "rust macro walk must refuse: {rust_macro:?}");
+    let rust_macro = match_pattern(Language::Rust, "fn f() {\n    q!(x);\n}\n", "q!($A)").unwrap();
+    assert!(
+        rust_macro.is_empty(),
+        "rust macro walk must refuse: {rust_macro:?}"
+    );
 }
 
 /// F1 fold (f122e): sg's bare `:` suite section is the EMPTY suite, not an
@@ -9869,12 +10246,17 @@ fn f122d_root_kind_admissions_per_sg_grid() {
 fn f122e_bare_colon_suite_is_sg_empty_suite() {
     let if_colon = match_pattern(Language::Python, "if x:\n    q()\n", "if $X:").unwrap();
     assert!(if_colon.is_empty(), "empty-suite if pattern must answer []");
-    let def_colon = match_pattern(Language::Python, "def f(x):\n    return x\n", "def $A($B):")
-        .unwrap();
-    assert!(def_colon.is_empty(), "empty-suite def pattern must answer []");
-    let class_colon = match_pattern(Language::Python, "class A:\n    pass\n", "class $A:")
-        .unwrap();
-    assert!(class_colon.is_empty(), "empty-suite class pattern must answer []");
+    let def_colon =
+        match_pattern(Language::Python, "def f(x):\n    return x\n", "def $A($B):").unwrap();
+    assert!(
+        def_colon.is_empty(),
+        "empty-suite def pattern must answer []"
+    );
+    let class_colon = match_pattern(Language::Python, "class A:\n    pass\n", "class $A:").unwrap();
+    assert!(
+        class_colon.is_empty(),
+        "empty-suite class pattern must answer []"
+    );
     let if_meta = match_pattern(Language::Python, "if x: q()\n", "if $X: $B").unwrap();
     assert_eq!(lines_of(&if_meta), vec![1]);
 }
@@ -9896,13 +10278,28 @@ fn f122e_bare_colon_suite_is_sg_empty_suite() {
 fn f124a_if_condition_call_binds_whole_condition_text() {
     for (lang, src, x, line) in [
         (Language::JavaScript, "if (q(1)) { b(); }\n", "q(1)", 1),
-        (Language::JavaScript, "if (q(1, 2)) { b(); }\n", "q(1, 2)", 1),
+        (
+            Language::JavaScript,
+            "if (q(1, 2)) { b(); }\n",
+            "q(1, 2)",
+            1,
+        ),
         (Language::JavaScript, "if (a.b(1)) { b(); }\n", "a.b(1)", 1),
-        (Language::JavaScript, "if (q(q(1))) { b(); }\n", "q(q(1))", 1),
+        (
+            Language::JavaScript,
+            "if (q(q(1))) { b(); }\n",
+            "q(q(1))",
+            1,
+        ),
         (Language::TypeScript, "if (q(1)) { b(); }\n", "q(1)", 1),
         // php cells live on line 2 (the `<?php` opener is line 1).
         (Language::Php, "<?php\nif (q(1)) { b(); }\n", "q(1)", 2),
-        (Language::Php, "<?php\nif ($o->m(1)) { b(); }\n", "$o->m(1)", 2),
+        (
+            Language::Php,
+            "<?php\nif ($o->m(1)) { b(); }\n",
+            "$o->m(1)",
+            2,
+        ),
     ] {
         let hits = match_pattern(lang, src, "if ($X) { $B }")
             .unwrap_or_else(|e| panic!("{lang} {src:?}: {e}"));
@@ -9989,14 +10386,22 @@ fn f124b_member_link_trivia_veto_on_all_member_paths() {
     }
     // kt dotted PROPERTY: recv/doubled trivia refuse; insuffix + tail + clean
     // keep their sg answers (insuffix n1, mid n0, clean n1, tail n1).
-    for pat in ["a.b.c"] {
+    {
+        let pat = "a.b.c";
         let recv = match_pattern(Language::Kotlin, "val r = a /*c*/ .b.c\n", pat).unwrap();
         assert!(recv.is_empty(), "kt property recv trivia must refuse");
         let recv2 = match_pattern(Language::Kotlin, "val r = a /*c*/ /*d*/ .b.c\n", pat).unwrap();
-        assert!(recv2.is_empty(), "kt property doubled recv trivia must refuse");
+        assert!(
+            recv2.is_empty(),
+            "kt property doubled recv trivia must refuse"
+        );
     }
     let kt_insuffix = match_pattern(Language::Kotlin, "val r = a. /*c*/ b.c\n", "a.b.c").unwrap();
-    assert_eq!(lines_of(&kt_insuffix), vec![1], "kt insuffix trivia transparent");
+    assert_eq!(
+        lines_of(&kt_insuffix),
+        vec![1],
+        "kt insuffix trivia transparent"
+    );
     let kt_clean = match_pattern(Language::Kotlin, "val r = a.b.c\n", "a.b.c").unwrap();
     assert_eq!(lines_of(&kt_clean), vec![1]);
     // swift dotted PROPERTY: recv trivia refuses (the third member path),
@@ -10004,9 +10409,16 @@ fn f124b_member_link_trivia_veto_on_all_member_paths() {
     let sw_recv = match_pattern(Language::Swift, "let x = a /*c*/ .b.c\n", "a.b.c").unwrap();
     assert!(sw_recv.is_empty(), "swift property recv trivia must refuse");
     let sw_recv2 = match_pattern(Language::Swift, "let x = a /*c*/ /*d*/ .b.c\n", "a.b.c").unwrap();
-    assert!(sw_recv2.is_empty(), "swift property doubled recv trivia must refuse");
+    assert!(
+        sw_recv2.is_empty(),
+        "swift property doubled recv trivia must refuse"
+    );
     let sw_tail = match_pattern(Language::Swift, "let x = a.b.c /*c*/\n", "a.b.c").unwrap();
-    assert_eq!(lines_of(&sw_tail), vec![1], "tail trivia is outside the candidate");
+    assert_eq!(
+        lines_of(&sw_tail),
+        vec![1],
+        "tail trivia is outside the candidate"
+    );
     let sw_clean = match_pattern(Language::Swift, "let x = a.b.c\n", "a.b.c").unwrap();
     assert_eq!(lines_of(&sw_clean), vec![1]);
     // swift $-less dotted CALL recv trivia (the registered §41.5 faces) now
@@ -10014,8 +10426,8 @@ fn f124b_member_link_trivia_veto_on_all_member_paths() {
     let sw_lit = match_pattern(Language::Swift, "let r = a /*c*/ .b(1)\n", "a.b(1)").unwrap();
     assert!(sw_lit.is_empty(), "swift $-less recv trivia must refuse");
     // kt `?.` step-0 postures byte-frozen.
-    let ktopt_recv = match_pattern(Language::Kotlin, "val r = a /*c*/ ?.b(1)\n", "a?.b($X)")
-        .unwrap();
+    let ktopt_recv =
+        match_pattern(Language::Kotlin, "val r = a /*c*/ ?.b(1)\n", "a?.b($X)").unwrap();
     assert!(ktopt_recv.is_empty(), "kt ?. recv trivia stays refused");
     let ktopt_recv_meta =
         match_pattern(Language::Kotlin, "val r = a /*c*/ ?.b(1)\n", "$A?.b($X)").unwrap();
@@ -10029,19 +10441,24 @@ fn f124b_member_link_trivia_veto_on_all_member_paths() {
     // refuses (oracle /tmp/phase124/f2c), insuffix + clean keep answering.
     let ktopt_prop_recv =
         match_pattern(Language::Kotlin, "val r = a /*c*/ ?.b?.c\n", "a?.b?.c").unwrap();
-    assert!(ktopt_prop_recv.is_empty(), "kt optional property recv trivia must refuse");
+    assert!(
+        ktopt_prop_recv.is_empty(),
+        "kt optional property recv trivia must refuse"
+    );
     let ktopt_prop_insuffix =
         match_pattern(Language::Kotlin, "val r = a?. /*c*/ b?.c\n", "a?.b?.c").unwrap();
-    assert_eq!(lines_of(&ktopt_prop_insuffix), vec![1], "insuffix transparent");
-    let ktopt_prop_clean =
-        match_pattern(Language::Kotlin, "val r = a?.b?.c\n", "a?.b?.c").unwrap();
+    assert_eq!(
+        lines_of(&ktopt_prop_insuffix),
+        vec![1],
+        "insuffix transparent"
+    );
+    let ktopt_prop_clean = match_pattern(Language::Kotlin, "val r = a?.b?.c\n", "a?.b?.c").unwrap();
     assert_eq!(lines_of(&ktopt_prop_clean), vec![1]);
     // kt mid-call trivia keeps its sg refusal; kt callee-internal trivia keeps
     // its sg transparency; kt clean call answers.
     let kt_mid = match_pattern(Language::Kotlin, "val r = a.b /*c*/ (1)\n", "a.b($X)").unwrap();
     assert!(kt_mid.is_empty(), "kt mid-call trivia stays refused");
-    let kt_callee =
-        match_pattern(Language::Kotlin, "val r = a. /*c*/ b(1)\n", "a.b($X)").unwrap();
+    let kt_callee = match_pattern(Language::Kotlin, "val r = a. /*c*/ b(1)\n", "a.b($X)").unwrap();
     assert_eq!(lines_of(&kt_callee), vec![1]);
     let kt_call_clean = match_pattern(Language::Kotlin, "val r = a.b(1)\n", "a.b($X)").unwrap();
     assert_eq!(lines_of(&kt_call_clean), vec![1]);
@@ -10055,7 +10472,11 @@ fn f124b_member_link_trivia_veto_on_all_member_paths() {
     // js/ts comment transparency byte-frozen.
     for lang in [Language::JavaScript, Language::TypeScript] {
         let hits = match_pattern(lang, "a /*c*/ .b(1);\n", "a.b($X)").unwrap();
-        assert_eq!(lines_of(&hits), vec![1], "{lang} transparency must not move");
+        assert_eq!(
+            lines_of(&hits),
+            vec![1],
+            "{lang} transparency must not move"
+        );
     }
 }
 
@@ -10090,14 +10511,24 @@ fn f124c_swift_py_if_trivia_transparent_structural_elsewhere() {
         (Language::JavaScript, "if (a) /*c*/ { b(); }\n"),
         (Language::JavaScript, "if /*c*/ (a) { b(); }\n"),
         (Language::Kotlin, "fun m() {\n    if (c) /*c*/ { d() }\n}\n"),
-        (Language::Go, "package main\nfunc main() {\n\tif a /*c*/ { b() }\n}\n"),
+        (
+            Language::Go,
+            "package main\nfunc main() {\n\tif a /*c*/ { b() }\n}\n",
+        ),
     ] {
         let hits = match_pattern(lang, src, "if ($X) { $B }").unwrap();
-        assert!(hits.is_empty(), "{lang} {src:?} must stay structural-refused");
+        assert!(
+            hits.is_empty(),
+            "{lang} {src:?} must stay structural-refused"
+        );
     }
     // js body/pre-else transparency byte-frozen.
-    let js_body =
-        match_pattern(Language::JavaScript, "if (a) { /*c*/ b(); }\n", "if ($X) { $B }").unwrap();
+    let js_body = match_pattern(
+        Language::JavaScript,
+        "if (a) { /*c*/ b(); }\n",
+        "if ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&js_body), vec![1]);
     let js_preelse = match_pattern(
         Language::JavaScript,
@@ -10126,7 +10557,10 @@ fn f124c_swift_py_if_trivia_transparent_structural_elsewhere() {
 fn f124d_py_colon_suite_binds_whole_suite_any_count() {
     for (src, b) in [
         ("if x:\n    a()\n    b()\n", "a()\n    b()"),
-        ("if x:\n    a()\n    b()\n    c()\n", "a()\n    b()\n    c()"),
+        (
+            "if x:\n    a()\n    b()\n    c()\n",
+            "a()\n    b()\n    c()",
+        ),
         ("if x: a(); b()\n", "a(); b()"),
     ] {
         let hits = match_pattern(Language::Python, src, "if $X: $B")
@@ -10139,20 +10573,31 @@ fn f124d_py_colon_suite_binds_whole_suite_any_count() {
         );
     }
     // Trivia-carrying suites answer like clean ones (sg n1).
-    let triv =
-        match_pattern(Language::Python, "if x:\n    a()\n    # c\n    b()\n", "if $X: $B")
-            .unwrap();
+    let triv = match_pattern(
+        Language::Python,
+        "if x:\n    a()\n    # c\n    b()\n",
+        "if $X: $B",
+    )
+    .unwrap();
     assert_eq!(lines_of(&triv), vec![1]);
     // Single-statement and nested faces keep their agreeing answers.
     let single = match_pattern(Language::Python, "if x:\n    a()\n", "if $X: $B").unwrap();
     assert_eq!(lines_of(&single), vec![1]);
     assert_eq!(single[0].captures.get("B").map(String::as_str), Some("a()"));
-    let nested =
-        match_pattern(Language::Python, "if x:\n    if y:\n        a()\n", "if $X: $B").unwrap();
+    let nested = match_pattern(
+        Language::Python,
+        "if x:\n    if y:\n        a()\n",
+        "if $X: $B",
+    )
+    .unwrap();
     assert_eq!(lines_of(&nested), vec![1, 2]);
     // The paren-spelled py condition spelling carries the same rule.
-    let ps = match_pattern(Language::Python, "if (x):\n    a()\n    b()\n", "if ($X): $B")
-        .unwrap();
+    let ps = match_pattern(
+        Language::Python,
+        "if (x):\n    a()\n    b()\n",
+        "if ($X): $B",
+    )
+    .unwrap();
     assert_eq!(lines_of(&ps), vec![1]);
     // f122e pin: the bare-colon EMPTY-suite pattern still refuses.
     let bare = match_pattern(Language::Python, "if x:\n    a()\n    b()\n", "if $X:").unwrap();
@@ -10194,9 +10639,10 @@ fn f124e_census_loud_faces_where_sg_answers_stay_registered() {
     }
     // jsx face: sg supports jsx; the subject keeps its loud class until the
     // jsx root kind gains walk machinery.
-    assert!(native_pattern_answerable(Language::JavaScript, "<div q={$X} />")
-        == false
-        || needs_ast_grep_fallback("<div q={$X} />"));
+    assert!(
+        !native_pattern_answerable(Language::JavaScript, "<div q={$X} />")
+            || needs_ast_grep_fallback("<div q={$X} />")
+    );
 }
 
 /// F5 (f124f): the same-line else-if containment envelope. The WALK emits
@@ -10217,7 +10663,11 @@ fn f124f_one_line_else_if_containment_registered_envelope() {
     )
     .unwrap();
     assert_eq!(oneline.len(), 2, "walk emits both same-line hits");
-    assert_eq!(klass_lines(&oneline), vec![1], "registered §41.3 cell: same-line dedup at CLI");
+    assert_eq!(
+        klass_lines(&oneline),
+        vec![1],
+        "registered §41.3 cell: same-line dedup at CLI"
+    );
     // Agreeing cells byte-frozen: multi-line chain answers both; the inner
     // brace-less else-if refuses under the braced pattern (brace-ness).
     let multiline = match_pattern(
@@ -10233,7 +10683,11 @@ fn f124f_one_line_else_if_containment_registered_envelope() {
         "if ($X) { $B }",
     )
     .unwrap();
-    assert_eq!(lines_of(&inner_braceless), vec![1], "brace-ness structural on the else-if arm");
+    assert_eq!(
+        lines_of(&inner_braceless),
+        vec![1],
+        "brace-ness structural on the else-if arm"
+    );
     let chain3 = match_pattern(
         Language::JavaScript,
         "if (a) { b(); } else if (c) { d(); } else if (e) { f(); }\n",
@@ -10279,8 +10733,7 @@ fn tmp_kt_probe_124_converted_kt_link_trivia_pins() {
     );
     let clean = match_pattern(Language::Kotlin, "val r = a.b(1)\n", "a.b(1)").unwrap();
     assert_eq!(lines_of(&clean), vec![1]);
-    let prop_trivia =
-        match_pattern(Language::Kotlin, "val r = a /*c*/ .b.c\n", "a.b.c").unwrap();
+    let prop_trivia = match_pattern(Language::Kotlin, "val r = a /*c*/ .b.c\n", "a.b.c").unwrap();
     assert!(
         prop_trivia.is_empty(),
         "kt receiver-link trivia on a property chain must refuse like sg, got {prop_trivia:?}"
@@ -10322,7 +10775,10 @@ fn f127a_php_assignment_meta_targets_bind_like_sg() {
     // stays loud.
     assert!(!native_pattern_answerable(Language::Php, "$X = $Y;"));
     assert!(!native_pattern_answerable(Language::Php, "$Alpha = $V;"));
-    assert!(!native_pattern_answerable(Language::Php, "list($X, $Y) = $Z"));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "list($X, $Y) = $Z"
+    ));
     // (d) go short-var declarations answer like sg (px_go cells).
     let go = "package main\n\nfunc f() {\n\tx := q()\n\t_ = x\n}\n";
     let go_short = match_pattern(Language::Go, go, "$X := $Y").unwrap();
@@ -10372,8 +10828,12 @@ fn f127b_loop_roots_answer_like_sg() {
     assert_eq!(lines_of(&ts_for_of), vec![1]);
     // js while — the §30.6 registered row CORRECTED: sg answers n1 braced
     // AND brace-less (oracle g1 f2_js_while_meta + cells2 o1).
-    let js_while = match_pattern(Language::JavaScript, "while (a) { b(); }\n", "while ($X) { $B }")
-        .unwrap();
+    let js_while = match_pattern(
+        Language::JavaScript,
+        "while (a) { b(); }\n",
+        "while ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&js_while, "X"), Some("a"));
     assert_eq!(f127_capture(&js_while, "B"), Some("b();"));
     let js_while_bare =
@@ -10405,8 +10865,8 @@ fn f127b_loop_roots_answer_like_sg() {
     .unwrap();
     assert_eq!(f127_capture(&go_range, "X"), Some("i"));
     assert_eq!(f127_capture(&go_range, "Y"), Some("xs"));
-    let go_bare = match_pattern(Language::Go, &go_wrap("for {\n\t\tq()\n\t}"), "for { $B }")
-        .unwrap();
+    let go_bare =
+        match_pattern(Language::Go, &go_wrap("for {\n\t\tq()\n\t}"), "for { $B }").unwrap();
     assert_eq!(f127_capture(&go_bare, "B"), Some("q()\n"));
     let go_while_form = match_pattern(
         Language::Go,
@@ -10450,7 +10910,10 @@ fn f127b_loop_registered_loud_boundaries_hold() {
     assert!(needs_ast_grep_fallback("for { $$$B }"));
     assert!(needs_ast_grep_fallback("(function() { $$$B })()"));
     assert!(needs_ast_grep_fallback("for ($$$A) { $B }"));
-    assert!(!native_pattern_answerable(Language::Python, "for $X in $Y: $B"));
+    assert!(!native_pattern_answerable(
+        Language::Python,
+        "for $X in $Y: $B"
+    ));
     assert!(!native_pattern_answerable(Language::Python, "while $X: $B"));
     // php: the loop faces whose metas land in php VARIABLE positions
     // (foreach `as`-targets, braced `{ $B }` bodies) and the brace-less
@@ -10463,20 +10926,44 @@ fn f127b_loop_registered_loud_boundaries_hold() {
     // substitution (or a dedicated foreach/while lane with sg's
     // statement-span binding) for the php rows; the 123B-F1 suite-text
     // binding model generalized to loop suites for the py rows.
-    assert!(!native_pattern_answerable(Language::Php, "foreach ($X as $Y) { $B }"));
-    assert!(!native_pattern_answerable(Language::Php, "foreach ($X as $K => $V) { $B }"));
-    assert!(!native_pattern_answerable(Language::Php, "foreach ($X as $Y) $B"));
-    assert!(!native_pattern_answerable(Language::Php, "while ($X) { $B }"));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "foreach ($X as $Y) { $B }"
+    ));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "foreach ($X as $K => $V) { $B }"
+    ));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "foreach ($X as $Y) $B"
+    ));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "while ($X) { $B }"
+    ));
     assert!(!native_pattern_answerable(Language::Php, "while ($X) $B"));
-    assert!(!native_pattern_answerable(Language::Php, "do { $B } while ($X);"));
+    assert!(!native_pattern_answerable(
+        Language::Php,
+        "do { $B } while ($X);"
+    ));
     // ruby end-terminated roots stay census-loud (125A-F1 registered
     // form-1: multi-line template lane per the 123B-F1 suite-text model).
-    assert!(!native_pattern_answerable(Language::Ruby, "if $X\n  $B\nend"));
-    assert!(!native_pattern_answerable(Language::Ruby, "while $X\n  $B\nend"));
+    assert!(!native_pattern_answerable(
+        Language::Ruby,
+        "if $X\n  $B\nend"
+    ));
+    assert!(!native_pattern_answerable(
+        Language::Ruby,
+        "while $X\n  $B\nend"
+    ));
     // rust `let` census contract and the brace-less if refusal boundary
     // (§30.6's truly-sg-refused cells) are unmoved.
     assert!(!native_pattern_answerable(Language::Rust, "let $A = $B"));
-    assert!(!native_pattern_answerable(Language::JavaScript, "if ($X) $B"));
+    assert!(!native_pattern_answerable(
+        Language::JavaScript,
+        "if ($X) $B"
+    ));
 }
 
 /// PASS 127 (125A-F4, f127c): keyword/unary operator template roots answer
@@ -10502,7 +10989,8 @@ fn f127c_keyword_operator_roots_answer_like_sg() {
     // (f129f). Retry predicate retired: the dedicated rb unary arm exists.
     let rb_bang = match_pattern(Language::Ruby, "if !flag\n  q()\nend\n", "!$X").unwrap();
     assert_eq!(f127_capture(&rb_bang, "X"), Some("flag"));
-    let js_typeof = match_pattern(Language::JavaScript, "var a = typeof b;\n", "typeof $X").unwrap();
+    let js_typeof =
+        match_pattern(Language::JavaScript, "var a = typeof b;\n", "typeof $X").unwrap();
     assert_eq!(f127_capture(&js_typeof, "X"), Some("b"));
     let ts_as = match_pattern(Language::TypeScript, "var a = b as string;\n", "$X as $Y").unwrap();
     assert_eq!(f127_capture(&ts_as, "X"), Some("b"));
@@ -10538,8 +11026,8 @@ fn f127d_php_rb_statement_heads_answer_like_sg() {
     )
     .unwrap();
     assert_eq!(f127_capture(&php_throw, "X"), Some("new Exception('x')"));
-    let rb_return = match_pattern(Language::Ruby, "def f\n  return q(1)\nend\n", "return $X")
-        .unwrap();
+    let rb_return =
+        match_pattern(Language::Ruby, "def f\n  return q(1)\nend\n", "return $X").unwrap();
     assert_eq!(lines_of(&rb_return), vec![2]);
     assert_eq!(f127_capture(&rb_return, "X"), Some("q(1)"));
 }
@@ -10563,12 +11051,8 @@ fn f127h_if_whitespace_spellings_bind_like_sg() {
     assert_eq!(lines_of(&drop_face), vec![1]);
     assert_eq!(f127_capture(&drop_face, "X"), Some("q(1)"));
     assert_eq!(f127_capture(&drop_face, "B"), Some("b();"));
-    let tab_face = match_pattern(
-        Language::JavaScript,
-        "if (a) { b(); }\n",
-        "if\t($X) { $B }",
-    )
-    .unwrap();
+    let tab_face =
+        match_pattern(Language::JavaScript, "if (a) { b(); }\n", "if\t($X) { $B }").unwrap();
     assert_eq!(f127_capture(&tab_face, "X"), Some("a"));
     assert_eq!(f127_capture(&tab_face, "B"), Some("b();"));
     let py_face = match_pattern(Language::Python, "if a:\n    q()\n", "if\n$X: $B").unwrap();
@@ -10652,7 +11136,7 @@ fn f129a_php_static_scope_targets_bind_like_sg() {
     let call_rhs = match_pattern(
         Language::Php,
         "<?php\nclass C { public static $s = 0; }\nC::$s = f(5);\n",
-        "C::$s = f($V)"
+        "C::$s = f($V)",
     )
     .unwrap();
     assert_eq!(f127_capture(&call_rhs, "V"), Some("5"));
@@ -10713,19 +11197,27 @@ fn f129a_php_static_scope_targets_bind_like_sg() {
 #[test]
 fn f129b_chain_interior_link_trivia_binds_like_sg() {
     // The 128A-F5 repro: trivia between link 1 and link 2.
-    let link2 = match_pattern(Language::JavaScript, "a.b(1)/*m*/.c(2);\n", "a.b($X).c($Y)")
-        .unwrap();
+    let link2 =
+        match_pattern(Language::JavaScript, "a.b(1)/*m*/.c(2);\n", "a.b($X).c($Y)").unwrap();
     assert_eq!(lines_of(&link2), vec![1]);
     assert_eq!(f127_capture(&link2, "X"), Some("1"));
     assert_eq!(f127_capture(&link2, "Y"), Some("2"));
     // Receiver-position trivia on a 2-link chain (§39.6's single-link fix
     // never covered the chain lane).
-    let recv = match_pattern(Language::JavaScript, "a /*r*/ .b(1).c(2);\n", "a.b($X).c($Y)")
-        .unwrap();
+    let recv = match_pattern(
+        Language::JavaScript,
+        "a /*r*/ .b(1).c(2);\n",
+        "a.b($X).c($Y)",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&recv, "X"), Some("1"));
     // Meta head binds the clean identifier text (sg A=a, X=1, Y=2).
-    let metahead = match_pattern(Language::JavaScript, "a.b(1)/*m*/.c(2);\n", "$A.b($X).c($Y)")
-        .unwrap();
+    let metahead = match_pattern(
+        Language::JavaScript,
+        "a.b(1)/*m*/.c(2);\n",
+        "$A.b($X).c($Y)",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&metahead, "A"), Some("a"));
     // 3-link chains: interior comments at either boundary.
     let three = match_pattern(
@@ -10739,19 +11231,35 @@ fn f129b_chain_interior_link_trivia_binds_like_sg() {
     let ts = match_pattern(Language::TypeScript, "a.b(1)/*m*/.c(2);\n", "a.b($X).c($Y)").unwrap();
     assert_eq!(lines_of(&ts), vec![1]);
     // Callee-internal position stays transparent (§39.6 chain twin).
-    let internal =
-        match_pattern(Language::JavaScript, "a.b(1). /*m*/ c(2);\n", "a.b($X).c($Y)").unwrap();
+    let internal = match_pattern(
+        Language::JavaScript,
+        "a.b(1). /*m*/ c(2);\n",
+        "a.b($X).c($Y)",
+    )
+    .unwrap();
     assert_eq!(lines_of(&internal), vec![1]);
     // The junction veto holds at EVERY consumed call level (sg n0 both).
-    let head_junction =
-        match_pattern(Language::JavaScript, "a.b(1).c /*j*/ (2);\n", "a.b($X).c($Y)").unwrap();
+    let head_junction = match_pattern(
+        Language::JavaScript,
+        "a.b(1).c /*j*/ (2);\n",
+        "a.b($X).c($Y)",
+    )
+    .unwrap();
     assert!(head_junction.is_empty());
-    let mid_junction =
-        match_pattern(Language::JavaScript, "a.b /*j*/ (1).c(2);\n", "a.b($X).c($Y)").unwrap();
+    let mid_junction = match_pattern(
+        Language::JavaScript,
+        "a.b /*j*/ (1).c(2);\n",
+        "a.b($X).c($Y)",
+    )
+    .unwrap();
     assert!(mid_junction.is_empty());
     // Arg-list trivia stays transparent (sg n1).
-    let arg_trivia =
-        match_pattern(Language::JavaScript, "a.b( /*i*/ 1).c(2);\n", "a.b($X).c($Y)").unwrap();
+    let arg_trivia = match_pattern(
+        Language::JavaScript,
+        "a.b( /*i*/ 1).c(2);\n",
+        "a.b($X).c($Y)",
+    )
+    .unwrap();
     assert_eq!(lines_of(&arg_trivia), vec![1]);
     // Clean chains and the clean 2-on-3 prefix containment hold.
     let clean = match_pattern(Language::JavaScript, "a.b(1).c(2);\n", "a.b($X).c($Y)").unwrap();
@@ -10995,23 +11503,33 @@ fn f129e_rb_modifier_statements_bind_like_sg() {
     let mif = match_pattern(Language::Ruby, "cond = true\nx if cond\n", "x if $C").unwrap();
     assert_eq!(lines_of(&mif), vec![2]);
     assert_eq!(f127_capture(&mif, "C"), Some("cond"));
-    let munless =
-        match_pattern(Language::Ruby, "ready = false\nx unless ready\n", "x unless $C").unwrap();
+    let munless = match_pattern(
+        Language::Ruby,
+        "ready = false\nx unless ready\n",
+        "x unless $C",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&munless, "C"), Some("ready"));
     let muntil =
         match_pattern(Language::Ruby, "done = false\nx until done\n", "x until $C").unwrap();
     assert_eq!(f127_capture(&muntil, "C"), Some("done"));
-    let mwhile =
-        match_pattern(Language::Ruby, "waiting = true\nx while waiting\n", "x while $C").unwrap();
+    let mwhile = match_pattern(
+        Language::Ruby,
+        "waiting = true\nx while waiting\n",
+        "x while $C",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&mwhile, "C"), Some("waiting"));
     // Ingress pin (the M-127f lesson): the language-free support gate must
     // admit the modifier shape via the rb union arm, else the CLI rc2s on
     // match-bearing files even though the library binds.
     assert!(!needs_ast_grep_fallback("x if $C"));
     // Literal-condition mismatch answers honest empty (text-exact body).
-    assert!(match_pattern(Language::Ruby, "cond = true\nx if other\n", "x if cond")
-        .unwrap()
-        .is_empty());
+    assert!(
+        match_pattern(Language::Ruby, "cond = true\nx if other\n", "x if cond")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// PASS 129 (128B-F2, f129f): rb `not $X` binds like sg (X=`flag`, oracle
@@ -11039,9 +11557,13 @@ fn f129f_rb_not_unary_binds_like_sg() {
     assert_eq!(f127_capture(&bang, "X"), Some("flag"));
     // Token-exactness control: pattern `not $X` refuses a `!`-spelled
     // source (sg answers empty — g_rb_not_again).
-    assert!(match_pattern(Language::Ruby, "flag = true\nif !flag\n  q\nend\n", "not $X")
-        .unwrap()
-        .is_empty());
+    assert!(match_pattern(
+        Language::Ruby,
+        "flag = true\nif !flag\n  q\nend\n",
+        "not $X"
+    )
+    .unwrap()
+    .is_empty());
 }
 
 /// PASS 129 (128A-F1, f129g): rb `BEGIN {}` / `END {}` block roots bind the
@@ -11050,8 +11572,12 @@ fn f129f_rb_not_unary_binds_like_sg() {
 /// refuses newline-carrying patterns — §43.7c's registered lane gap).
 #[test]
 fn f129g_rb_begin_end_blocks_bind_like_sg() {
-    let begin = match_pattern(Language::Ruby, "BEGIN {\n  init\n}\n\nputs 1\n", "BEGIN { $B }")
-        .unwrap();
+    let begin = match_pattern(
+        Language::Ruby,
+        "BEGIN {\n  init\n}\n\nputs 1\n",
+        "BEGIN { $B }",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&begin, "B"), Some("init"));
     let end = match_pattern(Language::Ruby, "END {\n  cleanup\n}\n", "END { $B }").unwrap();
     assert_eq!(f127_capture(&end, "B"), Some("cleanup"));
@@ -11085,13 +11611,21 @@ fn f129g_rb_begin_end_blocks_bind_like_sg() {
 #[test]
 fn f131a_php_static_lane_binds_namespaced_meta_index_and_binary_faces() {
     // Namespaced head binds (sg n1 V=5, oracle a_ns).
-    let ns = match_pattern(Language::Php, "<?php\nFoo\\Bar::$s = 5;\n", "Foo\\Bar::$s = $V")
-        .unwrap();
+    let ns = match_pattern(
+        Language::Php,
+        "<?php\nFoo\\Bar::$s = 5;\n",
+        "Foo\\Bar::$s = $V",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&ns, "V"), Some("5"));
     // Leading-`\` FQN binds (sg n1 V=5, oracle a2_lead1 — refuted-receipt
     // correction).
-    let lead = match_pattern(Language::Php, "<?php\n\\Foo\\Bar::$s = 5;\n", "\\Foo\\Bar::$s = $V")
-        .unwrap();
+    let lead = match_pattern(
+        Language::Php,
+        "<?php\n\\Foo\\Bar::$s = 5;\n",
+        "\\Foo\\Bar::$s = $V",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&lead, "V"), Some("5"));
     // Single-canonical-meta subscript binds K to the whole candidate index
     // text (sg n1 K='$i' V=7, oracle a_msub).
@@ -11127,7 +11661,8 @@ fn f131a_php_static_lane_binds_namespaced_meta_index_and_binary_faces() {
     .is_empty());
     // Lowercase php-variable index spelling is a LITERAL index: the
     // text-equal candidate binds V only, no K capture (oracle a2_lowsub).
-    let lit_idx = match_pattern(Language::Php, "<?php\nC::$s[$k] = 7;\n", "C::$s[$k] = $V").unwrap();
+    let lit_idx =
+        match_pattern(Language::Php, "<?php\nC::$s[$k] = 7;\n", "C::$s[$k] = $V").unwrap();
     assert_eq!(f127_capture(&lit_idx, "V"), Some("7"));
     assert_eq!(f127_capture(&lit_idx, "K"), None);
 }
@@ -11140,7 +11675,8 @@ fn f131a_php_static_lane_binds_namespaced_meta_index_and_binary_faces() {
 fn f131b_ts_typeargs_junction_trivia_refuses_like_sg() {
     let refused = match_pattern(Language::TypeScript, "g<T> /* c */ (1);\n", "g<T>($A)").unwrap();
     assert!(refused.is_empty(), "{:?}", refused);
-    let refused_js = match_pattern(Language::JavaScript, "g<T> /* c */ (1);\n", "g<T>($A)").unwrap();
+    let refused_js =
+        match_pattern(Language::JavaScript, "g<T> /* c */ (1);\n", "g<T>($A)").unwrap();
     assert!(refused_js.is_empty(), "{:?}", refused_js);
     // Whitespace-only gap stays sg-ANSWERED (oracle bws).
     let ws = match_pattern(Language::TypeScript, "g<T> (1);\n", "g<T>($A)").unwrap();
@@ -11153,14 +11689,26 @@ fn f131b_ts_typeargs_junction_trivia_refuses_like_sg() {
 /// `;`-ful and bare spellings (oracle dbg_js / dbg_ts).
 #[test]
 fn f131d_bare_debugger_answers_debugger_statement() {
-    let bare = match_pattern(Language::JavaScript, "function f() { debugger; }\n", "debugger")
-        .unwrap();
+    let bare = match_pattern(
+        Language::JavaScript,
+        "function f() { debugger; }\n",
+        "debugger",
+    )
+    .unwrap();
     assert_eq!(lines_of(&bare), vec![1]);
-    let semi = match_pattern(Language::JavaScript, "function f() { debugger; }\n", "debugger;")
-        .unwrap();
+    let semi = match_pattern(
+        Language::JavaScript,
+        "function f() { debugger; }\n",
+        "debugger;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&semi), vec![1]);
-    let ts = match_pattern(Language::TypeScript, "function f() { debugger; }\n", "debugger")
-        .unwrap();
+    let ts = match_pattern(
+        Language::TypeScript,
+        "function f() { debugger; }\n",
+        "debugger",
+    )
+    .unwrap();
     assert_eq!(lines_of(&ts), vec![1]);
 }
 
@@ -11172,13 +11720,21 @@ fn f131d_bare_debugger_answers_debugger_statement() {
 /// d2_py_concrete, d2_rs_concrete.
 #[test]
 fn f131e_concrete_cond_if_binds_like_sg() {
-    let call = match_pattern(Language::JavaScript, "if (f(1)) { b(); }\n", "if (f($X)) { $B }")
-        .unwrap();
+    let call = match_pattern(
+        Language::JavaScript,
+        "if (f(1)) { b(); }\n",
+        "if (f($X)) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&call), vec![1]);
     assert_eq!(f127_capture(&call, "X"), Some("1"));
     assert_eq!(f127_capture(&call, "B"), Some("b();"));
-    let bin = match_pattern(Language::JavaScript, "if (a && b) { c(); }\n", "if (a && $X) { $B }")
-        .unwrap();
+    let bin = match_pattern(
+        Language::JavaScript,
+        "if (a && b) { c(); }\n",
+        "if (a && $X) { $B }",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&bin, "X"), Some("b"));
     let conc = match_pattern(Language::TypeScript, "if (a) { b(); }\n", "if (a) { $B }").unwrap();
     assert_eq!(lines_of(&conc), vec![1]);
@@ -11227,8 +11783,12 @@ fn f131f_interface_member_count_body_binds_like_sg() {
     .unwrap()
     .is_empty());
     // java receipt (d4 grid): sg n1 B='void m();'.
-    let java = match_pattern(Language::Java, "interface I { void m(); }\n", "interface $N { $B }")
-        .unwrap();
+    let java = match_pattern(
+        Language::Java,
+        "interface I { void m(); }\n",
+        "interface $N { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&java), vec![1]);
     assert_eq!(f127_capture(&java, "N"), Some("I"));
     assert_eq!(f127_capture(&java, "B"), Some("void m();"));
@@ -11302,8 +11862,12 @@ fn f135a_return_semi_empty_operand_and_py_return_answer_sg_aligned() {
     let py_meta = match_pattern(Language::Python, py, "return $X").unwrap();
     assert_eq!(lines_of(&py_meta), vec![5]);
     // java general-lane face unchanged (grid B_java_return; sg n1 == n1).
-    let java_semi = match_pattern(Language::Java, "class K {\n  void f() {\n    return;\n  }\n}\n", "return;")
-        .unwrap();
+    let java_semi = match_pattern(
+        Language::Java,
+        "class K {\n  void f() {\n    return;\n  }\n}\n",
+        "return;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&java_semi), vec![3]);
 }
 
@@ -11325,7 +11889,9 @@ fn f135b_interface_candidates_refuse_extends_modifiers_and_gap_trivia() {
         "interface L extends M, N {\n  b: number;\n}\n",
     ] {
         assert!(
-            match_pattern(Language::TypeScript, src, iface).unwrap().is_empty(),
+            match_pattern(Language::TypeScript, src, iface)
+                .unwrap()
+                .is_empty(),
             "ts extends-carrying interface must refuse like sg: {src}"
         );
     }
@@ -11335,7 +11901,9 @@ fn f135b_interface_candidates_refuse_extends_modifiers_and_gap_trivia() {
         "interface I\n /* c */ {\n  a: string;\n}\n",
     ] {
         assert!(
-            match_pattern(Language::TypeScript, src, iface).unwrap().is_empty(),
+            match_pattern(Language::TypeScript, src, iface)
+                .unwrap()
+                .is_empty(),
             "ts gap-trivia interface must refuse like sg: {src}"
         );
     }
@@ -11357,7 +11925,9 @@ fn f135b_interface_candidates_refuse_extends_modifiers_and_gap_trivia() {
         "interface I /* c */ {\n  void m();\n}\n",
     ] {
         assert!(
-            match_pattern(Language::Java, src, iface).unwrap().is_empty(),
+            match_pattern(Language::Java, src, iface)
+                .unwrap()
+                .is_empty(),
             "java extended/modified/trivia interface must refuse like sg: {src}"
         );
     }
@@ -11374,7 +11944,9 @@ fn f135b_interface_candidates_refuse_extends_modifiers_and_gap_trivia() {
         "interface I /* c */ {\n  void M();\n}\n",
     ] {
         assert!(
-            match_pattern(Language::CSharp, src, iface).unwrap().is_empty(),
+            match_pattern(Language::CSharp, src, iface)
+                .unwrap()
+                .is_empty(),
             "csharp 2-member/extends/modified/trivia interface must refuse like sg: {src}"
         );
     }
@@ -11392,7 +11964,11 @@ fn f135b_interface_candidates_refuse_extends_modifiers_and_gap_trivia() {
 fn f135c_csharp_lock_using_statement_roots_answer_sg_aligned() {
     let lock_src = "class C {\n  void M() {\n    lock (o)\n    {\n      x();\n    }\n  }\n}\n";
     let lock = match_pattern(Language::CSharp, lock_src, "lock (o) { x(); }").unwrap();
-    assert_eq!(lines_of(&lock), vec![3], "sg binds the lock_statement layout-insensitively");
+    assert_eq!(
+        lines_of(&lock),
+        vec![3],
+        "sg binds the lock_statement layout-insensitively"
+    );
     let using_src =
         "class C {\n  void M() {\n    using (var d = f())\n    {\n      g();\n    }\n  }\n}\n";
     let using = match_pattern(Language::CSharp, using_src, "using (var d = f()) { g(); }").unwrap();
@@ -11435,7 +12011,12 @@ fn f135c_csharp_lock_using_statement_roots_answer_sg_aligned() {
     .unwrap();
     assert_eq!(lines_of(&var_decl), vec![3]);
     // Meta-BODY faces refuse like sg's ERROR-empty (A2/A3/Y_cs_using_meta_body).
-    for pat in ["lock ($X) { $B }", "lock ($X) { $$$B }", "using ($R) { $B }", "using ($R) { $$$B }"] {
+    for pat in [
+        "lock ($X) { $B }",
+        "lock ($X) { $$$B }",
+        "using ($R) { $B }",
+        "using ($R) { $$$B }",
+    ] {
         assert!(
             match_pattern(
                 Language::CSharp,
@@ -11464,7 +12045,11 @@ fn f135d_php_static_meta_edges_answer_sg_aligned() {
         "C::$s->$M();",
     )
     .unwrap();
-    assert_eq!(lines_of(&arrow), vec![3, 4], "sg binds the meta member name per site");
+    assert_eq!(
+        lines_of(&arrow),
+        vec![3, 4],
+        "sg binds the meta member name per site"
+    );
     assert_eq!(f127_capture(&arrow, "M"), Some("m"));
     let self_arrow = match_pattern(
         Language::Php,
@@ -11474,17 +12059,29 @@ fn f135d_php_static_meta_edges_answer_sg_aligned() {
     .unwrap();
     assert_eq!(lines_of(&self_arrow), vec![2]);
     assert_eq!(f127_capture(&self_arrow, "M"), Some("m"));
-    let dyn_lit = match_pattern(Language::Php, "<?php\n$c = 'C';\n$c::$s = 5;\n", "$$C::$s = $V").unwrap();
+    let dyn_lit = match_pattern(
+        Language::Php,
+        "<?php\n$c = 'C';\n$c::$s = 5;\n",
+        "$$C::$s = $V",
+    )
+    .unwrap();
     assert_eq!(lines_of(&dyn_lit), vec![3]);
     assert_eq!(f127_capture(&dyn_lit, "C"), Some("$c"));
     assert_eq!(f127_capture(&dyn_lit, "V"), Some("5"));
-    let dyn_prop = match_pattern(Language::Php, "<?php\n$name = 'C';\n$name::$s = 5;\n", "$C::$s = $V").unwrap();
+    let dyn_prop = match_pattern(
+        Language::Php,
+        "<?php\n$name = 'C';\n$name::$s = 5;\n",
+        "$C::$s = $V",
+    )
+    .unwrap();
     assert_eq!(lines_of(&dyn_prop), vec![3]);
     assert_eq!(f127_capture(&dyn_prop, "C"), Some("$name"));
     // Dynamic-head pattern vs subscript candidate: sg rc1 (Y_php_dynsub).
-    assert!(match_pattern(Language::Php, "<?php\n$c::$s[0] = 5;\n", "$$C::$s = $V")
-        .unwrap()
-        .is_empty());
+    assert!(
+        match_pattern(Language::Php, "<?php\n$c::$s[0] = 5;\n", "$$C::$s = $V")
+            .unwrap()
+            .is_empty()
+    );
     // Padded candidate LHS binds the tight pattern (E_php_padded2).
     let padded = match_pattern(Language::Php, "<?php\nC :: $s = 5;\n", "C::$s = $V").unwrap();
     assert_eq!(lines_of(&padded), vec![2]);
@@ -11547,7 +12144,12 @@ fn f135e_ts_type_alias_and_keyword_operator_faces_answer_sg_aligned() {
     assert_eq!(lines_of(&one), vec![1]);
     assert_eq!(f127_capture(&one, "N"), Some("T"));
     assert_eq!(f127_capture(&one, "B"), Some("a: string;"));
-    let multi = match_pattern(Language::TypeScript, "type T = {\n  a: string;\n};\n", alias).unwrap();
+    let multi = match_pattern(
+        Language::TypeScript,
+        "type T = {\n  a: string;\n};\n",
+        alias,
+    )
+    .unwrap();
     assert_eq!(lines_of(&multi), vec![1]);
     assert!(match_pattern(
         Language::TypeScript,
@@ -11563,18 +12165,36 @@ fn f135e_ts_type_alias_and_keyword_operator_faces_answer_sg_aligned() {
     )
     .unwrap();
     assert_eq!(lines_of(&iface_mix), vec![4]);
-    let union = match_pattern(Language::TypeScript, "type T = string | number;\n", "type $N = $V").unwrap();
+    let union = match_pattern(
+        Language::TypeScript,
+        "type T = string | number;\n",
+        "type $N = $V",
+    )
+    .unwrap();
     assert_eq!(lines_of(&union), vec![1]);
     assert_eq!(f127_capture(&union, "N"), Some("T"));
     assert_eq!(f127_capture(&union, "V"), Some("string | number"));
-    let fnval = match_pattern(Language::TypeScript, "type F = (x: number) => string;\n", "type $N = $V")
-        .unwrap();
+    let fnval = match_pattern(
+        Language::TypeScript,
+        "type F = (x: number) => string;\n",
+        "type $N = $V",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&fnval, "V"), Some("(x: number) => string"));
-    let concrete = match_pattern(Language::TypeScript, "type T = string | number;\n", "type T = $V").unwrap();
+    let concrete = match_pattern(
+        Language::TypeScript,
+        "type T = string | number;\n",
+        "type T = $V",
+    )
+    .unwrap();
     assert_eq!(f127_capture(&concrete, "V"), Some("string | number"));
     // Keyword-operator unary faces.
-    let del = match_pattern(Language::JavaScript, "const o = {};\ndelete o.k;\ndelete o['j'];\n", "delete $X")
-        .unwrap();
+    let del = match_pattern(
+        Language::JavaScript,
+        "const o = {};\ndelete o.k;\ndelete o['j'];\n",
+        "delete $X",
+    )
+    .unwrap();
     assert_eq!(lines_of(&del), vec![2, 3]);
     assert_eq!(f127_capture(&del, "X"), Some("o.k"));
     let voi = match_pattern(Language::JavaScript, "void f();\nvoid 0;\n", "void $X").unwrap();
@@ -11582,7 +12202,12 @@ fn f135e_ts_type_alias_and_keyword_operator_faces_answer_sg_aligned() {
     let pydel = match_pattern(Language::Python, "x = 1\ny = 2\ndel x, y\n", "del $X").unwrap();
     assert_eq!(lines_of(&pydel), vec![3]);
     assert_eq!(f127_capture(&pydel, "X"), Some("x, y"));
-    let with = match_pattern(Language::JavaScript, "with (obj) {\n  a();\n}\n", "with ($X) { $B }").unwrap();
+    let with = match_pattern(
+        Language::JavaScript,
+        "with (obj) {\n  a();\n}\n",
+        "with ($X) { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&with), vec![1]);
     assert_eq!(f127_capture(&with, "X"), Some("obj"));
     assert_eq!(f127_capture(&with, "B"), Some("a();"));
@@ -11644,6 +12269,7 @@ fn f135e_ts_type_alias_and_keyword_operator_faces_answer_sg_aligned() {
 ///   * mismatched or missing candidate modifiers refuse in both grammars;
 ///   * the PLAIN pattern keeps the blanket refusal (f135b) and leading
 ///     trivia before the modifier keeps answering (sg n1).
+///
 /// RED 2026-09-11: every bind cell answered silent-empty (the F4 fix's
 /// `interface_candidate_refused` refused ANY modifier-carrying candidate
 /// regardless of the pattern side).
@@ -11651,8 +12277,12 @@ fn f135e_ts_type_alias_and_keyword_operator_faces_answer_sg_aligned() {
 fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
     let pat = "public interface $N { $B }";
     // Modifier-matching candidates bind (sg n1, N/B).
-    let cs = match_pattern(Language::CSharp, "public interface K {\n    void P();\n}\n", pat)
-        .unwrap();
+    let cs = match_pattern(
+        Language::CSharp,
+        "public interface K {\n    void P();\n}\n",
+        pat,
+    )
+    .unwrap();
     assert_eq!(
         lines_of(&cs),
         vec![1],
@@ -11660,8 +12290,12 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
     );
     assert_eq!(f127_capture(&cs, "N"), Some("K"));
     assert_eq!(f127_capture(&cs, "B"), Some("void P();"));
-    let ja =
-        match_pattern(Language::Java, "public interface B {\n    void N();\n}\n", pat).unwrap();
+    let ja = match_pattern(
+        Language::Java,
+        "public interface B {\n    void N();\n}\n",
+        pat,
+    )
+    .unwrap();
     assert_eq!(lines_of(&ja), vec![1], "sg binds the java twin: {ja:?}");
     let ja_nested = match_pattern(
         Language::Java,
@@ -11669,7 +12303,11 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
         pat,
     )
     .unwrap();
-    assert_eq!(lines_of(&ja_nested), vec![1], "135E: the nested public interface binds: {ja_nested:?}");
+    assert_eq!(
+        lines_of(&ja_nested),
+        vec![1],
+        "135E: the nested public interface binds: {ja_nested:?}"
+    );
     assert_eq!(f127_capture(&ja_nested, "N"), Some("Inner"));
     // java subsequence rule (CORRECTED PASS 137, 137A-F5): the modifiers
     // wrapper absorbs extra candidate tokens IN ORDER.
@@ -11679,7 +12317,11 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
         pat,
     )
     .unwrap();
-    assert_eq!(lines_of(&ja_abs), vec![1], "sg binds `public` against `public abstract`");
+    assert_eq!(
+        lines_of(&ja_abs),
+        vec![1],
+        "sg binds `public` against `public abstract`"
+    );
     // java sequence ORDER matters, not set equality.
     assert!(
         match_pattern(
@@ -11693,9 +12335,13 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
     );
     // csharp exact-sequence rule.
     assert!(
-        match_pattern(Language::CSharp, "public sealed interface K {\n    void P();\n}\n", pat)
-            .unwrap()
-            .is_empty(),
+        match_pattern(
+            Language::CSharp,
+            "public sealed interface K {\n    void P();\n}\n",
+            pat
+        )
+        .unwrap()
+        .is_empty(),
         "sg refuses `public` against the `public sealed` leaf sequence"
     );
     // REGISTERED f136 residual (receipt, not an admission): sg 0.45.2 binds
@@ -11713,7 +12359,9 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
         "interface K {\n    void P();\n}\n",
     ] {
         assert!(
-            match_pattern(Language::CSharp, src, pat).unwrap().is_empty(),
+            match_pattern(Language::CSharp, src, pat)
+                .unwrap()
+                .is_empty(),
             "sg refuses the modifier-mismatched csharp candidate: {src}"
         );
     }
@@ -11728,12 +12376,30 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
     }
     // Refusals INDEPENDENT of modifiers: heritage, gap trivia, 2 members.
     for (lang, src) in [
-        (Language::CSharp, "public interface K : J {\n    void P();\n}\n"),
-        (Language::CSharp, "public interface K /* c */ {\n    void P();\n}\n"),
-        (Language::CSharp, "public interface K {\n    void P();\n    void Q();\n}\n"),
-        (Language::Java, "public interface K extends J {\n    void M();\n}\n"),
-        (Language::Java, "public interface K /* c */ {\n    void M();\n}\n"),
-        (Language::Java, "public interface K {\n    void M();\n    void N();\n}\n"),
+        (
+            Language::CSharp,
+            "public interface K : J {\n    void P();\n}\n",
+        ),
+        (
+            Language::CSharp,
+            "public interface K /* c */ {\n    void P();\n}\n",
+        ),
+        (
+            Language::CSharp,
+            "public interface K {\n    void P();\n    void Q();\n}\n",
+        ),
+        (
+            Language::Java,
+            "public interface K extends J {\n    void M();\n}\n",
+        ),
+        (
+            Language::Java,
+            "public interface K /* c */ {\n    void M();\n}\n",
+        ),
+        (
+            Language::Java,
+            "public interface K {\n    void M();\n    void N();\n}\n",
+        ),
     ] {
         assert!(
             match_pattern(lang, src, pat).unwrap().is_empty(),
@@ -11741,16 +12407,20 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
         );
     }
     // The plain pattern's blanket refusal keeps holding (f135b guard).
-    assert!(
-        match_pattern(Language::CSharp, "public interface K {\n    void P();\n}\n", "interface $N { $B }")
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        match_pattern(Language::Java, "public interface K {\n    void M();\n}\n", "interface $N { $B }")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(
+        Language::CSharp,
+        "public interface K {\n    void P();\n}\n",
+        "interface $N { $B }"
+    )
+    .unwrap()
+    .is_empty());
+    assert!(match_pattern(
+        Language::Java,
+        "public interface K {\n    void M();\n}\n",
+        "interface $N { $B }"
+    )
+    .unwrap()
+    .is_empty());
     // Trivia BEFORE the modifier attaches outside the declaration (sg n1).
     let lead = match_pattern(
         Language::CSharp,
@@ -11768,7 +12438,11 @@ fn f136a_modifier_carrying_interface_roots_bind_sg_exact() {
         "export interface $N { $B }",
     )
     .unwrap();
-    assert_eq!(lines_of(&ts_exp), vec![5], "the ts export face keeps binding");
+    assert_eq!(
+        lines_of(&ts_exp),
+        vec![5],
+        "the ts export face keeps binding"
+    );
     assert_eq!(f127_capture(&ts_exp, "N"), Some("B"));
 }
 
@@ -11793,10 +12467,18 @@ fn f136b_py_del_meta_binds_every_operand_shape_sg_exact() {
     assert_eq!(lines_of(&sub), vec![1], "subscript operand binds: {sub:?}");
     assert_eq!(f127_capture(&sub, "X"), Some("d[k]"));
     let attr = match_pattern(Language::Python, "del o.a\n", "del $X").unwrap();
-    assert_eq!(lines_of(&attr), vec![1], "attribute operand binds: {attr:?}");
+    assert_eq!(
+        lines_of(&attr),
+        vec![1],
+        "attribute operand binds: {attr:?}"
+    );
     assert_eq!(f127_capture(&attr, "X"), Some("o.a"));
     let infunc = match_pattern(Language::Python, "def f():\n    del x\n", "del $X").unwrap();
-    assert_eq!(lines_of(&infunc), vec![2], "in-function delete binds: {infunc:?}");
+    assert_eq!(
+        lines_of(&infunc),
+        vec![2],
+        "in-function delete binds: {infunc:?}"
+    );
     assert_eq!(f127_capture(&infunc, "X"), Some("x"));
     // The tuple keeps its whole-list binding (f135e pin unchanged).
     let tuple = match_pattern(Language::Python, "del x, y\n", "del $X").unwrap();
@@ -11820,11 +12502,18 @@ fn f136b_py_del_meta_binds_every_operand_shape_sg_exact() {
 /// first named does not exist).
 #[test]
 fn f136c_js_bare_delete_answers_the_expression_family() {
-    let del = match_pattern(Language::JavaScript, "const o = {k: 1};\ndelete o.k;\n", "delete")
-        .unwrap();
-    assert_eq!(lines_of(&del), vec![2], "sg n1 on the delete_expression: {del:?}");
+    let del = match_pattern(
+        Language::JavaScript,
+        "const o = {k: 1};\ndelete o.k;\n",
+        "delete",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&del),
+        vec![2],
+        "sg n1 on the delete_expression: {del:?}"
+    );
 }
-
 
 // ===========================================================================
 // PASS 137 — remediation round for verification round r70 (phase137a
@@ -11849,7 +12538,11 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
     let pat = "fixed ($D) {\n    *p = 'x';\n}";
     let src = "class K {\n    void m() {\n        fixed (char* p = s) {\n            *p = 'x';\n        }\n    }\n}\n";
     let fixed = match_pattern(Language::CSharp, src, pat).unwrap();
-    assert_eq!(lines_of(&fixed), vec![3], "sg n1 D=`char* p = s`: {fixed:?}");
+    assert_eq!(
+        lines_of(&fixed),
+        vec![3],
+        "sg n1 D=`char* p = s`: {fixed:?}"
+    );
     assert_eq!(f127_capture(&fixed, "D"), Some("char* p = s"));
 
     let checked = match_pattern(
@@ -11858,7 +12551,11 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
         "checked {\n    int v = a + b;\n}",
     )
     .unwrap();
-    assert_eq!(lines_of(&checked), vec![3], "checked concrete n1: {checked:?}");
+    assert_eq!(
+        lines_of(&checked),
+        vec![3],
+        "checked concrete n1: {checked:?}"
+    );
 
     let unchecked = match_pattern(
         Language::CSharp,
@@ -11866,7 +12563,11 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
         "unchecked {\n    int v = a + $C;\n}",
     )
     .unwrap();
-    assert_eq!(lines_of(&unchecked), vec![3], "unchecked meta n1 C=`1`: {unchecked:?}");
+    assert_eq!(
+        lines_of(&unchecked),
+        vec![3],
+        "unchecked meta n1 C=`1`: {unchecked:?}"
+    );
     assert_eq!(f127_capture(&unchecked, "C"), Some("1"));
 
     let unsafe_body = match_pattern(
@@ -11875,7 +12576,11 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
         "unsafe { $B }",
     )
     .unwrap();
-    assert_eq!(lines_of(&unsafe_body), vec![3], "unsafe meta-body binds: {unsafe_body:?}");
+    assert_eq!(
+        lines_of(&unsafe_body),
+        vec![3],
+        "unsafe meta-body binds: {unsafe_body:?}"
+    );
     assert_eq!(f127_capture(&unsafe_body, "B"), Some("int v = a;"));
 
     // Two-statement body under the meta-body face: sg accepted-empty.
@@ -11885,16 +12590,17 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
         "checked { $B }",
     )
     .unwrap();
-    assert!(two.is_empty(), "sg accepted-empty on the 2-statement body: {two:?}");
+    assert!(
+        two.is_empty(),
+        "sg accepted-empty on the 2-statement body: {two:?}"
+    );
 
     // `fixed` meta-body: sg binds NOTHING (valid-empty law).
-    let fixed_meta_body = match_pattern(
-        Language::CSharp,
-        src,
-        "fixed ($D) { $B }",
-    )
-    .unwrap();
-    assert!(fixed_meta_body.is_empty(), "fixed meta-body is sg valid-empty");
+    let fixed_meta_body = match_pattern(Language::CSharp, src, "fixed ($D) { $B }").unwrap();
+    assert!(
+        fixed_meta_body.is_empty(),
+        "fixed meta-body is sg valid-empty"
+    );
 }
 
 /// f137b (137A-F2/137B-F4): lock/using meta-body faces are sg-ACCEPTED
@@ -11904,11 +12610,18 @@ fn f137a_csharp_statement_heads_bind_sg_exact() {
 /// refusal) flips `answerable` back to false — the loud regression.
 #[test]
 fn f137b_lock_using_meta_body_valid_empty() {
-    assert!(native_pattern_answerable(Language::CSharp, "lock ($X) {\n    $B\n}"));
-    assert!(needs_ast_grep_fallback("lock ($X) {\n    $B\n}") == false);
-    let src = "class K {\n    void m() {\n        lock (o) {\n            x();\n        }\n    }\n}\n";
+    assert!(native_pattern_answerable(
+        Language::CSharp,
+        "lock ($X) {\n    $B\n}"
+    ));
+    assert!(!needs_ast_grep_fallback("lock ($X) {\n    $B\n}"));
+    let src =
+        "class K {\n    void m() {\n        lock (o) {\n            x();\n        }\n    }\n}\n";
     let empty = match_pattern(Language::CSharp, src, "lock ($X) {\n    $B\n}").unwrap();
-    assert!(empty.is_empty(), "sg binds nothing for the meta body: {empty:?}");
+    assert!(
+        empty.is_empty(),
+        "sg binds nothing for the meta body: {empty:?}"
+    );
     // Concrete body keeps the 135 binding.
     let concrete = match_pattern(Language::CSharp, src, "lock ($X) {\n    x();\n}").unwrap();
     assert_eq!(lines_of(&concrete), vec![3]);
@@ -11943,23 +12656,36 @@ fn f137c_py_del_operand_shapes_bind_sg_exact() {
     assert_eq!(f127_capture(&paren, "X"), Some("x"));
 
     let paren_pair = match_pattern(Language::Python, "del (x, y)\n", "del ($X, $Y)").unwrap();
-    assert_eq!(lines_of(&paren_pair), vec![1], "pinprobe n1 X=x Y=y: {paren_pair:?}");
+    assert_eq!(
+        lines_of(&paren_pair),
+        vec![1],
+        "pinprobe n1 X=x Y=y: {paren_pair:?}"
+    );
     assert_eq!(f127_capture(&paren_pair, "X"), Some("x"));
     assert_eq!(f127_capture(&paren_pair, "Y"), Some("y"));
 
     // M>=N prefix absorption (grid137 X_py_del_three): 3-element candidate.
     let three = match_pattern(Language::Python, "del x, y, z\n", "del $A, $B").unwrap();
-    assert_eq!(lines_of(&three), vec![1], "sg absorbs the third element: {three:?}");
+    assert_eq!(
+        lines_of(&three),
+        vec![1],
+        "sg absorbs the third element: {three:?}"
+    );
     // Structural shapes demand the exact count (sg rc1 class).
     assert!(
-        match_pattern(Language::Python, "del d[k], y\n", "del d[$K]").unwrap().is_empty(),
+        match_pattern(Language::Python, "del d[k], y\n", "del d[$K]")
+            .unwrap()
+            .is_empty(),
         "subscript + extra refuses (sg count law)"
     );
     // `;`-ful del template spellings are sg ACCEPTED-EMPTY in the
     // multi-language run (grid137 py_del_semi_loud: rc1 `[]` for the whole
     // family; the subject pre-fix rc2'd — the grid DIFF row is the RED).
     let semi = match_pattern(Language::Python, "del o.a.b\n", "del $O.$A;").unwrap();
-    assert!(semi.is_empty(), "sg accepted-empty on `del $O.$A;`: {semi:?}");
+    assert!(
+        semi.is_empty(),
+        "sg accepted-empty on `del $O.$A;`: {semi:?}"
+    );
     assert!(native_pattern_answerable(Language::Python, "del $O.$A;"));
 
     // Whole-list pins keep holding (f135e/f136).
@@ -11972,7 +12698,7 @@ fn f137c_py_del_operand_shapes_bind_sg_exact() {
 /// f137d (137A-F5, java semantics correction of record): the interface
 /// modifier scan is a greedy keyword-hopping scan with POSITIONAL
 /// annotations. javaprobe/pinprobe receipts: `public interface $N` binds
-/// `abstract public`/`static public`/`static final public` (n1 each); 
+/// `abstract public`/`static public`/`static final public` (n1 each);
 /// `public abstract interface $N` binds `public static abstract`; `public
 /// abstract interface $N` refuses `abstract public` (order); `@SafeVarargs
 /// interface $N` binds `@SafeVarargs public` and refuses `@Deprecated
@@ -11983,7 +12709,11 @@ fn f137c_py_del_operand_shapes_bind_sg_exact() {
 fn f137d_java_interface_modifier_scan_is_hopping_with_positional_annotations() {
     let binds = |src: &str, pat: &str| {
         let hits = match_pattern(Language::Java, src, pat).unwrap();
-        assert_eq!(lines_of(&hits), vec![1], "sg binds {pat:?} on {src:?}: {hits:?}");
+        assert_eq!(
+            lines_of(&hits),
+            vec![1],
+            "sg binds {pat:?} on {src:?}: {hits:?}"
+        );
     };
     let refuses = |src: &str, pat: &str| {
         assert!(
@@ -11991,23 +12721,42 @@ fn f137d_java_interface_modifier_scan_is_hopping_with_positional_annotations() {
             "sg refuses {pat:?} on {src:?}"
         );
     };
-    let wrap = |mods: &str| {
-        format!("{mods} interface K {{\n    void M();\n}}\n")
-    };
+    let wrap = |mods: &str| format!("{mods} interface K {{\n    void M();\n}}\n");
     binds(&wrap("abstract public"), "public interface $N { $B }");
     binds(&wrap("static public"), "public interface $N { $B }");
     binds(&wrap("static final public"), "public interface $N { $B }");
     binds(&wrap("public @Deprecated"), "public interface $N { $B }");
-    binds(&wrap("public static abstract"), "public abstract interface $N { $B }");
-    refuses(&wrap("abstract public"), "public abstract interface $N { $B }");
+    binds(
+        &wrap("public static abstract"),
+        "public abstract interface $N { $B }",
+    );
+    refuses(
+        &wrap("abstract public"),
+        "public abstract interface $N { $B }",
+    );
     refuses(&wrap("@Deprecated public"), "public interface $N { $B }");
     refuses(&wrap("private"), "public interface $N { $B }");
     // Annotations are positional.
-    binds(&wrap("@SafeVarargs public"), "@SafeVarargs interface $N { $B }");
-    refuses(&wrap("@Deprecated @SafeVarargs public"), "@SafeVarargs interface $N { $B }");
-    binds(&wrap("@Deprecated public"), "@Deprecated interface $N { $B }");
-    refuses(&wrap("public @Deprecated"), "@Deprecated interface $N { $B }");
-    binds(&wrap("@Deprecated @SafeVarargs public"), "@Deprecated @SafeVarargs interface $N { $B }");
+    binds(
+        &wrap("@SafeVarargs public"),
+        "@SafeVarargs interface $N { $B }",
+    );
+    refuses(
+        &wrap("@Deprecated @SafeVarargs public"),
+        "@SafeVarargs interface $N { $B }",
+    );
+    binds(
+        &wrap("@Deprecated public"),
+        "@Deprecated interface $N { $B }",
+    );
+    refuses(
+        &wrap("public @Deprecated"),
+        "@Deprecated interface $N { $B }",
+    );
+    binds(
+        &wrap("@Deprecated @SafeVarargs public"),
+        "@Deprecated @SafeVarargs interface $N { $B }",
+    );
 }
 
 /// f137e (137A-F12 + 137B-F6): the pattern-side strip list admits the
@@ -12063,7 +12812,10 @@ fn f137f_php_member_slot_absorption_and_nullsafe() {
     // `$O?->c1($U)` × `$o->c1($u);` is sg rc1 [] — the accepted-empty class
     // (subject answers ok:true-0), never a `?->` normalization.
     let nullsafe = match_pattern(Language::Php, "<?php\n$o?->c1($u);\n", "$O->c1($U)").unwrap();
-    assert!(nullsafe.is_empty(), "sg accepted-empty on ?-> vs ->: {nullsafe:?}");
+    assert!(
+        nullsafe.is_empty(),
+        "sg accepted-empty on ?-> vs ->: {nullsafe:?}"
+    );
 }
 
 /// f137g (137A-D3 grid): `return ($X)` / `return($X)` answer the
@@ -12071,28 +12823,48 @@ fn f137f_php_member_slot_absorption_and_nullsafe() {
 /// never-firing callee face. M-137g (carve deleted) re-silences both.
 #[test]
 fn f137g_return_paren_meta_binds_the_inner_operand() {
-    let js = match_pattern(Language::JavaScript, "function f() {\n  return (1);\n}\n", "return ($X)")
-        .unwrap();
+    let js = match_pattern(
+        Language::JavaScript,
+        "function f() {\n  return (1);\n}\n",
+        "return ($X)",
+    )
+    .unwrap();
     assert_eq!(lines_of(&js), vec![2], "sg n1 X=`1`: {js:?}");
     assert_eq!(f127_capture(&js, "X"), Some("1"));
-    let tight = match_pattern(Language::JavaScript, "function f() {\n  return (1);\n}\n", "return($X)")
-        .unwrap();
-    assert_eq!(lines_of(&tight), vec![2], "sg n1 for the tight spelling: {tight:?}");
+    let tight = match_pattern(
+        Language::JavaScript,
+        "function f() {\n  return (1);\n}\n",
+        "return($X)",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&tight),
+        vec![2],
+        "sg n1 for the tight spelling: {tight:?}"
+    );
     assert_eq!(f127_capture(&tight, "X"), Some("1"));
-    let ts = match_pattern(Language::TypeScript, "function f() {\n  return (2);\n}\n", "return ($X)")
-        .unwrap();
+    let ts = match_pattern(
+        Language::TypeScript,
+        "function f() {\n  return (2);\n}\n",
+        "return ($X)",
+    )
+    .unwrap();
     assert_eq!(lines_of(&ts), vec![2]);
     // Paren-free and operand-less candidates refuse (structural).
-    assert!(
-        match_pattern(Language::JavaScript, "function f() {\n  return 1;\n}\n", "return ($X)")
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        match_pattern(Language::JavaScript, "function f() {\n  return;\n}\n", "return ($X)")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(
+        Language::JavaScript,
+        "function f() {\n  return 1;\n}\n",
+        "return ($X)"
+    )
+    .unwrap()
+    .is_empty());
+    assert!(match_pattern(
+        Language::JavaScript,
+        "function f() {\n  return;\n}\n",
+        "return ($X)"
+    )
+    .unwrap()
+    .is_empty());
 }
 
 /// f137h (137A-D6/F5-corrected else-if): the if lane parses `else { B }`
@@ -12129,7 +12901,11 @@ fn f137h_if_else_and_else_if_tails_bind_every_capture() {
         "if ($X) { $A } else if ($Y) { $B } else if ($Z) { $C }",
     )
     .unwrap();
-    assert_eq!(lines_of(&chain), vec![1], "3-chain binds all six: {chain:?}");
+    assert_eq!(
+        lines_of(&chain),
+        vec![1],
+        "3-chain binds all six: {chain:?}"
+    );
     assert_eq!(f127_capture(&chain, "Z"), Some("c"));
     assert_eq!(f127_capture(&chain, "C"), Some("k();"));
 
@@ -12153,9 +12929,17 @@ fn f137h_if_else_and_else_if_tails_bind_every_capture() {
 /// deleted) re-louds the class.
 #[test]
 fn f137i_general_lane_statement_root_admissions_bind_sg_exact() {
-    let export = match_pattern(Language::JavaScript, "export default 42;\n", "export default $X;")
-        .unwrap();
-    assert_eq!(lines_of(&export), vec![1], "grid B5: sg n1 X=`42`: {export:?}");
+    let export = match_pattern(
+        Language::JavaScript,
+        "export default 42;\n",
+        "export default $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&export),
+        vec![1],
+        "grid B5: sg n1 X=`42`: {export:?}"
+    );
     assert_eq!(f127_capture(&export, "X"), Some("42"));
 
     let assert_msg = match_pattern(
@@ -12164,7 +12948,11 @@ fn f137i_general_lane_statement_root_admissions_bind_sg_exact() {
         "assert $X : $M;",
     )
     .unwrap();
-    assert_eq!(lines_of(&assert_msg), vec![3], "grid B3: sg n1: {assert_msg:?}");
+    assert_eq!(
+        lines_of(&assert_msg),
+        vec![3],
+        "grid B3: sg n1: {assert_msg:?}"
+    );
     assert_eq!(f127_capture(&assert_msg, "X"), Some("b"));
     assert_eq!(f127_capture(&assert_msg, "M"), Some("\"msg\""));
 
@@ -12177,15 +12965,25 @@ fn f137i_general_lane_statement_root_admissions_bind_sg_exact() {
     assert_eq!(lines_of(&sync), vec![3], "grid B3: sg n1: {sync:?}");
     assert_eq!(f127_capture(&sync, "X"), Some("lock"));
 
-    let cpp_using = match_pattern(Language::Cpp, "using namespace std;\n", "using namespace $N;")
-        .unwrap();
-    assert_eq!(lines_of(&cpp_using), vec![1], "grid B7: sg n1 N=`std`: {cpp_using:?}");
+    let cpp_using = match_pattern(
+        Language::Cpp,
+        "using namespace std;\n",
+        "using namespace $N;",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&cpp_using),
+        vec![1],
+        "grid B7: sg n1 N=`std`: {cpp_using:?}"
+    );
 
     // Ingress parity (grid137 DIFF rows → OK): the language-free
     // needs_ast_grep_fallback must admit the faces the per-language lanes
     // answer (pre-fix the CLI rc2'd them before any walk ran).
     assert!(!needs_ast_grep_fallback("assert $X : $M;"));
-    assert!(!needs_ast_grep_fallback("synchronized ($X) {\n    doIt();\n}"));
+    assert!(!needs_ast_grep_fallback(
+        "synchronized ($X) {\n    doIt();\n}"
+    ));
     assert!(!needs_ast_grep_fallback("namespace $N;"));
     assert!(!needs_ast_grep_fallback("goto $L;"));
     assert_eq!(f127_capture(&cpp_using, "N"), Some("std"));
@@ -12207,9 +13005,15 @@ fn f137j_go_rb_return_semi_valid_empty() {
     assert!(native_pattern_answerable(Language::Go, "return;"));
     assert!(native_pattern_answerable(Language::Ruby, "return;"));
     let go = match_pattern(Language::Go, "func f() {\n\treturn\n}\n", "return;").unwrap();
-    assert!(go.is_empty(), "sg accepted-empty on the bare go return: {go:?}");
+    assert!(
+        go.is_empty(),
+        "sg accepted-empty on the bare go return: {go:?}"
+    );
     let rb = match_pattern(Language::Ruby, "def f\n  return\nend\n", "return;").unwrap();
-    assert!(rb.is_empty(), "sg accepted-empty on the bare rb return: {rb:?}");
+    assert!(
+        rb.is_empty(),
+        "sg accepted-empty on the bare rb return: {rb:?}"
+    );
 }
 
 /// f137k (137A-F11, §45.11 receipt refuted): py bare `await` ANSWERS n1
@@ -12239,11 +13043,22 @@ fn f137l_bare_csharp_statement_keywords_answer_per_site() {
         );
     }
     let js_var = match_pattern(Language::JavaScript, "var a = 1;\nvar b = 2;\n", "var").unwrap();
-    assert_eq!(lines_of(&js_var), vec![1, 2], "bare js `var` sg n2: {js_var:?}");
-    let rs_unsafe =
-        match_pattern(Language::Rust, "fn f() {\n    unsafe {\n        let x = 1;\n    }\n}\n", "unsafe")
-            .unwrap();
-    assert_eq!(lines_of(&rs_unsafe), vec![2], "bare rs `unsafe` sg n1: {rs_unsafe:?}");
+    assert_eq!(
+        lines_of(&js_var),
+        vec![1, 2],
+        "bare js `var` sg n2: {js_var:?}"
+    );
+    let rs_unsafe = match_pattern(
+        Language::Rust,
+        "fn f() {\n    unsafe {\n        let x = 1;\n    }\n}\n",
+        "unsafe",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&rs_unsafe),
+        vec![2],
+        "bare rs `unsafe` sg n1: {rs_unsafe:?}"
+    );
 }
 
 /// f138a (F-137E-1): the py bare-`await` route REFUSES operand-bearing
@@ -12259,22 +13074,45 @@ fn f137l_bare_csharp_statement_keywords_answer_per_site() {
 #[test]
 fn f138a_py_bare_await_refuses_operand_await_expressions() {
     let def = match_pattern(Language::Python, "async def f():\n    await g()\n", "await").unwrap();
-    assert!(def.is_empty(), "grid S2: sg rc1 [] on the async-def call: {def:?}");
+    assert!(
+        def.is_empty(),
+        "grid S2: sg rc1 [] on the async-def call: {def:?}"
+    );
     let top = match_pattern(Language::Python, "await g()\n", "await").unwrap();
-    assert!(top.is_empty(), "grid S3: sg rc1 [] on the top-level call: {top:?}");
-    let assign =
-        match_pattern(Language::Python, "async def f():\n    x = await g()\n", "await").unwrap();
-    assert!(assign.is_empty(), "grid S4: sg rc1 [] on the assignment: {assign:?}");
+    assert!(
+        top.is_empty(),
+        "grid S3: sg rc1 [] on the top-level call: {top:?}"
+    );
+    let assign = match_pattern(
+        Language::Python,
+        "async def f():\n    x = await g()\n",
+        "await",
+    )
+    .unwrap();
+    assert!(
+        assign.is_empty(),
+        "grid S4: sg rc1 [] on the assignment: {assign:?}"
+    );
     let comp = match_pattern(
         Language::Python,
         "async def f():\n    r = [await g(i) async for i in items]\n",
         "await",
     )
     .unwrap();
-    assert!(comp.is_empty(), "grid S5: sg rc1 [] on the async comprehension: {comp:?}");
-    let paren =
-        match_pattern(Language::Python, "async def f():\n    x = (await g())\n", "await").unwrap();
-    assert!(paren.is_empty(), "grid S15: sg rc1 [] on the paren operand: {paren:?}");
+    assert!(
+        comp.is_empty(),
+        "grid S5: sg rc1 [] on the async comprehension: {comp:?}"
+    );
+    let paren = match_pattern(
+        Language::Python,
+        "async def f():\n    x = (await g())\n",
+        "await",
+    )
+    .unwrap();
+    assert!(
+        paren.is_empty(),
+        "grid S15: sg rc1 [] on the paren operand: {paren:?}"
+    );
     let mixed = match_pattern(
         Language::Python,
         "async def f():\n    await\n    await g()\n    x = await h()\n",
@@ -12289,8 +13127,8 @@ fn f138a_py_bare_await_refuses_operand_await_expressions() {
 }
 
 /// f138b (F-137E-1 keep side): the operand-free bare-`await` statement
-/// faces KEEP the §46-refuted binding (grid138 S1/S6/S7/S8/S10/S11/S13/S16
-/// + edges E1/E2: sg answers n per site — bare, `;`-terminated,
+/// faces KEEP the §46-refuted binding (grid138 S1/S6/S7/S8/S10/S11/S13/S16 +
+/// edges E1/E2: sg answers n per site — bare, `;`-terminated,
 /// `await ;`, trailing comment, `await; g()` where `;` ends the statement,
 /// two bare rows on one line, and the ident-recovery `await = 5`). The
 /// `;`-ful PATTERN spelling stays sg valid-empty on every fixture.
@@ -12304,29 +13142,53 @@ fn f138b_py_bare_await_statement_faces_keep_binding() {
         "S1: the §46-refutation receipt cell"
     );
     let in_def = match_pattern(Language::Python, "async def f():\n    await\n", "await").unwrap();
-    assert_eq!(lines_of(&in_def), vec![2], "S6: sg n1 at the bare statement: {in_def:?}");
+    assert_eq!(
+        lines_of(&in_def),
+        vec![2],
+        "S6: sg n1 at the bare statement: {in_def:?}"
+    );
     let semi = match_pattern(Language::Python, "async def f():\n    await;\n", "await").unwrap();
-    assert_eq!(lines_of(&semi), vec![2], "S7: `;`-terminated statement binds: {semi:?}");
+    assert_eq!(
+        lines_of(&semi),
+        vec![2],
+        "S7: `;`-terminated statement binds: {semi:?}"
+    );
     let space_semi = match_pattern(Language::Python, "await ;\n", "await").unwrap();
-    assert_eq!(lines_of(&space_semi), vec![1], "S13: spaced `;` binds: {space_semi:?}");
+    assert_eq!(
+        lines_of(&space_semi),
+        vec![1],
+        "S13: spaced `;` binds: {space_semi:?}"
+    );
     let comment = match_pattern(Language::Python, "await  # hi\n", "await").unwrap();
     assert_eq!(
         lines_of(&comment),
         vec![1],
         "S11: trailing comment is trivia: {comment:?}"
     );
-    let semi_stmt =
-        match_pattern(Language::Python, "async def f():\n    await; g()\n", "await").unwrap();
+    let semi_stmt = match_pattern(
+        Language::Python,
+        "async def f():\n    await; g()\n",
+        "await",
+    )
+    .unwrap();
     assert_eq!(
         lines_of(&semi_stmt),
         vec![2],
         "S16: `;` ends the bare statement: {semi_stmt:?}"
     );
-    let two =
-        match_pattern(Language::Python, "async def f():\n    await\n    await\n", "await").unwrap();
+    let two = match_pattern(
+        Language::Python,
+        "async def f():\n    await\n    await\n",
+        "await",
+    )
+    .unwrap();
     assert_eq!(lines_of(&two), vec![2, 3], "S10: n per site: {two:?}");
     let oneline = match_pattern(Language::Python, "await; await\n", "await").unwrap();
-    assert_eq!(lines_of(&oneline), vec![1, 1], "E1: one row per token: {oneline:?}");
+    assert_eq!(
+        lines_of(&oneline),
+        vec![1, 1],
+        "E1: one row per token: {oneline:?}"
+    );
     let ident = match_pattern(Language::Python, "await = 5\n", "await").unwrap();
     assert_eq!(
         lines_of(&ident),
@@ -12335,7 +13197,10 @@ fn f138b_py_bare_await_statement_faces_keep_binding() {
     );
     for src in ["await\n", "async def f():\n    await g()\n"] {
         let hits = match_pattern(Language::Python, src, "await;").unwrap();
-        assert!(hits.is_empty(), "pattern `await;` is sg-rc1 empty: {hits:?}");
+        assert!(
+            hits.is_empty(),
+            "pattern `await;` is sg-rc1 empty: {hits:?}"
+        );
     }
 }
 
@@ -12353,7 +13218,11 @@ fn f138b_py_bare_await_statement_faces_keep_binding() {
 fn f139a_cs_nested_statement_head_compositions_bind() {
     let nested = "class C {\n    void M() {\n        fixed (int* p = arr) {\n            checked { x = 1; }\n        }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, nested, "fixed ($D) { checked { $B } }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid A01: sg n1 @ the fixed stmt: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid A01: sg n1 @ the fixed stmt: {hits:?}"
+    );
     assert_eq!(
         hits[0].captures.get("D").map(String::as_str),
         Some("int* p = arr"),
@@ -12365,50 +13234,98 @@ fn f139a_cs_nested_statement_head_compositions_bind() {
         "grid A01: B binds the INNERMOST body statement: {hits:?}"
     );
     let unchk = match_pattern(Language::CSharp, nested, "fixed ($D) { unchecked { $B } }").unwrap();
-    assert!(unchk.is_empty(), "grid A02 twin on a checked candidate: {unchk:?}");
+    assert!(
+        unchk.is_empty(),
+        "grid A02 twin on a checked candidate: {unchk:?}"
+    );
     let unsafe_checked = "class C {\n    void M() {\n        unsafe {\n            checked { x = 1; }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::CSharp, unsafe_checked, "unsafe { checked { $B } }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid A03: sg n1 @ the unsafe stmt: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        unsafe_checked,
+        "unsafe { checked { $B } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid A03: sg n1 @ the unsafe stmt: {hits:?}"
+    );
     assert_eq!(
         hits[0].captures.get("B").map(String::as_str),
         Some("x = 1;"),
         "grid A03: B = the inner body: {hits:?}"
     );
     let checked_unchecked = "class C {\n    void M() {\n        checked {\n            unchecked { x = 1; }\n        }\n    }\n}\n";
-    let hits =
-        match_pattern(Language::CSharp, checked_unchecked, "checked { unchecked { $B } }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        checked_unchecked,
+        "checked { unchecked { $B } }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid A04: sg n1: {hits:?}");
     // The binds-nothing law composes at depth (grid A05/A07/A19/A20/A22:
     // sg rc1 `[]` = the walk's empty).
     let unchecked_fixed = "class C {\n    void M() {\n        unchecked {\n            fixed (int* p = arr) { x = 1; }\n        }\n    }\n}\n";
-    let hits =
-        match_pattern(Language::CSharp, unchecked_fixed, "unchecked { fixed ($D) { $B } }").unwrap();
-    assert!(hits.is_empty(), "grid A05: fixed meta-body under nesting: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        unchecked_fixed,
+        "unchecked { fixed ($D) { $B } }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid A05: fixed meta-body under nesting: {hits:?}"
+    );
     let unsafe_fixed = "class C {\n    void M() {\n        unsafe {\n            fixed (int* p = arr) { *p = 1; }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::CSharp, unsafe_fixed, "unsafe { fixed ($D) { $B } }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        unsafe_fixed,
+        "unsafe { fixed ($D) { $B } }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "grid A07: {hits:?}");
     let unsafe_lock = "class C {\n    void M() {\n        unsafe {\n            lock (o) { x = 1; }\n        }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, unsafe_lock, "unsafe { lock ($L) { $B } }").unwrap();
     assert!(hits.is_empty(), "grid A19: {hits:?}");
     let fixed_fixed = "class C {\n    void M() {\n        fixed (int* p = arr) {\n            fixed (char* q = b) { *q = 1; }\n        }\n    }\n}\n";
-    let hits =
-        match_pattern(Language::CSharp, fixed_fixed, "fixed ($D1) { fixed ($D2) { $B } }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        fixed_fixed,
+        "fixed ($D1) { fixed ($D2) { $B } }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "grid A22: {hits:?}");
     // lock/using with nested or placeholder-carrying bodies BIND (grid
     // A08/A09/A24/A29/A30: sg n1 — L/R bind the resource, B/V the body).
     let lock_checked = "class C {\n    void M() {\n        lock (obj) {\n            checked { x = 1; }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::CSharp, lock_checked, "lock ($L) { checked { $B } }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid A08: sg n1 @ the lock stmt: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        lock_checked,
+        "lock ($L) { checked { $B } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid A08: sg n1 @ the lock stmt: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("L").map(String::as_str), Some("obj"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("x = 1;"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("x = 1;")
+    );
     let lock_conc = "class C {\n    void M() {\n        lock (o) { x = 1; }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, lock_conc, "lock ($L) { x = $V; }").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid A29: sg n1: {hits:?}");
     assert_eq!(hits[0].captures.get("L").map(String::as_str), Some("o"));
     assert_eq!(hits[0].captures.get("V").map(String::as_str), Some("1"));
     let using_checked = "class C {\n    void M() {\n        using (var d = Open()) {\n            checked { x = 1; }\n        }\n    }\n}\n";
-    let hits =
-        match_pattern(Language::CSharp, using_checked, "using ($R) { checked { x = $V; } }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        using_checked,
+        "using ($R) { checked { x = $V; } }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid A09-family: sg n1: {hits:?}");
     assert_eq!(
         hits[0].captures.get("R").map(String::as_str),
@@ -12425,23 +13342,50 @@ fn f139a_cs_nested_statement_head_compositions_bind() {
     assert!(hits.is_empty(), "grid A26: outer 2-stmt body: {hits:?}");
     // Depth-3 binds at the outermost (grid A10/A11).
     let depth3 = "class C {\n    void M() {\n        unsafe {\n            checked {\n                unchecked { x = 1; }\n            }\n        }\n    }\n}\n";
-    let hits =
-        match_pattern(Language::CSharp, depth3, "unsafe { checked { unchecked { $B } } }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid A10: sg n1 @ the outer stmt: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("x = 1;"));
+    let hits = match_pattern(
+        Language::CSharp,
+        depth3,
+        "unsafe { checked { unchecked { $B } } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid A10: sg n1 @ the outer stmt: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("x = 1;")
+    );
     // Controls: the 137 cells hold (A12/A13/A14/A17/A18/A21).
     let ctl = match_pattern(Language::CSharp, nested, "checked { $B }").unwrap();
-    assert_eq!(lines_of(&ctl), vec![4], "grid A21: 1-level on a nested fixture: {ctl:?}");
+    assert_eq!(
+        lines_of(&ctl),
+        vec![4],
+        "grid A21: 1-level on a nested fixture: {ctl:?}"
+    );
     let conc = match_pattern(
         Language::CSharp,
         nested,
         "fixed (int* p = arr) { checked { x = 1; } }",
     )
     .unwrap();
-    assert_eq!(lines_of(&conc), vec![3], "grid A12: full-concrete nested: {conc:?}");
-    let inner_meta =
-        match_pattern(Language::CSharp, nested, "fixed ($D) { checked { x = $V; } }").unwrap();
-    assert_eq!(lines_of(&inner_meta), vec![3], "grid A17: concrete inner meta: {inner_meta:?}");
+    assert_eq!(
+        lines_of(&conc),
+        vec![3],
+        "grid A12: full-concrete nested: {conc:?}"
+    );
+    let inner_meta = match_pattern(
+        Language::CSharp,
+        nested,
+        "fixed ($D) { checked { x = $V; } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&inner_meta),
+        vec![3],
+        "grid A17: concrete inner meta: {inner_meta:?}"
+    );
 }
 
 /// f139b (139A-F2, grid139 B /tmp/phase139R/gridBCDEF): the java
@@ -12455,18 +13399,35 @@ fn f139a_cs_nested_statement_head_compositions_bind() {
 fn f139b_java_synchronized_meta_body_binds_block() {
     let src = "class S {\n    synchronized void m() {}\n    void n() {\n        synchronized (lock) {\n            doIt();\n        }\n    }\n}\n";
     let hits = match_pattern(Language::Java, src, "synchronized ($X) { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![4], "grid B01: sg n1 @ the block ONLY: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![4],
+        "grid B01: sg n1 @ the block ONLY: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("lock"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
     let two = "class S {\n    void n() {\n        synchronized (lock) {\n            doIt();\n            more();\n        }\n    }\n}\n";
     let hits = match_pattern(Language::Java, two, "synchronized ($X) { $B }").unwrap();
-    assert!(hits.is_empty(), "grid B02: 2-stmt body is sg rc1 []: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid B02: 2-stmt body is sg rc1 []: {hits:?}"
+    );
     let empty = "class S {\n    void n() {\n        synchronized (lock) {\n        }\n    }\n}\n";
     let hits = match_pattern(Language::Java, empty, "synchronized ($X) { $B }").unwrap();
     assert!(hits.is_empty(), "grid B06: empty body refuses: {hits:?}");
     let hits = match_pattern(Language::Java, src, "synchronized (lock) { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![4], "grid B05: literal resource binds: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
+    assert_eq!(
+        lines_of(&hits),
+        vec![4],
+        "grid B05: literal resource binds: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
     // Controls: the concrete-body 137 cells (grid B03/B04 AGREE).
     let hits = match_pattern(Language::Java, src, "synchronized ($X) {\n doIt();\n}").unwrap();
     assert_eq!(lines_of(&hits), vec![4], "grid B03 control: {hits:?}");
@@ -12484,49 +13445,99 @@ fn f139c_py_del_postfix_chains_unify_per_level() {
     assert_eq!(hits[0].captures.get("K1").map(String::as_str), Some("k1"));
     assert_eq!(hits[0].captures.get("K2").map(String::as_str), Some("k2"));
     let hits = match_pattern(Language::Python, "del d[k].b\n", "del $O[$K].$A").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C02: sub→attr binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C02: sub→attr binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("d"));
     assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("k"));
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("b"));
     let hits = match_pattern(Language::Python, "del d.b[k]\n", "del $O.$A[$K]").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C03: attr→sub binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C03: attr→sub binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("d"));
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("b"));
     assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("k"));
-    let hits =
-        match_pattern(Language::Python, "del d[k1][k2][k3]\n", "del $O[$K1][$K2][$K3]").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C04: 3-level binds: {hits:?}");
+    let hits = match_pattern(
+        Language::Python,
+        "del d[k1][k2][k3]\n",
+        "del $O[$K1][$K2][$K3]",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C04: 3-level binds: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del x.y.z\n", "del $O.$A.$B").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C06: 3-attr chain binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C06: 3-attr chain binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("x"));
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("y"));
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("z"));
     let hits = match_pattern(Language::Python, "del x.y.z\n", "del $A.$B.$C").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C19: all-meta chain binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C19: all-meta chain binds: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del d[k1][k2]\n", "del d[$K][$J]").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C15: literal head + meta idxs: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C15: literal head + meta idxs: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("k1"));
     let hits = match_pattern(Language::Python, "del d[k]\n", "del $O[k]").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid C10: meta head + literal idx: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid C10: meta head + literal idx: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("d"));
     // Literals byte-match per level; kinds must agree per level.
     let hits = match_pattern(Language::Python, "del d[k1][k2]\n", "del $O[$K][j]").unwrap();
-    assert!(hits.is_empty(), "grid C14: literal `j` != `k2` refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C14: literal `j` != `k2` refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del x.y.z\n", "del m.n.$A").unwrap();
-    assert!(hits.is_empty(), "grid C11: literal `m` != `x` refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C11: literal `m` != `x` refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del d.b[k]\n", "del m.n[$K]").unwrap();
-    assert!(hits.is_empty(), "grid C13: literal receiver mismatch: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C13: literal receiver mismatch: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del x.y\n", "del $O[$K]").unwrap();
-    assert!(hits.is_empty(), "grid C18: attribute candidate vs subscript: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C18: attribute candidate vs subscript: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del d[k], y\n", "del $O[$K]").unwrap();
-    assert!(hits.is_empty(), "grid C17: structural demands M==N: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C17: structural demands M==N: {hits:?}"
+    );
     // The 137 family holds (controls).
     let hits = match_pattern(Language::Python, "del d[k]\n", "del d[$K]").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "137 control C09: {hits:?}");
     let hits = match_pattern(Language::Python, "del x.y.z\n", "del $O.$A").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "137 control C08: {hits:?}");
     let hits = match_pattern(Language::Python, "del x.y.z\n", "del $O.b.$A").unwrap();
-    assert!(hits.is_empty(), "grid C12: literal `b` != `y` refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C12: literal `b` != `y` refuses: {hits:?}"
+    );
 }
 
 /// f139d (139B-F1, grid139 G): the del paren wrap is structurally
@@ -12537,25 +13548,52 @@ fn f139c_py_del_postfix_chains_unify_per_level() {
 #[test]
 fn f139d_py_del_paren_wrap_is_structural() {
     let hits = match_pattern(Language::Python, "del x, y\n", "del ($X, $Y)").unwrap();
-    assert!(hits.is_empty(), "grid G01: paren pattern vs free candidate: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G01: paren pattern vs free candidate: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del x\n", "del ($X)").unwrap();
-    assert!(hits.is_empty(), "grid G03: single paren meta vs free: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G03: single paren meta vs free: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del x\n", "del (x)").unwrap();
     assert!(hits.is_empty(), "grid G02: literal paren vs free: {hits:?}");
     let hits = match_pattern(Language::Python, "del (x, y)\n", "del $X, $Y").unwrap();
-    assert!(hits.is_empty(), "grid G04: free pattern vs paren candidate: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G04: free pattern vs paren candidate: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del (x, y)\n", "del ($X, $Y)").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid G05 ctl: paren pair binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid G05 ctl: paren pair binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("x"));
     let hits = match_pattern(Language::Python, "del (x)\n", "del (x)").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid G07: paren literal binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid G07: paren literal binds: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del (y)\n", "del (x)").unwrap();
-    assert!(hits.is_empty(), "grid G07-twin: literal mismatch refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G07-twin: literal mismatch refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del (x)\n", "del $X").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid G08 ctl: whole absorbs parens: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid G08 ctl: whole absorbs parens: {hits:?}"
+    );
     // The paren-structural spelling is sg-ACCEPTED binds-nothing (C16).
     let hits = match_pattern(Language::Python, "del d[k1][k2]\n", "del ($O[$K])").unwrap();
-    assert!(hits.is_empty(), "grid C16: paren structural binds nothing: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C16: paren structural binds nothing: {hits:?}"
+    );
 }
 
 /// f139e (139A-F4 REGISTERED, grid139 D): the go `select` meta comm-clause
@@ -12607,7 +13645,11 @@ fn f139f_java_class_head_member_count_binds() {
     );
     let hop = "public static abstract class A {\n    void f();\n}\n";
     let hits = match_pattern(Language::Java, hop, "public abstract class $N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid E02: keyword hop over `static`: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid E02: keyword hop over `static`: {hits:?}"
+    );
     let empty = "public abstract class A {\n}\n";
     let hits = match_pattern(Language::Java, empty, "public abstract class $N { $B }").unwrap();
     assert!(hits.is_empty(), "grid E03: empty body refuses: {hits:?}");
@@ -12619,7 +13661,11 @@ fn f139f_java_class_head_member_count_binds() {
     assert!(hits.is_empty(), "grid E07: extends refuses: {hits:?}");
     let plain = "class A {\n    void f();\n}\n";
     let hits = match_pattern(Language::Java, plain, "class $N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid E08: plain pattern binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid E08: plain pattern binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("A"));
     // Control: the interface face keeps its 137 answer.
     let iface = "public abstract interface I {\n    void f();\n}\n";
@@ -12653,25 +13699,37 @@ fn f139g_semi_keyword_census_siblings_accepted_empty() {
             "grid F: {pat:?} answers empty on {lang:?}"
         );
     }
-    let go_break =
-        match_pattern(Language::Go, "package main\n\nfunc f() {\n\tfor {\n\t\tbreak;\n\t}\n}\n", "break;")
-            .unwrap();
-    assert!(go_break.is_empty(), "grid F01 on the real fixture: {go_break:?}");
+    let go_break = match_pattern(
+        Language::Go,
+        "package main\n\nfunc f() {\n\tfor {\n\t\tbreak;\n\t}\n}\n",
+        "break;",
+    )
+    .unwrap();
+    assert!(
+        go_break.is_empty(),
+        "grid F01 on the real fixture: {go_break:?}"
+    );
     // Controls: bare spellings answer per site; the 137 `return;` arm holds.
     assert_eq!(
-        lines_of(&match_pattern(
-            Language::Go,
-            "package main\n\nfunc f() {\n\tfor {\n\t\tbreak;\n\t}\n}\n",
-            "break"
-        )
-        .unwrap()),
+        lines_of(
+            &match_pattern(
+                Language::Go,
+                "package main\n\nfunc f() {\n\tfor {\n\t\tbreak;\n\t}\n}\n",
+                "break"
+            )
+            .unwrap()
+        ),
         vec![5],
         "control F06: bare `break` answers"
     );
     assert!(
-        match_pattern(Language::Go, "package main\n\nfunc f() {\n\tfor {\n\t\treturn;\n\t}\n}\n", "return;")
-            .unwrap()
-            .is_empty(),
+        match_pattern(
+            Language::Go,
+            "package main\n\nfunc f() {\n\tfor {\n\t\treturn;\n\t}\n}\n",
+            "return;"
+        )
+        .unwrap()
+        .is_empty(),
         "control F04: the 137 return; arm holds"
     );
 }
@@ -12684,15 +13742,34 @@ fn f139g_semi_keyword_census_siblings_accepted_empty() {
 #[test]
 fn f139h_nested_bare_await_ident_survives_the_filter() {
     let hits = match_pattern(Language::Python, "x = await (await)\n", "await").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid H01: sg n1 @ the inner ident: {hits:?}");
-    let hits = match_pattern(Language::Python, "async def f():\n    x = await (await)\n", "await")
-        .unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid H02: same in a def: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid H01: sg n1 @ the inner ident: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "async def f():\n    x = await (await)\n",
+        "await",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid H02: same in a def: {hits:?}"
+    );
     // The operand rows stay dropped (the 138 law holds at the new spans).
     let hits = match_pattern(Language::Python, "async def f():\n    await g()\n", "await").unwrap();
-    assert!(hits.is_empty(), "grid S2 control: operand rows still refuse: {hits:?}");
-    let hits = match_pattern(Language::Python, "async def f():\n    x = await g()\n", "await")
-        .unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid S2 control: operand rows still refuse: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "async def f():\n    x = await g()\n",
+        "await",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "grid S4 control: {hits:?}");
 }
 
@@ -12709,7 +13786,11 @@ fn f139i_php_braced_namespace_binds_block() {
     // tagged fixture, oracle grid I06).
     let named = "<?php\nnamespace App {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, named, "namespace $N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid I01: sg n1 @ the block: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid I01: sg n1 @ the block: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("App"));
     assert_eq!(
         hits[0].captures.get("B").map(String::as_str),
@@ -12717,16 +13798,26 @@ fn f139i_php_braced_namespace_binds_block() {
     );
     let global = "<?php\nnamespace {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, global, "namespace { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid I02: the global block binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid I02: the global block binds: {hits:?}"
+    );
     assert_eq!(
         hits[0].captures.get("B").map(String::as_str),
         Some("function f() {}")
     );
     let multi = "<?php\nnamespace App {\n    function f() {}\n    function h() {}\n}\n";
     let hits = match_pattern(Language::Php, multi, "namespace $N { $B }").unwrap();
-    assert!(hits.is_empty(), "grid I03: multi-member body refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid I03: multi-member body refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Php, named, "namespace { $B }").unwrap();
-    assert!(hits.is_empty(), "grid I04: global pattern vs named candidate: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid I04: global pattern vs named candidate: {hits:?}"
+    );
 }
 
 // ===========================================================================
@@ -12747,10 +13838,16 @@ fn f140a_cs_nested_head_trivia_seam_is_tight() {
     let tpl = "fixed ($D) { checked { $B } }";
     let seam_line = "class C {\n    void M() {\n        fixed (int* p = arr) {\n            // inner\n            checked { x = 1; }\n        }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, seam_line, tpl).unwrap();
-    assert!(hits.is_empty(), "grid A_v_inner: comment at the seam refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid A_v_inner: comment at the seam refuses: {hits:?}"
+    );
     let seam_block = "class C {\n    void M() {\n        fixed (int* p = arr) { /* blk */ checked { x = 1; }\n        }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, seam_block, tpl).unwrap();
-    assert!(hits.is_empty(), "grid A_v_block: inline comment at the seam refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid A_v_block: inline comment at the seam refuses: {hits:?}"
+    );
     // Controls: comments OUTSIDE the seam keep binding (grid A_v_outer/
     // A_v_leaf/A_v_after/A_meta_inner).
     let outer = "class C {\n    void M() {\n        // outer\n        fixed (int* p = arr) {\n            checked { x = 1; }\n        }\n    }\n}\n";
@@ -12764,7 +13861,11 @@ fn f140a_cs_nested_head_trivia_seam_is_tight() {
     assert_eq!(lines_of(&hits), vec![3], "grid A_v_after: {hits:?}");
     let meta_inner = "class C {\n    void M() {\n        checked {\n            // c\n            x = 1;\n        }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, meta_inner, "checked { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid A_meta_inner: meta body rides through trivia: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid A_meta_inner: meta body rides through trivia: {hits:?}"
+    );
     // Depth-3: a comment at EITHER nested seam refuses (grid A_3lvl_c1/c2).
     let tpl3 = "unsafe { checked { unchecked { $B } } }";
     let c1 = "class C {\n    void M() {\n        unsafe {\n            // c1\n            checked {\n                unchecked { x = 1; }\n            }\n        }\n    }\n}\n";
@@ -12789,19 +13890,37 @@ fn f140a_cs_nested_head_trivia_seam_is_tight() {
 #[test]
 fn f140b_throw_semi_spelling_is_accepted_empty() {
     let js = "function f() {\n    throw e;\n}\n";
-    assert!(match_pattern(Language::JavaScript, js, "throw;").unwrap().is_empty(),
-        "grid B_js_throw_semi_xop: sg rc1 [] on an operand candidate");
-    assert!(match_pattern(Language::TypeScript, js, "throw;").unwrap().is_empty(),
-        "grid B_ts_throw_semi_xop");
-    assert!(match_pattern(Language::TypeScript, js, "throw;").unwrap().is_empty(),
-        "grid B_ts_throw_semi_xbare");
+    assert!(
+        match_pattern(Language::JavaScript, js, "throw;")
+            .unwrap()
+            .is_empty(),
+        "grid B_js_throw_semi_xop: sg rc1 [] on an operand candidate"
+    );
+    assert!(
+        match_pattern(Language::TypeScript, js, "throw;")
+            .unwrap()
+            .is_empty(),
+        "grid B_ts_throw_semi_xop"
+    );
+    assert!(
+        match_pattern(Language::TypeScript, js, "throw;")
+            .unwrap()
+            .is_empty(),
+        "grid B_ts_throw_semi_xbare"
+    );
     let ja = "class C {\n    void m() {\n        throw e;\n    }\n}\n";
-    assert!(match_pattern(Language::Java, ja, "throw;").unwrap().is_empty(),
-        "grid B_ja_throw_semi");
-    assert!(!match_pattern(Language::JavaScript, js, "throw")
-        .unwrap()
-        .is_empty(),
-        "grid B_js_bare_xop: the bare spelling keeps answering");
+    assert!(
+        match_pattern(Language::Java, ja, "throw;")
+            .unwrap()
+            .is_empty(),
+        "grid B_ja_throw_semi"
+    );
+    assert!(
+        !match_pattern(Language::JavaScript, js, "throw")
+            .unwrap()
+            .is_empty(),
+        "grid B_js_bare_xop: the bare spelling keeps answering"
+    );
     // Census posture: sg accepts the spelling (answerable), never loud.
     assert!(native_pattern_answerable(Language::JavaScript, "throw;"));
     assert!(native_pattern_answerable(Language::TypeScript, "throw;"));
@@ -12830,7 +13949,10 @@ fn f140c_cs_checked_expression_root_binds() {
     assert_eq!(lines_of(&hits), vec![3], "grid C_uncheckedE: {hits:?}");
     let stmt = "class C {\n    void M() {\n        checked { x = 1; }\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, stmt, "checked($E)").unwrap();
-    assert!(hits.is_empty(), "grid C_checkedE_vs_stmt: statement candidate refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid C_checkedE_vs_stmt: statement candidate refuses: {hits:?}"
+    );
 }
 
 /// f140d (140A-F4, grid D): java synchronized compositions — nested sync
@@ -12845,34 +13967,71 @@ fn f140c_cs_checked_expression_root_binds() {
 #[test]
 fn f140d_java_synchronized_compositions_bind() {
     let nested = "class C {\n    void m() {\n        synchronized (a) {\n            synchronized (b) { doIt(); }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::Java, nested, "synchronized ($X) { synchronized ($Y) { $B } }").unwrap();
+    let hits = match_pattern(
+        Language::Java,
+        nested,
+        "synchronized ($X) { synchronized ($Y) { $B } }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid D_sync_nested: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("a"));
     assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("b"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
     let depth3 = "class C {\n    void m() {\n        synchronized (a) {\n            synchronized (b) {\n                synchronized (c) { doIt(); }\n            }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::Java, depth3, "synchronized ($X) { synchronized ($Y) { synchronized ($Z) { $B } } }").unwrap();
+    let hits = match_pattern(
+        Language::Java,
+        depth3,
+        "synchronized ($X) { synchronized ($Y) { synchronized ($Z) { $B } } }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid D_sync_nested_3: {hits:?}");
     assert_eq!(hits[0].captures.get("Z").map(String::as_str), Some("c"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
     let lit = "class C {\n    void m() {\n        synchronized (a) {\n            synchronized (b) { doIt(); }\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::Java, lit, "synchronized (a) { synchronized (b) { $B } }").unwrap();
+    let hits = match_pattern(
+        Language::Java,
+        lit,
+        "synchronized (a) { synchronized (b) { $B } }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid D_sync_nested_lit: {hits:?}");
     // Method root + modifier hopping.
     let method = "class C {\n    synchronized void m() {\n        doIt();\n    }\n}\n";
     let hits = match_pattern(Language::Java, method, "synchronized void $M() { $B }").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "grid D_sync_method: {hits:?}");
     assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("m"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
     let stat = "class C {\n    static synchronized void m() {\n        doIt();\n    }\n}\n";
     let hits = match_pattern(Language::Java, stat, "synchronized void $M() { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid D_sync_static: hopping binds: {hits:?}");
-    let hits = match_pattern(Language::Java, method, "static synchronized void $M() { $B }").unwrap();
-    assert!(hits.is_empty(), "grid D_sync_static_pat: order enforced: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid D_sync_static: hopping binds: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        method,
+        "static synchronized void $M() { $B }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid D_sync_static_pat: order enforced: {hits:?}"
+    );
     let plain = "class C {\n    void m() {\n        doIt();\n    }\n}\n";
     let hits = match_pattern(Language::Java, plain, "synchronized void $M() { $B }").unwrap();
     assert!(hits.is_empty(), "grid D_sync_plain_neg: {hits:?}");
-    let two = "class C {\n    synchronized void m() {\n        doIt();\n        more();\n    }\n}\n";
+    let two =
+        "class C {\n    synchronized void m() {\n        doIt();\n        more();\n    }\n}\n";
     let hits = match_pattern(Language::Java, two, "synchronized void $M() { $B }").unwrap();
     assert!(hits.is_empty(), "grid D_sync_method_2stmt: {hits:?}");
     let zero = "class C {\n    synchronized void m() {}\n}\n";
@@ -12880,16 +14039,37 @@ fn f140d_java_synchronized_compositions_bind() {
     assert!(hits.is_empty(), "grid R2_ja_sync_method_0stmt: {hits:?}");
     // Method-body lane: a plain method whose single statement is a sync block.
     let body = "class C {\n    void m() {\n        synchronized (a) {\n            doIt();\n        }\n    }\n}\n";
-    let hits = match_pattern(Language::Java, body, "void $M() { synchronized ($X) { $B } }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid D_sync_method_body: {hits:?}");
+    let hits = match_pattern(
+        Language::Java,
+        body,
+        "void $M() { synchronized ($X) { $B } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid D_sync_method_body: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("m"));
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("a"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("doIt();"));
-    let hits = match_pattern(Language::Java, plain, "void $M() { synchronized ($X) { $B } }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("doIt();")
+    );
+    let hits = match_pattern(
+        Language::Java,
+        plain,
+        "void $M() { synchronized ($X) { $B } }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "grid D_sync_method_body_neg: {hits:?}");
     // 139 one-level lane keeps its faces.
     let hits = match_pattern(Language::Java, nested, "synchronized ($X) { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3, 4], "grid D_sync_plain_ctl + inner-only: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3, 4],
+        "grid D_sync_plain_ctl + inner-only: {hits:?}"
+    );
 }
 
 /// f140e (140A-F5, grid E/R2/R3): the import/directive root family binds
@@ -12907,10 +14087,17 @@ fn f140e_import_directive_roots_bind() {
     assert_eq!(lines_of(&hits), vec![1], "grid E_py_import1: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os"));
     let hits = match_pattern(Language::Python, "import os.path\n", "import $X").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os.path"),
-        "grid E_py_import_dotted");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("os.path"),
+        "grid E_py_import_dotted"
+    );
     let hits = match_pattern(Language::Python, "import os, sys\n", "import $X").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid E_py_import_two: first child binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid E_py_import_two: first child binds: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os"));
     let hits = match_pattern(Language::Python, "import os, sys\n", "import $A, $B").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "grid E_py_importAB: {hits:?}");
@@ -12921,66 +14108,150 @@ fn f140e_import_directive_roots_bind() {
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os"));
     assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("o"));
     let hits = match_pattern(Language::Python, "import os as o\n", "import $X").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os as o"),
-        "grid R2_py_importX_alias_cand: the aliased child's whole text binds");
-    let hits = match_pattern(Language::Python, "from os import path\n", "from $M import $X").unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("os as o"),
+        "grid R2_py_importX_alias_cand: the aliased child's whole text binds"
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "from os import path\n",
+        "from $M import $X",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "grid E_py_from: {hits:?}");
     assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("os"));
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("path"));
-    let hits = match_pattern(Language::Python, "from os import path, join\n", "from $M import $X").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("path"),
-        "grid R2_py_from_multi: first name binds");
+    let hits = match_pattern(
+        Language::Python,
+        "from os import path, join\n",
+        "from $M import $X",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("path"),
+        "grid R2_py_from_multi: first name binds"
+    );
     // java
     let hits = match_pattern(Language::Java, "import java.util.List;\n", "import $X;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "grid E_ja_import1: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("java.util.List"));
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("java.util.List")
+    );
     let two = "import java.util.List;\nimport java.io.File;\n";
     let hits = match_pattern(Language::Java, two, "import $X;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1, 2], "grid E_ja_import_two: {hits:?}");
-    let hits = match_pattern(Language::Java, "import static java.lang.Math.abs;\n", "import static $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("java.lang.Math.abs"),
-        "grid E_ja_import_static");
-    let hits = match_pattern(Language::Java, "import static java.lang.Math.abs;\n", "import $X;").unwrap();
-    assert!(hits.is_empty(), "grid R2_ja_import_plain_pat_static_cand: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1, 2],
+        "grid E_ja_import_two: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        "import static java.lang.Math.abs;\n",
+        "import static $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("java.lang.Math.abs"),
+        "grid E_ja_import_static"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        "import static java.lang.Math.abs;\n",
+        "import $X;",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid R2_ja_import_plain_pat_static_cand: {hits:?}"
+    );
     let hits = match_pattern(Language::Java, "import java.util.*;\n", "import $X.*;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("java.util"),
-        "grid E_ja_import_star");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("java.util"),
+        "grid E_ja_import_star"
+    );
     let hits = match_pattern(Language::Java, "import java.util.List;\n", "import $X.*;").unwrap();
-    assert!(hits.is_empty(), "grid R2_ja_import_star_pat_plain_cand: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid R2_ja_import_star_pat_plain_cand: {hits:?}"
+    );
     let hits = match_pattern(Language::Java, "import java.util.*;\n", "import $X;").unwrap();
     assert!(hits.is_empty(), "grid R3_ja_import_plain_star: {hits:?}");
     // rust
     let hits = match_pattern(Language::Rust, "use std::fmt;\n", "use $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("std::fmt"),
-        "grid E_rs_use1");
-    let hits = match_pattern(Language::Rust, "use std::collections::{HashMap, HashSet};\n", "use $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str),
-        Some("std::collections::{HashMap, HashSet}"), "grid E_rs_use_braces");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("std::fmt"),
+        "grid E_rs_use1"
+    );
+    let hits = match_pattern(
+        Language::Rust,
+        "use std::collections::{HashMap, HashSet};\n",
+        "use $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("std::collections::{HashMap, HashSet}"),
+        "grid E_rs_use_braces"
+    );
     let hits = match_pattern(Language::Rust, "use std::fmt as f;\n", "use $X as $Y;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("std::fmt"), "grid E_rs_use_alias");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("std::fmt"),
+        "grid E_rs_use_alias"
+    );
     assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("f"));
     // php
     let hits = match_pattern(Language::Php, "<?php\nuse Foo\\Bar;\n", "use $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("Foo\\Bar"),
-        "grid E_php_use1");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("Foo\\Bar"),
+        "grid E_php_use1"
+    );
     let hits = match_pattern(Language::Php, "<?php\nuse function foo;\n", "use $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("function foo"),
-        "grid R3_php_use_function");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("function foo"),
+        "grid R3_php_use_function"
+    );
     // csharp
     let hits = match_pattern(Language::CSharp, "using System;\n", "using $N;").unwrap();
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"),
-        "grid E_cs_using1");
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System"),
+        "grid E_cs_using1"
+    );
     let hits = match_pattern(Language::CSharp, "using S = System.Text;\n", "using $N;").unwrap();
-    assert!(hits.is_empty(), "grid E_cs_using_alias: alias candidate refuses: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "class C {\n    void M() {\n        using (var d = Open()) { x = 1; }\n    }\n}\n", "using $N;").unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid E_cs_using_alias: alias candidate refuses: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C {\n    void M() {\n        using (var d = Open()) { x = 1; }\n    }\n}\n",
+        "using $N;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "grid R3_cs_using_stmt_neg: {hits:?}");
     let hits = match_pattern(Language::CSharp, "using System;\n", "using System;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1],
-        "grid R2_cs_using_lit: the literal face answers ONE row (pre-fix n2)");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid R2_cs_using_lit: the literal face answers ONE row (pre-fix n2)"
+    );
     // go `import $X;` is accepted-empty.
     let go = "package main\n\nimport (\n    \"fmt\"\n)\n\nfunc main() { fmt.Println() }\n";
-    assert!(match_pattern(Language::Go, go, "import $X;").unwrap().is_empty(),
-        "grid E_go_importblock: sg rc1 []");
+    assert!(
+        match_pattern(Language::Go, go, "import $X;")
+            .unwrap()
+            .is_empty(),
+        "grid E_go_importblock: sg rc1 []"
+    );
     assert!(native_pattern_answerable(Language::Go, "import $X;"));
 }
 
@@ -12992,7 +14263,12 @@ fn f140e_import_directive_roots_bind() {
 /// `fallthrough` is the 140B-F4 control: the literal lane already agrees.
 #[test]
 fn f140f_remaining_statement_roots_bind() {
-    let hits = match_pattern(Language::Kotlin, "typealias Foo = Bar\n", "typealias $N = $T").unwrap();
+    let hits = match_pattern(
+        Language::Kotlin,
+        "typealias Foo = Bar\n",
+        "typealias $N = $T",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "grid F_kt_typealias: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Foo"));
     assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("Bar"));
@@ -13005,12 +14281,16 @@ fn f140f_remaining_statement_roots_bind() {
     let kt2 = "fun main() {\n    val xs = listOf(1)\n    for (x in xs) {\n        g(x)\n        h(x)\n    }\n}\n";
     let hits = match_pattern(Language::Kotlin, kt2, "for ($X in $C) { $B }").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid R2_kt_for_2stmt: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("g(x)\n        h(x)"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("g(x)\n        h(x)")
+    );
     let ktnb = "fun main() {\n    val xs = listOf(1)\n    for (x in xs) g(x)\n}\n";
     let hits = match_pattern(Language::Kotlin, ktnb, "for ($X in $C) { $B }").unwrap();
     assert!(hits.is_empty(), "grid R2_kt_for_nobrace: {hits:?}");
     // swift
-    let sw = "func m() {\n    let xs = [1]\n    for x in xs where x > 1 {\n        g(x)\n    }\n}\n";
+    let sw =
+        "func m() {\n    let xs = [1]\n    for x in xs where x > 1 {\n        g(x)\n    }\n}\n";
     let hits = match_pattern(Language::Swift, sw, "for $X in $C where $W { $B }").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid F_sw_for_where: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("x"));
@@ -13018,18 +14298,31 @@ fn f140f_remaining_statement_roots_bind() {
     assert_eq!(hits[0].captures.get("W").map(String::as_str), Some("x > 1"));
     let swp = "func m() {\n    let xs = [1]\n    for x in xs {\n        g(x)\n    }\n}\n";
     let hits = match_pattern(Language::Swift, swp, "for $X in $C { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid R2_sw_plain_pat_plain_src: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid R2_sw_plain_pat_plain_src: {hits:?}"
+    );
     let hits = match_pattern(Language::Swift, swp, "for $X in $C where $W { $B }").unwrap();
     assert!(hits.is_empty(), "grid R2_sw_where_pat_plain_src: {hits:?}");
     let hits = match_pattern(Language::Swift, sw, "for $X in $C { $B }").unwrap();
-    assert!(hits.is_empty(), "grid F_sw_for_plain: where candidate vs plain pattern: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid F_sw_for_plain: where candidate vs plain pattern: {hits:?}"
+    );
     // rust let-else
     let rs = "fn f(y: Option<i32>) {\n    let Some(x) = y else {\n        return;\n    };\n}\n";
     let hits = match_pattern(Language::Rust, rs, "let $P = $E else { $B };").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "grid F_rs_letelse: {hits:?}");
-    assert_eq!(hits[0].captures.get("P").map(String::as_str), Some("Some(x)"));
+    assert_eq!(
+        hits[0].captures.get("P").map(String::as_str),
+        Some("Some(x)")
+    );
     assert_eq!(hits[0].captures.get("E").map(String::as_str), Some("y"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("return;"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("return;")
+    );
     let rs2 = "fn f(y: Option<i32>) {\n    let Some(x) = y else {\n        a();\n        return;\n    };\n}\n";
     let hits = match_pattern(Language::Rust, rs2, "let $P = $E else { $B };").unwrap();
     assert!(hits.is_empty(), "grid R2_rs_letelse_2stmt: {hits:?}");
@@ -13039,12 +14332,22 @@ fn f140f_remaining_statement_roots_bind() {
     // c goto
     let c = "void f(void) {\n    if (a) goto end;\n    goto end;\nend:\n    return;\n}\n";
     let hits = match_pattern(Language::C, c, "goto $L;").unwrap();
-    assert_eq!(lines_of(&hits), vec![2, 3], "grid R2_c_goto_2sites: {hits:?}");
-    assert!(hits.iter().all(|h| h.captures.get("L").map(String::as_str) == Some("end")));
+    assert_eq!(
+        lines_of(&hits),
+        vec![2, 3],
+        "grid R2_c_goto_2sites: {hits:?}"
+    );
+    assert!(hits
+        .iter()
+        .all(|h| h.captures.get("L").map(String::as_str) == Some("end")));
     // 140B-F4 control: go bare `fallthrough` already answers (receipt of record).
     let go = "package main\n\nfunc f(x int) {\n\tswitch x {\n\tcase 1:\n\t\tg()\n\t\tfallthrough\n\tcase 2:\n\t\tg()\n\t}\n}\nfunc g() {}\n";
     let hits = match_pattern(Language::Go, go, "fallthrough").unwrap();
-    assert_eq!(lines_of(&hits), vec![7], "grid F_go_fallthrough_bare: literal-lane receipt");
+    assert_eq!(
+        lines_of(&hits),
+        vec![7],
+        "grid F_go_fallthrough_bare: literal-lane receipt"
+    );
 }
 
 /// f140g (140A-F8, grid G/R2): the py del lane boundaries — a CALL operand
@@ -13062,14 +14365,32 @@ fn f140g_py_del_call_and_paren_lead_bind() {
     assert_eq!(hits[0].captures.get("F").map(String::as_str), Some("f"));
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"));
     let hits = match_pattern(Language::Python, src, "del f($A)").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid G_del_call_fmeta_src: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid G_del_call_fmeta_src: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "a = 1\nb = 2\ndel g(1)\n", "del f($A)").unwrap();
-    assert!(hits.is_empty(), "grid G_del_call_conca_neg: literal head byte-matches: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G_del_call_conca_neg: literal head byte-matches: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "a = 1\nb = 2\ndel f(x.y)\n", "del f($A)").unwrap();
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("x.y"),
-        "grid G_del_call_meta_src");
-    let hits = match_pattern(Language::Python, "a = 1\nb = 2\ndel f(1), g(2)\n", "del $F($A)").unwrap();
-    assert!(hits.is_empty(), "grid G_del_call_2op: exact count: {hits:?}");
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("x.y"),
+        "grid G_del_call_meta_src"
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "a = 1\nb = 2\ndel f(1), g(2)\n",
+        "del $F($A)",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "grid G_del_call_2op: exact count: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "a = 1\ndel f()\n", "del $F($A)").unwrap();
     assert!(hits.is_empty(), "grid R2_del_call_emptyargs: {hits:?}");
     // paren-lead mixed lists
@@ -13083,13 +14404,20 @@ fn f140g_py_del_call_and_paren_lead_bind() {
     assert_eq!(lines_of(&hits), vec![4], "grid G_del_pm3: {hits:?}");
     assert_eq!(hits[0].captures.get("Z").map(String::as_str), Some("c"));
     let hits = match_pattern(Language::Python, "a = 1\nb = 2\ndel a, b\n", "del ($X), $Y").unwrap();
-    assert!(hits.is_empty(), "grid G_del_pm2_free_cand: paren demanded: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid G_del_pm2_free_cand: paren demanded: {hits:?}"
+    );
     let pms = "d = {}\ny = 2\ndel (d[k]), y\n";
     let hits = match_pattern(Language::Python, pms, "del ($X), $Y").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid G_del_pm2_struct: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("d[k]"));
     let hits = match_pattern(Language::Python, pms, "del ($O[$K]), $Y").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid G_del_pm_structmix: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid G_del_pm_structmix: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("d"));
     assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("k"));
     assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("y"));
@@ -13098,17 +14426,37 @@ fn f140g_py_del_call_and_paren_lead_bind() {
     assert_eq!(lines_of(&hits), vec![3], "grid G_del_bothparen: {hits:?}");
     let extra = "a = 1\nb = 2\nc = 3\ndel (a), b, c\n";
     let hits = match_pattern(Language::Python, extra, "del ($X), $Y").unwrap();
-    assert_eq!(lines_of(&hits), vec![4], "grid R2_del_pm2_extra_cand: prefix absorb: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![4],
+        "grid R2_del_pm2_extra_cand: prefix absorb: {hits:?}"
+    );
     // 139 guard cells keep holding.
     let free = "a = 1\nb = 2\ndel a, b\n";
-    assert!(match_pattern(Language::Python, free, "del ($X, $Y)").unwrap().is_empty(),
-        "grid G01 held");
-    assert!(match_pattern(Language::Python, free, "del ($X)").unwrap().is_empty(),
-        "grid G03 held");
-    assert!(match_pattern(Language::Python, pm, "del (a)").unwrap().is_empty(),
-        "grid G07-twin held: single paren vs 2-op candidate");
+    assert!(
+        match_pattern(Language::Python, free, "del ($X, $Y)")
+            .unwrap()
+            .is_empty(),
+        "grid G01 held"
+    );
+    assert!(
+        match_pattern(Language::Python, free, "del ($X)")
+            .unwrap()
+            .is_empty(),
+        "grid G03 held"
+    );
+    assert!(
+        match_pattern(Language::Python, pm, "del (a)")
+            .unwrap()
+            .is_empty(),
+        "grid G07-twin held: single paren vs 2-op candidate"
+    );
     let hits = match_pattern(Language::Python, "a = 1\nb = 2\ndel (a)\n", "del (a)").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid G07 held: concrete paren binds");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid G07 held: concrete paren binds"
+    );
 }
 
 /// f140h (140A-F9, grid H): the accepted-empty `;`-ful spellings join the
@@ -13119,25 +14467,50 @@ fn f140g_py_del_call_and_paren_lead_bind() {
 #[test]
 fn f140h_semi_keyword_accepted_empty_siblings() {
     let pykw = "def m():\n    pass;\n    yield;\n    global x;\n    import os;\n    raise;\n    del x;\n    assert x;\n    return;\n";
-    for pattern in ["pass;", "yield;", "global;", "import;", "raise;", "del;", "assert;"] {
-        assert!(native_pattern_answerable(Language::Python, pattern),
-            "census answerable: py {pattern}");
-        assert!(match_pattern(Language::Python, pykw, pattern).unwrap().is_empty(),
-            "walk empty: py {pattern}");
+    for pattern in [
+        "pass;", "yield;", "global;", "import;", "raise;", "del;", "assert;",
+    ] {
+        assert!(
+            native_pattern_answerable(Language::Python, pattern),
+            "census answerable: py {pattern}"
+        );
+        assert!(
+            match_pattern(Language::Python, pykw, pattern)
+                .unwrap()
+                .is_empty(),
+            "walk empty: py {pattern}"
+        );
     }
     let rb = "loop do\n    break\nend\n";
     assert!(native_pattern_answerable(Language::Ruby, "break;"));
-    assert!(match_pattern(Language::Ruby, rb, "break;").unwrap().is_empty(), "grid H_rb_break");
+    assert!(
+        match_pattern(Language::Ruby, rb, "break;")
+            .unwrap()
+            .is_empty(),
+        "grid H_rb_break"
+    );
     let rb2 = "loop do\n    break;\nend\n";
-    assert!(match_pattern(Language::Ruby, rb2, "break;").unwrap().is_empty(),
-        "grid H_rb_breaksemi: binds nothing even on the semi source");
+    assert!(
+        match_pattern(Language::Ruby, rb2, "break;")
+            .unwrap()
+            .is_empty(),
+        "grid H_rb_breaksemi: binds nothing even on the semi source"
+    );
     let go = "package main\n\nfunc f() {\n    goto end\nend:\n    return\n}\n";
     assert!(native_pattern_answerable(Language::Go, "goto $L;"));
     assert!(native_pattern_answerable(Language::Go, "goto end;"));
-    assert!(match_pattern(Language::Go, go, "goto $L;").unwrap().is_empty(),
-        "grid H_go_goto_meta: the meta spelling is refused, not bound");
-    assert!(match_pattern(Language::Go, go, "goto end;").unwrap().is_empty(),
-        "grid H_go_goto_plain");
+    assert!(
+        match_pattern(Language::Go, go, "goto $L;")
+            .unwrap()
+            .is_empty(),
+        "grid H_go_goto_meta: the meta spelling is refused, not bound"
+    );
+    assert!(
+        match_pattern(Language::Go, go, "goto end;")
+            .unwrap()
+            .is_empty(),
+        "grid H_go_goto_plain"
+    );
     // 139 siblings keep their census posture.
     assert!(native_pattern_answerable(Language::Go, "break;"));
     assert!(native_pattern_answerable(Language::Ruby, "retry;"));
@@ -13155,20 +14528,41 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
     let ja = "class C {\n    void m() {\n        synchronized (lock) {\n            doIt();\n        }\n    }\n}\n";
     let hits = match_pattern(Language::Java, ja, "synchronized ($$$X) { $B }").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "grid I_ja_dollarres3: {hits:?}");
-    assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("lock"),
-        "the multi-namespace key binds");
+    assert_eq!(
+        hits[0].captures.get("$$$X").map(String::as_str),
+        Some("lock"),
+        "the multi-namespace key binds"
+    );
     let hits = match_pattern(Language::Java, ja, "synchronized ($X) { $$$B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid R3_ja_body_dollar3: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid R3_ja_body_dollar3: {hits:?}"
+    );
     let hits = match_pattern(Language::Java, ja, "synchronized ($$X) { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![3], "grid I_ja_dollarres held: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![3],
+        "grid I_ja_dollarres held: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("lock"));
     // php: name multi-binds; the BODY double/multi-prefix is accepted-empty.
     let php = "<?php\nnamespace App {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, php, "namespace $$$N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid R3_php_name_dollar3: {hits:?}");
-    assert_eq!(hits[0].captures.get("$$$N").map(String::as_str), Some("App"));
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid R3_php_name_dollar3: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("$$$N").map(String::as_str),
+        Some("App")
+    );
     let hits = match_pattern(Language::Php, php, "namespace { $$B }").unwrap();
-    assert!(hits.is_empty(), "grid I_php_dollarbody: body double-prefix accepted-empty: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "grid I_php_dollarbody: body double-prefix accepted-empty: {hits:?}"
+    );
     let hits = match_pattern(Language::Php, php, "namespace { $$$B }").unwrap();
     assert!(hits.is_empty(), "grid I_php_dollarbody3: {hits:?}");
     // java class heads.
@@ -13177,7 +14571,11 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
     assert_eq!(lines_of(&hits), vec![1], "grid I_ja_class_dollar: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("C"));
     let hits = match_pattern(Language::Java, cls, "class $$$N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "grid R2_ja_class_dollar3: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "grid R2_ja_class_dollar3: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("$$$N").map(String::as_str), Some("C"));
     // py del atoms.
     let py = "d = {1: 2}\ndel d[1]\n";
@@ -13185,11 +14583,19 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
     assert_eq!(lines_of(&hits), vec![2], "grid I_py_dollaratom: {hits:?}");
     assert_eq!(hits[0].captures.get("$$$K").map(String::as_str), Some("1"));
     let hits = match_pattern(Language::Python, py, "del d[$$K]").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid I_py_dollaratom2 held: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid I_py_dollaratom2 held: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("1"));
     let pyw = "x = 1\ndel x\n";
     let hits = match_pattern(Language::Python, pyw, "del $$$X").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid R3_py_del_whole_d3: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid R3_py_del_whole_d3: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("x"));
     // The LIST-level paren wrap over a multi-meta slot binds NOTHING —
     // sg ACCEPTED-empty (R3_py_del_paren_d3 rc1 `[]`).
@@ -13205,13 +14611,20 @@ fn f140j_php_braced_namespace_literal_name_binds() {
     let src = "<?php\nnamespace App {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, src, "namespace App { $B }").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "grid J_php_litname: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("function f() {}"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("function f() {}")
+    );
     let hits = match_pattern(Language::Php, src, "namespace Other { $B }").unwrap();
     assert!(hits.is_empty(), "grid J_php_litname_neg: {hits:?}");
     let hits = match_pattern(Language::Php, src, "namespace { $B }").unwrap();
     assert!(hits.is_empty(), "grid J_php_lit_global held: {hits:?}");
     let hits = match_pattern(Language::Php, src, "namespace $N { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "grid I01 held: the meta-name face keeps binding");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "grid I01 held: the meta-name face keeps binding"
+    );
 }
 
 // ===========================================================================
@@ -13243,41 +14656,78 @@ fn f141a_cs_using_directive_faces_demarcate() {
     // static/unsafe runs.
     let hits = match_pattern(Language::CSharp, plain, "using $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F1_a_plain: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"));
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System")
+    );
     let hits = match_pattern(Language::CSharp, staticc, "using $N;").unwrap();
-    assert!(hits.is_empty(), "F1_a_static: the static run refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "F1_a_static: the static run refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, unsafee, "using $N;").unwrap();
-    assert!(hits.is_empty(), "F1_a_unsafe: the unsafe run refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "F1_a_unsafe: the unsafe run refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, global, "using $N;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "F1_a_global: global candidate binds: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System.IO"));
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "F1_a_global: global candidate binds: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System.IO")
+    );
     // Static pattern: demands the `static` run (never unsafe), global
     // skippable.
     let hits = match_pattern(Language::CSharp, staticc, "using static $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F6_cs_using_static_pat: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System.Math"));
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System.Math")
+    );
     let hits = match_pattern(Language::CSharp, plain, "using static $N;").unwrap();
     assert!(hits.is_empty(), "F6_cs_using_static_pat_x_plain: {hits:?}");
     let gstat = "global using static System.Text.Encoding;\n";
     let hits = match_pattern(Language::CSharp, gstat, "using static $N;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "F1_all6_staticpat global face: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "F1_all6_staticpat global face: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, unsafee, "using static $N;").unwrap();
     assert!(hits.is_empty(), "R2_cs_static_pat_x_unsafe_cand: {hits:?}");
     let hits = match_pattern(Language::CSharp, gstat, "global using static $N;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "R2_cs_global_static_pat: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "R2_cs_global_static_pat: {hits:?}"
+    );
     // Unsafe pattern face (R2_cs_unsafe_pat).
     let hits = match_pattern(Language::CSharp, unsafee, "using unsafe $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "R2_cs_unsafe_pat: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Foo.Bar"));
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("Foo.Bar")
+    );
     // Alias face: A/T split, global skippable.
     let alias = "using M = System.Math;\n";
     let hits = match_pattern(Language::CSharp, alias, "using $A = $T;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A_cs_using_alias_pat: {hits:?}");
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("M"));
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("System.Math"));
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("System.Math")
+    );
     let galias = "global using M = System.Math;\n";
     let hits = match_pattern(Language::CSharp, galias, "using $A = $T;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "R2_cs_global_alias_cand: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "R2_cs_global_alias_cand: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, plain, "using $A = $T;").unwrap();
     assert!(hits.is_empty(), "A_cs_using_alias_pat_x_plain: {hits:?}");
     // Global pattern: demand-only global + refusal of the static run.
@@ -13289,10 +14739,23 @@ fn f141a_cs_using_directive_faces_demarcate() {
     assert!(hits.is_empty(), "F6_cs_global_pat_x_static: {hits:?}");
     // Literal faces answer the SINGLE directive node (the pre-fix double
     // emit spanned the trailing newline).
-    let hits = match_pattern(Language::CSharp, "global using System;\n", "global using System;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "F5_global_lit: exactly one hit: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        "global using System;\n",
+        "global using System;",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "F5_global_lit: exactly one hit: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, plain, "using System;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "A_using_plain_lit_ctrl held: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "A_using_plain_lit_ctrl held: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, "using System;\n", "global using System;").unwrap();
     assert!(hits.is_empty(), "F5_global_lit_x_plain: {hits:?}");
     // Census posture: every new face is answerable (never loud).
@@ -13318,19 +14781,33 @@ fn f141b_cs_throw_semi_operand_gate() {
     let bare = "class C {\n    void M() {\n        try { } catch (System.Exception) {\n            throw;\n        }\n    }\n}\n";
     let operand = "class C {\n    void M() {\n        throw e;\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, bare, "throw;").unwrap();
-    assert_eq!(lines_of(&hits), vec![4], "F2_bare_cand: rethrow binds: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![4],
+        "F2_bare_cand: rethrow binds: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, operand, "throw;").unwrap();
-    assert!(hits.is_empty(), "F2_operand_cand: operand candidate refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "F2_operand_cand: operand candidate refuses: {hits:?}"
+    );
     let mixed = "class C {\n    void M() {\n        try { } catch (System.Exception) {\n            throw;\n        }\n        throw e;\n    }\n}\n";
     let hits = match_pattern(Language::CSharp, mixed, "throw;").unwrap();
-    assert_eq!(lines_of(&hits), vec![4], "F2_mixed: exactly the bare site: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![4],
+        "F2_mixed: exactly the bare site: {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, operand, "throw ;").unwrap();
     assert!(hits.is_empty(), "F2_throw_semi_ws operand face: {hits:?}");
     // Operand patterns keep answering (unchanged faces).
     let hits = match_pattern(Language::CSharp, operand, "throw $X;").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "F2_throwX_operand held: {hits:?}");
     let hits = match_pattern(Language::CSharp, bare, "throw").unwrap();
-    assert!(!hits.is_empty(), "F2_throwbare_bare held: the bare spelling keeps the kind lane");
+    assert!(
+        !hits.is_empty(),
+        "F2_throwbare_bare held: the bare spelling keeps the kind lane"
+    );
     // Census posture: answerable, never loud.
     assert!(native_pattern_answerable(Language::CSharp, "throw;"));
 }
@@ -13346,16 +14823,30 @@ fn f141c_php_dollar_body_single_member_law() {
     let one_fn = "<?php\nnamespace App {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, one_fn, "namespace App { $$B }").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "F3_app_d2_1mem: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("function f() {}"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("function f() {}")
+    );
     let echo = "<?php\nnamespace App {\n    echo 1;\n}\n";
     let hits = match_pattern(Language::Php, echo, "namespace App { $$B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("echo 1;"), "F3_app_d2_echo");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("echo 1;"),
+        "F3_app_d2_echo"
+    );
     let assign = "<?php\nnamespace App {\n    $x = 1;\n}\n";
     let hits = match_pattern(Language::Php, assign, "namespace App { $$B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("$x = 1;"), "F3_app_d2_assign");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("$x = 1;"),
+        "F3_app_d2_assign"
+    );
     let two = "<?php\nnamespace App {\n    function f() {}\n    function g() {}\n}\n";
     let hits = match_pattern(Language::Php, two, "namespace App { $$B }").unwrap();
-    assert!(hits.is_empty(), "F3_app_d2_2mem: two members refuse: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "F3_app_d2_2mem: two members refuse: {hits:?}"
+    );
     let zero = "<?php\nnamespace App {\n}\n";
     let hits = match_pattern(Language::Php, zero, "namespace App { $$B }").unwrap();
     assert!(hits.is_empty(), "F3_app_d2_0mem: {hits:?}");
@@ -13381,7 +14872,11 @@ fn f141c_php_dollar_body_single_member_law() {
         "F3_app_d3_2mem multi capture joins members"
     );
     let hits = match_pattern(Language::Php, zero, "namespace App { $$$B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "F3_app_d3_0mem: binds the empty list: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "F3_app_d3_0mem: binds the empty list: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("$$$B").map(String::as_str), Some(""));
     let mixed = "<?php\nnamespace App {\n    function f() {}\n    echo 1;\n}\n";
     let hits = match_pattern(Language::Php, mixed, "namespace App { $$$B }").unwrap();
@@ -13415,8 +14910,16 @@ fn f141d_cs_seam_trivia_class() {
         ("D_d_ff_ctrl", "\u{000c} "),
     ] {
         let hits = match_pattern(Language::CSharp, &seam_case(seam), tpl).unwrap();
-        assert_eq!(lines_of(&hits), vec![3], "{cell}: sg n1 binds through the seam: {hits:?}");
-        assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("x = 1;"), "{cell}");
+        assert_eq!(
+            lines_of(&hits),
+            vec![3],
+            "{cell}: sg n1 binds through the seam: {hits:?}"
+        );
+        assert_eq!(
+            hits[0].captures.get("B").map(String::as_str),
+            Some("x = 1;"),
+            "{cell}"
+        );
     }
     // Refused seam trivia (outside the class of record).
     for (cell, seam) in [
@@ -13447,7 +14950,10 @@ fn f141e_py_import_name_list_faces() {
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("sys"));
     assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("json"));
     let hits = match_pattern(Language::Python, "import os, sys\n", "import $A, $B, $C").unwrap();
-    assert!(hits.is_empty(), "G_abc_x2name: fewer names refuse: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "G_abc_x2name: fewer names refuse: {hits:?}"
+    );
     // from-import comma names.
     let from3 = "from os import path, sep, curdir\n";
     let hits = match_pattern(Language::Python, from3, "from $X import $A, $B").unwrap();
@@ -13457,11 +14963,18 @@ fn f141e_py_import_name_list_faces() {
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("sep"));
     let hits = match_pattern(Language::Python, from3, "from $X import $A, $B, $C").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "G_from3_abc: {hits:?}");
-    assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("curdir"));
+    assert_eq!(
+        hits[0].captures.get("C").map(String::as_str),
+        Some("curdir")
+    );
     let hits = match_pattern(Language::Python, from3, "from $X import $A, $B, $C, $D").unwrap();
     assert!(hits.is_empty(), "G_from3_ctrl: {hits:?}");
     let hits = match_pattern(Language::Python, from3, "from $X import path, sep").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "F6_from_lit_names: literal names unify: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "F6_from_lit_names: literal names unify: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, from3, "from $X import path, other").unwrap();
     assert!(hits.is_empty(), "literal names byte-match (sg unification)");
     // Paren faces demarcate both ways.
@@ -13469,7 +14982,12 @@ fn f141e_py_import_name_list_faces() {
     let hits = match_pattern(Language::Python, paren2, "from $X import ($A, $B)").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F6_from_paren_ab: {hits:?}");
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("sep"));
-    let hits = match_pattern(Language::Python, "from os import path, sep\n", "from $X import ($A, $B)").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "from os import path, sep\n",
+        "from $X import ($A, $B)",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "F6_from_paren_ab_x_plain_src: {hits:?}");
     let hits = match_pattern(Language::Python, paren2, "from $X import $A, $B").unwrap();
     assert!(hits.is_empty(), "R2_from_plain_x_paren_src: {hits:?}");
@@ -13481,10 +14999,19 @@ fn f141e_py_import_name_list_faces() {
     let hits = match_pattern(Language::Python, star, "from $X import *").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F6_from_star: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("os"));
-    let hits = match_pattern(Language::Python, "from os import path, sep\n", "from $X import *").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "from os import path, sep\n",
+        "from $X import *",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "F6_from_star_x_names: {hits:?}");
     let hits = match_pattern(Language::Python, star, "from $X import $Y").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "R2_from_nameY_x_star_src held: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "R2_from_nameY_x_star_src held: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("*"));
     // Alias face: the FIRST child must be aliased_import.
     let hits = match_pattern(Language::Python, "import o as a, p\n", "import $X as $Y").unwrap();
@@ -13513,17 +15040,40 @@ fn f141e_py_import_name_list_faces() {
 /// keeps its whole-clause law (R3_php_use_function).
 #[test]
 fn f141f_php_use_kind_keywords() {
-    let hits = match_pattern(Language::Php, "<?php\nuse function strlen;\n", "use function $X;").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "F6_php_use_function: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("strlen"));
-    let hits = match_pattern(Language::Php, "<?php\nuse const PHP_EOL;\n", "use const $X;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("strlen")
+    );
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse const PHP_EOL;\n",
+        "use const $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "F6_php_use_const: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("PHP_EOL"));
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("PHP_EOL")
+    );
     let hits = match_pattern(Language::Php, "<?php\nuse App\\Foo;\n", "use function $X;").unwrap();
     assert!(hits.is_empty(), "F6_php_use_function_x_plain: {hits:?}");
     let hits = match_pattern(Language::Php, "<?php\nuse function strlen;\n", "use $X;").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "F6_php_use_plain_x_function held: whole clause: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("function strlen"));
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "F6_php_use_plain_x_function held: whole clause: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("function strlen")
+    );
     assert!(native_pattern_answerable(Language::Php, "use function $X;"));
 }
 
@@ -13535,27 +15085,72 @@ fn f141f_php_use_kind_keywords() {
 #[test]
 fn f141g_ja_method_annotations_and_modifier_order() {
     let annotated = "class A {\n    @Override\n    public synchronized void o() { g(); }\n}\n";
-    let hits = match_pattern(Language::Java, annotated, "@Override\n synchronized void $M() { $B }").unwrap();
+    let hits = match_pattern(
+        Language::Java,
+        annotated,
+        "@Override\n synchronized void $M() { $B }",
+    )
+    .unwrap();
     // sg anchors the hit at the pattern-demanded annotation (the modifiers
     // node start — grid F6_ja_annot_pat: byteOffset 14..65, line 2 1-based).
     assert_eq!(lines_of(&hits), vec![2], "F6_ja_annot_pat: {hits:?}");
     assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("o"));
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("g();"));
     let plain = "class A {\n    public synchronized void o() { g(); }\n}\n";
-    let hits = match_pattern(Language::Java, plain, "@Override\n synchronized void $M() { $B }").unwrap();
-    assert!(hits.is_empty(), "F6_ja_annot_pat_x_noannot: the demand refuses: {hits:?}");
+    let hits = match_pattern(
+        Language::Java,
+        plain,
+        "@Override\n synchronized void $M() { $B }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "F6_ja_annot_pat_x_noannot: the demand refuses: {hits:?}"
+    );
     // `synchronized` anywhere in the run; the in-order demand governs.
     let sync_static = "class A {\n    synchronized static void m() { g(); }\n}\n";
-    let hits = match_pattern(Language::Java, sync_static, "synchronized static void $M() { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "R2_ja_syncstatic_patorder_cand (sg start line 1 0-based): {hits:?}");
+    let hits = match_pattern(
+        Language::Java,
+        sync_static,
+        "synchronized static void $M() { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "R2_ja_syncstatic_patorder_cand (sg start line 1 0-based): {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("m"));
     let static_sync = "class A {\n    static synchronized void m() { g(); }\n}\n";
-    let hits = match_pattern(Language::Java, static_sync, "synchronized static void $M() { $B }").unwrap();
-    assert!(hits.is_empty(), "F7_ja_syncstatic_pat: out-of-order refuses: {hits:?}");
-    let hits = match_pattern(Language::Java, static_sync, "static synchronized void $M() { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "R2_ja_staticsync_pat_staticfirst held (sg start line 1 0-based): {hits:?}");
-    assert!(native_pattern_answerable(Language::Java, "synchronized static void $M() { $B }"));
-    assert!(native_pattern_answerable(Language::Java, "@Override\n synchronized void $M() { $B }"));
+    let hits = match_pattern(
+        Language::Java,
+        static_sync,
+        "synchronized static void $M() { $B }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "F7_ja_syncstatic_pat: out-of-order refuses: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        static_sync,
+        "static synchronized void $M() { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "R2_ja_staticsync_pat_staticfirst held (sg start line 1 0-based): {hits:?}"
+    );
+    assert!(native_pattern_answerable(
+        Language::Java,
+        "synchronized static void $M() { $B }"
+    ));
+    assert!(native_pattern_answerable(
+        Language::Java,
+        "@Override\n synchronized void $M() { $B }"
+    ));
 }
 
 /// f141h (F6 py row 15, grid F6_py_del_chain*/R2_del_chain*): the py del
@@ -13569,11 +15164,21 @@ fn f141h_py_del_chain_tail_call() {
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("a"));
     assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("c"));
     let hits = match_pattern(Language::Python, "del f(c)\n", "del $A.b($C)").unwrap();
-    assert!(hits.is_empty(), "F6_py_del_chain_x_plain: no attr tail refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "F6_py_del_chain_x_plain: no attr tail refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del a.b(c, d)\n", "del $A.b($C)").unwrap();
-    assert!(hits.is_empty(), "R2_del_chain_2arg: exact-count holds: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "R2_del_chain_2arg: exact-count holds: {hits:?}"
+    );
     let hits = match_pattern(Language::Python, "del a.b(c.d)\n", "del $A.b($C)").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "R2_del_chain_dotted_arg: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "R2_del_chain_dotted_arg: {hits:?}"
+    );
     assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("c.d"));
     assert!(native_pattern_answerable(Language::Python, "del $A.b($C)"));
 }
@@ -13593,7 +15198,10 @@ fn f141i_kt_swift_accepted_empty_siblings() {
     let sw_deinit = "class C {\n    deinit {\n        g()\n    }\n}\n";
     let hits = match_pattern(Language::Swift, sw_deinit, "deinit { $B }").unwrap();
     assert!(hits.is_empty(), "F7_sw_deinit: {hits:?}");
-    assert!(native_pattern_answerable(Language::Kotlin, "companion object { $B }"));
+    assert!(native_pattern_answerable(
+        Language::Kotlin,
+        "companion object { $B }"
+    ));
     assert!(native_pattern_answerable(Language::Kotlin, "init { $B }"));
     assert!(native_pattern_answerable(Language::Swift, "deinit { $B }"));
 }
@@ -13613,9 +15221,11 @@ fn f141j_del_paren_multi_single_element_bind() {
         Some("x"),
         "multi namespace key binds the single inner operand: {hits:?}"
     );
-    assert!(match_pattern(Language::Python, "del (a, b)\n", "del ($$$X)")
-        .unwrap()
-        .is_empty());
+    assert!(
+        match_pattern(Language::Python, "del (a, b)\n", "del ($$$X)")
+            .unwrap()
+            .is_empty()
+    );
     assert!(match_pattern(Language::Python, "del ()\n", "del ($$$X)")
         .unwrap()
         .is_empty());
@@ -13686,45 +15296,144 @@ fn f141k_del_mixed_postfix_meta_list() {
 fn f142a_directive_comment_transparency() {
     let hits = match_pattern(Language::CSharp, "using /* c */ System;\n", "using $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A1: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"));
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System")
+    );
     let hits = match_pattern(Language::CSharp, "using System /* c */;\n", "using $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A2: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"));
-    let hits = match_pattern(Language::CSharp, "using /* multi\nline */ System;\n", "using $N;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System")
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "using /* multi\nline */ System;\n",
+        "using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A3: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "using static /* c */ System.Math;\n", "using static $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static /* c */ System.Math;\n",
+        "using static $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A4: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System.Math"));
-    let hits = match_pattern(Language::CSharp, "global /* c */ using System;\n", "global using $N;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System.Math")
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "global /* c */ using System;\n",
+        "global using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A5: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "global using static /* c */ System.Math;\n", "global using static $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "global using static /* c */ System.Math;\n",
+        "global using static $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A6: {hits:?}");
     // demand-only global: the global candidate binds the plain static pattern too.
-    let hits = match_pattern(Language::CSharp, "global using static /* c */ System.Math;\n", "using static $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "global using static /* c */ System.Math;\n",
+        "using static $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A20: {hits:?}");
     // the alias face binds TRIVIA-FREE lhs/rhs (sg A='M', T='System.Math').
-    let hits = match_pattern(Language::CSharp, "using M /* c */ = System.Math;\n", "using $A = $T;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using M /* c */ = System.Math;\n",
+        "using $A = $T;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "A10: {hits:?}");
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("M"), "A10 capture strips trivia");
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("M"),
+        "A10 capture strips trivia"
+    );
     // php use-kind: comments AFTER the kind keyword are trivia (A7/A16); a
     // comment BEFORE the kind keyword still refuses (A13 — sg n0).
-    let hits = match_pattern(Language::Php, "<?php\nuse function /* c */ strlen;\n", "use function $X;").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function /* c */ strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "A7: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("strlen"));
-    let hits = match_pattern(Language::Php, "<?php\nuse function strlen /* c */;\n", "use function $X;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("strlen")
+    );
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function strlen /* c */;\n",
+        "use function $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "A16: {hits:?}");
-    let hits = match_pattern(Language::Php, "<?php\nuse /* c */ function strlen;\n", "use function $X;").unwrap();
-    assert!(hits.is_empty(), "A13: comment before kind refuses: {hits:?}");
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse /* c */ function strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "A13: comment before kind refuses: {hits:?}"
+    );
     // Pattern-side comment faces: sg ACCEPTS the pattern and binds NOTHING.
     let accepted_empty: &[(&str, Language, &str, &str)] = &[
-        ("using /* c */ $N;", Language::CSharp, "using System;\n", "A21"),
-        ("using static /* c */ $N;", Language::CSharp, "using static System.Math;\n", "A22"),
-        ("global /* c */ using $N;", Language::CSharp, "global using System.IO;\n", "I1"),
-        ("using $A = /* c */ $T;", Language::CSharp, "using M = System.Math;\n", "I4"),
-        ("use function /* c */ $X;", Language::Php, "<?php\nuse function strlen;\n", "A23"),
-        ("use const /* c */ $X;", Language::Php, "<?php\nuse const X;\n", "I8"),
+        (
+            "using /* c */ $N;",
+            Language::CSharp,
+            "using System;\n",
+            "A21",
+        ),
+        (
+            "using static /* c */ $N;",
+            Language::CSharp,
+            "using static System.Math;\n",
+            "A22",
+        ),
+        (
+            "global /* c */ using $N;",
+            Language::CSharp,
+            "global using System.IO;\n",
+            "I1",
+        ),
+        (
+            "using $A = /* c */ $T;",
+            Language::CSharp,
+            "using M = System.Math;\n",
+            "I4",
+        ),
+        (
+            "use function /* c */ $X;",
+            Language::Php,
+            "<?php\nuse function strlen;\n",
+            "A23",
+        ),
+        (
+            "use const /* c */ $X;",
+            Language::Php,
+            "<?php\nuse const X;\n",
+            "I8",
+        ),
         ("use /* c */ $X;", Language::Php, "<?php\nuse Name;\n", "I3"),
-        ("import /* c */ $X;", Language::Java, "import java.util.List;\n", "I2"),
+        (
+            "import /* c */ $X;",
+            Language::Java,
+            "import java.util.List;\n",
+            "I2",
+        ),
     ];
     for (pattern, lang, cand, tag) in accepted_empty {
         assert!(
@@ -13742,27 +15451,62 @@ fn f142a_directive_comment_transparency() {
 #[test]
 fn f142b_global_qualified_literal_single_emit() {
     for (cand, pattern, tag) in [
-        ("using static global::System.Math;\n", "using static global::System.Math;", "B1"),
-        ("using static global::A.B;\n", "using static global::A.B;", "B2"),
+        (
+            "using static global::System.Math;\n",
+            "using static global::System.Math;",
+            "B1",
+        ),
+        (
+            "using static global::A.B;\n",
+            "using static global::A.B;",
+            "B2",
+        ),
         ("using M = global::S;\n", "using M = global::S;", "B3"),
-        ("using global::System.Math;\n", "using global::System.Math;", "B4"),
+        (
+            "using global::System.Math;\n",
+            "using global::System.Math;",
+            "B4",
+        ),
         ("using System::Math;\n", "using System::Math;", "B14"),
     ] {
         let hits = match_pattern(Language::CSharp, cand, pattern).unwrap();
         assert_eq!(hits.len(), 1, "{tag}: exactly one hit: {hits:?}");
-        assert_eq!(hits[0].byte_end, cand.len() - 1, "{tag}: span ends at the ';'");
+        assert_eq!(
+            hits[0].byte_end,
+            cand.len() - 1,
+            "{tag}: span ends at the ';'"
+        );
     }
     // followed-by-decl control: n1 unchanged (B5)
-    let hits = match_pattern(Language::CSharp, "using static global::System.Math;\nclass C {}\n", "using static global::System.Math;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static global::System.Math;\nclass C {}\n",
+        "using static global::System.Math;",
+    )
+    .unwrap();
     assert_eq!(hits.len(), 1, "B5: {hits:?}");
     // the alias qualified-meta face binds T AFTER the qualifier (I7: T='S')
-    let hits = match_pattern(Language::CSharp, "using M = global::S;\n", "using $A = global::$T;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using M = global::S;\n",
+        "using $A = global::$T;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "I7: {hits:?}");
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("M"));
     assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("S"));
     // meta-target controls hold (B7/B8/B9 — the 141 fix).
-    let hits = match_pattern(Language::CSharp, "using static global::System.Math;\n", "using static $N;").unwrap();
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("global::System.Math"), "B7");
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static global::System.Math;\n",
+        "using static $N;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("global::System.Math"),
+        "B7"
+    );
 }
 
 /// f142c (142B-F1, grids C_*): the pattern-side cs demarcation trivia gate
@@ -13800,17 +15544,36 @@ fn f142c_pattern_side_trivia_class() {
         native_pattern_answerable(Language::CSharp, "using\u{2028}$A = $T;"),
         "census C8"
     );
-    let hits = match_pattern(Language::CSharp, "using Point = (int, int);\n", "using\u{2028}$A = $T;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using Point = (int, int);\n",
+        "using\u{2028}$A = $T;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "C8 walk empty: {hits:?}");
     assert!(
         native_pattern_answerable(Language::CSharp, "using\u{2028}static $N;"),
         "census C13"
     );
-    let hits = match_pattern(Language::CSharp, "using static System.Math;\n", "using\u{2028}static $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static System.Math;\n",
+        "using\u{2028}static $N;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "C13 walk empty: {hits:?}");
     let hits = match_pattern(Language::CSharp, "using System.Text;\n", "using\u{FEFF}$N;").unwrap();
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System.Text"), "C9");
-    let hits = match_pattern(Language::CSharp, "global using System;\n", "global\u{FEFF}using $N;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System.Text"),
+        "C9"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "global using System;\n",
+        "global\u{FEFF}using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "C12");
     let hits = match_pattern(Language::CSharp, "using System.Text;\n", "using\u{00A0}$N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "C10 NBSP control");
@@ -13826,15 +15589,34 @@ fn f142c_pattern_side_trivia_class() {
 fn f142d_del_double_paren_law_pin() {
     let hits = match_pattern(Language::Python, "del ((a, b))\n", "del ($$$X)").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "D1: {hits:?}");
-    assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("(a, b)"), "D1 X = the tuple text ($$$ multi-key encoding of record)");
+    assert_eq!(
+        hits[0].captures.get("$$$X").map(String::as_str),
+        Some("(a, b)"),
+        "D1 X = the tuple text ($$$ multi-key encoding of record)"
+    );
     let hits = match_pattern(Language::Python, "del ((a))\n", "del ($$$X)").unwrap();
-    assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("(a)"), "D2");
+    assert_eq!(
+        hits[0].captures.get("$$$X").map(String::as_str),
+        Some("(a)"),
+        "D2"
+    );
     let hits = match_pattern(Language::Python, "del ((a, b))\n", "del ($X)").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("(a, b)"), "D4");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("(a, b)"),
+        "D4"
+    );
     let hits = match_pattern(Language::Python, "del (x)\n", "del ($$$X)").unwrap();
-    assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("x"), "D6 control");
+    assert_eq!(
+        hits[0].captures.get("$$$X").map(String::as_str),
+        Some("x"),
+        "D6 control"
+    );
     let hits = match_pattern(Language::Python, "del (a, b)\n", "del ($$$X)").unwrap();
-    assert!(hits.is_empty(), "D7: the bare-tuple >=2 law holds: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "D7: the bare-tuple >=2 law holds: {hits:?}"
+    );
 }
 
 /// f142e (142A-F3 rs roots, grids E1-E4/H21-H22): `mod $N { $B }` binds
@@ -13843,25 +15625,53 @@ fn f142d_del_double_paren_law_pin() {
 /// `extern crate $N;` binds the crate name.
 #[test]
 fn f142e_rs_mod_and_extern_roots() {
-    let hits = match_pattern(Language::Rust, "mod inner {\n    pub fn f() {}\n}\n", "mod $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::Rust,
+        "mod inner {\n    pub fn f() {}\n}\n",
+        "mod $N { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E1: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("inner"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("pub fn f() {}"));
-    let hits = match_pattern(Language::Rust, "mod inner {\n    pub fn f() {}\n    pub fn g() {}\n}\n", "mod $N { $B }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("pub fn f() {}")
+    );
+    let hits = match_pattern(
+        Language::Rust,
+        "mod inner {\n    pub fn f() {}\n    pub fn g() {}\n}\n",
+        "mod $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "E2: single-exact body law: {hits:?}");
     let hits = match_pattern(Language::Rust, "mod inner;\n", "mod $N { $B }").unwrap();
     assert!(hits.is_empty(), "E3: bodyless candidate refuses: {hits:?}");
-    let hits = match_pattern(Language::Rust, "mod inner {\n    pub fn f() {}\n}\n", "mod inner { $B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("pub fn f() {}"), "H21 literal name");
+    let hits = match_pattern(
+        Language::Rust,
+        "mod inner {\n    pub fn f() {}\n}\n",
+        "mod inner { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("pub fn f() {}"),
+        "H21 literal name"
+    );
     let hits = match_pattern(Language::Rust, "fn f() {}\n", "mod $N { $B }").unwrap();
     assert!(hits.is_empty(), "H22: kind gate: {hits:?}");
     for pattern in ["mod $N { $B }", "mod inner { $B }"] {
-        assert!(native_pattern_answerable(Language::Rust, pattern), "census: {pattern}");
+        assert!(
+            native_pattern_answerable(Language::Rust, pattern),
+            "census: {pattern}"
+        );
     }
     let hits = match_pattern(Language::Rust, "extern crate alloc;\n", "extern crate $N;").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E4: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("alloc"));
-    assert!(native_pattern_answerable(Language::Rust, "extern crate $N;"), "census E4");
+    assert!(
+        native_pattern_answerable(Language::Rust, "extern crate $N;"),
+        "census E4"
+    );
 }
 
 /// f142f (142A-F3 go/rb roots, grids E5-E7/E14/H19-H20/H25-H26): go
@@ -13869,33 +15679,89 @@ fn f142e_rs_mod_and_extern_roots() {
 /// `module $N\n  $B\nend` binds the trimmed body; kind gates hold.
 #[test]
 fn f142f_go_type_and_rb_module_roots() {
-    let hits = match_pattern(Language::Go, "package main\n\ntype MyInt int\n", "type $N $T").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package main\n\ntype MyInt int\n",
+        "type $N $T",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "E5: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("MyInt"));
     assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int"));
-    let hits = match_pattern(Language::Go, "package main\n\ntype P struct {\n\tX int\n}\n", "type $N $T").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("struct {\n\tX int\n}"), "E6");
+    let hits = match_pattern(
+        Language::Go,
+        "package main\n\ntype P struct {\n\tX int\n}\n",
+        "type $N $T",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("struct {\n\tX int\n}"),
+        "E6"
+    );
     let hits = match_pattern(Language::Go, "package main\n\nvar x int\n", "type $N $T").unwrap();
     assert!(hits.is_empty(), "H26: kind gate: {hits:?}");
-    let hits = match_pattern(Language::Go, "package main\n\ntype MyInt int\n", "type MyInt $T").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int"), "H25 literal name");
-    assert!(native_pattern_answerable(Language::Go, "type $N $T"), "census E5");
+    let hits = match_pattern(
+        Language::Go,
+        "package main\n\ntype MyInt int\n",
+        "type MyInt $T",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("int"),
+        "H25 literal name"
+    );
+    assert!(
+        native_pattern_answerable(Language::Go, "type $N $T"),
+        "census E5"
+    );
     // the `;`-ful spelling is sg RC8 — both loud (E13): the census must stay loud.
     assert!(
         !native_pattern_answerable(Language::Go, "type $N $T;"),
         "census E13: the ; spelling stays fail-closed"
     );
-    let hits = match_pattern(Language::Ruby, "module M\n  def f\n    1\n  end\nend\n", "module $N\n  $B\nend").unwrap();
+    let hits = match_pattern(
+        Language::Ruby,
+        "module M\n  def f\n    1\n  end\nend\n",
+        "module $N\n  $B\nend",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E7: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("M"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("def f\n    1\n  end"));
-    let hits = match_pattern(Language::Ruby, "module M\n  def f\n    1\n  end\n  def g\n    2\n  end\nend\n", "module $N\n  $B\nend").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("def f\n    1\n  end\n  def g\n    2\n  end"), "E14 whole-body law");
-    let hits = match_pattern(Language::Ruby, "module M\n  def f\n    1\n  end\nend\n", "module M\n  $B\nend").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("def f\n    1\n  end")
+    );
+    let hits = match_pattern(
+        Language::Ruby,
+        "module M\n  def f\n    1\n  end\n  def g\n    2\n  end\nend\n",
+        "module $N\n  $B\nend",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("def f\n    1\n  end\n  def g\n    2\n  end"),
+        "E14 whole-body law"
+    );
+    let hits = match_pattern(
+        Language::Ruby,
+        "module M\n  def f\n    1\n  end\nend\n",
+        "module M\n  $B\nend",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "H19 literal name");
-    let hits = match_pattern(Language::Ruby, "class C\n  def f\n    1\n  end\nend\n", "module $N\n  $B\nend").unwrap();
+    let hits = match_pattern(
+        Language::Ruby,
+        "class C\n  def f\n    1\n  end\nend\n",
+        "module $N\n  $B\nend",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "H20: kind gate: {hits:?}");
-    assert!(native_pattern_answerable(Language::Ruby, "module $N\n  $B\nend"), "census E7");
+    assert!(
+        native_pattern_answerable(Language::Ruby, "module $N\n  $B\nend"),
+        "census E7"
+    );
 }
 
 /// f142g (142A-F3 ts roots, grids E10-E11/H23-H24 + E10b): `declare module
@@ -13903,22 +15769,63 @@ fn f142f_go_type_and_rb_module_roots() {
 /// quotes); `declare const $X: $T;` binds the declarator; `let` refuses.
 #[test]
 fn f142g_ts_declare_roots() {
-    let hits = match_pattern(Language::TypeScript, "declare module \"m\" {\n    export const x: number;\n}\n", "declare module $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::TypeScript,
+        "declare module \"m\" {\n    export const x: number;\n}\n",
+        "declare module $N { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E10: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("\"m\""));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("export const x: number;"));
-    let hits = match_pattern(Language::TypeScript, "declare module \"m\" {\n    export const x: number;\n    export const y: number;\n}\n", "declare module $N { $B }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("export const x: number;")
+    );
+    let hits = match_pattern(
+        Language::TypeScript,
+        "declare module \"m\" {\n    export const x: number;\n    export const y: number;\n}\n",
+        "declare module $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "E10b: single-exact body law: {hits:?}");
-    assert!(native_pattern_answerable(Language::TypeScript, "declare module $N { $B }"), "census E10");
-    let hits = match_pattern(Language::TypeScript, "declare const x: number;\n", "declare const $X: $T;").unwrap();
+    assert!(
+        native_pattern_answerable(Language::TypeScript, "declare module $N { $B }"),
+        "census E10"
+    );
+    let hits = match_pattern(
+        Language::TypeScript,
+        "declare const x: number;\n",
+        "declare const $X: $T;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E11: {hits:?}");
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("x"));
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("number"));
-    let hits = match_pattern(Language::TypeScript, "declare let x: number;\n", "declare const $X: $T;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("number")
+    );
+    let hits = match_pattern(
+        Language::TypeScript,
+        "declare let x: number;\n",
+        "declare const $X: $T;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "H23: const kind demanded: {hits:?}");
-    let hits = match_pattern(Language::TypeScript, "declare const x: number;\n", "declare const x: $T;").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("number"), "H24 literal name");
-    assert!(native_pattern_answerable(Language::TypeScript, "declare const $X: $T;"), "census E11");
+    let hits = match_pattern(
+        Language::TypeScript,
+        "declare const x: number;\n",
+        "declare const x: $T;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("number"),
+        "H24 literal name"
+    );
+    assert!(
+        native_pattern_answerable(Language::TypeScript, "declare const $X: $T;"),
+        "census E11"
+    );
 }
 
 /// f142h (142A-F3 py async root, grids E8/E8b/E8c/H16-H18 + E9 control):
@@ -13927,29 +15834,90 @@ fn f142g_ts_declare_roots() {
 /// spelling keeps its existing answering route (E9 control).
 #[test]
 fn f142h_py_async_def_root() {
-    let hits = match_pattern(Language::Python, "async def fetch(url):\n    return 1\n", "async def $N($$P):\n    $$B").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url):\n    return 1\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "E8: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("fetch"));
     assert_eq!(hits[0].captures.get("P").map(String::as_str), Some("url"));
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("return 1"));
-    let hits = match_pattern(Language::Python, "async def fetch(url):\n    return 1\n    return 2\n", "async def $N($$P):\n    $$B").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("return 1\n    return 2"), "E8b whole-body law");
-    let hits = match_pattern(Language::Python, "async def fetch(url, opt):\n    return 1\n", "async def $N($$P):\n    $$B").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("return 1")
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url):\n    return 1\n    return 2\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("return 1\n    return 2"),
+        "E8b whole-body law"
+    );
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url, opt):\n    return 1\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "E8c: param-exact law: {hits:?}");
-    let hits = match_pattern(Language::Python, "async def f():\n    return 1\n", "async def $N($$P):\n    $$B").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "async def f():\n    return 1\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "H16: 0-param refuses: {hits:?}");
-    let hits = match_pattern(Language::Python, "async def fetch(url):\n    return 1\n", "async def fetch($$P):\n    $$B").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url):\n    return 1\n",
+        "async def fetch($$P):\n    $$B",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "H17 literal name");
-    let hits = match_pattern(Language::Python, "async def fetch(url):\n    pass\n", "async def $N($$P):\n    $$B").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("pass"), "H18");
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url):\n    pass\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("pass"),
+        "H18"
+    );
     // the sync def candidate lacks the `async` token — the async face
     // refuses it (sg structural keyword alignment, E-face family).
-    let hits = match_pattern(Language::Python, "def fetch(url):\n    return 1\n", "async def $N($$P):\n    $$B").unwrap();
-    assert!(hits.is_empty(), "H19: sync def refuses async face: {hits:?}");
+    let hits = match_pattern(
+        Language::Python,
+        "def fetch(url):\n    return 1\n",
+        "async def $N($$P):\n    $$B",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "H19: sync def refuses async face: {hits:?}"
+    );
     // the single-$ spelling keeps its pre-existing answering route (E9).
-    let hits = match_pattern(Language::Python, "async def fetch(url):\n    return 1\n", "async def $N($P):\n    $B").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "E9 control: single-$ face unchanged");
-    assert!(native_pattern_answerable(Language::Python, "async def $N($$P):\n    $$B"), "census E8");
+    let hits = match_pattern(
+        Language::Python,
+        "async def fetch(url):\n    return 1\n",
+        "async def $N($P):\n    $B",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "E9 control: single-$ face unchanged"
+    );
+    assert!(
+        native_pattern_answerable(Language::Python, "async def $N($$P):\n    $$B"),
+        "census E8"
+    );
 }
 
 /// f142i (142A-F5 ja enum — grids G3/G10b/G11/G14-G17/H1-H3/J3/K3/K4/K6):
@@ -13964,26 +15932,84 @@ fn f142i_ja_enum_lane() {
     assert_eq!(lines_of(&hits), vec![1], "J3: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("C"));
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("RED"));
-    let hits = match_pattern(Language::Java, "enum Color {\n    RED\n}\n", "enum Color { $B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("RED"), "G10b literal name");
+    let hits = match_pattern(
+        Language::Java,
+        "enum Color {\n    RED\n}\n",
+        "enum Color { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("RED"),
+        "G10b literal name"
+    );
     let hits = match_pattern(Language::Java, bare, "enum $N { RED }").unwrap();
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("C"), "G16 literal body");
-    let hits = match_pattern(Language::Java, "enum Color {\n    BLUE\n}\n", "enum $N { RED }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("C"),
+        "G16 literal body"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        "enum Color {\n    BLUE\n}\n",
+        "enum $N { RED }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "H3 literal-body mismatch: {hits:?}");
-    let hits = match_pattern(Language::Java, "enum C {\n    RED, GREEN\n}\n", "enum $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::Java,
+        "enum C {\n    RED, GREEN\n}\n",
+        "enum $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "K3: single-member law: {hits:?}");
-    let hits = match_pattern(Language::Java, "enum Color {\n    RED, GREEN;\n    void f() {}\n}\n", "enum $N { $B }").unwrap();
-    assert!(hits.is_empty(), "G3: modifier+multi candidate refuses: {hits:?}");
-    let hits = match_pattern(Language::Java, "enum Color {\n    void f() {}\n}\n", "enum Color { $B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("void f() {}"), "G17 method member");
+    let hits = match_pattern(
+        Language::Java,
+        "enum Color {\n    RED, GREEN;\n    void f() {}\n}\n",
+        "enum $N { $B }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "G3: modifier+multi candidate refuses: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        "enum Color {\n    void f() {}\n}\n",
+        "enum Color { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("void f() {}"),
+        "G17 method member"
+    );
     let hits = match_pattern(Language::Java, "enum C { }\n", "enum $N { }").unwrap();
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("C"), "K4 empty-body pattern binds empty candidate");
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("C"),
+        "K4 empty-body pattern binds empty candidate"
+    );
     let hits = match_pattern(Language::Java, "enum C {\n    RED\n}\n", "enum $N { }").unwrap();
-    assert!(hits.is_empty(), "G11 empty-body pattern vs member candidate: {hits:?}");
-    let hits = match_pattern(Language::Java, "class C { void f() {} }\n", "enum $N { $B }").unwrap();
+    assert!(
+        hits.is_empty(),
+        "G11 empty-body pattern vs member candidate: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Java,
+        "class C { void f() {} }\n",
+        "enum $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "K6: kind gate: {hits:?}");
-    assert!(native_pattern_answerable(Language::Java, "enum $N { $B }"), "census J3");
-    assert!(native_pattern_answerable(Language::Java, "enum $N { }"), "census K4");
+    assert!(
+        native_pattern_answerable(Language::Java, "enum $N { $B }"),
+        "census J3"
+    );
+    assert!(
+        native_pattern_answerable(Language::Java, "enum $N { }"),
+        "census K4"
+    );
 }
 
 /// f142j (142A-F5 cs record/struct — grids G4-G6/J1-J2/J6-J8/K1-K2/K5/K7-K8):
@@ -13996,31 +16022,88 @@ fn f142j_cs_record_struct_lane() {
     assert_eq!(lines_of(&hits), vec![1], "J1: {hits:?}");
     assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Q"));
     assert_eq!(hits[0].captures.get("P").map(String::as_str), Some("int X"));
-    let hits = match_pattern(Language::CSharp, "record Q(int X, int Y);\n", "record $N($P);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "record Q(int X, int Y);\n",
+        "record $N($P);",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "K2: param-exact law: {hits:?}");
     let hits = match_pattern(Language::CSharp, "record Q();\n", "record $N($P);").unwrap();
     assert!(hits.is_empty(), "K7: 0-param refuses: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "record Q(int X)\n{\n    void F() {}\n}\n", "record $N($P) { $B }").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("void F() {}"), "J6");
-    let hits = match_pattern(Language::CSharp, "public record Point(int X, int Y);\n", "record $N($P);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "record Q(int X)\n{\n    void F() {}\n}\n",
+        "record $N($P) { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("void F() {}"),
+        "J6"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "public record Point(int X, int Y);\n",
+        "record $N($P);",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "G4: modifier candidate refuses: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "record Point(int X);\n", "record Point($P);").unwrap();
-    assert_eq!(hits[0].captures.get("P").map(String::as_str), Some("int X"), "J8 literal name");
-    let hits = match_pattern(Language::CSharp, "struct S {\n    int X;\n}\n", "struct $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "record Point(int X);\n",
+        "record Point($P);",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("P").map(String::as_str),
+        Some("int X"),
+        "J8 literal name"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "struct S {\n    int X;\n}\n",
+        "struct $N { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "J2: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("int X;"));
-    let hits = match_pattern(Language::CSharp, "struct S {\n    int X;\n    int Y;\n}\n", "struct $N { $B }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("int X;")
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "struct S {\n    int X;\n    int Y;\n}\n",
+        "struct $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "K1: single-member law: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "public struct S\n{\n    public int X;\n}\n", "struct $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "public struct S\n{\n    public int X;\n}\n",
+        "struct $N { $B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "G6: modifier candidate refuses: {hits:?}");
     let hits = match_pattern(Language::CSharp, "record Q(int X);\n", "struct $N { $B }").unwrap();
     assert!(hits.is_empty(), "K5: kind gate: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "class C {\n    struct S { int X; }\n}\n", "struct $N { $B }").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C {\n    struct S { int X; }\n}\n",
+        "struct $N { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "K8 nested bind");
     let hits = match_pattern(Language::CSharp, "struct S { }\n", "struct $N { $B }").unwrap();
     assert!(hits.is_empty(), "J9: empty body refuses: {hits:?}");
-    assert!(native_pattern_answerable(Language::CSharp, "record $N($P);"), "census J1");
-    assert!(native_pattern_answerable(Language::CSharp, "struct $N { $B }"), "census J2");
+    assert!(
+        native_pattern_answerable(Language::CSharp, "record $N($P);"),
+        "census J1"
+    );
+    assert!(
+        native_pattern_answerable(Language::CSharp, "struct $N { $B }"),
+        "census J2"
+    );
 }
 
 /// f142k (142A-F5 cs using dotted-meta patterns — grids G1/G2/G8/G9/I6):
@@ -14034,7 +16117,11 @@ fn f142k_using_dotted_meta_accepted_empty() {
         ("using static $N.M;", "using static System.Math;\n", "G2"),
         ("using $A.B;", "using System;\n", "G8"),
         ("global using $A.B;", "global using System.Console;\n", "G9"),
-        ("using static global::$N;", "using static global::System.Math;\n", "I6"),
+        (
+            "using static global::$N;",
+            "using static global::System.Math;\n",
+            "I6",
+        ),
     ] {
         assert!(
             native_pattern_answerable(Language::CSharp, pattern),
@@ -14047,8 +16134,15 @@ fn f142k_using_dotted_meta_accepted_empty() {
     // BINDING face, not accepted-empty — the >=2-segment minimum of the
     // dotted/qualified family is load-bearing (G1's base case).
     let hits = match_pattern(Language::CSharp, "using System;\n", "using $N;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "G0: single-segment path binds: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"));
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "G0: single-segment path binds: {hits:?}"
+    );
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System")
+    );
 }
 
 /// f142l (142A-F4 cs alias rhs faces — grids F1/F4/F7/F8-F10/H4-H5/I7/B9):
@@ -14057,30 +16151,68 @@ fn f142k_using_dotted_meta_accepted_empty() {
 /// keeps its whole-rhs law.
 #[test]
 fn f142l_cs_alias_rhs_faces() {
-    let hits = match_pattern(Language::CSharp, "using Point = (int, int);\n", "using $A = ($T, $U);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using Point = (int, int);\n",
+        "using $A = ($T, $U);",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F1: {hits:?}");
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("Point"));
     assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int"));
     assert_eq!(hits[0].captures.get("U").map(String::as_str), Some("int"));
-    let hits = match_pattern(Language::CSharp, "using Point = ( int, int );\n", "using $A = ($T, $U);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using Point = ( int, int );\n",
+        "using $A = ($T, $U);",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F4 spaced candidate");
-    let hits = match_pattern(Language::CSharp, "using P = (int, int, int);\n", "using $A = ($T, $U);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using P = (int, int, int);\n",
+        "using $A = ($T, $U);",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "F7: count-exact law: {hits:?}");
     let hits = match_pattern(Language::CSharp, "using A = int[];\n", "using $A = $T[];").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "F10: {hits:?}");
     assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int"));
     let hits = match_pattern(Language::CSharp, "using A = int[][];\n", "using $A = $T[];").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int[]"), "H4 recursive suffix");
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("int[]"),
+        "H4 recursive suffix"
+    );
     let hits = match_pattern(Language::CSharp, "using A = int [];\n", "using $A = $T[];").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("int"), "H5 spaced suffix");
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("int"),
+        "H5 spaced suffix"
+    );
     // single-meta whole-rhs law holds (F8 — sg T='(int, int)').
-    let hits = match_pattern(Language::CSharp, "using P = (int, int);\n", "using $A = $T;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using P = (int, int);\n",
+        "using $A = $T;",
+    )
+    .unwrap();
     assert_eq!(hits.len(), 1, "F8 control");
     // meta rhs binds the qualified text whole (B9).
     let hits = match_pattern(Language::CSharp, "using M = global::S;\n", "using $A = $T;").unwrap();
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("global::S"), "B9 control");
-    assert!(native_pattern_answerable(Language::CSharp, "using $A = ($T, $U);"), "census F1");
-    assert!(native_pattern_answerable(Language::CSharp, "using $A = $T[];"), "census F10");
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("global::S"),
+        "B9 control"
+    );
+    assert!(
+        native_pattern_answerable(Language::CSharp, "using $A = ($T, $U);"),
+        "census F1"
+    );
+    assert!(
+        native_pattern_answerable(Language::CSharp, "using $A = $T[];"),
+        "census F10"
+    );
 }
 
 /// f142m (142A-F4 py del slice — grids F3/F6/G7/H11-H15): the subscript
@@ -14095,11 +16227,23 @@ fn f142m_py_del_slice_face() {
     assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"));
     assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("2"));
     let hits = match_pattern(Language::Python, "del d[1:2:3]\n", "del $O[$A:$B]").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("2"), "F6 step absorbed");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("2"),
+        "F6 step absorbed"
+    );
     let hits = match_pattern(Language::Python, "del d[1:9]\n", "del $O[$A:9]").unwrap();
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"), "H11 literal hi");
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("1"),
+        "H11 literal hi"
+    );
     let hits = match_pattern(Language::Python, "del d[1:9]\n", "del $O[1:$B]").unwrap();
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("9"), "H12 literal lo");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("9"),
+        "H12 literal lo"
+    );
     let hits = match_pattern(Language::Python, "del d[:2]\n", "del $O[$A:$B]").unwrap();
     assert!(hits.is_empty(), "H13: missing lower refuses: {hits:?}");
     let hits = match_pattern(Language::Python, "del d[1:]\n", "del $O[$A:$B]").unwrap();
@@ -14107,8 +16251,15 @@ fn f142m_py_del_slice_face() {
     let hits = match_pattern(Language::Python, "del d[k]\n", "del $O[$A:$B]").unwrap();
     assert!(hits.is_empty(), "G7: plain subscript refuses: {hits:?}");
     let hits = match_pattern(Language::Python, "del d[1:2]\n", "del $O[$K]").unwrap();
-    assert_eq!(hits[0].captures.get("K").map(String::as_str), Some("1:2"), "H15 whole-text control");
-    assert!(native_pattern_answerable(Language::Python, "del $O[$A:$B]"), "census F3");
+    assert_eq!(
+        hits[0].captures.get("K").map(String::as_str),
+        Some("1:2"),
+        "H15 whole-text control"
+    );
+    assert!(
+        native_pattern_answerable(Language::Python, "del $O[$A:$B]"),
+        "census F3"
+    );
 }
 
 /// f143a (142E-F1, phase143R grid cs_throw_*): sg's pinned cs grammar skips
@@ -14121,9 +16272,7 @@ fn f142m_py_del_slice_face() {
 /// (`throwfoo`) refuse.
 #[test]
 fn f143a_cs_throw_candidate_gap_bind() {
-    let mk = |gap: &str| {
-        format!("class K {{\n    void M() {{\n        throw{gap};\n    }}\n}}\n")
-    };
+    let mk = |gap: &str| format!("class K {{\n    void M() {{\n        throw{gap};\n    }}\n}}\n");
     // sg bind-set of record (grid cs_throw_*): Unicode White_Space + FEFF
     // (142 class members: controls prove the junk arm) — ALL bind n1.
     for (ch, tag) in [
@@ -14140,7 +16289,11 @@ fn f143a_cs_throw_candidate_gap_bind() {
     ] {
         let cand = mk(ch);
         let hits = match_pattern(Language::CSharp, &cand, "throw;").unwrap();
-        assert_eq!(lines_of(&hits), vec![3], "{tag}: gap {ch:?} must bind: {hits:?}");
+        assert_eq!(
+            lines_of(&hits),
+            vec![3],
+            "{tag}: gap {ch:?} must bind: {hits:?}"
+        );
     }
     // operand control: junk-gap + real operand refuses (sg n0).
     let cand = mk("\u{2028} foo");
@@ -14189,7 +16342,10 @@ fn f143b_cs_using_candidate_gap_bind() {
     )
     .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "S1: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System"));
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System")
+    );
     // glue controls: junk inside the name token refuses (sg n0).
     for (cand, tag) in [
         ("using Sys\u{2028}tem;\nclass K {}\n", "GL28"),
@@ -14234,24 +16390,65 @@ fn f143c_php_use_kind_head_gap_law() {
     ] {
         let hits = match_pattern(Language::Php, &mk(ch), "use function $X;").unwrap();
         assert_eq!(lines_of(&hits), vec![2], "{tag}: {hits:?}");
-        assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("strlen"), "{tag} X");
+        assert_eq!(
+            hits[0].captures.get("X").map(String::as_str),
+            Some("strlen"),
+            "{tag} X"
+        );
     }
     // head gap after `use` itself: FEFF trivia admits (sg php_head_feff n1).
-    let hits = match_pattern(Language::Php, "<?php\nuse\u{FEFF}function strlen;\n", "use function $X;").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse\u{FEFF}function strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "HEAD-FE: {hits:?}");
     // no-gap control refuses (sg php_nogap n0).
     let hits = match_pattern(Language::Php, &mk(""), "use function $X;").unwrap();
     assert!(hits.is_empty(), "NOGAP: {hits:?}");
     // name section: the FIRST token binds; trivia splits it; glue chars are
     // token chars (sg space_glue/internal_feff/two_names captures).
-    let hits = match_pattern(Language::Php, "<?php\nuse function str len;\n", "use function $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("str"), "TWO: {hits:?}");
-    let hits = match_pattern(Language::Php, "<?php\nuse function str\u{FEFF}len;\n", "use function $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("str"), "SPLIT-FE: {hits:?}");
-    let hits = match_pattern(Language::Php, "<?php\nuse function \u{2028}strlen;\n", "use function $X;").unwrap();
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("\u{2028}strlen"), "GLUE-X: {hits:?}");
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function str len;\n",
+        "use function $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("str"),
+        "TWO: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function str\u{FEFF}len;\n",
+        "use function $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("str"),
+        "SPLIT-FE: {hits:?}"
+    );
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function \u{2028}strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("\u{2028}strlen"),
+        "GLUE-X: {hits:?}"
+    );
     // registered raw-head law holds: a comment before the kind refuses (A13).
-    let hits = match_pattern(Language::Php, "<?php\nuse /* c */ function strlen;\n", "use function $X;").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse /* c */ function strlen;\n",
+        "use function $X;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "A13-hold: {hits:?}");
 }
 
@@ -14264,9 +16461,7 @@ fn f143c_php_use_kind_head_gap_law() {
 /// rc1) and glued `returnx` refuses.
 #[test]
 fn f144a_cs_return_semi_gap_bind() {
-    let mk = |gap: &str| {
-        format!("class K {{\n    void M() {{\n        return{gap};\n    }}\n}}\n")
-    };
+    let mk = |gap: &str| format!("class K {{\n    void M() {{\n        return{gap};\n    }}\n}}\n");
     for (ch, tag) in [
         ("\u{2028}", "R28"),
         ("\u{2029}", "R29"),
@@ -14276,7 +16471,11 @@ fn f144a_cs_return_semi_gap_bind() {
         ("\u{0000}", "RNUL"),
     ] {
         let hits = match_pattern(Language::CSharp, &mk(ch), "return;").unwrap();
-        assert_eq!(lines_of(&hits), vec![3], "{tag}: gap {ch:?} must bind: {hits:?}");
+        assert_eq!(
+            lines_of(&hits),
+            vec![3],
+            "{tag}: gap {ch:?} must bind: {hits:?}"
+        );
     }
     // junk RUN and comment transparency (sg n1 on both).
     let hits = match_pattern(Language::CSharp, &mk("\u{2028}\u{2029}"), "return;").unwrap();
@@ -14290,7 +16489,12 @@ fn f144a_cs_return_semi_gap_bind() {
     let hits = match_pattern(Language::CSharp, &mk(" /* c */ 1"), "return;").unwrap();
     assert!(hits.is_empty(), "OP-COMMENT: {hits:?}");
     // glue control refuses; plain control binds.
-    let hits = match_pattern(Language::CSharp, "class K {\n    void M() {\n        returnx;\n    }\n}\n", "return;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class K {\n    void M() {\n        returnx;\n    }\n}\n",
+        "return;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "GLUE: {hits:?}");
     let hits = match_pattern(Language::CSharp, &mk(""), "return;").unwrap();
     assert_eq!(lines_of(&hits), vec![3], "CTRL: {hits:?}");
@@ -14312,7 +16516,12 @@ fn f144b_cs_call_junction_gate() {
         assert!(hits.is_empty(), "{tag}: must refuse: {hits:?}");
     }
     // 2-arg junction comment refuses the same way (J8).
-    let hits = match_pattern(Language::CSharp, "void g() { f /* c */ (a, b); }\n", "f($A, $B);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "void g() { f /* c */ (a, b); }\n",
+        "f($A, $B);",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "J8: {hits:?}");
     // FEFF/NBSP junctions bind (sg n1) — the class of record is
     // is_sg_cs_trivia, NOT the wider candidate gap-junk class.
@@ -14324,7 +16533,11 @@ fn f144b_cs_call_junction_gate() {
     ] {
         let hits = match_pattern(Language::CSharp, cand, "f($A);").unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: must bind: {hits:?}");
-        assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"), "{tag} A");
+        assert_eq!(
+            hits[0].captures.get("A").map(String::as_str),
+            Some("1"),
+            "{tag} A"
+        );
     }
 }
 
@@ -14349,7 +16562,11 @@ fn f144c_cs_using_statement_head_gate() {
     ] {
         let hits = match_pattern(Language::CSharp, cand, "using var s = $E;").unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: must bind: {hits:?}");
-        assert_eq!(hits[0].captures.get("E").map(String::as_str), Some("g()"), "{tag} E");
+        assert_eq!(
+            hits[0].captures.get("E").map(String::as_str),
+            Some("g()"),
+            "{tag} E"
+        );
     }
 }
 
@@ -14372,8 +16589,16 @@ fn f144d_php_namespace_head_gap_law() {
         let hits = match_pattern(Language::Php, &cand, "namespace $N { $$B }").unwrap();
         if bind {
             assert_eq!(lines_of(&hits), vec![2], "{tag}: must bind: {hits:?}");
-            assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("X"), "{tag} N trimmed sg-exact");
-            assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("f();"), "{tag} B");
+            assert_eq!(
+                hits[0].captures.get("N").map(String::as_str),
+                Some("X"),
+                "{tag} N trimmed sg-exact"
+            );
+            assert_eq!(
+                hits[0].captures.get("B").map(String::as_str),
+                Some("f();"),
+                "{tag} B"
+            );
         } else {
             assert!(hits.is_empty(), "{tag}: glue gap must refuse: {hits:?}");
         }
@@ -14387,11 +16612,19 @@ fn f144d_php_namespace_head_gap_law() {
 /// refuses (sg n0: the junk eats into the name token).
 #[test]
 fn f144e_php_kindless_use_head_gap_law() {
-    for (gap, tag) in [("\u{FEFF}", "P1-feff"), ("\u{00A0}", "P2-a0"), ("\u{001A}", "P3-001a")] {
+    for (gap, tag) in [
+        ("\u{FEFF}", "P1-feff"),
+        ("\u{00A0}", "P2-a0"),
+        ("\u{001A}", "P3-001a"),
+    ] {
         let cand = format!("<?php\nuse{gap}MyClass;\n");
         let hits = match_pattern(Language::Php, &cand, "use $X;").unwrap();
         assert_eq!(lines_of(&hits), vec![2], "{tag}: must bind: {hits:?}");
-        assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("MyClass"), "{tag} X");
+        assert_eq!(
+            hits[0].captures.get("X").map(String::as_str),
+            Some("MyClass"),
+            "{tag} X"
+        );
     }
     // glue gap refuses (sg P5 n0); plain binds.
     let hits = match_pattern(Language::Php, "<?php\nuse\u{2028}MyClass;\n", "use $X;").unwrap();
@@ -14418,12 +16651,28 @@ fn f144f_go_type_keyword_gap_gate() {
     }
     for (cand, tag, name) in [
         ("package p\ntype MyInt int\n", "T4-plain", "MyInt"),
-        ("package p\ntype MyInt /* c */ int\n", "T3-pre-tail", "MyInt"),
-        ("package p\n// lead\ntype MyInt int // tail\n", "T5-lead-trail", "MyInt"),
+        (
+            "package p\ntype MyInt /* c */ int\n",
+            "T3-pre-tail",
+            "MyInt",
+        ),
+        (
+            "package p\n// lead\ntype MyInt int // tail\n",
+            "T5-lead-trail",
+            "MyInt",
+        ),
     ] {
         let hits = match_pattern(Language::Go, cand, "type $N $T").unwrap();
-        assert_eq!(lines_of(&hits), vec![if tag == "T5-lead-trail" { 3 } else { 2 }], "{tag}: must bind: {hits:?}");
-        assert_eq!(hits[0].captures.get("N").map(String::as_str), Some(name), "{tag} N");
+        assert_eq!(
+            lines_of(&hits),
+            vec![if tag == "T5-lead-trail" { 3 } else { 2 }],
+            "{tag}: must bind: {hits:?}"
+        );
+        assert_eq!(
+            hits[0].captures.get("N").map(String::as_str),
+            Some(name),
+            "{tag} N"
+        );
     }
 }
 
@@ -14441,18 +16690,45 @@ fn f144g_py_del_slice_colon_comment_bind() {
     ] {
         let hits = match_pattern(Language::Python, cand, "del $O[$A:$B]").unwrap();
         assert_eq!(lines_of(&hits), vec![2], "{tag}: must bind: {hits:?}");
-        assert_eq!(hits[0].captures.get("O").map(String::as_str), Some("d"), "{tag} O");
-        assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"), "{tag} A");
-        assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("2"), "{tag} B");
+        assert_eq!(
+            hits[0].captures.get("O").map(String::as_str),
+            Some("d"),
+            "{tag} O"
+        );
+        assert_eq!(
+            hits[0].captures.get("A").map(String::as_str),
+            Some("1"),
+            "{tag} A"
+        );
+        assert_eq!(
+            hits[0].captures.get("B").map(String::as_str),
+            Some("2"),
+            "{tag} B"
+        );
     }
     // start-bound position refuses (sg rc1; pre-fix this cell already
     // refused — the pin keeps the widened law from over-serving).
-    let hits = match_pattern(Language::Python, "def f(d):\n    del d[ # c\n1:2]\n", "del $O[$A:$B]").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "def f(d):\n    del d[ # c\n1:2]\n",
+        "del $O[$A:$B]",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "D3-start-comment: {hits:?}");
     // controls: pre-`]` comment and the plain slice keep binding.
-    let hits = match_pattern(Language::Python, "def f(d):\n    del d[1:2 # c\n]\n", "del $O[$A:$B]").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "def f(d):\n    del d[1:2 # c\n]\n",
+        "del $O[$A:$B]",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "D4-pre-bracket: {hits:?}");
-    let hits = match_pattern(Language::Python, "def f(d):\n    del d[1:2]\n", "del $O[$A:$B]").unwrap();
+    let hits = match_pattern(
+        Language::Python,
+        "def f(d):\n    del d[1:2]\n",
+        "del $O[$A:$B]",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "D5-plain: {hits:?}");
 }
 
@@ -14464,15 +16740,39 @@ fn f144g_py_del_slice_colon_comment_bind() {
 /// binding.
 #[test]
 fn f144h_go_goto_bare_binds() {
-    let hits = match_pattern(Language::Go, "package p\nfunc f() {\n\tgoto end\nend:\n}\n", "goto $L").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package p\nfunc f() {\n\tgoto end\nend:\n}\n",
+        "goto $L",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "G1: {hits:?}");
-    assert_eq!(hits[0].captures.get("L").map(String::as_str), Some("end"), "G1 L");
-    let hits = match_pattern(Language::Go, "package p\nfunc f() {\n\tgoto a\na:\n\tgoto b\nb:\n}\n", "goto $L").unwrap();
+    assert_eq!(
+        hits[0].captures.get("L").map(String::as_str),
+        Some("end"),
+        "G1 L"
+    );
+    let hits = match_pattern(
+        Language::Go,
+        "package p\nfunc f() {\n\tgoto a\na:\n\tgoto b\nb:\n}\n",
+        "goto $L",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3, 5], "G5-two-sites: {hits:?}");
     // registered sibling postures hold.
-    let hits = match_pattern(Language::Go, "package p\nfunc f() {\n\tgoto end\nend:\n}\n", "goto $L;").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package p\nfunc f() {\n\tgoto end\nend:\n}\n",
+        "goto $L;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "G3 semi-ful accepted-empty: {hits:?}");
-    let hits = match_pattern(Language::Go, "package p\nfunc f() {\n\tfor {\n\t\tbreak outer\n\t}\nouter:\n}\n", "break $L").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package p\nfunc f() {\n\tfor {\n\t\tbreak outer\n\t}\nouter:\n}\n",
+        "break $L",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![4], "G4 break control: {hits:?}");
 }
 
@@ -14516,20 +16816,42 @@ fn f144j_php_mixed_namespace_body_exact_order() {
     )
     .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "M1: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("f();"), "M1 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("f();"),
+        "M1 B"
+    );
     for (cand, tag) in [
-        ("<?php\nnamespace X { f(); const A = 1; }\n", "M2-mixed-order"),
+        (
+            "<?php\nnamespace X { f(); const A = 1; }\n",
+            "M2-mixed-order",
+        ),
         ("<?php\nnamespace X { const A = 1; }\n", "M3-zero-trailing"),
-        ("<?php\nnamespace X { const A = 1; f(); g(); }\n", "M4-two-trailing"),
-        ("<?php\nnamespace X { const A = 2; f(); }\n", "M5-prefix-mismatch"),
+        (
+            "<?php\nnamespace X { const A = 1; f(); g(); }\n",
+            "M4-two-trailing",
+        ),
+        (
+            "<?php\nnamespace X { const A = 2; f(); }\n",
+            "M5-prefix-mismatch",
+        ),
     ] {
         let hits = match_pattern(Language::Php, cand, "namespace X { const A = 1; $$B }").unwrap();
         assert!(hits.is_empty(), "{tag}: must refuse sg-silently: {hits:?}");
     }
     // plain bare-meta control keeps binding (M6).
-    let hits = match_pattern(Language::Php, "<?php\nnamespace X { f(); }\n", "namespace X { $$B }").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nnamespace X { f(); }\n",
+        "namespace X { $$B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "M6-control: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("f();"), "M6 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("f();"),
+        "M6 B"
+    );
 }
 
 /// f144k (143B-F1, phase144R grid Q*): the cs qualified-name INTERNAL
@@ -14557,21 +16879,58 @@ fn f144k_cs_using_internal_gap_bind() {
         );
     }
     // post-dot junk lead segment binds (Q6).
-    let hits = match_pattern(Language::CSharp, "using Sys\u{2028}.tem;\nclass K {}\n", "using $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using Sys\u{2028}.tem;\nclass K {}\n",
+        "using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q6: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Sys\u{2028}.tem"), "Q6 N");
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("Sys\u{2028}.tem"),
+        "Q6 N"
+    );
     // static + global lanes share the law (Q10/Q11).
-    let hits = match_pattern(Language::CSharp, "using static Sys\u{2028}.IO;\nclass K {}\n", "using static $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static Sys\u{2028}.IO;\nclass K {}\n",
+        "using static $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q10-static: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Sys\u{2028}.IO"), "Q10 N");
-    let hits = match_pattern(Language::CSharp, "global using Sys\u{2028}.IO;\nclass K {}\n", "global using $N;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("Sys\u{2028}.IO"),
+        "Q10 N"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "global using Sys\u{2028}.IO;\nclass K {}\n",
+        "global using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q11-global: {hits:?}");
     // glue INSIDE one segment refuses (Q7); clean binds (Q8).
-    let hits = match_pattern(Language::CSharp, "using Sys\u{2028}tem;\nclass K {}\n", "using $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using Sys\u{2028}tem;\nclass K {}\n",
+        "using $N;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "Q7-glue: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "using System.IO;\nclass K {}\n", "using $N;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using System.IO;\nclass K {}\n",
+        "using $N;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q8-clean: {hits:?}");
-    assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("System.IO"), "Q8 N");
+    assert_eq!(
+        hits[0].captures.get("N").map(String::as_str),
+        Some("System.IO"),
+        "Q8 N"
+    );
 }
 
 /// f144l (143B-F2, phase144R grid Q12/Q13): the discriminating ALIAS-lane
@@ -14581,11 +16940,29 @@ fn f144k_cs_using_internal_gap_bind() {
 /// (f144k Q4) the 142-class guard refuses where sg binds.
 #[test]
 fn f144l_cs_using_alias_internal_gap() {
-    let hits = match_pattern(Language::CSharp, "using M\u{2028}= System.IO;\nclass K {}\n", "using $A = $T;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using M\u{2028}= System.IO;\nclass K {}\n",
+        "using $A = $T;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q12: {hits:?}");
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("M"), "Q12 A");
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("System.IO"), "Q12 T");
-    let hits = match_pattern(Language::CSharp, "using M = System\u{2028}.IO;\nclass K {}\n", "using $A = $T;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("M"),
+        "Q12 A"
+    );
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("System.IO"),
+        "Q12 T"
+    );
+    let hits = match_pattern(
+        Language::CSharp,
+        "using M = System\u{2028}.IO;\nclass K {}\n",
+        "using $A = $T;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "Q13: {hits:?}");
     assert_eq!(
         hits[0].captures.get("T").map(String::as_str),
@@ -14611,7 +16988,11 @@ fn f146a_cs_goto_meta_binds_per_site() {
     ] {
         let hits = match_pattern(Language::CSharp, cand, "goto $L;").unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: sg binds n1: {hits:?}");
-        assert_eq!(hits[0].captures.get("L").map(String::as_str), Some("end"), "{tag} L");
+        assert_eq!(
+            hits[0].captures.get("L").map(String::as_str),
+            Some("end"),
+            "{tag} L"
+        );
     }
     let hits = match_pattern(
         Language::CSharp,
@@ -14620,7 +17001,11 @@ fn f146a_cs_goto_meta_binds_per_site() {
     )
     .unwrap();
     assert_eq!(hits.len(), 2, "a6: per-site n2");
-    assert_eq!(hits[1].captures.get("L").map(String::as_str), Some("other"), "a6 L2");
+    assert_eq!(
+        hits[1].captures.get("L").map(String::as_str),
+        Some("other"),
+        "a6 L2"
+    );
 }
 
 /// f146b (145A-F2, grid b*): cs `new $T($A);` binds the one-argument
@@ -14628,24 +17013,70 @@ fn f146a_cs_goto_meta_binds_per_site() {
 /// b5 literal type) and refuses nested (b4), zero-arg (b6), two-arg (b7).
 #[test]
 fn f146b_cs_object_creation_binds_one_arg_statement() {
-    let hits = match_pattern(Language::CSharp, "class C { void M() { new T(1); } }", "new $T($A);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C { void M() { new T(1); } }",
+        "new $T($A);",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "b1: {hits:?}");
-    assert_eq!(hits[0].captures.get("T").map(String::as_str), Some("T"), "b1 T");
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"), "b1 A");
+    assert_eq!(
+        hits[0].captures.get("T").map(String::as_str),
+        Some("T"),
+        "b1 T"
+    );
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("1"),
+        "b1 A"
+    );
     for (cand, tag) in [
-        ("class C { void M() { new /* c */ T(1); } }", "b2-comment-junction"),
+        (
+            "class C { void M() { new /* c */ T(1); } }",
+            "b2-comment-junction",
+        ),
         ("class C { void M() { new T(1); } }", "b3-semi-less"),
     ] {
-        let hits = match_pattern(Language::CSharp, cand, if tag == "b3-semi-less" { "new $T($A)" } else { "new $T($A);" }).unwrap();
+        let hits = match_pattern(
+            Language::CSharp,
+            cand,
+            if tag == "b3-semi-less" {
+                "new $T($A)"
+            } else {
+                "new $T($A);"
+            },
+        )
+        .unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: {hits:?}");
     }
-    let hits = match_pattern(Language::CSharp, "class C { void M() { new T(1); } }", "new T($A);").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C { void M() { new T(1); } }",
+        "new T($A);",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "b5 literal type: {hits:?}");
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("1"), "b5 A");
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("1"),
+        "b5 A"
+    );
     for (cand, pattern, tag) in [
-        ("class C { void M() { var x = new T(1); } }", "new $T($A);", "b4-nested"),
-        ("class C { void M() { new T(); } }", "new $T($A);", "b6-zero-arg"),
-        ("class C { void M() { new T(1, 2); } }", "new $T($A);", "b7-two-arg"),
+        (
+            "class C { void M() { var x = new T(1); } }",
+            "new $T($A);",
+            "b4-nested",
+        ),
+        (
+            "class C { void M() { new T(); } }",
+            "new $T($A);",
+            "b6-zero-arg",
+        ),
+        (
+            "class C { void M() { new T(1, 2); } }",
+            "new $T($A);",
+            "b7-two-arg",
+        ),
     ] {
         let hits = match_pattern(Language::CSharp, cand, pattern).unwrap();
         assert!(hits.is_empty(), "{tag}: sg refuses: {hits:?}");
@@ -14660,33 +17091,106 @@ fn f146b_cs_object_creation_binds_one_arg_statement() {
 #[test]
 fn f146c_php_decl_meta_bodies_bind_one_member() {
     for (pattern, cand, n_tag, name, body) in [
-        ("function $N() { $$B }", "<?php\nfunction f() { g(); }", "c1-fn-multi", "f", "g();"),
-        ("class $N { $$B }", "<?php\nclass X { public $y; }", "c4-class-multi", "X", "public $y;"),
-        ("class $N { $B }", "<?php\nclass X { public $y; }", "c7-class-single", "X", "public $y;"),
-        ("trait $N { $$B }", "<?php\ntrait T { public $y; }", "c8-trait", "T", "public $y;"),
-        ("interface $N { $$B }", "<?php\ninterface I { public function f(); }", "c9-interface", "I", "public function f();"),
-        ("class X { $$B }", "<?php\nclass X { public $y; }", "c11-literal-name", "", "public $y;"),
-        ("function f() { $$B }", "<?php\nfunction f() { g(); }", "c12-literal-fn", "", "g();"),
-        ("class $N { const A = 1; $$B }", "<?php\nclass X { const A = 1; public $y; }", "c10-mixed", "X", "public $y;"),
+        (
+            "function $N() { $$B }",
+            "<?php\nfunction f() { g(); }",
+            "c1-fn-multi",
+            "f",
+            "g();",
+        ),
+        (
+            "class $N { $$B }",
+            "<?php\nclass X { public $y; }",
+            "c4-class-multi",
+            "X",
+            "public $y;",
+        ),
+        (
+            "class $N { $B }",
+            "<?php\nclass X { public $y; }",
+            "c7-class-single",
+            "X",
+            "public $y;",
+        ),
+        (
+            "trait $N { $$B }",
+            "<?php\ntrait T { public $y; }",
+            "c8-trait",
+            "T",
+            "public $y;",
+        ),
+        (
+            "interface $N { $$B }",
+            "<?php\ninterface I { public function f(); }",
+            "c9-interface",
+            "I",
+            "public function f();",
+        ),
+        (
+            "class X { $$B }",
+            "<?php\nclass X { public $y; }",
+            "c11-literal-name",
+            "",
+            "public $y;",
+        ),
+        (
+            "function f() { $$B }",
+            "<?php\nfunction f() { g(); }",
+            "c12-literal-fn",
+            "",
+            "g();",
+        ),
+        (
+            "class $N { const A = 1; $$B }",
+            "<?php\nclass X { const A = 1; public $y; }",
+            "c10-mixed",
+            "X",
+            "public $y;",
+        ),
     ] {
         let hits = match_pattern(Language::Php, cand, pattern).unwrap();
         assert_eq!(lines_of(&hits), vec![2], "{n_tag}: sg binds n1: {hits:?}");
         if !name.is_empty() {
-            assert_eq!(hits[0].captures.get("N").map(String::as_str), Some(name), "{n_tag} N");
+            assert_eq!(
+                hits[0].captures.get("N").map(String::as_str),
+                Some(name),
+                "{n_tag} N"
+            );
         }
-        assert_eq!(hits[0].captures.get("B").map(String::as_str), Some(body), "{n_tag} B");
+        assert_eq!(
+            hits[0].captures.get("B").map(String::as_str),
+            Some(body),
+            "{n_tag} B"
+        );
     }
     for (pattern, cand, tag) in [
-        ("function $N() { $$B }", "<?php\nfunction f() { g(); h(); }", "c2-fn-two-stmt"),
-        ("class $N { $$B }", "<?php\nclass X { public $y; public $z; }", "c5-class-two"),
+        (
+            "function $N() { $$B }",
+            "<?php\nfunction f() { g(); h(); }",
+            "c2-fn-two-stmt",
+        ),
+        (
+            "class $N { $$B }",
+            "<?php\nclass X { public $y; public $z; }",
+            "c5-class-two",
+        ),
         ("class $N { $$B }", "<?php\nclass X { }", "c6-class-empty"),
-        ("class $N { $$B }", "<?php\nclass X { const A = 1; public function f() { g(); } }", "c13-class-two"),
+        (
+            "class $N { $$B }",
+            "<?php\nclass X { const A = 1; public function f() { g(); } }",
+            "c13-class-two",
+        ),
     ] {
         let hits = match_pattern(Language::Php, cand, pattern).unwrap();
         assert!(hits.is_empty(), "{tag}: sg refuses: {hits:?}");
     }
     // served control: the function `$B` face keeps its pre-existing route (c3).
-    let hits = match_pattern(Language::Php, "<?php\nfunction f() { g(); }", "function $N() { $B }").unwrap();
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nfunction f() { g(); }",
+        "function $N() { $B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "c3 control: {hits:?}");
 }
 
@@ -14697,15 +17201,30 @@ fn f146c_php_decl_meta_bodies_bind_one_member() {
 #[test]
 fn f146d_cs_switch_statement_binds_one_section() {
     let sw1 = "class C { void M(int x) { switch (x) { case 1: break; } } }";
-    for (pattern, tag) in [("switch ($X) { $$B }", "d1-multi-spelling"), ("switch ($X) { $B }", "d2-single-spelling")] {
+    for (pattern, tag) in [
+        ("switch ($X) { $$B }", "d1-multi-spelling"),
+        ("switch ($X) { $B }", "d2-single-spelling"),
+    ] {
         let hits = match_pattern(Language::CSharp, sw1, pattern).unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: {hits:?}");
-        assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("x"), "{tag} X");
-        assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("case 1: break;"), "{tag} B");
+        assert_eq!(
+            hits[0].captures.get("X").map(String::as_str),
+            Some("x"),
+            "{tag} X"
+        );
+        assert_eq!(
+            hits[0].captures.get("B").map(String::as_str),
+            Some("case 1: break;"),
+            "{tag} B"
+        );
     }
     let hits = match_pattern(Language::CSharp, sw1, "switch (x) { $$B }").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "d6 literal subject: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("case 1: break;"), "d6 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("case 1: break;"),
+        "d6 B"
+    );
     for (cand, tag) in [
         ("class C { void M(int x) { switch (x) { } } }", "d4-empty"),
         ("class C { void M(int x) { switch (x) { case 1: break; case 2: break; default: break; } } }", "d5-three-sections"),
@@ -14730,8 +17249,16 @@ fn f146e_go_switch_package_import_roots_bind() {
     )
     .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "e1: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("x"), "e1 X");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("case 1:\n\t\tg()\n"), "e1 B");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("x"),
+        "e1 X"
+    );
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("case 1:\n\t\tg()\n"),
+        "e1 B"
+    );
     let hits = match_pattern(
         Language::Go,
         "package main\nfunc f(a bool) {\n\tswitch {\n\tcase a:\n\t\tg()\n\t}\n}\nfunc g() {}\n",
@@ -14739,7 +17266,11 @@ fn f146e_go_switch_package_import_roots_bind() {
     )
     .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "e2: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("case a:\n\t\tg()\n"), "e2 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("case a:\n\t\tg()\n"),
+        "e2 B"
+    );
     for (cand, tag) in [
         (
             "package main\nfunc f(x int) {\n\tswitch x {\n\tcase 1:\n\t\tg()\n\tcase 2:\n\t\th()\n\t}\n}\nfunc g() {}\nfunc h() {}\n",
@@ -14760,14 +17291,36 @@ fn f146e_go_switch_package_import_roots_bind() {
     ] {
         let hits = match_pattern(Language::Go, cand, "package $N").unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: {hits:?}");
-        assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("main"), "{tag} N");
+        assert_eq!(
+            hits[0].captures.get("N").map(String::as_str),
+            Some("main"),
+            "{tag} N"
+        );
     }
-    let hits = match_pattern(Language::Go, "package main\nimport \"fmt\"\nfunc f() { fmt.Print() }\n", "import $X").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nimport \"fmt\"\nfunc f() { fmt.Print() }\n",
+        "import $X",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "e8: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("\"fmt\""), "e8 X");
-    let hits = match_pattern(Language::Go, "package main\nimport (\n\t\"a\"\n\t\"b\"\n)\n", "import $X").unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("\"fmt\""),
+        "e8 X"
+    );
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nimport (\n\t\"a\"\n\t\"b\"\n)\n",
+        "import $X",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "e9: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("(\n\t\"a\"\n\t\"b\"\n)"), "e9 X = the whole group");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("(\n\t\"a\"\n\t\"b\"\n)"),
+        "e9 X = the whole group"
+    );
 }
 
 /// f146f (145A-F6, grid e10-e13): go `if $C { $$B }` binds the WHOLE body
@@ -14775,18 +17328,54 @@ fn f146e_go_switch_package_import_roots_bind() {
 /// the literal-cond spelling binds (e13).
 #[test]
 fn f146f_go_if_multi_body_binds_whole_body() {
-    let hits = match_pattern(Language::Go, "package main\nfunc f(x bool) {\n\tif x { g() }\n}\nfunc g() {}\n", "if $C { $$B }").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nfunc f(x bool) {\n\tif x { g() }\n}\nfunc g() {}\n",
+        "if $C { $$B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "e10: {hits:?}");
-    assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("x"), "e10 C");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("g()"), "e10 B");
-    let hits = match_pattern(Language::Go, "package main\nfunc f(x bool) {\n\tif x { g(); h() }\n}\nfunc g() {}\nfunc h() {}\n", "if $C { $$B }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("C").map(String::as_str),
+        Some("x"),
+        "e10 C"
+    );
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("g()"),
+        "e10 B"
+    );
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nfunc f(x bool) {\n\tif x { g(); h() }\n}\nfunc g() {}\nfunc h() {}\n",
+        "if $C { $$B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "e11: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("g(); h()"), "e11 B = the whole body");
-    let hits = match_pattern(Language::Go, "package main\nfunc f(x bool) {\n\tif x { }\n}\n", "if $C { $$B }").unwrap();
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("g(); h()"),
+        "e11 B = the whole body"
+    );
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nfunc f(x bool) {\n\tif x { }\n}\n",
+        "if $C { $$B }",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "e12 empty body refuses: {hits:?}");
-    let hits = match_pattern(Language::Go, "package main\nfunc f(x bool) {\n\tif x { g() }\n}\nfunc g() {}\n", "if x { $$B }").unwrap();
+    let hits = match_pattern(
+        Language::Go,
+        "package main\nfunc f(x bool) {\n\tif x { g() }\n}\nfunc g() {}\n",
+        "if x { $$B }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![3], "e13 literal cond: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("g()"), "e13 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("g()"),
+        "e13 B"
+    );
 }
 
 /// f146g (145A-F7, grid f*): js `$$` arm bodies — the else-if face binds all
@@ -14795,28 +17384,80 @@ fn f146f_go_if_multi_body_binds_whole_body() {
 /// (f6); the single-`$` control keeps its served route (f7).
 #[test]
 fn f146g_js_dollar_dollar_arm_bodies_bind() {
-    let hits = match_pattern(Language::JavaScript, "if (a) { b(); } else if (c) { d(); }", "if ($A) { $$B } else if ($C) { $$D }").unwrap();
+    let hits = match_pattern(
+        Language::JavaScript,
+        "if (a) { b(); } else if (c) { d(); }",
+        "if ($A) { $$B } else if ($C) { $$D }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "f1: {hits:?}");
-    assert_eq!(hits[0].captures.get("A").map(String::as_str), Some("a"), "f1 A");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("b();"), "f1 B");
-    assert_eq!(hits[0].captures.get("C").map(String::as_str), Some("c"), "f1 C");
-    assert_eq!(hits[0].captures.get("D").map(String::as_str), Some("d();"), "f1 D");
+    assert_eq!(
+        hits[0].captures.get("A").map(String::as_str),
+        Some("a"),
+        "f1 A"
+    );
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("b();"),
+        "f1 B"
+    );
+    assert_eq!(
+        hits[0].captures.get("C").map(String::as_str),
+        Some("c"),
+        "f1 C"
+    );
+    assert_eq!(
+        hits[0].captures.get("D").map(String::as_str),
+        Some("d();"),
+        "f1 D"
+    );
     for (cand, tag) in [
-        ("if (a) { b(); c(); } else if (cc) { d(); }", "f2-two-stmt-arm"),
+        (
+            "if (a) { b(); c(); } else if (cc) { d(); }",
+            "f2-two-stmt-arm",
+        ),
         ("if (a) { } else if (c) { }", "f3-empty-arms"),
     ] {
-        let hits = match_pattern(Language::JavaScript, cand, "if ($A) { $$B } else if ($C) { $$D }").unwrap();
+        let hits = match_pattern(
+            Language::JavaScript,
+            cand,
+            "if ($A) { $$B } else if ($C) { $$D }",
+        )
+        .unwrap();
         assert!(hits.is_empty(), "{tag}: sg refuses: {hits:?}");
     }
-    let hits = match_pattern(Language::JavaScript, "if (a) { b(); } else if (c) { d(); } else if (e) { g(); }", "if ($A) { $$B } else if ($C) { $$D }").unwrap();
+    let hits = match_pattern(
+        Language::JavaScript,
+        "if (a) { b(); } else if (c) { d(); } else if (e) { g(); }",
+        "if ($A) { $$B } else if ($C) { $$D }",
+    )
+    .unwrap();
     assert_eq!(hits.len(), 2, "f4: sg emits per level: {hits:?}");
-    let hits = match_pattern(Language::JavaScript, "if (a) { b(); } else { d(); }", "if ($A) { $$B } else { $$D }").unwrap();
+    let hits = match_pattern(
+        Language::JavaScript,
+        "if (a) { b(); } else { d(); }",
+        "if ($A) { $$B } else { $$D }",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "f5 plain else: {hits:?}");
-    assert_eq!(hits[0].captures.get("B").map(String::as_str), Some("b();"), "f5 B");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("b();"),
+        "f5 B"
+    );
     let hits = match_pattern(Language::JavaScript, "if (a) { b(); }", "if ($C) { $$B }").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "f6 plain if: {hits:?}");
-    let hits = match_pattern(Language::JavaScript, "if (a) { b(); } else if (c) { d(); }", "if ($C) { $A } else if ($D) { $B }").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "f7 single-$ control stays served: {hits:?}");
+    let hits = match_pattern(
+        Language::JavaScript,
+        "if (a) { b(); } else if (c) { d(); }",
+        "if ($C) { $A } else if ($D) { $B }",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "f7 single-$ control stays served: {hits:?}"
+    );
 }
 
 /// f146h (145A-F8, grid g*): the go keyword→body junction gate — comments
@@ -14839,13 +17480,29 @@ fn f146h_go_keyword_body_junction_comments_refuse() {
         assert!(hits.is_empty(), "{tag}: sg refuses (rc1): {hits:?}");
     }
     for (cand, pattern, tag) in [
-        ("package main\nfunc main() { go g(1) }\nfunc g(x int) {}\n", "go $F($A)", "g5-clean"),
-        ("package main\nfunc main() { go g(/* c */ 1) }\nfunc g(x int) {}\n", "go $F($A)", "g6-arg-comment"),
-        ("package main\nfunc /* c */ f() { g() }\nfunc g() {}\n", "func $N() { $$B }", "g9-func-control"),
-        ("package main\nfunc main() { defer g(1) }\nfunc g(x int) {}\n", "defer $F($A)", "g10-defer-clean"),
+        (
+            "package main\nfunc main() { go g(1) }\nfunc g(x int) {}\n",
+            "go $F($A)",
+            "g5-clean",
+        ),
+        (
+            "package main\nfunc main() { go g(/* c */ 1) }\nfunc g(x int) {}\n",
+            "go $F($A)",
+            "g6-arg-comment",
+        ),
+        (
+            "package main\nfunc /* c */ f() { g() }\nfunc g() {}\n",
+            "func $N() { $$B }",
+            "g9-func-control",
+        ),
+        (
+            "package main\nfunc main() { defer g(1) }\nfunc g(x int) {}\n",
+            "defer $F($A)",
+            "g10-defer-clean",
+        ),
     ] {
         let hits = match_pattern(Language::Go, cand, pattern).unwrap();
-        assert_eq!(lines_of(&hits), vec![if tag == "g9-func-control" { 2 } else { 2 }], "{tag}: must bind: {hits:?}");
+        assert_eq!(lines_of(&hits), vec![2], "{tag}: must bind: {hits:?}");
     }
 }
 
@@ -14856,24 +17513,45 @@ fn f146h_go_keyword_body_junction_comments_refuse() {
 #[test]
 fn f146i_cs_using_var_head_gate_scoped_to_the_head() {
     for (cand, tag) in [
-        ("class C { void M() { using var /* c */ s = g(); } }", "h1-comment-var-name"),
-        ("class C { void M() { using /* c */ var s = g(); } }", "h2-comment-using-var"),
+        (
+            "class C { void M() { using var /* c */ s = g(); } }",
+            "h1-comment-var-name",
+        ),
+        (
+            "class C { void M() { using /* c */ var s = g(); } }",
+            "h2-comment-using-var",
+        ),
     ] {
         let hits = match_pattern(Language::CSharp, cand, "using var $N = $E;").unwrap();
         assert!(hits.is_empty(), "{tag}: sg refuses (rc1): {hits:?}");
     }
     for (cand, tag) in [
-        ("class C { void M() { using var s /* c */ = g(); } }", "h3-comment-name-eq"),
-        ("class C { void M() { using var s = /* c */ g(); } }", "h4-comment-eq-init"),
+        (
+            "class C { void M() { using var s /* c */ = g(); } }",
+            "h3-comment-name-eq",
+        ),
+        (
+            "class C { void M() { using var s = /* c */ g(); } }",
+            "h4-comment-eq-init",
+        ),
         ("class C { void M() { using var s = g(); } }", "h5-clean"),
     ] {
         let hits = match_pattern(Language::CSharp, cand, "using var $N = $E;").unwrap();
         assert_eq!(lines_of(&hits), vec![1], "{tag}: must bind: {hits:?}");
     }
     // 145B-F2: junk INSIDE the initializer binds sg-exactly (junk retained).
-    let hits = match_pattern(Language::CSharp, "class C { void M() { using var s = g\u{2028}(); } }", "using var $N = $E;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C { void M() { using var s = g\u{2028}(); } }",
+        "using var $N = $E;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "uc-initializer-junk: {hits:?}");
-    assert_eq!(hits[0].captures.get("E").map(String::as_str), Some("g\u{2028}()"), "uc E retains the junk");
+    assert_eq!(
+        hits[0].captures.get("E").map(String::as_str),
+        Some("g\u{2028}()"),
+        "uc E retains the junk"
+    );
 }
 
 /// f146j (145A-F10, grid i*): the cs nested-head seam gate is symmetrical —
@@ -14883,15 +17561,26 @@ fn f146i_cs_using_var_head_gate_scoped_to_the_head() {
 #[test]
 fn f146j_cs_seam_gate_covers_the_pattern_side() {
     let fixd = "class C { void M() { fixed (char* p = s) { checked { *p = 'x'; } } } }";
-    let hits = match_pattern(Language::CSharp, fixd, "fixed ($D) {\u{2028} checked { $B } }").unwrap();
-    assert!(hits.is_empty(), "i1 pattern-side U+2028 seam: sg valid-empty: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        fixd,
+        "fixed ($D) {\u{2028} checked { $B } }",
+    )
+    .unwrap();
+    assert!(
+        hits.is_empty(),
+        "i1 pattern-side U+2028 seam: sg valid-empty: {hits:?}"
+    );
     let hits = match_pattern(
         Language::CSharp,
         "class C { void M() { fixed (char* p = s) {\u{2028} checked { *p = 'x'; } } } }",
         "fixed ($D) { checked { $B } }",
     )
     .unwrap();
-    assert!(hits.is_empty(), "i2 candidate-side control (seam of record): {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "i2 candidate-side control (seam of record): {hits:?}"
+    );
     let hits = match_pattern(Language::CSharp, fixd, "fixed ($D) { checked { $B } }").unwrap();
     assert_eq!(lines_of(&hits), vec![1], "i4 clean control: {hits:?}");
 }
@@ -14902,11 +17591,18 @@ fn f146j_cs_seam_gate_covers_the_pattern_side() {
 #[test]
 fn f146k_php_use_meta_refuses_group_use_candidate() {
     let hits = match_pattern(Language::Php, "<?php\nuse My\\{A, B};", "use $X;").unwrap();
-    assert!(hits.is_empty(), "j1 group-use candidate: sg refuses: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "j1 group-use candidate: sg refuses: {hits:?}"
+    );
     let hits = match_pattern(Language::Php, "<?php\nuse My\\Ns;", "use $X;").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "j4 control: {hits:?}");
     let hits = match_pattern(Language::Php, "<?php\nuse My\\{A, B};", "use My\\{A, B};").unwrap();
-    assert_eq!(lines_of(&hits), vec![2], "j2 literal pattern control: {hits:?}");
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "j2 literal pattern control: {hits:?}"
+    );
 }
 
 /// f146l (145B-F1, the TRUE root): the byte-prefilter literal must never
@@ -14916,8 +17612,8 @@ fn f146k_php_use_meta_refuses_group_use_candidate() {
 #[test]
 fn f146l_required_literal_never_carries_layout() {
     for pattern in ["namespace A { f(); $B }", "namespace A { f(); $$B }"] {
-        let lit = ast_sgrep_lang::required_pattern_literal(pattern)
-            .expect("prefilter literal present");
+        let lit =
+            ast_sgrep_lang::required_pattern_literal(pattern).expect("prefilter literal present");
         assert!(
             !lit.chars().any(char::is_whitespace),
             "{pattern}: literal must be layout-free, got {lit:?}"
@@ -14931,18 +17627,43 @@ fn f146l_required_literal_never_carries_layout() {
 #[test]
 fn f146m_cs_literal_qname_segment_law() {
     for (cand, tag) in [
-        (format!("class C {{ }}\nusing Sys\u{2028}.IO;"), "m1-u2028-boundary"),
-        ("class C { }\nusing Sys /* c */ .IO;".to_string(), "m3-comment-gap"),
+        (
+            "class C { }\nusing Sys\u{2028}.IO;".to_string(),
+            "m1-u2028-boundary",
+        ),
+        (
+            "class C { }\nusing Sys /* c */ .IO;".to_string(),
+            "m3-comment-gap",
+        ),
     ] {
         let hits = match_pattern(Language::CSharp, &cand, "using Sys.IO;").unwrap();
         assert_eq!(lines_of(&hits), vec![2], "{tag}: sg binds n1: {hits:?}");
     }
-    let hits = match_pattern(Language::CSharp, "class C { }\nusing Sy\u{2028}s.IO;", "using Sys.IO;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "class C { }\nusing Sy\u{2028}s.IO;",
+        "using Sys.IO;",
+    )
+    .unwrap();
     assert!(hits.is_empty(), "m2 glue refuses: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "using static Sys\u{2028}.IO;", "using static Sys.IO;").unwrap();
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static Sys\u{2028}.IO;",
+        "using static Sys.IO;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![1], "m6 static lane: {hits:?}");
-    let hits = match_pattern(Language::CSharp, "using static Sys/* c */.IO;", "using static Sys/* c */.IO;").unwrap();
-    assert_eq!(lines_of(&hits), vec![1], "z8 pattern-side comment face: sg binds n1: {hits:?}");
+    let hits = match_pattern(
+        Language::CSharp,
+        "using static Sys/* c */.IO;",
+        "using static Sys/* c */.IO;",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "z8 pattern-side comment face: sg binds n1: {hits:?}"
+    );
 }
 
 /// f146n (145B-F3, grid l*): sg's php use-head gap law admits U+0000 at the
@@ -14953,10 +17674,23 @@ fn f146m_cs_literal_qname_segment_law() {
 fn f146n_php_meta_use_head_admits_nul() {
     let hits = match_pattern(Language::Php, "<?php\nuse\u{0}Foo;", "use $X;").unwrap();
     assert_eq!(lines_of(&hits), vec![2], "l1: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("Foo"), "l1 X stripped");
-    let hits = match_pattern(Language::Php, "<?php\nuse function\u{0}Foo;", "use function $X;").unwrap();
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("Foo"),
+        "l1 X stripped"
+    );
+    let hits = match_pattern(
+        Language::Php,
+        "<?php\nuse function\u{0}Foo;",
+        "use function $X;",
+    )
+    .unwrap();
     assert_eq!(lines_of(&hits), vec![2], "l3 kind-clause: {hits:?}");
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("Foo"), "l3 X stripped");
+    assert_eq!(
+        hits[0].captures.get("X").map(String::as_str),
+        Some("Foo"),
+        "l3 X stripped"
+    );
     let hits = match_pattern(Language::Php, "<?php\nuse\u{0}Foo;", "use Foo;").unwrap();
     assert!(hits.is_empty(), "l4 literal pattern refuses: {hits:?}");
 }
@@ -15011,5 +17745,8 @@ fn f147c_statement_head_newline_seam_law() {
     }
     // The 146E prefilter hypothesis is recorded as disproven at the API:
     // the repro pattern yields NO prefilter literal on any path.
-    assert_eq!(ast_sgrep_lang::required_pattern_literal("return \n$A"), None);
+    assert_eq!(
+        ast_sgrep_lang::required_pattern_literal("return \n$A"),
+        None
+    );
 }

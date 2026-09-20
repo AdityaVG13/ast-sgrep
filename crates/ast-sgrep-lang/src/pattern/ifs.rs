@@ -30,6 +30,9 @@ pub(crate) fn is_trivia_kind(kind: &str) -> bool {
     kind.contains("comment")
 }
 
+// Matcher-lane shape: (lang/node/source/pattern/captures/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_ifs(
     lang: Language,
     node: Node,
@@ -73,14 +76,14 @@ pub(crate) fn walk_ifs(
         && node.is_named()
         && !is_in_comment_or_string(&node)
         && !if_trivia_structural
-        && !cross_grammar_braced_if_refused(lang, node.clone(), pattern, body_braced)
+        && !cross_grammar_braced_if_refused(lang, node, pattern, body_braced)
         && if_body_matches(lang, &node, body, body_braced)
     {
         // The else-tail alignment gates the emission — an else-carrying
         // pattern whose candidate lacks (or mismatches) the tail emits
         // nothing. The descent below continues either way so a refused OUTER
         // candidate still yields its nested if candidates.
-        if_alternative_matches(lang, &node, source, pattern, alternative, &mut |captures| {
+        if_alternative_matches(lang, &node, source, alternative, &mut |captures| {
             emit_if_match(lang, &node, source, pattern, cond, captures, out);
         });
     }
@@ -108,6 +111,7 @@ pub(crate) fn walk_ifs(
 ///   braced/count body grammar; a `$$$`/`$B` meta body binds its text.
 /// * `ElseIf` — the candidate's alternative must itself be an if node whose
 ///   condition and body align, then the nested tail recurses.
+///
 /// The `emit` closure runs ONCE with the extended captures when (and only
 /// when) the whole tail aligned, so the else-if binding lands in one
 /// match row.
@@ -115,7 +119,6 @@ pub(crate) fn if_alternative_matches(
     lang: Language,
     node: &Node,
     source: &str,
-    pattern: &str,
     alternative: Option<&IfAlternative>,
     emit: &mut dyn FnMut(&mut BTreeMap<String, String>),
 ) -> bool {
@@ -127,7 +130,7 @@ pub(crate) fn if_alternative_matches(
         return false;
     };
     let mut captures = BTreeMap::new();
-    if !if_alternative_aligns(lang, spec, &cand_alt, source, pattern, &mut captures) {
+    if !if_alternative_aligns(lang, spec, &cand_alt, source, &mut captures) {
         return false;
     }
     emit(&mut captures);
@@ -143,7 +146,6 @@ pub(crate) fn if_alternative_aligns(
     spec: &IfAlternative,
     cand: &Node,
     source: &str,
-    pattern: &str,
     captures: &mut BTreeMap<String, String>,
 ) -> bool {
     // js/ts/c-style grammars wrap the else tail in an `else_clause` node
@@ -249,7 +251,7 @@ pub(crate) fn if_alternative_aligns(
             match alternative {
                 Some(nested) => match cand.child_by_field_name("alternative") {
                     Some(nested_cand) => {
-                        if_alternative_aligns(lang, nested, &nested_cand, source, pattern, captures)
+                        if_alternative_aligns(lang, nested, &nested_cand, source, captures)
                     }
                     None => false,
                 },

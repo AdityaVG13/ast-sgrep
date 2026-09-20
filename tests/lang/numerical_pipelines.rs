@@ -8,8 +8,8 @@
 //! 1e-5 inline for the 256-lane text self-dot (f32 accumulation band).
 
 use ast_sgrep_embed::{
-    cosine_similarity, dot_similarity, normalize_vec, top_by_similarity,
-    top_k_flat_similarity, top_k_similarity, SemanticLocalEmbedding,
+    cosine_similarity, dot_similarity, normalize_vec, top_by_similarity, top_k_flat_similarity,
+    top_k_similarity, SemanticLocalEmbedding,
 };
 use ast_sgrep_testkit::{lcg_vec, ranked_indices};
 use std::thread;

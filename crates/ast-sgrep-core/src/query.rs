@@ -30,8 +30,7 @@ pub enum QueryMode {
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
-        let (without_scope, path_scope, path_scope_error) =
-            split_in_path_scope(trimmed);
+        let (without_scope, path_scope, path_scope_error) = split_in_path_scope(trimmed);
         let mut parsed = Self::parse_mode(without_scope.trim());
         parsed.path_scope = path_scope;
         parsed.path_scope_error = path_scope_error;
@@ -272,7 +271,8 @@ fn split_in_path_scope(input: &str) -> (String, Option<String>, Option<String>) 
                 copy_from = end;
                 let escape = path.split(['/', '\\']).any(|seg| seg == "..");
                 if path.is_empty() {
-                    scope_error = Some("in: token has no path; scope queries look like `in:src`".into());
+                    scope_error =
+                        Some("in: token has no path; scope queries look like `in:src`".into());
                 } else if escape {
                     scope_error = Some(format!(
                         "in: scope '{path}' escapes the index root: '..' segments are not allowed"

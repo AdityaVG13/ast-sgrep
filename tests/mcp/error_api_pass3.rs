@@ -188,7 +188,10 @@ fn determinism_identical_errors_are_byte_identical_across_sessions() {
     };
     let first = rpc_session_raw(rpc_calls(), Some(temp.path()));
     let second = rpc_session_raw(rpc_calls(), Some(temp.path()));
-    assert_eq!(first, second, "JSON-RPC-error bytes drifted across sessions");
+    assert_eq!(
+        first, second,
+        "JSON-RPC-error bytes drifted across sessions"
+    );
     for line in &first {
         assert_jsonrpc_error(&parse_line(line), -32601);
     }
@@ -403,7 +406,11 @@ fn failclosed_backend_failures_carry_no_partial_payloads() {
         .iter()
         .enumerate()
         .map(|(i, channel)| {
-            tool_call(i as u32 + 1, channel, json!({"query": "target_symbol", "limit": 4}))
+            tool_call(
+                i as u32 + 1,
+                channel,
+                json!({"query": "target_symbol", "limit": 4}),
+            )
         })
         .collect();
     let raw = rpc_session_raw(calls, Some(corrupt.path()));
@@ -422,7 +429,11 @@ fn failclosed_backend_failures_carry_no_partial_payloads() {
     let temp = file_tree();
     std::fs::remove_file(temp.path().join("src").join("lib.rs")).unwrap();
     let gone = rpc_session_raw(
-        vec![tool_call(1, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]}))],
+        vec![tool_call(
+            1,
+            "code_read",
+            json!({"ids": ["src/lib.rs#L1-L1"]}),
+        )],
         Some(temp.path()),
     );
     assert_eq!(gone.len(), 1);

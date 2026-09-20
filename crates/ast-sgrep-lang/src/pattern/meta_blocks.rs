@@ -141,9 +141,7 @@ pub(crate) fn java_synchronized_meta_match(
     // The resource section of the PATTERN binds like the general lane: a
     // meta takes the inner text; any other spelling byte-matches.
     if let Some(meta) = ja_synchronized_resource_meta_name(pattern) {
-        if meta.bind(&mut captures, resource_text.trim()).is_none() {
-            return None;
-        }
+        meta.bind(&mut captures, resource_text.trim())?;
     } else {
         let want = ja_synchronized_resource_literal_text(pattern)?;
         if resource_text.trim() != want {
@@ -162,9 +160,7 @@ pub(crate) fn java_synchronized_meta_match(
         return None;
     };
     let text = node_text(only, source)?;
-    if bind_capture(&mut captures, body_name, text).is_none() {
-        return None;
-    }
+    bind_capture(&mut captures, body_name, text)?;
     Some(hit_for_node(node, source, pattern, captures))
 }
 
@@ -386,9 +382,7 @@ pub(crate) fn php_namespace_block_match(
                 }
             }
             let tail_text = node_text(&members[members.len() - 1], source)?.trim();
-            if tail.bind(&mut captures, tail_text).is_none() {
-                return None;
-            }
+            tail.bind(&mut captures, tail_text)?;
             return Some(hit_for_node(node, source, pattern, captures));
         }
     };
@@ -401,17 +395,13 @@ pub(crate) fn php_namespace_block_match(
         for member in &members {
             texts.push(node_text(member, source)?.trim().to_string());
         }
-        if body_meta.bind(&mut captures, &texts.join("\n")).is_none() {
-            return None;
-        }
+        body_meta.bind(&mut captures, &texts.join("\n"))?;
     } else {
         let [only] = members.as_slice() else {
             return None;
         };
         let text = node_text(only, source)?;
-        if body_meta.bind(&mut captures, text).is_none() {
-            return None;
-        }
+        body_meta.bind(&mut captures, text)?;
     }
     Some(hit_for_node(node, source, pattern, captures))
 }

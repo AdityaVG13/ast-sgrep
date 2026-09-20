@@ -35,11 +35,9 @@ fn general_template_keys_are_pattern_isolated() {
         ret,
         match_pattern(Language::JavaScript, source, "return $X").unwrap()
     );
-    assert!(
-        match_pattern(Language::JavaScript, source, "throw $X")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::JavaScript, source, "throw $X")
+        .unwrap()
+        .is_empty());
 
     // Leg 2 (interleaved patterns): repeat query identical after unrelated
     // literal + structural queries populate other template slots.
@@ -91,11 +89,9 @@ fn general_template_keys_are_pattern_isolated() {
         py_first,
         match_pattern(Language::Python, py_src, "class $NAME").unwrap()
     );
-    assert!(
-        match_pattern(Language::Rust, rust_src, "class $NAME")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_pattern(Language::Rust, rust_src, "class $NAME")
+        .unwrap()
+        .is_empty());
 
     // Leg 5 (repeat-N): 25 uses of general- and literal-lane keys equal 1 use.
     let first = match_pattern(Language::JavaScript, source, "return $X").unwrap();
@@ -127,8 +123,7 @@ fn general_template_keys_are_pattern_isolated() {
 fn literal_keys_are_case_isolated() {
     // Leg 1 (anchor): foo/Foo/FOO keys isolated under reverse order + growth.
     let source = "fn Foo() {}\nfn foo() {}\nfn FOO() {}\n";
-    let query =
-        |pattern: &str| lines(&match_pattern(Language::Rust, source, pattern).unwrap());
+    let query = |pattern: &str| lines(&match_pattern(Language::Rust, source, pattern).unwrap());
     let foo_first = query("foo");
     let big_first = query("Foo");
     let caps_first = query("FOO");
@@ -159,16 +154,15 @@ fn literal_keys_are_case_isolated() {
     assert_eq!(py_first, py_again);
     let _ = match_literal_pattern(Language::Rust, rust_src, "beta").unwrap();
     let _ = match_literal_pattern(Language::Python, py_src, "beta").unwrap();
-    let _ = match_literal_pattern(Language::Go, "package main\nfunc alpha() {}\n", "alpha").unwrap();
+    let _ =
+        match_literal_pattern(Language::Go, "package main\nfunc alpha() {}\n", "alpha").unwrap();
     assert_eq!(
         rust_first,
         match_literal_pattern(Language::Rust, rust_src, "alpha").unwrap()
     );
-    assert!(
-        match_literal_pattern(Language::Python, py_src, "alpha")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(match_literal_pattern(Language::Python, py_src, "alpha")
+        .unwrap()
+        .is_empty());
 
     // Leg 3 (same text, keyed by language): identical pattern text answers
     // per-language correctly under both population orders incl fresh thread.

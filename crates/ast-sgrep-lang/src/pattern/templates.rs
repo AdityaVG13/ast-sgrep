@@ -8,20 +8,21 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock, RwLock};
 use tree_sitter::{Node, Parser, Query};
 
+/// `HEAD?.$TAIL` ends: (head_capture, head_literal, tail_capture, tail_literal).
+type OptionalCallEnds = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// Parse the two-segment optional-chain callee spelling `HEAD?.$TAIL` — the
 /// trailing `?` on the head marks the `?.` connector. Php spells the
 /// nullsafe connector `?->` — the marker rides BETWEEN head and tail
 /// (`$O?->$M`), so it splits there instead. Arbitrary expression heads have
 /// no structural contract here and stay fail-closed; only metavariable and
 /// plain-identifier heads classify.
-pub(crate) fn parse_optional_call_path(
-    callee: &str,
-) -> Option<(
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-)> {
+pub(crate) fn parse_optional_call_path(callee: &str) -> Option<OptionalCallEnds> {
     let (head, tail) = match callee.rsplit_once('.') {
         Some((head, tail)) => (head.strip_suffix('?')?, tail),
         None => callee.rsplit_once("?->")?,
@@ -110,9 +111,7 @@ pub(crate) fn classify_if_template(p: &str) -> Option<NativeKind> {
         // The section close is the paren that BALANCES the leading `(` — a
         // depth scan. A first-`)` slice would truncate any paren-bearing
         // condition (`if (f($X))` would read cond `f($X`).
-        let Some(close) = balanced_paren_close(inner) else {
-            return None;
-        };
+        let close = balanced_paren_close(inner)?;
         (inner[..close].trim(), inner[close + 1..].trim_start())
     } else {
         let end = rest
@@ -127,9 +126,7 @@ pub(crate) fn classify_if_template(p: &str) -> Option<NativeKind> {
     // clauses are unprobed; the suite-text extent is line-ambiguous at the
     // spelling level).
     let (body, body_braced, rest) = if let Some(inner) = after.trim_start().strip_prefix('{') {
-        let Some(close) = balanced_brace_close(inner) else {
-            return None;
-        };
+        let close = balanced_brace_close(inner)?;
         (
             parse_body_section(inner[..close].trim())?,
             true,
@@ -145,10 +142,10 @@ pub(crate) fn classify_if_template(p: &str) -> Option<NativeKind> {
     // the plain else-less spelling.
     let alternative = match rest {
         Some(r) if r.trim().is_empty() => None,
-        Some(r) => match parse_else_tail(r) {
-            Some(alternative) => Some(alternative),
-            None => return None,
-        },
+        Some(r) => {
+            let alternative = parse_else_tail(r)?;
+            Some(alternative)
+        }
         None => None,
     };
     Some(NativeKind::If {
@@ -575,7 +572,7 @@ pub(crate) fn dollar_token_classes(p: &str) -> Vec<DollarTokenClass> {
         {
             name_end += 1;
         }
-        if dollars >= 1 && dollars <= 3 {
+        if (1..=3).contains(&dollars) {
             let name = p.get(name_start..name_end).unwrap_or("");
             let class = match (dollars, dollar_name_class(name)) {
                 (_, None) => None,
@@ -903,7 +900,7 @@ pub(crate) fn call_arg_slots_match(
         match slot {
             ArgSlot::Meta(name) => {
                 let text = node_text(nodes.get(consumed)?, source)?;
-                bind_capture(captures, name, &text)?;
+                bind_capture(captures, name, text)?;
                 consumed += 1;
             }
             ArgSlot::Rest(name) => {
@@ -987,7 +984,7 @@ pub(crate) fn arg_slots_match_from(
         }
         Some((ArgSlot::Meta(name), rest)) => {
             let text = node_text(nodes.first()?, source)?;
-            bind_capture(captures, name, &text)?;
+            bind_capture(captures, name, text)?;
             arg_slots_match_from(rest, &nodes[1..], source, captures, false)
         }
         Some((ArgSlot::Rest(name), rest)) => {

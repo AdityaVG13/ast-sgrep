@@ -82,10 +82,16 @@ fn store_open_fail_closed_matrix() {
         let db = sibling_db(&session, "torn.db");
         {
             let store = IndexStore::open(&root, Some(&db)).unwrap();
-            assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+            assert_eq!(
+                store.on_disk_schema_version().unwrap(),
+                INDEX_SCHEMA_VERSION
+            );
         }
         let full = std::fs::read(&db).unwrap();
-        assert!(full.len() as u64 > TRUNCATED_LEN, "fixture must be truncatable");
+        assert!(
+            full.len() as u64 > TRUNCATED_LEN,
+            "fixture must be truncatable"
+        );
         let torn = full[..TRUNCATED_LEN as usize].to_vec();
         std::fs::write(&db, &torn).unwrap();
         for readonly in [false, true] {
@@ -106,7 +112,9 @@ fn store_open_fail_closed_matrix() {
             "ordinary open must not quarantine: {after:?}"
         );
         assert!(
-            after.iter().all(|n| n != "lexical.db" && n != "semantic.ivf"),
+            after
+                .iter()
+                .all(|n| n != "lexical.db" && n != "semantic.ivf"),
             "failed open must not fabricate derived sidecars: {after:?}"
         );
     }
@@ -121,10 +129,16 @@ fn store_open_fail_closed_matrix() {
             matches!(err, StoreError::Other(_)),
             "empty store must refuse read-only as Other, got {err:?}"
         );
-        assert_eq!(IndexStore::peek_schema_version(&root, Some(&db)).unwrap(), 0);
+        assert_eq!(
+            IndexStore::peek_schema_version(&root, Some(&db)).unwrap(),
+            0
+        );
         assert_eq!(std::fs::metadata(&db).unwrap().len(), 0);
         let store = IndexStore::open(&root, Some(&db)).unwrap();
-        assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            store.on_disk_schema_version().unwrap(),
+            INDEX_SCHEMA_VERSION
+        );
         assert_eq!(store.status().unwrap().file_count, 0);
     }
 
@@ -132,13 +146,19 @@ fn store_open_fail_closed_matrix() {
     {
         let db = temp.join("ghost").join("nested").join("index.db");
         let err = err_of(IndexStore::peek_schema_version(&root, Some(&db)));
-        assert!(matches!(err, StoreError::Other(_)), "missing peek must error as Other, got {err:?}");
+        assert!(
+            matches!(err, StoreError::Other(_)),
+            "missing peek must error as Other, got {err:?}"
+        );
         let err = err_of(IndexStore::open_readonly(&root, Some(&db)));
         assert!(
             matches!(err, StoreError::Other(_)),
             "missing read-only open must error as Other, got {err:?}"
         );
-        assert!(!temp.join("ghost").exists(), "failed opens must not create parent dirs");
+        assert!(
+            !temp.join("ghost").exists(),
+            "failed opens must not create parent dirs"
+        );
         let fresh = temp.join("untouched-root");
         std::fs::create_dir_all(&fresh).unwrap();
         let err = err_of(IndexStore::open_readonly(&fresh, None));
@@ -154,7 +174,8 @@ fn store_open_fail_closed_matrix() {
         let newer = INDEX_SCHEMA_VERSION + 1;
         {
             let conn = rusqlite::Connection::open(&db).unwrap();
-            conn.execute_batch(&format!("PRAGMA user_version = {newer}")).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {newer}"))
+                .unwrap();
         }
         for refused in [
             err_of(IndexStore::open(&root, Some(&db))),
@@ -170,12 +191,12 @@ fn store_open_fail_closed_matrix() {
                 "refusal must carry the structured version pair"
             );
         }
-        let conn = rusqlite::Connection::open_with_flags(
-            &db,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .unwrap();
-        let stamp: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let conn =
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        let stamp: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(stamp, newer);
     }
 
@@ -194,7 +215,10 @@ fn store_open_fail_closed_matrix() {
             matches!(err, StoreError::Other(_)),
             "directory-as-db must fail read-only open as Other, got {err:?}"
         );
-        assert!(home_names(&db).is_empty(), "failed opens must not write into the directory");
+        assert!(
+            home_names(&db).is_empty(),
+            "failed opens must not write into the directory"
+        );
     }
 
     // Facet: searching a missing root fails closed (Other), never creates it.
@@ -205,7 +229,10 @@ fn store_open_fail_closed_matrix() {
             use_embed: false,
             ..SearchOptions::default()
         }));
-        assert!(matches!(err, StoreError::Other(_)), "missing root must fail as Other, got {err:?}");
+        assert!(
+            matches!(err, StoreError::Other(_)),
+            "missing root must fail as Other, got {err:?}"
+        );
         assert!(!missing.exists());
     }
 
@@ -217,7 +244,10 @@ fn store_open_fail_closed_matrix() {
         let store = IndexStore::open(&root, Some(&db)).unwrap();
         assert_eq!(store.db_path(), db);
         assert!(db.is_file());
-        assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            store.on_disk_schema_version().unwrap(),
+            INDEX_SCHEMA_VERSION
+        );
         assert_eq!(store.status().unwrap().file_count, 0);
     }
 
@@ -356,7 +386,9 @@ fn sidecar_refusal_and_publish_matrix() {
         let valid_bytes = std::fs::read(&valid).unwrap();
         assert!(load_semantic_ivf(&valid, fp).unwrap().is_some());
 
-        assert!(load_semantic_ivf(&dir.join("missing.ivf"), fp).unwrap().is_none());
+        assert!(load_semantic_ivf(&dir.join("missing.ivf"), fp)
+            .unwrap()
+            .is_none());
         let empty = dir.join("empty.ivf");
         std::fs::write(&empty, b"").unwrap();
         assert!(load_semantic_ivf(&empty, fp).unwrap().is_none());
@@ -388,7 +420,10 @@ fn sidecar_refusal_and_publish_matrix() {
             let path = dir.join(name);
             let fp = compute_ann_fingerprint(1, 1, 4, Some("test"), 1);
             let err = save_semantic_ivf(&path, fp, dim, flat, &index).unwrap_err();
-            assert!(matches!(err, StoreError::Other(_)), "{name} must reject as Other, got {err:?}");
+            assert!(
+                matches!(err, StoreError::Other(_)),
+                "{name} must reject as Other, got {err:?}"
+            );
             assert!(!path.exists(), "rejected save must not create {name}");
         }
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
@@ -432,7 +467,10 @@ fn sidecar_refusal_and_publish_matrix() {
         std::fs::write(&orphan_tmp, &new_bytes).unwrap();
 
         assert_eq!(
-            load_semantic_ivf(&final_path, old_fp).unwrap().unwrap().vectors,
+            load_semantic_ivf(&final_path, old_fp)
+                .unwrap()
+                .unwrap()
+                .vectors,
             old_vectors,
             "pre-rename crash must still serve exactly the old payload"
         );
@@ -441,7 +479,10 @@ fn sidecar_refusal_and_publish_matrix() {
         std::fs::rename(&orphan_tmp, &final_path).unwrap();
         assert!(load_semantic_ivf(&final_path, old_fp).unwrap().is_none());
         assert_eq!(
-            load_semantic_ivf(&final_path, new_fp).unwrap().unwrap().vectors,
+            load_semantic_ivf(&final_path, new_fp)
+                .unwrap()
+                .unwrap()
+                .vectors,
             new_vectors,
             "post-rename load must serve exactly the new payload"
         );
@@ -513,13 +554,22 @@ fn cold_start_state_serves_as_zero() {
     {
         let stamp_session = isolated_index_session();
         let db = sibling_db(&stamp_session, "home.db");
-        assert_eq!(read_writer_generation(&stamp_session.corpus_root, Some(&db)), 0);
+        assert_eq!(
+            read_writer_generation(&stamp_session.corpus_root, Some(&db)),
+            0
+        );
         let stamp = writer_generation_path(&stamp_session.corpus_root, Some(&db));
         std::fs::create_dir_all(stamp.parent().unwrap()).unwrap();
         std::fs::write(&stamp, b"not-a-number\n").unwrap();
-        assert_eq!(read_writer_generation(&stamp_session.corpus_root, Some(&db)), 0);
+        assert_eq!(
+            read_writer_generation(&stamp_session.corpus_root, Some(&db)),
+            0
+        );
         std::fs::write(&stamp, b"").unwrap();
-        assert_eq!(read_writer_generation(&stamp_session.corpus_root, Some(&db)), 0);
+        assert_eq!(
+            read_writer_generation(&stamp_session.corpus_root, Some(&db)),
+            0
+        );
     }
 }
 
@@ -557,7 +607,6 @@ fn writable_open_refuses_a_second_index_inside_an_indexed_checkout() {
     assert!(explicit.is_file(), "explicit index paths stay allowed");
 }
 
-
 /// INTENT: the one-index rule is scoped to the checkout. An index that merely
 /// lives above the git work tree root (a home dir, a shared scratch tree) is not
 /// this project's and must not block a new project from indexing itself.
@@ -590,4 +639,3 @@ fn only_the_checkout_own_index_blocks_a_second_one() {
     );
     assert!(!nested.join(".asgrep").exists());
 }
-

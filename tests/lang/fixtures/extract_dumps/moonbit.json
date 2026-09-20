@@ -43,6 +43,7 @@
       "line": 20
     }
   ],
+  "depth_truncated": false,
   "imports": [
     {
       "line": 2,

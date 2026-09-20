@@ -50,7 +50,7 @@ const TRIGRAM_LEN: usize = 3;
 const RARE_ENOUGH_DF: i64 = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TrigramShortcut {
+pub enum TrigramShortcut {
     /// Scan the posting intersection of 1–2 rarest needle trigrams. Safety:
     /// only trigrams DERIVED FROM THE NEEDLE are candidates, so poisoned dfs
     /// can change speed, not output. One trigram's postings are a superset of
@@ -71,7 +71,7 @@ struct DfCacheInner {
 
 /// Per-Searcher memoization of trigram document frequencies. Invalidated by
 /// generation bump; never authoritative (all misses fall back).
-pub(crate) struct TrigramDfCache {
+pub struct TrigramDfCache {
     inner: Mutex<DfState>,
 }
 
@@ -88,8 +88,14 @@ struct DfState {
     armed: bool,
 }
 
+impl Default for TrigramDfCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrigramDfCache {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Mutex::new(DfState {
                 cache: DfCacheInner {
@@ -120,14 +126,14 @@ impl TrigramDfCache {
 
     /// Whether a sticky session armed the exact-df path. Cold one-shot
     /// search stays unarmed and uses the static prior instead.
-    pub(crate) fn is_armed(&self) -> bool {
+    pub fn is_armed(&self) -> bool {
         self.inner.lock().map(|state| state.armed).unwrap_or(false)
     }
 
     /// Shortcut decision for scanning `needle`, per the contract on
     /// [`TrigramShortcut`]. Never errors: every uncertain outcome degrades to
     /// [`TrigramShortcut::Full`], preserving pre-lever behavior.
-    pub(crate) fn scan_shortcut(&self, store: &IndexStore, needle: &str) -> TrigramShortcut {
+    pub fn scan_shortcut(&self, store: &IndexStore, needle: &str) -> TrigramShortcut {
         // The trigram tokenizer case-folds; ASCII lowercase folding is exact,
         // but Unicode folding is not reproduced here, so restrict the fast
         // path to pure-ASCII needles where fold identity holds.
@@ -232,7 +238,7 @@ fn refresh_vocab(store: &IndexStore, state: &mut DfState, gen: i64) -> bool {
 }
 
 /// Pick 1–2 rarest trigrams whose smallest df is rare enough to shortcut.
-pub(crate) fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
+pub fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
     if ranked.is_empty() {
         return TrigramShortcut::Full;
     }
@@ -251,7 +257,7 @@ pub(crate) fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
 /// Baked occurrence count for a lowercase ASCII trigram, or 0 when the bake
 /// never saw it. Zero reads as rarest: absent from 10GB of code is the
 /// strongest rarity signal available without a live df lookup.
-fn bake_count(tri: &str) -> u32 {
+pub fn bake_count(tri: &str) -> u32 {
     let bytes = tri.as_bytes();
     if bytes.len() != TRIGRAM_LEN {
         return 0;
@@ -289,7 +295,7 @@ fn pick_static(trigrams: &[&str]) -> TrigramShortcut {
 
 /// Distinct lowercased trigrams, or None when the needle is too short for a
 /// trigram or has too many for the df probe budget.
-fn distinct_trigrams(needle_lower: &str) -> Option<Vec<&str>> {
+pub fn distinct_trigrams(needle_lower: &str) -> Option<Vec<&str>> {
     let bytes = needle_lower.as_bytes();
     if bytes.len() < TRIGRAM_LEN {
         return None;
@@ -320,11 +326,6 @@ fn ensure_vocab_table(store: &IndexStore) -> Result<(), crate::StoreError> {
         .map_err(|e| crate::StoreError::Other(format!("fts5vocab unavailable: {e}")))
 }
 
-/// Fetch a single term's document count. None means "unknown" (lookup or
-/// decode failure) — distinct from a genuine df of 0, which the vocab reports
-/// only as an absent row; callers treat None as fall-back-to-phrase and a 0
-/// as merely the best rarity candidate (never trusted absence).
-
 /// Bulk-load every (term, doc) pair from the ephemeral fts5vocab table.
 /// One ordered pass over the vocabulary per generation replaces O(terms)
 /// linear point-probes; entries then serve HashMap-speed df lookups.
@@ -353,6 +354,10 @@ fn preload_vocab(store: &IndexStore) -> Result<HashMap<String, i64>, crate::Stor
     Ok(map)
 }
 
+/// Fetch a single term's document count. None means "unknown" (lookup or
+/// decode failure) — distinct from a genuine df of 0, which the vocab reports
+/// only as an absent row; callers treat None as fall-back-to-phrase and a 0
+/// as merely the best rarity candidate (never trusted absence).
 fn fetch_one(conn: &rusqlite::Connection, term: &str) -> Option<i64> {
     let sql = format!("SELECT doc FROM {VOCAB_TABLE} WHERE term = ?1");
     let mut stmt = conn.prepare_cached(&sql).ok()?;
@@ -361,64 +366,4 @@ fn fetch_one(conn: &rusqlite::Connection, term: &str) -> Option<i64> {
         .optional()
         .ok()
         .flatten()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ascii_trigram_extraction_dedups_and_bounds() {
-        let tris = distinct_trigrams("process_request").unwrap();
-        // 15 chars -> 13 sliding windows; none repeat.
-        assert_eq!(tris.len(), 13);
-        assert_eq!(tris.first(), Some(&"pro"));
-        assert_eq!(tris.last(), Some(&"est"));
-        assert!(distinct_trigrams("ab").is_none());
-        assert!(distinct_trigrams("").is_none());
-        let long = "x".repeat(40);
-        assert!(distinct_trigrams(&long).is_none(), "over lookup budget");
-    }
-
-    #[test]
-    fn pick_shortcut_ands_two_rarest_when_selective() {
-        let ranked = [(12_i64, "ial"), (80_i64, "cre"), (4000_i64, "den")];
-        match pick_shortcut(&ranked) {
-            TrigramShortcut::Match(terms) => assert_eq!(terms, vec!["ial".to_string(), "cre".to_string()]),
-            other => panic!("expected Match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
-        let ranked = [(3000_i64, "the"), (5000_i64, "and")];
-        assert_eq!(pick_shortcut(&ranked), TrigramShortcut::Full);
-    }
-
-    #[test]
-    fn static_bake_ranks_common_above_rare() {
-        // Triple-space tops every code corpus; 'ion' is common English;
-        // 'zzq' is absent-or-trace in a 10GB bake. Absent reads as 0.
-        let spaces = bake_count("   ");
-        let ion = bake_count("ion");
-        let zzq = bake_count("zzq");
-        assert!(spaces > ion, "triple-space must top the bake");
-        assert!(ion > zzq, "common English must beat rare 'zzq'");
-    }
-
-    #[test]
-    fn unarmed_scan_uses_static_prior() {
-        let store = IndexStore::open_in_memory(std::path::Path::new("mem"))
-            .expect("in-memory store");
-        let cache = TrigramDfCache::new();
-        assert!(!cache.is_armed(), "fresh cache starts unarmed");
-        match cache.scan_shortcut(&store, "zzquux") {
-            TrigramShortcut::Match(terms) => {
-                assert_eq!(terms[0], "zzq", "rarest static trigram leads");
-            }
-            TrigramShortcut::Full => {
-                panic!("cold one-shot must use the static prior, not Full")
-            }
-        }
-    }
 }

@@ -6,9 +6,7 @@
 //! 1e-6 (`approx_eq`) for extreme-magnitude ratios, SIMD-lane symmetry,
 //! self-ceiling, and rescale invariance.
 
-use ast_sgrep_embed::{
-    cosine_similarity, dot_similarity, normalize_vec, top_k_flat_similarity,
-};
+use ast_sgrep_embed::{cosine_similarity, dot_similarity, normalize_vec, top_k_flat_similarity};
 use ast_sgrep_testkit::{approx_eq, lcg_vec};
 
 /// INTENT: cosine_similarity total contract — SIMD lane poisons (no skip) while

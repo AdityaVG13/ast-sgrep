@@ -141,7 +141,7 @@ pub(crate) fn member_chain_segments<'a>(
             let args = argument_nodes(node, &["arguments"]);
             let args_content = argument_container(node, &["arguments"])
                 .and_then(|container| node_text(&container, source))
-                .map(|text| strip_container(&text).to_string());
+                .map(|text| strip_container(text).to_string());
             segs.push(MemberChainSegment {
                 text: node_text(&name, source)?.to_string(),
                 args,
@@ -174,7 +174,7 @@ pub(crate) fn member_chain_segments<'a>(
             let args = argument_nodes(node, &["arguments"]);
             let args_content = argument_container(node, &["arguments"])
                 .and_then(|container| node_text(&container, source))
-                .map(|text| strip_container(&text).to_string());
+                .map(|text| strip_container(text).to_string());
             segs.push(MemberChainSegment {
                 text: node_text(&name, source)?.to_string(),
                 args,
@@ -250,6 +250,9 @@ pub(crate) fn walk_call_chains(
 /// `user?.profile?.load()`, `maybe()` on `maybe()?.load()`, `a.b` on
 /// `a.b?.c()`. Nested chains emit inner+outer rows
 /// (`conn?.open()?.send(1)` answers both calls).
+// Matcher-lane shape: (lang/node/source/pattern/captures/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_optional_calls(
     lang: Language,
     node: Node,
@@ -302,6 +305,9 @@ pub(crate) fn walk_optional_calls(
 /// candidate. `None` when the candidate is not a call, its chain does not
 /// link into the tail through `?.`, or a head/tail spelling (literal or
 /// same-name unification) fails.
+// Matcher-lane shape: (lang/node/source/pattern/captures/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn optional_call_matches(
     lang: Language,
     node: &Node,

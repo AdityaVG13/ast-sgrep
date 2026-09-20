@@ -64,5 +64,12 @@ pub fn ranked_indices(ranked: &[(usize, f32)]) -> Vec<usize> {
 /// span 0..1, `sym`/`ex`) so suites vary only the embedding under test.
 /// Pure constructor.
 pub fn chunk_row(emb: Vec<f32>) -> SemanticChunkRow {
-    ("f.rs".to_string(), 0, 1, "sym".to_string(), "ex".to_string(), emb)
+    (
+        "f.rs".to_string(),
+        0,
+        1,
+        "sym".to_string(),
+        "ex".to_string(),
+        emb,
+    )
 }

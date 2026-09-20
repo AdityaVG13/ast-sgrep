@@ -81,20 +81,23 @@ fn interrupted_batch_atomicity_prefix_and_resume_equals_uninterrupted() {
     let (_temp1, config) = testkit::indexed_codemode_repo(TOKEN);
     let a_rs = config.root.join("src/a.rs");
     let before = std::fs::read_to_string(&a_rs).expect("read before");
-    let request = testkit::batch_request_with_mode(vec![
-        testkit::batch_call("w1", "search", json!({"query": TOKEN, "limit": 5})),
-        testkit::batch_call(
-            "w2",
-            "edit",
-            json!({"edits": [
-                {"path": "src/a.rs",
-                 "oldText": TOKEN, "newText": "needle_mutated_rr_xyz"},
-                {"path": "src/a.rs",
-                 "oldText": "not-present-anywhere", "newText": "x"},
-            ]}),
-        ),
-        testkit::batch_call("w3", "search", json!({"query": TOKEN, "limit": 5})),
-    ], ParallelMode::Serial);
+    let request = testkit::batch_request_with_mode(
+        vec![
+            testkit::batch_call("w1", "search", json!({"query": TOKEN, "limit": 5})),
+            testkit::batch_call(
+                "w2",
+                "edit",
+                json!({"edits": [
+                    {"path": "src/a.rs",
+                     "oldText": TOKEN, "newText": "needle_mutated_rr_xyz"},
+                    {"path": "src/a.rs",
+                     "oldText": "not-present-anywhere", "newText": "x"},
+                ]}),
+            ),
+            testkit::batch_call("w3", "search", json!({"query": TOKEN, "limit": 5})),
+        ],
+        ParallelMode::Serial,
+    );
     let response = run_batch(config, &request).expect("batch runs");
     assert!(!response.all_ok);
     assert_eq!(response.call_count, 3);
@@ -117,20 +120,23 @@ fn interrupted_batch_atomicity_prefix_and_resume_equals_uninterrupted() {
     // all_ok and the final bytes show both mutations in order.
     let (_temp2, config) = testkit::indexed_codemode_repo(TOKEN);
     let a_rs = config.root.join("src/a.rs");
-    let request = testkit::batch_request_with_mode(vec![
-        testkit::batch_call(
-            "step-1",
-            "edit",
-            json!({"path": "src/a.rs",
+    let request = testkit::batch_request_with_mode(
+        vec![
+            testkit::batch_call(
+                "step-1",
+                "edit",
+                json!({"path": "src/a.rs",
                 "oldText": TOKEN, "newText": "needle_mid_rr_xyz"}),
-        ),
-        testkit::batch_call(
-            "step-2",
-            "edit",
-            json!({"path": "src/a.rs",
+            ),
+            testkit::batch_call(
+                "step-2",
+                "edit",
+                json!({"path": "src/a.rs",
                 "oldText": "not-present-anywhere", "newText": "x"}),
-        ),
-    ], ParallelMode::Serial);
+            ),
+        ],
+        ParallelMode::Serial,
+    );
     let response = run_batch(config.clone(), &request).expect("batch runs");
     assert!(!response.all_ok);
     assert!(response.results[0].ok);
@@ -139,12 +145,15 @@ fn interrupted_batch_atomicity_prefix_and_resume_equals_uninterrupted() {
     // Committed prefix visible on disk: no cross-call rollback (documented).
     let mid = std::fs::read_to_string(&a_rs).expect("reread mid");
     assert!(mid.contains("needle_mid_rr_xyz"), "{mid}");
-    let resume = testkit::batch_request_with_mode(vec![testkit::batch_call(
-        "step-2",
-        "edit",
-        json!({"path": "src/a.rs",
+    let resume = testkit::batch_request_with_mode(
+        vec![testkit::batch_call(
+            "step-2",
+            "edit",
+            json!({"path": "src/a.rs",
             "oldText": "needle_mid_rr_xyz", "newText": "needle_final_rr_xyz"}),
-    )], ParallelMode::Serial);
+        )],
+        ParallelMode::Serial,
+    );
     let resumed = run_batch(config, &resume).expect("resume runs");
     assert!(resumed.all_ok);
     assert_eq!(resumed.results.len(), 1);
@@ -190,19 +199,29 @@ fn interrupted_batch_atomicity_prefix_and_resume_equals_uninterrupted() {
     assert!(!interrupted.results[1].ok);
     assert!(interrupted.results[1].value.is_none());
     assert!(interrupted.results[1].error.is_some());
-    let resumed = run_batch(a_config, &testkit::batch_request_with_mode(vec![step_2_fixed.clone()], ParallelMode::Serial)).expect("resume runs");
+    let resumed = run_batch(
+        a_config,
+        &testkit::batch_request_with_mode(vec![step_2_fixed.clone()], ParallelMode::Serial),
+    )
+    .expect("resume runs");
     assert!(resumed.all_ok);
     assert_eq!(resumed.results.len(), 1);
     assert_eq!(resumed.results[0].id, "step-2");
     assert!(resumed.results[0].ok);
-    let uninterrupted = run_batch(b_config, &testkit::batch_request_with_mode(vec![step_1, step_2_fixed], ParallelMode::Serial))
-        .expect("uninterrupted wave runs");
+    let uninterrupted = run_batch(
+        b_config,
+        &testkit::batch_request_with_mode(vec![step_1, step_2_fixed], ParallelMode::Serial),
+    )
+    .expect("uninterrupted wave runs");
     assert!(uninterrupted.all_ok);
     assert_eq!(uninterrupted.results.len(), 2);
     let a_final = std::fs::read_to_string(&a_rs).expect("reread a");
     let b_final = std::fs::read_to_string(&b_rs).expect("reread b");
     assert!(a_final.contains("needle_final_rr_xyz"), "{a_final}");
-    assert_eq!(a_final, b_final, "resumed bytes must equal uninterrupted bytes");
+    assert_eq!(
+        a_final, b_final,
+        "resumed bytes must equal uninterrupted bytes"
+    );
     assert_eq!(interrupted.results[0].value, uninterrupted.results[0].value);
     assert_eq!(resumed.results[0].value, uninterrupted.results[1].value);
 }
@@ -258,12 +277,16 @@ fn sessions_modes_and_writer_invalidation_agree_exactly() {
     assert_eq!(edited["ok"], true);
     let mut fresh = CodeModeSession::new(config);
     let new_args = json!({"query": "needle_moved_rr_xyz", "format": "capsule", "limit": 5});
-    let after = reader.call("search", new_args.clone()).expect("reader after write");
+    let after = reader
+        .call("search", new_args.clone())
+        .expect("reader after write");
     let expected = fresh.call("search", new_args).expect("fresh");
     assert_eq!(after, expected);
     assert!(!after["hits"].as_array().expect("hits").is_empty());
     let old_args = json!({"query": TOKEN, "limit": 5});
-    let gone = reader.call("search", old_args.clone()).expect("old token via reader");
+    let gone = reader
+        .call("search", old_args.clone())
+        .expect("old token via reader");
     let gone_fresh = fresh.call("search", old_args).expect("old token via fresh");
     assert_eq!(gone, gone_fresh);
 
@@ -292,10 +315,16 @@ fn sessions_modes_and_writer_invalidation_agree_exactly() {
             .collect();
         serde_json::to_value(&triples).expect("serialize triples")
     };
-    let serial_before =
-        run_batch(config.clone(), &testkit::batch_request_with_mode(calls(), ParallelMode::Serial)).expect("serial before");
-    let parallel_before =
-        run_batch(config.clone(), &testkit::batch_request_with_mode(calls(), ParallelMode::Parallel)).expect("parallel before");
+    let serial_before = run_batch(
+        config.clone(),
+        &testkit::batch_request_with_mode(calls(), ParallelMode::Serial),
+    )
+    .expect("serial before");
+    let parallel_before = run_batch(
+        config.clone(),
+        &testkit::batch_request_with_mode(calls(), ParallelMode::Parallel),
+    )
+    .expect("parallel before");
     assert_eq!(serial_before.mode, "serial");
     assert_eq!(parallel_before.mode, "parallel");
     assert_eq!(answers(&parallel_before), answers(&serial_before));
@@ -311,9 +340,16 @@ fn sessions_modes_and_writer_invalidation_agree_exactly() {
     repaired
         .call("index_repo", json!({"force": false}))
         .expect("rebuild after removal");
-    let serial_after =
-        run_batch(config.clone(), &testkit::batch_request_with_mode(calls(), ParallelMode::Serial)).expect("serial after");
-    let parallel_after = run_batch(config, &testkit::batch_request_with_mode(calls(), ParallelMode::Parallel)).expect("parallel after");
+    let serial_after = run_batch(
+        config.clone(),
+        &testkit::batch_request_with_mode(calls(), ParallelMode::Serial),
+    )
+    .expect("serial after");
+    let parallel_after = run_batch(
+        config,
+        &testkit::batch_request_with_mode(calls(), ParallelMode::Parallel),
+    )
+    .expect("parallel after");
     assert_eq!(answers(&parallel_after), answers(&serial_after));
     assert_eq!(
         answers(&serial_after),
@@ -385,7 +421,10 @@ fn plan_reexecution_and_reopen_preserve_state_exactly() {
     let status_reopened = reopened
         .call("index_status", json!({}))
         .expect("status reopened");
-    assert_eq!(testkit::status_counts(&status_reopened), testkit::status_counts(&status_warm));
+    assert_eq!(
+        testkit::status_counts(&status_reopened),
+        testkit::status_counts(&status_warm)
+    );
     assert_eq!(reopened.call_count(), warm_calls);
     let src_after = std::fs::read(config.root.join("src/a.rs")).expect("reread src");
     assert_eq!(src_after, src_before);
@@ -432,7 +471,10 @@ fn corrupt_remove_rebuild_restores_identical_outputs_and_matches_pristine_twin()
     let status_after = repaired
         .call("index_status", json!({}))
         .expect("status after");
-    assert_eq!(testkit::status_counts(&status_after), testkit::status_counts(&status_before));
+    assert_eq!(
+        testkit::status_counts(&status_after),
+        testkit::status_counts(&status_before)
+    );
     // Deterministic repeat on the rebuilt index.
     assert_eq!(search_capsule(&mut repaired), search_before);
 

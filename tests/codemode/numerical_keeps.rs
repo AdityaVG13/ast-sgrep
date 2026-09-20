@@ -6,7 +6,7 @@
 //! drill, and the sole full find→filter→read→select pipeline. Bodies are
 //! verbatim ports of the pass1/pass4 originals.
 
-use ast_sgrep_codemode::{CallError, parse_plan, run_plan};
+use ast_sgrep_codemode::{parse_plan, run_plan, CallError};
 use ast_sgrep_testkit as testkit;
 use ast_sgrep_testkit::{indexed_session_at, scored_hits6};
 use serde_json::json;

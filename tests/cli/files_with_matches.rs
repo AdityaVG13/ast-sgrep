@@ -99,8 +99,11 @@ fn run_search(session: &CliSession, patterns: &[&str], extra: &[&str]) -> (i32, 
 #[test]
 fn files_with_matches_lists_sorted_deduped_paths() {
     let session = corpus_session();
-    let (code, stdout, stderr) =
-        run_search(&session, &["fn $A($$$B) { $$$C }"], &["--files-with-matches"]);
+    let (code, stdout, stderr) = run_search(
+        &session,
+        &["fn $A($$$B) { $$$C }"],
+        &["--files-with-matches"],
+    );
     assert_eq!(code, 0, "stderr={stderr}");
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(

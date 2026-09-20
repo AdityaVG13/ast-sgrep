@@ -114,9 +114,7 @@ pub fn search_pattern(
     // the same operational class as the structural-ingress rejection below
     // (the reference exits nonzero on an empty pattern too).
     if pattern.is_empty() {
-        return Err(crate::StoreError::Other(
-            "pattern must not be empty".into(),
-        ));
+        return Err(crate::StoreError::Other("pattern must not be empty".into()));
     }
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
@@ -189,13 +187,14 @@ pub fn search_pattern(
         return Ok(early);
     }
     let mut native_accepted = false;
-    // The same-line dedup key carries the hit's matched-node byte span.
-    // Its rationale is collapsing the SAME node found by overlapping query
-    // arms — two hits with equal (file, lines, span). Two INDEPENDENT
-    // same-line hits (`q(1); q(2);` — different spans) are distinct
-    // reference rows and must both survive; the old line-only key collapsed
-    // them. Index-lane rows carry no span (`None`), keeping the line-keyed
-    // behavior there.
+    // PASS 131 (130A-F4): the same-line dedup key carries the hit's
+    // matched-node byte span. Two INDEPENDENT same-line nodes (`q(1);
+    // q(2);` — disjoint spans) are two sg rows and must both survive at
+    // this layer (f131, sg receipt); the SAME node found by overlapping
+    // query arms (equal spans) still collapses to one. Containment
+    // narrowing (outermost-wins, §41.3/F66a-7) and one-row-per-line
+    // presentation live downstream (RRF line-fusion on the hybrid path),
+    // not in this union: line-keying here broke f131.
     if let Some((native_hits, unanswerable)) = native_walk_candidate_narrowed(
         store,
         &match_spelling,
@@ -272,6 +271,9 @@ fn structural_fallback_error(pattern: &str) -> crate::StoreError {
 /// truncated scope. call:/kind:/ident rows stay incomplete past the budget
 /// and keep the walk/refusal paths below. Comment placement remains a
 /// matcher decision, so comment-carrying spellings stay excluded.
+// Stable lane shape: query context is threaded, not bundled; bundling would
+// churn every pattern lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 fn serve_cached_exact_lane(
     store: &crate::store::IndexStore,
     match_spelling: &str,
@@ -977,8 +979,23 @@ fn ruby_regex_plausible(bytes: &[u8], at: usize, last_sig: u8, keywords: &[&str]
     }
     if matches!(
         last_sig,
-        b'(' | b'[' | b'{' | b',' | b';' | b'=' | b'~' | b'!' | b'?' | b':' | b'&' | b'|' | b'+'
-            | b'-' | b'*' | b'%' | b'<' | b'>'
+        b'(' | b'['
+            | b'{'
+            | b','
+            | b';'
+            | b'='
+            | b'~'
+            | b'!'
+            | b'?'
+            | b':'
+            | b'&'
+            | b'|'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'%'
+            | b'<'
+            | b'>'
     ) {
         return true;
     }
@@ -1093,10 +1110,7 @@ fn php_comment_follows_top_level_assignment(pattern: &str) -> bool {
 /// probed); the php inline non-leading non-trailing placement keeps the
 /// hook-family exemption; every other block placement (trailing, unclosed,
 /// non-php) is refused.
-fn block_placement_sg_accepted(
-    lang: ast_sgrep_lang::Language,
-    scan: PatternCommentScan,
-) -> bool {
+fn block_placement_sg_accepted(lang: ast_sgrep_lang::Language, scan: PatternCommentScan) -> bool {
     if !scan.block {
         return true;
     }
@@ -1156,6 +1170,7 @@ fn never_matches_comment_placement_sg_accepted(
 ///     ANSWERS the rust container-slot faces via the comment-slot
 ///     machinery (php's hook-family exemption is the already-accepted
 ///     subset).
+///
 /// `#[` gets its own arms. In ts/js the pair is INVALID syntax — the
 /// reference refuses the face — so a quote-external `hash_bracket`
 /// refuses. In php the language-aware scan has ALREADY cleared the flag
@@ -1205,15 +1220,12 @@ fn comment_placement_template_route_refused(
         // spellings stay refused — the lane refuses them by construction),
         // so the walk decides every admitted face and the loud fold keeps
         // everything else exactly where registered.
-        if !pattern.contains('$')
-            && ast_sgrep_lang::literal_trailing_comment_lane(lang, pattern)
-        {
+        if !pattern.contains('$') && ast_sgrep_lang::literal_trailing_comment_lane(lang, pattern) {
             return false;
         }
         return true;
     }
-    if scan.block && (scan.block_leading || scan.block_trailing || matches!(lang, Language::Ruby))
-    {
+    if scan.block && (scan.block_leading || scan.block_trailing || matches!(lang, Language::Ruby)) {
         return true;
     }
     false
@@ -1295,8 +1307,7 @@ fn search_pattern_native_profiled(
         never_matches
             && never_matches_comment_placement_sg_accepted(lang, comment_scan)
             && (comment_free && ast_sgrep_lang::native_pattern_answerable(lang, pattern)
-                || (!comment_free
-                    && ast_sgrep_lang::php_comment_transparent_operand_lane(pattern)))
+                || (!comment_free && ast_sgrep_lang::php_comment_transparent_operand_lane(pattern)))
     };
     // The template-exists route needs the same comment gate. A `$`-less
     // pattern short-circuits `native_pattern_answerable`'s own comment
@@ -1636,7 +1647,6 @@ fn native_match_file(
         parsed: true,
         prefilter_ns,
         parse_match_ns: parse_match_started.elapsed().as_nanos(),
-        ..NativeFileResult::default()
     }
 }
 

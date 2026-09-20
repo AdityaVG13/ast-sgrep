@@ -269,6 +269,9 @@ pub(crate) fn define_value_matches(
         .is_some_and(|text| binding.unify(text, Some(value_node), source, captures))
 }
 
+// Matcher-lane shape: (node/source/pattern/...) is threaded
+// deliberately; bundling would churn every lane for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn walk_preproc_directive(
     node: Node,
     source: &str,

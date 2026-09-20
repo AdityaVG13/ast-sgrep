@@ -122,7 +122,7 @@ checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
 name = "ast-sgrep-cli"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-codemode",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode-napi"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-testkit",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-core"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -185,7 +185,7 @@ dependencies = [
  "rayon",
  "regex",
  "rusqlite",
- "rustix 0.38.44",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-embed"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lang"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lsp"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mcp"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mmap"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "memmap2",
  "tempfile",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-plugins"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "ast-sgrep-core",
  "serde",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-testkit"
-version = "2.1.0"
+version = "2.5.0"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-core",
@@ -391,7 +391,7 @@ dependencies = [
  "io-lifetimes 3.0.1",
  "ipnet",
  "maybe-owned",
- "rustix 1.1.4",
+ "rustix",
  "rustix-linux-procfs",
  "windows-sys 0.61.2",
  "winx",
@@ -406,7 +406,7 @@ dependencies = [
  "cap-primitives",
  "io-extras",
  "io-lifetimes 3.0.1",
- "rustix 1.1.4",
+ "rustix",
 ]
 
 [[package]]
@@ -894,7 +894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
- "rustix 1.1.4",
+ "rustix",
  "windows-sys 0.59.0",
 ]
 
@@ -1489,12 +1489,6 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
-
-[[package]]
-name = "linux-raw-sys"
-version = "0.4.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "linux-raw-sys"
@@ -2275,19 +2269,6 @@ checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"
-version = "0.38.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
-dependencies = [
- "bitflags 2.13.0",
- "errno",
- "libc",
- "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
@@ -2295,7 +2276,7 @@ dependencies = [
  "bitflags 2.13.0",
  "errno",
  "libc",
- "linux-raw-sys 0.12.1",
+ "linux-raw-sys",
  "windows-sys 0.61.2",
 ]
 
@@ -2306,14 +2287,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
 dependencies = [
  "once_cell",
- "rustix 1.1.4",
+ "rustix",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
@@ -2336,9 +2317,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2650,15 +2631,15 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.14.0"
+version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28cce251fcbc87fac86a866eeb0d6c2d536fc16d06f184bb61aeae11aa4cee0c"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
- "cfg-if",
  "fastrand",
+ "getrandom 0.4.3",
  "once_cell",
- "rustix 0.38.44",
- "windows-sys 0.59.0",
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

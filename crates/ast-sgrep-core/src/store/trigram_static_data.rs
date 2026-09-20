@@ -2,7 +2,7 @@
 // Static trigram occurrence counts, sorted by packed key (binary search).
 // Rank semantics: HIGHER count = more common. Absent = rarest.
 #[rustfmt::skip]
-pub(crate) const TRIGRAM_BAKE: [(u32, u32); 138909] = [
+pub(crate) static TRIGRAM_BAKE: [(u32, u32); 138909] = [
     (0x000000, 6772264),
     (0x000001, 62424),
     (0x000002, 128107),

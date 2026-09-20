@@ -40,8 +40,16 @@ fn alias_matches_keyword_search_exactly() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[0]["result"]["isError"], false, "{:#}", responses[0]);
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[0]["result"]["isError"], false,
+        "{:#}",
+        responses[0]
+    );
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     assert_eq!(
         tool_text(&responses[0]),
         tool_text(&responses[1]),
@@ -118,8 +126,16 @@ fn limit_growth_is_prefix_stable() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(responses[0]["result"]["isError"], false, "{:#}", responses[0]);
-    assert_eq!(responses[1]["result"]["isError"], false, "{:#}", responses[1]);
+    assert_eq!(
+        responses[0]["result"]["isError"], false,
+        "{:#}",
+        responses[0]
+    );
+    assert_eq!(
+        responses[1]["result"]["isError"], false,
+        "{:#}",
+        responses[1]
+    );
     let small = tool_body(&responses[0]);
     let large = tool_body(&responses[1]);
     assert_eq!(small["zn"], 2, "{small:#}");
@@ -128,7 +144,10 @@ fn limit_growth_is_prefix_stable() {
         large["h"].as_array().unwrap().len() > 2,
         "need headroom to test prefix stability: {large:#}"
     );
-    assert_eq!(&large["h"].as_array().unwrap()[..2], small["h"].as_array().unwrap());
+    assert_eq!(
+        &large["h"].as_array().unwrap()[..2],
+        small["h"].as_array().unwrap()
+    );
     assert_eq!(small["q"], large["q"]);
     for (id, path) in small["p"].as_object().unwrap() {
         assert_eq!(&large["p"][id], path, "path table shrank for {id}");
@@ -236,16 +255,32 @@ fn adversarial_inputs_share_tool_error_shape() {
         tool_call(3, "Keyword_Search", json!({"query": "x", "limit": 4})),
         tool_call(4, "keyword_search", json!({"limit": 4})),
         tool_call(5, "keyword_search", json!({"query": "x", "limit": 1.5})),
-        tool_call(6, "keyword_search", json!({"query": "x", "limit": u64::MAX})),
+        tool_call(
+            6,
+            "keyword_search",
+            json!({"query": "x", "limit": u64::MAX}),
+        ),
         tool_call(7, "keyword_search", json!({"query": "   ", "limit": 4})),
-        tool_call(8, "keyword_search", json!({"query": "x", "limit": 4, "preview": "huge"})),
-        tool_call(9, "keyword_search", json!({"query": "x", "limit": 4, "file_filter": ""})),
+        tool_call(
+            8,
+            "keyword_search",
+            json!({"query": "x", "limit": 4, "preview": "huge"}),
+        ),
+        tool_call(
+            9,
+            "keyword_search",
+            json!({"query": "x", "limit": 4, "file_filter": ""}),
+        ),
         tool_call(
             10,
             "keyword_search",
             json!({"query": "x", "limit": 4, "file_filter": "a".repeat(4097)}),
         ),
-        tool_call(11, "keyword_search", json!({"query": "x", "limit": 4, "lang": "  "})),
+        tool_call(
+            11,
+            "keyword_search",
+            json!({"query": "x", "limit": 4, "lang": "  "}),
+        ),
         tool_call(
             12,
             "keyword_search",
@@ -262,7 +297,11 @@ fn adversarial_inputs_share_tool_error_shape() {
         assert_tool_error_shape(response);
     }
     // Unicode is a runnable query: a miss envelope, not a tool error.
-    assert_eq!(responses[11]["result"]["isError"], false, "{:#}", responses[11]);
+    assert_eq!(
+        responses[11]["result"]["isError"], false,
+        "{:#}",
+        responses[11]
+    );
     let body = tool_body(&responses[11]);
     assert_eq!(body["why"], "no_match", "{body:#}");
     assert_eq!(body["h"].as_array().unwrap().len(), 0);
@@ -276,7 +315,11 @@ fn adversarial_inputs_share_tool_error_shape() {
         tool_call(1, "code_read", json!({"ids": []})),
         tool_call(2, "code_read", json!({"ids": [""]})),
         tool_call(3, "code_read", json!({"ids": ["日本.rs#L1-L1"]})),
-        tool_call(4, "code_read", json!({"ids": [format!("{}#L1-L1", "a".repeat(5000))]})),
+        tool_call(
+            4,
+            "code_read",
+            json!({"ids": [format!("{}#L1-L1", "a".repeat(5000))]}),
+        ),
         tool_call(5, "code_read", json!({"ids": vec!["src/lib.rs#L1-L1"; 21]})),
         tool_call(6, "code_read", json!({"ids": "src/lib.rs#L1-L1"})),
         tool_call(7, "code_read", json!({"ids": [42]})),
@@ -301,12 +344,19 @@ fn adversarial_inputs_share_tool_error_shape() {
     // one process (catalog gap, out of scope).
     let mut session = LiveSession::spawn(Some(temp.path()));
     session.handshake();
-    session.send(&tool_call(11, "code_read", json!({"ids": ["src/lib.rs#L1-L1"]})));
+    session.send(&tool_call(
+        11,
+        "code_read",
+        json!({"ids": ["src/lib.rs#L1-L1"]}),
+    ));
     let response = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(response["result"]["isError"], false, "{:#}", response);
-    assert_eq!(tool_body(&response)["nodes"][0]["content"], "fn target_symbol() {}");
+    assert_eq!(
+        tool_body(&response)["nodes"][0]["content"],
+        "fn target_symbol() {}"
+    );
 }
 
 /// INTENT: reindexing an unchanged tree succeeds, indexes nothing new, and

@@ -71,10 +71,7 @@ fn backend_empty_index_is_success_miss_on_every_channel() {
         assert_tool_success_shape(response);
         let body = tool_body(response);
         if channel == "ast_search" {
-            assert!(
-                body["zn"].as_u64().unwrap_or(0) >= 1,
-                "{channel}: {body:#}"
-            );
+            assert!(body["zn"].as_u64().unwrap_or(0) >= 1, "{channel}: {body:#}");
             assert!(
                 !body["h"].as_array().unwrap().is_empty(),
                 "{channel}: {body:#}"
@@ -308,7 +305,10 @@ fn backend_compact_id_resolves_only_after_search_registration() {
         .as_str()
         .expect("compact hit id")
         .to_owned();
-    assert!(!hit_id.contains("#L"), "expected a compact id, got {hit_id}");
+    assert!(
+        !hit_id.contains("#L"),
+        "expected a compact id, got {hit_id}"
+    );
 
     let resolved = session.call(&tool_call(3, "code_read", json!({"ids": [hit_id]})), 3);
     assert_tool_success_shape(&resolved);
@@ -367,7 +367,12 @@ fn propagation_sequence_reports_per_call_errors_without_dropping_results() {
         responses[5]
     );
     assert_tool_success_shape(&responses[6]);
-    assert_eq!(tool_body(&responses[6])["file_count"], 1, "{:#}", responses[6]);
+    assert_eq!(
+        tool_body(&responses[6])["file_count"],
+        1,
+        "{:#}",
+        responses[6]
+    );
     // The three tool-level failure classes share one envelope, mutually
     // indistinguishable by shape -- and none leaks to another level.
     for response in &responses[1..4] {

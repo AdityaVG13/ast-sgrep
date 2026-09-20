@@ -46,6 +46,7 @@ cap-fs-ext.workspace = true
 
 [dev-dependencies]
 ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+cap-std.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -262,3 +263,30 @@ path = "../../tests/core/topology_local.rs"
 [[test]]
 name = "topology_runs"
 path = "../../tests/core/topology_runs.rs"
+[[test]]
+name = "symbol_unit"
+path = "../../tests/core/symbol_unit.rs"
+[[test]]
+name = "embed_unit"
+path = "../../tests/core/embed_unit.rs"
+[[test]]
+name = "literal_unit"
+path = "../../tests/core/literal_unit.rs"
+[[test]]
+name = "lexical_unit"
+path = "../../tests/core/lexical_unit.rs"
+[[test]]
+name = "field_weight_unit"
+path = "../../tests/core/field_weight_unit.rs"
+[[test]]
+name = "critic_unit"
+path = "../../tests/core/critic_unit.rs"
+[[test]]
+name = "apply_unit"
+path = "../../tests/core/apply_unit.rs"
+[[test]]
+name = "line_corpus_unit"
+path = "../../tests/core/line_corpus_unit.rs"
+[[test]]
+name = "trigram_df_unit"
+path = "../../tests/core/trigram_df_unit.rs"

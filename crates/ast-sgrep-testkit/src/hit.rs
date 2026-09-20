@@ -46,8 +46,7 @@ pub fn hit_key_bits(hit: &SearchHit) -> (String, u32, u32, u64, u64) {
 /// INTENT: order-free contributor comparison for merge asserts: contributor
 /// kinds as sorted wire names. Pure projection.
 pub fn sorted_contributors(hit: &SearchHit) -> Vec<&'static str> {
-    let mut kinds: Vec<&'static str> =
-        hit.contributors.iter().map(|kind| kind.as_str()).collect();
+    let mut kinds: Vec<&'static str> = hit.contributors.iter().map(|kind| kind.as_str()).collect();
     kinds.sort_unstable();
     kinds
 }

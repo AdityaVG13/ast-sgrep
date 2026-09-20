@@ -543,11 +543,7 @@ fn m4_incremental_fresh_force_parity() {
             json!({"query": "alpha_marker", "limit": 8, "resend_seen": true}),
         );
         assert_hit_envelope(&tool_body(&warm));
-        std::fs::write(
-            temp.path().join("lib.rs"),
-            "fn zebroid_quixotic() {}\n",
-        )
-        .unwrap();
+        std::fs::write(temp.path().join("lib.rs"), "fn zebroid_quixotic() {}\n").unwrap();
         let reindex = session.call("index_repo", json!({}));
         assert_tool_success(&reindex);
         let in_session = session.call(
@@ -654,7 +650,10 @@ fn m4_incremental_fresh_force_parity() {
         let stats = force_refresh(temp.path());
         assert_eq!(stats["files_failed"], 0, "{stats:#}");
         let hit_after = search_text(temp.path(), "plumb_kiosk");
-        assert_eq!(hit_before, hit_after, "force rebuild must preserve hit bytes");
+        assert_eq!(
+            hit_before, hit_after,
+            "force rebuild must preserve hit bytes"
+        );
         let miss_after = rpc_at(search_call(1, "froth_gazebo"), temp.path());
         assert_miss_envelope(&tool_body(&miss_after), "no_match");
         let counts_after = status_body(temp.path());

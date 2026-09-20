@@ -352,11 +352,11 @@ pub(crate) fn statement_root_142_template(
                 ty: root142_name_slot(ty)?,
             })
         }
-        Language::Python => py_async_def_template(pattern).map(|t| match t {
-            PyAsyncDefTemplate { name, param, body } => {
+        Language::Python => {
+            py_async_def_template(pattern).map(|PyAsyncDefTemplate { name, param, body }| {
                 Root142Template::PyAsyncDef { name, param, body }
-            }
-        }),
+            })
+        }
         Language::Java => {
             // `enum <name> { <body> }` — the body is one canonical meta, one
             // literal token, or EMPTY (K4: the empty pattern binds empty
@@ -625,7 +625,8 @@ pub(crate) fn js_if_meta_template(pattern: &str) -> Option<JsIfTemplate> {
             return None;
         }
         JsTail::ElseIf { cond, body }
-    } else if let Some(rest) = rest.strip_prefix("else ") {
+    } else {
+        let rest = rest.strip_prefix("else ")?;
         let inner = rest.trim_start().strip_prefix('{')?;
         let close_b = balanced_brace_close(inner)?;
         let body = js_arm_slot(inner[..close_b].trim())?;
@@ -633,8 +634,6 @@ pub(crate) fn js_if_meta_template(pattern: &str) -> Option<JsIfTemplate> {
             return None;
         }
         JsTail::Block(body)
-    } else {
-        return None;
     };
     Some(JsIfTemplate { cond, body, tail })
 }
@@ -758,7 +757,7 @@ pub(crate) fn walk_root_142(
                 // be ASCII whitespace only (comment bytes and junk are
                 // outside that class; a grouped `type ( … )` declaration
                 // does not lead with the token and keeps its prior route).
-                let gap_ascii_clean = node.parent().map_or(true, |decl| {
+                let gap_ascii_clean = node.parent().is_none_or(|decl| {
                     let mut kw = decl.walk();
                     decl.children(&mut kw)
                         .next()
@@ -1406,9 +1405,7 @@ pub(crate) fn root142_ts_const_match(
         return None;
     }
     let declarators = named_non_trivia_children(&decl);
-    let Some(declarator) = declarators.first() else {
-        return None;
-    };
+    let declarator = declarators.first()?;
     let mut captures = BTreeMap::new();
     if let Some(text) = node_text(node, source) {
         captures.insert("MATCH".to_string(), text.to_string());

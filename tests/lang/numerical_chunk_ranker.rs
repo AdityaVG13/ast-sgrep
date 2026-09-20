@@ -40,7 +40,10 @@ fn chunk_ranker_contract() {
     assert_eq!(ranked[0], (0, 1.0));
     assert_eq!(ranked[1].0, 1);
     let expected = 7.0f64 / (5.0 * 2.0f64.sqrt());
-    assert!((f64::from(ranked[1].1) - expected).abs() < 1e-6, "got {ranked:?}");
+    assert!(
+        (f64::from(ranked[1].1) - expected).abs() < 1e-6,
+        "got {ranked:?}"
+    );
     // Limit shaping keeps the head of the same order.
     assert_eq!(
         rank_chunk_indices_by_vector(&[3.0, 4.0], &chunks, 1),
@@ -64,11 +67,8 @@ fn chunk_ranker_contract() {
     let good = chunk_row(vec![6.0, 8.0]);
     // NaN query: unguarded l2 is NaN, den is NaN, `den > 0.0` is false,
     // so every row scores 0.0 and the threshold drops all. Empty.
-    let nan_q = rank_chunk_indices_by_vector(
-        &[f32::NAN, f32::NAN],
-        &[chunk_row(vec![6.0, 8.0])],
-        10,
-    );
+    let nan_q =
+        rank_chunk_indices_by_vector(&[f32::NAN, f32::NAN], &[chunk_row(vec![6.0, 8.0])], 10);
     assert!(nan_q.is_empty(), "got {nan_q:?}");
     // NaN/inf rows score 0.0 (NaN den / 0.0-per-nonfinite-dot) and drop;
     // the good row still scores exactly 1.0. BIT-EXACT.

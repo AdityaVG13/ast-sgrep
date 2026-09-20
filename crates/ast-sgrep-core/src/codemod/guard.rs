@@ -31,7 +31,7 @@ pub(crate) fn confined_relative_path(path: &str) -> anyhow::Result<&Path> {
 /// (fresh fstatat each call) — so the predicate is expressed once over both.
 /// Neither representation caches the mode; plan/apply never share a metadata
 /// value.
-pub(crate) trait TargetWritability {
+pub trait TargetWritability {
     fn owner_cannot_write(&self) -> bool;
 }
 
@@ -63,6 +63,6 @@ impl TargetWritability for cap_std::fs::Permissions {
     }
 }
 
-pub(crate) fn target_refuses_writes<P: TargetWritability>(permissions: &P) -> bool {
+pub fn target_refuses_writes<P: TargetWritability>(permissions: &P) -> bool {
     permissions.owner_cannot_write()
 }

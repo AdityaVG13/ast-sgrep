@@ -32,10 +32,7 @@ use error_testkit::{
 use rusqlite::ErrorCode;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 use tempfile::TempDir;
 
 /// INTENT: MR1 — the same corrupt-bytes fault through the store open, the
@@ -67,7 +64,11 @@ fn garbage_db_same_discriminant_across_open_search_and_index() {
         );
     }
     assert_eq!(
-        (sqlite_code(&via_store), sqlite_code(&via_searcher), sqlite_code(&via_indexer)),
+        (
+            sqlite_code(&via_store),
+            sqlite_code(&via_searcher),
+            sqlite_code(&via_indexer)
+        ),
         (
             Some(ErrorCode::NotADatabase),
             Some(ErrorCode::NotADatabase),
@@ -119,7 +120,7 @@ fn oversize_query_same_discriminant_across_search_lanes() {
         ("search_regex", err_of(searcher.search_regex(&query))),
         (
             "search_multi_pattern",
-            err_of(searcher.search_multi_pattern(&[query.clone()])),
+            err_of(searcher.search_multi_pattern(std::slice::from_ref(&query))),
         ),
     ];
     for (lane, err) in &errs {
@@ -196,8 +197,11 @@ fn dropped_table_same_discriminant_across_depth_and_search_lanes() {
     let via_free_fn =
         err_of(search_pattern("greet_user", &store, temp.path(), None, 10).map(|_| ()));
     let via_search = err_of(searcher.search("pattern:greet_user").map(|_| ()));
-    let via_multi =
-        err_of(searcher.search_multi_pattern(&["greet_user".to_string()]).map(|_| ()));
+    let via_multi = err_of(
+        searcher
+            .search_multi_pattern(&["greet_user".to_string()])
+            .map(|_| ()),
+    );
     let via_status = err_of(store.status().map(|_| ()));
     for (lane, err) in [
         ("depth query", &via_depth),
@@ -241,7 +245,10 @@ fn repeated_triggers_yield_identical_discriminant_sequence() {
         let blocker = temp.path().join("blocker");
         std::fs::write(&blocker, b"i am a file, not a directory").unwrap();
         let e1 = err_of(IndexStore::open(temp.path(), Some(&garbage)));
-        let e2 = err_of(IndexStore::open(temp.path(), Some(&blocker.join("index.db"))));
+        let e2 = err_of(IndexStore::open(
+            temp.path(),
+            Some(&blocker.join("index.db")),
+        ));
         let e3 = err_of(Searcher::new(SearchOptions {
             root: temp.path().join("nosuch-root"),
             ..SearchOptions::default()
@@ -353,7 +360,10 @@ fn failed_opens_leave_filesystem_untouched() {
         before,
         "garbage-db open must not touch the filesystem"
     );
-    let _ = err_of(IndexStore::open(temp.path(), Some(&blocker.join("index.db"))));
+    let _ = err_of(IndexStore::open(
+        temp.path(),
+        Some(&blocker.join("index.db")),
+    ));
     assert_eq!(
         snapshot(temp.path()),
         before,
@@ -391,21 +401,24 @@ fn failed_writes_preserve_committed_rows() {
     let e1 = err_of(indexer.update_paths(&over_max).map(|_| ()));
     let cancel = Arc::new(AtomicBool::new(true));
     indexer.set_cancel(Arc::clone(&cancel));
-    let e2 = err_of(indexer.update_paths(std::slice::from_ref(&good)).map(|_| ()));
+    let e2 = err_of(
+        indexer
+            .update_paths(std::slice::from_ref(&good))
+            .map(|_| ()),
+    );
     let e3 = err_of(indexer.index_all().map(|_| ()));
     for (op, err) in [
         ("over-max batch", &e1),
         ("cancelled update", &e2),
         ("cancelled index_all", &e3),
     ] {
-        assert_eq!(
-            discriminant(err),
-            2,
-            "{op} must fail as Other, got {err:?}"
-        );
+        assert_eq!(discriminant(err), 2, "{op} must fail as Other, got {err:?}");
     }
     assert_eq!(
-        indexer.store().file_hash("good.rs").expect("store readable"),
+        indexer
+            .store()
+            .file_hash("good.rs")
+            .expect("store readable"),
         committed_hash,
         "failed writes must preserve the committed hash"
     );

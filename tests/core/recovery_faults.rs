@@ -92,7 +92,10 @@ fn torn_bytes_never_silently_healthy() {
         let b_bytes = std::fs::read(&session_b.index_path).unwrap();
         // Structurally divergent stores: near-identical stores splice into an
         // accidentally coherent db. Different sizes tear by construction.
-        assert!(a_bytes.len() > b_bytes.len() + 4096, "splice sources must diverge in size");
+        assert!(
+            a_bytes.len() > b_bytes.len() + 4096,
+            "splice sources must diverge in size"
+        );
         let min = b_bytes.len();
         assert!(min > 4096, "fixtures must span several pages");
         let mut splice = a_bytes[..2000].to_vec();
@@ -111,7 +114,10 @@ fn torn_bytes_never_silently_healthy() {
         // Read-only opens never normalize: refuse or detect, deterministically.
         let (first, _) = probe_fresh(true);
         let (second, ro_kept) = probe_fresh(true);
-        assert_eq!(first, second, "read-only splice outcome must be deterministic");
+        assert_eq!(
+            first, second,
+            "read-only splice outcome must be deterministic"
+        );
         assert!(
             matches!(first, Probe::Refused(_) | Probe::Dirty(_)),
             "read-only splice must refuse or detect corruption, got {first:?}"
@@ -125,20 +131,31 @@ fn torn_bytes_never_silently_healthy() {
         // store — never serve torn rows as authoritative.
         let (first, _) = probe_fresh(false);
         let (second, rw_kept) = probe_fresh(false);
-        assert_eq!(first, second, "writable splice outcome must be deterministic");
+        assert_eq!(
+            first, second,
+            "writable splice outcome must be deterministic"
+        );
         match &first {
             Probe::Refused(name) => assert_eq!(*name, "Database"),
             Probe::Dirty(_) => {}
             Probe::Healthy { file_count } => {
-                assert_eq!(*file_count, 0, "normalized splice must serve zero torn rows")
+                assert_eq!(
+                    *file_count, 0,
+                    "normalized splice must serve zero torn rows"
+                )
             }
         }
 
         for kept in [&ro_kept, &rw_kept] {
             let after = home_names(kept.index_path.parent().unwrap());
-            assert!(after.iter().all(|n| !n.contains(".corrupt")), "failed splice opens must not quarantine: {after:?}");
             assert!(
-                after.iter().all(|n| n != "lexical.db" && n != "semantic.ivf"),
+                after.iter().all(|n| !n.contains(".corrupt")),
+                "failed splice opens must not quarantine: {after:?}"
+            );
+            assert!(
+                after
+                    .iter()
+                    .all(|n| n != "lexical.db" && n != "semantic.ivf"),
                 "failed splice opens must not fabricate sidecars: {after:?}"
             );
         }
@@ -162,8 +179,12 @@ fn torn_bytes_never_silently_healthy() {
         // and verifies clean (no page checksums), so that offset is not a
         // fault. With an empty freelist every page is live.
         let conn = rusqlite::Connection::open(&src.index_path).unwrap();
-        let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
-        let freelist: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap();
+        let page_count: i64 = conn
+            .query_row("PRAGMA page_count", [], |r| r.get(0))
+            .unwrap();
+        let freelist: i64 = conn
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+            .unwrap();
         assert!(page_count >= 5, "fixture must span several pages");
         assert_eq!(freelist, 0, "fixture must have no dead pages");
         let page_size = full.len() / page_count as usize;
@@ -189,7 +210,10 @@ fn torn_bytes_never_silently_healthy() {
                 assert_torn(&probe.index_path);
             }
 
-            match (label, probe_open(&probe.corpus_root, &probe.index_path, true)) {
+            match (
+                label,
+                probe_open(&probe.corpus_root, &probe.index_path, true),
+            ) {
                 ("zero" | "one-byte", outcome) => assert_eq!(
                     outcome,
                     Probe::Refused("Other"),
@@ -209,7 +233,10 @@ fn torn_bytes_never_silently_healthy() {
             // Fresh bytes: the read-only probe is side-effect free, but the
             // writable probe may normalize, so re-lay pristine torn bytes.
             lay_torn();
-            match (label, probe_open(&probe.corpus_root, &probe.index_path, false)) {
+            match (
+                label,
+                probe_open(&probe.corpus_root, &probe.index_path, false),
+            ) {
                 ("zero", _) => {}
                 ("one-byte", outcome) => assert_eq!(
                     outcome,
@@ -227,7 +254,10 @@ fn torn_bytes_never_silently_healthy() {
                 }
             }
             let after = home_names(probe.index_path.parent().unwrap());
-            assert!(after.iter().all(|n| !n.contains(".corrupt")), "{label}: failed opens must not quarantine: {after:?}");
+            assert!(
+                after.iter().all(|n| !n.contains(".corrupt")),
+                "{label}: failed opens must not quarantine: {after:?}"
+            );
         }
     }
 }

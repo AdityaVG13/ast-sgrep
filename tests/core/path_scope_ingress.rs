@@ -79,10 +79,7 @@ fn duplicate_scope_refuses_loudly() {
     let err = searcher
         .search("pattern:fn $F() { $$$B } in:src in:calc.rs")
         .expect_err("a second `in:` value must refuse, not be dropped (FB-80a-07)");
-    assert!(
-        err.to_string().to_lowercase().contains("multiple"),
-        "{err}"
-    );
+    assert!(err.to_string().to_lowercase().contains("multiple"), "{err}");
 }
 
 #[test]
@@ -90,7 +87,9 @@ fn unknown_scope_refuses_loudly() {
     let (_t, searcher) = indexed_scope_corpus();
     let err = searcher
         .search("pattern:fn $F() { $$$B } in:nosuchdir")
-        .expect_err("scope matching nothing under the root must refuse, not silent-empty (FB-80a-08)");
+        .expect_err(
+            "scope matching nothing under the root must refuse, not silent-empty (FB-80a-08)",
+        );
     assert!(err.to_string().contains("nosuchdir"), "{err}");
 }
 

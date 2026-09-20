@@ -76,10 +76,17 @@ impl Fixture {
             &[],
         );
         assert_eq!(code, 0, "stderr={stderr} value={value}");
-        assert!(stderr.is_empty(), "machine mode stderr must be empty: {stderr}");
+        assert!(
+            stderr.is_empty(),
+            "machine mode stderr must be empty: {stderr}"
+        );
         assert_eq!(value["ok"], true);
         assert!(value["files_indexed"].as_u64().unwrap_or(0) >= 1);
-        Self { _temp: temp, root, index }
+        Self {
+            _temp: temp,
+            root,
+            index,
+        }
     }
 
     fn search(&self, extra: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
@@ -87,12 +94,7 @@ impl Fixture {
     }
 
     fn channel(&self, cmd: &str, extra: &[&str], envs: &[(&str, &str)]) -> (i32, Value, String) {
-        let mut args: Vec<&str> = vec![
-            "--index-path",
-            self.index.to_str().unwrap(),
-            "--json",
-            cmd,
-        ];
+        let mut args: Vec<&str> = vec!["--index-path", self.index.to_str().unwrap(), "--json", cmd];
         args.extend_from_slice(extra);
         args.push("alpha_query_target");
         args.push(self.root.to_str().unwrap());
@@ -129,7 +131,11 @@ fn missing_root_envelope() -> (i32, Value) {
 // Why file-local: one-use envelope+error key-equality assertion pairing with
 // `object_keys` above; used only by this file's gate pins.
 fn assert_key_identical(value: &Value, reference: &Value, what: &str) {
-    assert_eq!(object_keys(value), object_keys(reference), "{what} keys diverged");
+    assert_eq!(
+        object_keys(value),
+        object_keys(reference),
+        "{what} keys diverged"
+    );
     assert_eq!(
         object_keys(&value["error"]),
         object_keys(&reference["error"]),
@@ -328,7 +334,10 @@ fn gates_open_on_offline_safe_probes_under_all_features() {
         &[],
     );
     assert_eq!(code, 0, "value={dry_neural}");
-    assert_eq!(dry_neural, dry_plain, "neural flag changed the dry-run plan");
+    assert_eq!(
+        dry_neural, dry_plain,
+        "neural flag changed the dry-run plan"
+    );
 
     // `semantic --rerank` accepted with the hit set preserved (order-insensitive:
     // the 2-file drill pins the order marker; here only set preservation).

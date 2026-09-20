@@ -26,7 +26,7 @@
 //!   preserves request order (sequential send/recv) while `rpc_pipeline`
 //!   returns arrival order (the server answers concurrently by design).
 
-use ast_sgrep_core::{Indexer, IndexOptions};
+use ast_sgrep_core::{IndexOptions, Indexer};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -367,7 +367,10 @@ pub fn spawn_raw_no_handshake(
     stdin_lines: &[Value],
 ) -> Output {
     let mut command = Command::new(mcp_bin());
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(root) = root {
         command.env("ASGREP_ROOT", root);
     }
@@ -549,8 +552,7 @@ pub fn assert_tool_error_shape(response: &Value) {
     assert_eq!(response["result"]["isError"], true, "{response:#}");
     assert!(response.get("error").is_none(), "{response:#}");
     assert_eq!(
-        response["result"]["content"][0]["type"],
-        "text",
+        response["result"]["content"][0]["type"], "text",
         "{response:#}"
     );
     assert_eq!(
@@ -592,10 +594,7 @@ pub fn small_tree() -> TempDir {
     indexed_tree(&[
         ("a.rs", "fn redhammer() {}\n"),
         ("b.rs", "fn blueanvil() {}\n"),
-        (
-            "c.rs",
-            "fn greenchisel() {}\nfn greenchisel_helper() {}\n",
-        ),
+        ("c.rs", "fn greenchisel() {}\nfn greenchisel_helper() {}\n"),
     ])
 }
 
@@ -646,7 +645,10 @@ pub fn multi_hit_tree() -> TempDir {
             )
         })
         .collect();
-    owned.push(("src/lib.rs".to_owned(), "fn target_symbol() {}\n".to_owned()));
+    owned.push((
+        "src/lib.rs".to_owned(),
+        "fn target_symbol() {}\n".to_owned(),
+    ));
     let refs: Vec<(&str, &str)> = owned
         .iter()
         .map(|(path, body)| (path.as_str(), body.as_str()))
@@ -698,9 +700,9 @@ pub fn assert_hit_envelope(body: &Value) {
     );
 }
 
-/// INTENT: miss body-shape discriminant for one `why` code (`why` + `zn == 0`
-/// + empty `h`). One canonical copy of the helper triplicated across the
-/// suites.
+/// INTENT: miss body-shape discriminant for one `why` code
+/// (`why` + `zn == 0` + empty `h`). One canonical copy of the helper
+/// triplicated across the suites.
 pub fn assert_miss_envelope(body: &Value, why: &str) {
     assert_eq!(body["why"], why, "{body:#}");
     assert_eq!(body["zn"], 0, "{body:#}");

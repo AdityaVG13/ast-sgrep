@@ -141,6 +141,9 @@ pub(crate) fn materialize_upsert(
     }
 }
 
+// Stable pipeline shape: per-file inputs are threaded, not bundled; bundling
+// would churn every index stage for no behavior gain.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_file(
     abs: &Path,
     rel: &str,

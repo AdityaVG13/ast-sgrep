@@ -93,7 +93,7 @@ fn search_is_read_only_and_does_not_grow_wal() {
     ]);
     assert_eq!(code, 0, "stderr={stderr} value={value}");
     assert_eq!(value["ok"], true);
-    assert!(value["hits"].as_array().unwrap().len() >= 1);
+    assert!(!value["hits"].as_array().unwrap().is_empty());
     let after = wal_len(&index);
     assert!(
         after <= before,
@@ -193,7 +193,10 @@ fn index_path_is_not_rewritten_to_file_filter() {
         "--path",
         "pkg/auth.rs",
     ]);
-    assert_eq!(code, 0, "index --path must remain an index flag; stderr={stderr} value={value}");
+    assert_eq!(
+        code, 0,
+        "index --path must remain an index flag; stderr={stderr} value={value}"
+    );
     assert_eq!(value["ok"], true);
 }
 
@@ -270,9 +273,9 @@ fn doctor_older_schema_suggests_reindex() {
         .as_array()
         .expect("suggested_commands");
     assert!(
-        suggested.iter().any(|cmd| cmd
-            .as_str()
-            .is_some_and(|s| s.contains("asgrep reindex"))),
+        suggested
+            .iter()
+            .any(|cmd| cmd.as_str().is_some_and(|s| s.contains("asgrep reindex"))),
         "older-on-disk recovery must name reindex; got {suggested:?}"
     );
 }

@@ -146,3 +146,9 @@ path = "../../tests/cli/topology_identity.rs"
 [[test]]
 name = "topology_flows"
 path = "../../tests/cli/topology_flows.rs"
+[[test]]
+name = "keep_gate_unit"
+path = "../../tests/cli/keep_gate_unit.rs"
+[[test]]
+name = "bench_unit"
+path = "../../tests/cli/bench_unit.rs"

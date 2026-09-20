@@ -56,10 +56,7 @@ fn read_contract() {
             .expect("huge context runs");
         assert_eq!(saturated["windows"][0]["start"], json!(1));
         assert_eq!(saturated["windows"][0]["end"], json!(5));
-        assert_eq!(
-            saturated["windows"][0]["text"],
-            json!("l1\nl2\nl3\nl4\nl5")
-        );
+        assert_eq!(saturated["windows"][0]["text"], json!("l1\nl2\nl3\nl4\nl5"));
     }
     // §3 ABSORBED: read_char_budgets_truncate_with_flag — max_chars clamps
     // [1,100000]: 0→1 char ("a", truncated); a 2500-char line pins to
@@ -67,11 +64,17 @@ fn read_contract() {
     {
         let temp = tempfile::tempdir().expect("tempdir");
         std::fs::write(temp.path().join("abc.txt"), "a\nb\nc\n").expect("write");
-        std::fs::write(temp.path().join("wide.txt"), format!("{}\n", "x".repeat(2500)))
-            .expect("write");
+        std::fs::write(
+            temp.path().join("wide.txt"),
+            format!("{}\n", "x".repeat(2500)),
+        )
+        .expect("write");
         let (_index_dir, mut session) = indexed_session_at(temp.path());
         let one_char = session
-            .call("read", json!({"path": "abc.txt", "start": 1, "end": 3, "max_chars": 0}))
+            .call(
+                "read",
+                json!({"path": "abc.txt", "start": 1, "end": 3, "max_chars": 0}),
+            )
             .expect("max_chars 0 runs");
         assert_eq!(one_char["windows"][0]["text"], json!("a"));
         assert_eq!(one_char["windows"][0]["start"], json!(1));
@@ -102,7 +105,10 @@ fn read_contract() {
         assert_eq!(pinned["windows"][0]["end"], json!(3));
         assert_eq!(pinned["windows"][0]["text"], json!("l3"));
         let stringy = session
-            .call("read", json!({"path": "f.txt", "start": "bad", "end": "bad"}))
+            .call(
+                "read",
+                json!({"path": "f.txt", "start": "bad", "end": "bad"}),
+            )
             .expect("string bounds run");
         assert_eq!(stringy["windows"][0]["start"], json!(1));
         assert_eq!(stringy["windows"][0]["end"], json!(1));
@@ -123,7 +129,10 @@ fn read_contract() {
         assert_eq!(past["windows"][0]["text"], json!(""));
         assert_eq!(past["windows"][0]["truncated"], json!(false));
         let widened = session
-            .call("read", json!({"path": "f.txt", "start": 1, "end": 1_000_000_000u64}))
+            .call(
+                "read",
+                json!({"path": "f.txt", "start": 1, "end": 1_000_000_000u64}),
+            )
             .expect("huge end runs");
         assert_eq!(widened["windows"][0]["start"], json!(1));
         assert_eq!(widened["windows"][0]["end"], json!(5));
@@ -148,7 +157,9 @@ fn read_contract() {
             .call("read", json!({"refs": []}))
             .expect_err("empty refs must fail");
         assert!(matches!(err, CallError::Other(_)), "got {err:?}");
-        let err = session.call("read", json!({})).expect_err("missing ref must fail");
+        let err = session
+            .call("read", json!({}))
+            .expect_err("missing ref must fail");
         assert!(matches!(err, CallError::Other(_)), "got {err:?}");
     }
     // §7 ABSORBED: read_fanout_exact_window_counts — one read over 3 refs

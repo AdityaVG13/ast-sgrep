@@ -87,7 +87,13 @@ fn missing_root_human_and_json_agree_on_operational() {
             ast_sgrep_core::Language::parse("xx-no-such-lang").is_none(),
             "lib must reject an unknown language"
         );
-        let human = kit::run(&["--lang", "xx-no-such-lang", "search", "greet", root.as_str()]);
+        let human = kit::run(&[
+            "--lang",
+            "xx-no-such-lang",
+            "search",
+            "greet",
+            root.as_str(),
+        ]);
         kit::assert_human_error(&human, 1);
         let machine = kit::run(&[
             "--json",
@@ -146,7 +152,10 @@ fn missing_root_same_operational_family_across_subcommands() {
             );
             let value = kit::parse_stdout(&output);
             assert_eq!(value["ok"], false, "{sub} on {fault} must not succeed");
-            assert_eq!(value["error"]["kind"], "operational", "{sub} on {fault} kind");
+            assert_eq!(
+                value["error"]["kind"], "operational",
+                "{sub} on {fault} kind"
+            );
             codes.push(output.status.code());
         }
     }
@@ -167,10 +176,30 @@ fn ambiguous_root_same_usage_family_across_subcommands() {
     let ra = a.path().to_string_lossy().into_owned();
     let rb = b.path().to_string_lossy().into_owned();
 
-    let search = kit::run(&["--json", "--root", ra.as_str(), "search", "greet", rb.as_str()]);
-    let outline = kit::run(&["--json", "--root", ra.as_str(), "outline", "a.rs", rb.as_str()]);
+    let search = kit::run(&[
+        "--json",
+        "--root",
+        ra.as_str(),
+        "search",
+        "greet",
+        rb.as_str(),
+    ]);
+    let outline = kit::run(&[
+        "--json",
+        "--root",
+        ra.as_str(),
+        "outline",
+        "a.rs",
+        rb.as_str(),
+    ]);
     let call_path = kit::run(&[
-        "--json", "--root", ra.as_str(), "call-path", "greet", "greet", rb.as_str(),
+        "--json",
+        "--root",
+        ra.as_str(),
+        "call-path",
+        "greet",
+        "greet",
+        rb.as_str(),
     ]);
 
     for (name, command, output) in [
@@ -263,7 +292,15 @@ fn failed_codemod_leaves_tree_untouched() {
     let before_bytes = std::fs::read(&target).expect("read fixture");
     let before_listing = kit::dir_listing(dir.path());
 
-    let human = kit::run(&["codemod", "--yes", "--pattern", "", "--rewrite", "x", root.as_str()]);
+    let human = kit::run(&[
+        "codemod",
+        "--yes",
+        "--pattern",
+        "",
+        "--rewrite",
+        "x",
+        root.as_str(),
+    ]);
     kit::assert_human_error(&human, 2);
     let machine = kit::run(&[
         "codemod",

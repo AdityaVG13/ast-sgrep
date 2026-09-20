@@ -132,7 +132,7 @@ pub fn plan_codemod(
     let mut files = Vec::new();
     let mut read_only_refused = Vec::new();
     for rel_path in &indexed_paths {
-        let rel = confined_relative_path(&rel_path)?;
+        let rel = confined_relative_path(rel_path)?;
         let capped = root_dir
             .read_text_capped(rel, MAX_INDEX_FILE_BYTES)
             .with_context(|| format!("failed to read indexed file {rel_path}"))?;
@@ -238,8 +238,11 @@ pub fn plan_codemod(
             if ast_sgrep_lang::index_can_serve_pattern(pattern, &signatures) {
                 let mut index_serves_any = false;
                 for signature in &signatures {
-                    let served =
-                        store.pattern_nodes_matching_limited(signature, lang_filter.as_deref(), 1)?;
+                    let served = store.pattern_nodes_matching_limited(
+                        signature,
+                        lang_filter.as_deref(),
+                        1,
+                    )?;
                     if !served.is_empty() {
                         index_serves_any = true;
                         break;
@@ -275,8 +278,7 @@ pub fn plan_codemod(
                 // plan would contradict search. Refuse loudly. A re-index
                 // does NOT clear the flag (the budget re-truncates the same
                 // files), hence the verify-then-raise advice.
-                if store.has_depth_truncated_files(lang_filter.as_deref())?
-                    && literal_still_in_tree
+                if store.has_depth_truncated_files(lang_filter.as_deref())? && literal_still_in_tree
                 {
                     bail!(
                         "codemod cannot plan edits for pattern {pattern:?}: the index \

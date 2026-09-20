@@ -70,10 +70,7 @@ fn signatures(lang: Language, source: &str) -> Vec<String> {
 }
 
 fn has_sig(got: &[String], want: &str) {
-    assert!(
-        got.iter().any(|s| s == want),
-        "missing {want}; got {got:?}"
-    );
+    assert!(got.iter().any(|s| s == want), "missing {want}; got {got:?}");
 }
 
 #[test]
@@ -119,7 +116,9 @@ fn moonbit_native_queries_bind_trait_and_reject_type_as_fn_name() {
     let src = include_str!("fixtures/extract/moonbit.mbt");
     let iface = match_pattern(Language::MoonBit, src, "interface $NAME").expect("interface");
     assert!(
-        iface.iter().any(|hit| hit.excerpt.contains("GoldenRenderable")),
+        iface
+            .iter()
+            .any(|hit| hit.excerpt.contains("GoldenRenderable")),
         "interface $NAME must match trait GoldenRenderable; got {iface:?}"
     );
     let decorate = match_pattern(Language::MoonBit, src, "fn decorate($$$)").expect("decorate");
@@ -127,7 +126,8 @@ fn moonbit_native_queries_bind_trait_and_reject_type_as_fn_name() {
         !decorate.is_empty(),
         "fn decorate($$$) must match named_lambda_expression; got {decorate:?}"
     );
-    let type_as_fn = match_pattern(Language::MoonBit, src, "fn GoldenWidget($$$)").expect("type-as-fn");
+    let type_as_fn =
+        match_pattern(Language::MoonBit, src, "fn GoldenWidget($$$)").expect("type-as-fn");
     assert!(
         type_as_fn.is_empty(),
         "fn GoldenWidget must not match Type::method; got {type_as_fn:?}"

@@ -13,7 +13,7 @@
  * generation (an ABI mismatch risks crashes, not errors). Older launchers
  * serve Code Mode over CLI sticky/batch/spawn instead — same tools, slower.
  */
-export declare const CODEMODE_BINDING_VERSION = "2.1.0";
+export declare const CODEMODE_BINDING_VERSION = "2.5.0";
 export type NativeSessionConfig = {
     root?: string;
     indexPath?: string;

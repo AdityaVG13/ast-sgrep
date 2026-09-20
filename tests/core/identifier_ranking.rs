@@ -462,9 +462,21 @@ fn snapshot_unique_keeps_concept_def_first() {
     searcher.warm_search_path().expect("warm");
     for (query, file, symbol) in [
         ("credential renewal", "auth.rs", "auth_refresh"),
-        ("throttle inbound clients", "throttle.rs", "rate_limit_client"),
-        ("debounce noisy updates", "debounce.rs", "coalesce_watch_events"),
-        ("retry after transient failure", "retry.rs", "backoff_attempt"),
+        (
+            "throttle inbound clients",
+            "throttle.rs",
+            "rate_limit_client",
+        ),
+        (
+            "debounce noisy updates",
+            "debounce.rs",
+            "coalesce_watch_events",
+        ),
+        (
+            "retry after transient failure",
+            "retry.rs",
+            "backoff_attempt",
+        ),
     ] {
         let response = searcher.search(query).expect("search");
         require_first(
@@ -516,7 +528,8 @@ fn invent_path_gold_has_no_loss() {
     let root = manifest.join("../../benchmarks/fixtures/invent_path");
     let gold_path = manifest.join("../../benchmarks/gold/invent_path.json");
     let gold: InventPathGold = serde_json::from_str(
-        &fs::read_to_string(&gold_path).unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
+        &fs::read_to_string(&gold_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
     )
     .expect("parse invent_path gold");
     ast_sgrep_core::Indexer::new(IndexOptions {
@@ -553,12 +566,7 @@ fn invent_path_gold_has_no_loss() {
             })
         });
         if !found {
-            misses.push(format!(
-                "{} {:?}\n{}",
-                case.name,
-                case.query,
-                autopsy(hits)
-            ));
+            misses.push(format!("{} {:?}\n{}", case.name, case.query, autopsy(hits)));
         }
     }
     assert!(
@@ -577,7 +585,8 @@ fn self_gold_has_no_loss() {
     let root = manifest.join("../..");
     let gold_path = manifest.join("../../benchmarks/gold/self.json");
     let gold: InventPathGold = serde_json::from_str(
-        &fs::read_to_string(&gold_path).unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
+        &fs::read_to_string(&gold_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", gold_path.display())),
     )
     .expect("parse self gold");
     let temp = TempDir::new().unwrap();
@@ -618,12 +627,7 @@ fn self_gold_has_no_loss() {
             })
         });
         if !found {
-            misses.push(format!(
-                "{} {:?}\n{}",
-                case.name,
-                case.query,
-                autopsy(hits)
-            ));
+            misses.push(format!("{} {:?}\n{}", case.name, case.query, autopsy(hits)));
         }
     }
     assert!(
@@ -721,7 +725,13 @@ fn module_caller_ranks_below_fn_caller_on_conceptual_nl() {
     let query = "how do I validate an order";
     let response = searcher.search(query).expect("search");
     let cases = [
-        ("src/orders.py", "<module>", "src/pipeline.py", "run_pipeline", "py"),
+        (
+            "src/orders.py",
+            "<module>",
+            "src/pipeline.py",
+            "run_pipeline",
+            "py",
+        ),
         ("src/notify.js", "<module>", "src/flow.js", "run_flow", "js"),
     ];
     let mut failures = Vec::new();

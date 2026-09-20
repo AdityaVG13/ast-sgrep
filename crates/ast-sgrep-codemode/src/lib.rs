@@ -43,7 +43,7 @@
 pub mod adapters;
 pub mod batch;
 pub mod catalog;
-mod io;
+pub mod io;
 pub mod plan;
 pub mod session;
 pub mod tools;

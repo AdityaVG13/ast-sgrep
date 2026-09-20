@@ -29,7 +29,10 @@ fn search_rerun_yields_identical_hit_bytes() {
     let bytes_a = serde_json::to_string(&a["hits"]).unwrap();
     let bytes_b = serde_json::to_string(&b["hits"]).unwrap();
     assert!(!a["hits"].as_array().unwrap().is_empty(), "{a}");
-    assert_eq!(bytes_a, bytes_b, "rerun hit payload bytes must be identical");
+    assert_eq!(
+        bytes_a, bytes_b,
+        "rerun hit payload bytes must be identical"
+    );
 }
 
 /// INTENT: Limits 1..7 pin counts 1..5,5,5 with limit echo and exact file
@@ -44,7 +47,15 @@ fn search_limit_sweep_hit_counts_match_hand_values() {
     // echoes the requested limit, and at full coverage the sorted file set
     // is exactly the five fixtures.
     let (_temp, root) = indexed_project_n("wobble_n4_lim", 5);
-    for (limit, expected) in [(1usize, 1usize), (2, 2), (3, 3), (4, 4), (5, 5), (6, 5), (7, 5)] {
+    for (limit, expected) in [
+        (1usize, 1usize),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 5),
+        (6, 5),
+        (7, 5),
+    ] {
         let value = run_search_json(&root, limit, "wobble_n4_lim");
         assert_eq!(value["ok"], true, "limit={limit}: {value}");
         assert_eq!(value["limit"], limit, "limit echo: {value}");
@@ -64,7 +75,10 @@ fn search_limit_sweep_hit_counts_match_hand_values() {
         .map(|f| f.rsplit('/').next().expect("basename"))
         .collect();
     basenames.sort();
-    assert_eq!(basenames, ["m00.rs", "m01.rs", "m02.rs", "m03.rs", "m04.rs"]);
+    assert_eq!(
+        basenames,
+        ["m00.rs", "m01.rs", "m02.rs", "m03.rs", "m04.rs"]
+    );
 }
 
 /// INTENT: One contract for search limit semantics: growing --limit never
@@ -88,7 +102,10 @@ fn search_limit_contract() {
             let value = run_search_json(&root, limit, "wobblebuild_n3lim");
             assert_eq!(value["ok"], true, "{value}");
             let n = value["hits"].as_array().expect("hits array").len();
-            assert!(n <= limit, "hits ({n}) must not exceed limit ({limit}): {value}");
+            assert!(
+                n <= limit,
+                "hits ({n}) must not exceed limit ({limit}): {value}"
+            );
             assert!(
                 n >= prev,
                 "larger limit must never yield fewer hits: {prev} -> {n} at limit {limit}"
@@ -106,7 +123,11 @@ fn search_limit_contract() {
         let large = run_search_json(&root, 10, "wobblebuild_n3pfx");
         let small_hits = small["hits"].as_array().expect("hits array");
         let large_hits = large["hits"].as_array().expect("hits array");
-        assert_eq!(small_hits.len(), 2, "limit 2 must yield exactly 2 hits: {small}");
+        assert_eq!(
+            small_hits.len(),
+            2,
+            "limit 2 must yield exactly 2 hits: {small}"
+        );
         assert!(
             large_hits.len() >= small_hits.len(),
             "larger limit must cover smaller: {large}"

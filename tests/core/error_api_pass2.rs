@@ -242,10 +242,7 @@ fn db_dropped_table_through_search_pattern_stays_database() {
         .execute_batch("DROP TABLE pattern_nodes")
         .unwrap();
     assert!(
-        matches!(
-            store.pattern_node_count(),
-            Err(StoreError::Database(_))
-        ),
+        matches!(store.pattern_node_count(), Err(StoreError::Database(_))),
         "dropped table must fail direct count as Database"
     );
     let err = err_of(search_pattern("greet_user", &store, temp.path(), None, 10));
@@ -349,7 +346,10 @@ fn per_file_failure_is_counted_not_silent() {
         "healthy sibling must be indexed"
     );
     assert_eq!(
-        indexer.store().file_hash("blob.rs").expect("store readable"),
+        indexer
+            .store()
+            .file_hash("blob.rs")
+            .expect("store readable"),
         None,
         "failed file must leave no row"
     );

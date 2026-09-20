@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(unused_imports)]
 //! Shared kit for the consolidated core error-API suites (`error_api_pass1..4`,
 //! included via `#[path = "error_testkit.rs"]`).
 //!
@@ -12,6 +13,8 @@
 //!
 //! The `allow(dead_code)` is load-bearing: each pass file uses a subset of
 //! this kit, and an unused helper in one target must not warn in another.
+//! Same for `allow(unused_imports)`: the re-exports below serve some passes
+//! but not all (pass1 uses none of them).
 
 pub use ast_sgrep_testkit::{
     is_corrupt_kind, sqlite_code, store_error_discriminant as discriminant,

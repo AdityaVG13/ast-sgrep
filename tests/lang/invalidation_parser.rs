@@ -70,8 +70,14 @@ fn parser_reuse_returns_identical_extraction() {
     let go_first = registry.parse(Language::Go, go_src).unwrap();
     let ts_first = registry.parse(Language::TypeScript, ts_src).unwrap();
     assert_eq!(go_first, registry.parse(Language::Go, go_src).unwrap());
-    assert_eq!(ts_first, registry.parse(Language::TypeScript, ts_src).unwrap());
-    assert_eq!(rust_before, registry.parse(Language::Rust, rust_src).unwrap());
+    assert_eq!(
+        ts_first,
+        registry.parse(Language::TypeScript, ts_src).unwrap()
+    );
+    assert_eq!(
+        rust_before,
+        registry.parse(Language::Rust, rust_src).unwrap()
+    );
     assert_eq!(py_before, registry.parse(Language::Python, py_src).unwrap());
     assert_eq!(
         js_before,

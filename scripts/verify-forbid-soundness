@@ -77,6 +77,13 @@ else
     -e 'unsafe[[:space:]]*(fn|impl|trait|\{)' crates/)
 fi
 while IFS= read -r match; do
+  # `unsafe {` also names C# syntax in doc comments (cs_statements.rs); skip
+  # matches whose line already opened a `//` comment before the token. Real
+  # unsafe code never sits inside a comment, and rustc `forbid` plus the
+  # compile probe below remain the hard enforcement.
+  if [[ "${match%%unsafe*}" == *'//'* ]]; then
+    continue
+  fi
   echo "FAIL: first-party unsafe outside sealed boundary: $match"
   fail=1
 done < <("${scan_cmd[@]}" || true)

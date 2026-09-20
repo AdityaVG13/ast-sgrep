@@ -4,9 +4,7 @@
 //! Replaces `oracle_foundry_pass{1,2,3}.rs` rank legs. Expectations are
 //! hand-computed; errors assert discriminants, never messages.
 
-use ast_sgrep_embed::{
-    top_by_similarity, top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY,
-};
+use ast_sgrep_embed::{top_by_similarity, top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY};
 
 /// INTENT: ranking is score-desc/index-asc, truncates to the limit without
 /// padding, drops NaN, applies an exclusive (`>`) threshold — incl the
@@ -37,12 +35,7 @@ fn rank_matrix_orders_truncates_thresholds_stably() {
     );
     assert!(top_by_similarity(vec![(0, 0.9)], 0, None).is_empty());
     assert_eq!(
-        top_by_similarity(
-            vec![(0, MIN_SIMILARITY + 0.01)],
-            10,
-            Some(MIN_SIMILARITY)
-        )
-        .len(),
+        top_by_similarity(vec![(0, MIN_SIMILARITY + 0.01)], 10, Some(MIN_SIMILARITY)).len(),
         1
     );
     // Strict `>`: equal scores never pass, at 0.0, negatives, and the
@@ -53,13 +46,8 @@ fn rank_matrix_orders_truncates_thresholds_stably() {
         1
     );
     assert!(top_by_similarity(vec![(0, -1.0)], 10, Some(-1.0)).is_empty());
-    assert_eq!(
-        top_by_similarity(vec![(0, -0.5)], 10, Some(-1.0)).len(),
-        1
-    );
-    assert!(
-        top_by_similarity(vec![(0, MIN_SIMILARITY)], 10, Some(MIN_SIMILARITY)).is_empty()
-    );
+    assert_eq!(top_by_similarity(vec![(0, -0.5)], 10, Some(-1.0)).len(), 1);
+    assert!(top_by_similarity(vec![(0, MIN_SIMILARITY)], 10, Some(MIN_SIMILARITY)).is_empty());
     assert!(top_by_similarity(vec![(0, f32::INFINITY)], 10, None).is_empty());
     // Permutation invariance: every input order yields the hand order.
     let expected = vec![(0, 0.9), (1, 0.9), (2, 0.9), (3, 0.5), (4, 0.2)];

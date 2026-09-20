@@ -11,9 +11,9 @@
 //! batch execution vs `run_batch` stay unpinned — `compute()` is unreachable
 //! from Rust. Only the validation layer both sides share is compared.
 //!
-//! Link note (macOS): `RUSTFLAGS="-C link-arg=-undefined -C
-//! link-arg=dynamic_lookup" cargo test -p ast-sgrep-codemode-napi --test
-//! ffi_bilateral`. Tests never call Node FFI.
+//! Link note: node symbols stay unresolved via the napi crate's build.rs
+//! (tests never call Node FFI); plain `cargo test -p
+//! ast-sgrep-codemode-napi` works on macOS/Linux.
 
 use ast_sgrep_codemode::{
     run_batch, CallError, MAX_BATCH_CALLS, MAX_BATCH_ID_BYTES, MAX_BATCH_TOOL_BYTES,
@@ -94,7 +94,9 @@ fn metadata_tools_agree_byte_identical() {
     let napi_value = napi
         .call_now("index_status".to_string(), Some(json!({})))
         .expect("napi index_status");
-    let core_value = core.call("index_status", json!({})).expect("core index_status");
+    let core_value = core
+        .call("index_status", json!({}))
+        .expect("core index_status");
     assert_json_byte_identical(&napi_value, &core_value, "index_status");
     assert_eq!(napi_value["file_count"], json!(0));
 
@@ -102,7 +104,9 @@ fn metadata_tools_agree_byte_identical() {
     let napi_value = napi
         .call_now("catalog_search".to_string(), Some(args.clone()))
         .expect("napi catalog_search");
-    let core_value = core.call("catalog_search", args).expect("core catalog_search");
+    let core_value = core
+        .call("catalog_search", args)
+        .expect("core catalog_search");
     assert_json_byte_identical(&napi_value, &core_value, "catalog_search");
     assert!(!napi_value["tools"].as_array().expect("tools").is_empty());
 
@@ -157,7 +161,10 @@ fn search_cache_agrees_on_hit_and_miss() {
             .expect("napi cold search"),
         Value::Null
     );
-    assert_eq!(core.take_cached_search(&args).expect("core cold probe"), None);
+    assert_eq!(
+        core.take_cached_search(&args).expect("core cold probe"),
+        None
+    );
     assert_eq!(napi.call_count(), 0);
     assert_eq!(core.call_count(), 0);
 }
@@ -189,11 +196,7 @@ fn batch_validation_reasons_agree_byte_identical() {
             vec![batch_call("", "search", Value::Null)],
         ),
         (
-            vec![js_call(
-                &"i".repeat(MAX_BATCH_ID_BYTES + 1),
-                "search",
-                None,
-            )],
+            vec![js_call(&"i".repeat(MAX_BATCH_ID_BYTES + 1), "search", None)],
             vec![batch_call(
                 &"i".repeat(MAX_BATCH_ID_BYTES + 1),
                 "search",
@@ -205,11 +208,7 @@ fn batch_validation_reasons_agree_byte_identical() {
             vec![batch_call("a", "", Value::Null)],
         ),
         (
-            vec![js_call(
-                "a",
-                &"t".repeat(MAX_BATCH_TOOL_BYTES + 1),
-                None,
-            )],
+            vec![js_call("a", &"t".repeat(MAX_BATCH_TOOL_BYTES + 1), None)],
             vec![batch_call(
                 "a",
                 &"t".repeat(MAX_BATCH_TOOL_BYTES + 1),
@@ -226,8 +225,7 @@ fn batch_validation_reasons_agree_byte_identical() {
             config_at_indexed(temp.path(), &db),
             &batch_request(core_calls),
         )
-        .err()
-        .expect("core run_batch rejects");
+        .expect_err("core run_batch rejects");
         assert!(matches!(core_err, CallError::InvalidArgs(_)));
         assert_eq!(napi_err.reason, core_err.to_string());
     }
@@ -262,7 +260,11 @@ fn mixed_sequence_counts_and_reasons_agree() {
         ("imports", json!({}), true),
         ("catalog_search", json!({}), true),
         ("catalog_describe", json!({}), true),
-        ("catalog_describe", json!({"name": "zzz_no_such_catalog_tool"}), true),
+        (
+            "catalog_describe",
+            json!({"name": "zzz_no_such_catalog_tool"}),
+            true,
+        ),
         ("find", json!({}), false),
         ("read", json!({}), false),
     ];

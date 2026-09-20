@@ -4,7 +4,7 @@
 //! empty-envelope test from `numerical_pass2`. Pure plan harness only — no
 //! index I/O, no file-local helpers.
 
-use ast_sgrep_codemode::{CallError, parse_plan, run_plan};
+use ast_sgrep_codemode::{parse_plan, run_plan, CallError};
 use ast_sgrep_testkit as testkit;
 use serde_json::json;
 

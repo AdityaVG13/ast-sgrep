@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 /// High-level tool roles for progressive discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,316 +32,48 @@ pub struct ToolDef {
     pub read_only: bool,
 }
 
-const ROOT_ARG_DESC: &str =
-    "Optional subdirectory under the session workspace root (foreign paths are refused)";
+/// Owned shadow of [`ToolDef`] for one-time JSON deserialization: `&'static str`
+/// fields cannot borrow from a parsed buffer, so the const below is parsed
+/// once, the two strings per tool are leaked once, and calls clone the static.
+#[derive(Deserialize)]
+struct OwnedToolDef {
+    name: String,
+    description: String,
+    kind: ToolKind,
+    input_schema: Value,
+    capsule_default: bool,
+    read_only: bool,
+}
+
+/// Checked-in catalog. This was 300 lines of `json!` macro expansion (53KiB of
+/// .text for static data); the same bytes as JSON cost ~12KiB of rodata plus
+/// one parse. To regenerate after editing, dump from a trusted binary:
+/// `codemode-batch --requests <one catalog_describe per tool>`, then take
+/// `[.results[].value]`. Key order is irrelevant (serde_json::Map is
+/// BTreeMap-backed: keys always serialize sorted).
+const CATALOG_JSON: &str = include_str!("catalog_data.json");
+
+static CATALOG: OnceLock<Vec<ToolDef>> = OnceLock::new();
 
 /// Full catalog exposed to Code Mode / PTC runtimes.
 pub fn tool_catalog() -> Vec<ToolDef> {
-    vec![
-        ToolDef {
-            name: "search",
-            description: "Hybrid code search (lexical + symbols + call graph + semantic). Supports defs:, callers:, imports:, pattern:, literal:, regex:, word: prefixes and natural-language queries.",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
-                    "excerpt_lines": {"type": "integer", "minimum": 0, "description": "Inline up to N excerpt lines in capsule mode"},
-                    "semantic_only": {"type": "boolean", "default": false},
-                    "in": {"type": "string", "description": "Directory or glob bound (injected as in:path)"},
-                    "file_filter": {"type": "string", "description": "Alias of in"},
-                    "lang": {"type": "string", "description": "Language id or extension (rs, ts, py)"}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "find",
-            description: "Lexical / identifier lookup (word:). Faster than hybrid search when you already know the token. Prefixed queries (defs:, callers:, blast:, literal:, regex:, pattern:) pass through. blast:Symbol reverse-walks callers; blast:path uses imports.",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Exact token or prefixed query"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
-                    "excerpt_lines": {"type": "integer", "minimum": 0}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "read",
-            description: "Batched line windows from the index (file_lines), with disk fallback. Prefer one read({ refs }) over N calls. Caps at 32 windows.",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "start": {"type": "integer", "minimum": 1},
-                    "end": {"type": "integer", "minimum": 1},
-                    "ref": {"type": "string", "description": "file#Lstart-Lend"},
-                    "refs": {
-                        "type": "array",
-                        "items": {
-                            "oneOf": [
-                                {"type": "string"},
-                                {"type": "object", "properties": {
-                                    "path": {"type": "string"},
-                                    "start": {"type": "integer"},
-                                    "end": {"type": "integer"},
-                                    "ref": {"type": "string"}
-                                }}
-                            ]
-                        }
-                    },
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "context_lines": {"type": "integer", "minimum": 0},
-                    "max_chars": {"type": "integer", "minimum": 1}
-                },
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "edit",
-            description: "Unique string replace jailed to the session root, then targeted reindex of touched paths. oldText must match exactly once. Serial with other mutations.",
-            kind: ToolKind::Index,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "oldText": {"type": "string"},
-                    "newText": {"type": "string"},
-                    "edits": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string"},
-                                "oldText": {"type": "string"},
-                                "newText": {"type": "string"}
-                            },
-                            "required": ["path", "oldText", "newText"]
-                        }
-                    },
-                    "root": {"type": "string", "description": ROOT_ARG_DESC}
-                },
-                "additionalProperties": false
-            }),
-            capsule_default: false,
-            read_only: false,
-        },
-        ToolDef {
-            name: "semantic",
-            description: "Semantic/embed pass only. Prefer when query words may not appear in source (e.g. credential renewal → auth_refresh).",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"},
-                    "excerpt_lines": {"type": "integer", "minimum": 0}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "chain",
-            description: "Expand a seed query into a callers/callees/imports neighborhood graph.",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "max_depth": {"type": "integer", "minimum": 1, "maximum": 8, "default": 2},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
-                    "top_n": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            capsule_default: false,
-            read_only: true,
-        },
-        ToolDef {
-            name: "defs",
-            description: "Definition lookup for a symbol (shorthand for search with defs: prefix).",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
-                },
-                "required": ["symbol"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "callers",
-            description: "Caller lookup for a symbol (shorthand for search with callers: prefix).",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
-                },
-                "required": ["symbol"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "imports",
-            description: "Import lookup (shorthand for search with imports: prefix).",
-            kind: ToolKind::Search,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "module": {"type": "string"},
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "format": {"type": "string", "enum": ["agent", "capsule"], "default": "capsule"}
-                },
-                "required": ["module"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "index_status",
-            description: "Show index statistics for a project root (files, symbols, embed backend).",
-            kind: ToolKind::Index,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "root": {"type": "string", "description": ROOT_ARG_DESC}
-                },
-                "additionalProperties": false
-            }),
-            capsule_default: false,
-            read_only: true,
-        },
-        ToolDef {
-            name: "index_repo",
-            description: "Build or incrementally update the .asgrep index. Pass known changed paths for a targeted update; use force=true for a full rebuild. Embeddings default to the session setting; pass use_embed=false for a lexical/AST-only refresh.",
-            kind: ToolKind::Index,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "root": {"type": "string", "description": ROOT_ARG_DESC},
-                    "force": {"type": "boolean", "default": false},
-                    "use_embed": {
-                        "type": "boolean",
-                        "description": "Compute semantic embeddings for this run (default: the session's setting)"
-                    },
-                    "paths": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 1},
-                        "minItems": 1,
-                        "maxItems": 1024,
-                        "description": "Known created, changed, or deleted paths under root"
-                    }
-                },
-                "additionalProperties": false
-            }),
-            capsule_default: false,
-            read_only: false,
-        },
-        ToolDef {
-            name: "filter_hits",
-            description: "Filter a previous search/capsule JSON by kind, path substring, or minimum score. Keeps intermediate work out of the model context.",
-            kind: ToolKind::Transform,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "hits": {"type": "array", "description": "Hit array or full agent/capsule response"},
-                    "kind": {"type": "string"},
-                    "path_contains": {"type": "string"},
-                    "min_score": {"type": "number"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500}
-                },
-                "required": ["hits"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "select",
-            description: "Project fields from a JSON value (object or array of objects). Return only what the model needs.",
-            kind: ToolKind::Transform,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "value": {"description": "Any JSON value"},
-                    "fields": {"type": "array", "items": {"type": "string"}},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500}
-                },
-                "required": ["value", "fields"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "catalog_search",
-            description: "Progressive discovery: find tools by keyword (Cloudflare-style codemode.search).",
-            kind: ToolKind::Catalog,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Keyword(s) matched against name/description/kind"}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-        ToolDef {
-            name: "catalog_describe",
-            description: "Progressive discovery: return full schema for one tool (Cloudflare-style codemode.describe).",
-            kind: ToolKind::Catalog,
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"}
-                },
-                "required": ["name"],
-                "additionalProperties": false
-            }),
-            capsule_default: true,
-            read_only: true,
-        },
-    ]
+    CATALOG
+        .get_or_init(|| {
+            let owned: Vec<OwnedToolDef> = serde_json::from_str(CATALOG_JSON)
+                .expect("checked-in catalog_data.json must parse");
+            owned
+                .into_iter()
+                .map(|t| ToolDef {
+                    name: Box::leak(t.name.into_boxed_str()),
+                    description: Box::leak(t.description.into_boxed_str()),
+                    kind: t.kind,
+                    input_schema: t.input_schema,
+                    capsule_default: t.capsule_default,
+                    read_only: t.read_only,
+                })
+                .collect()
+        })
+        .clone()
 }
 
 /// Keyword search over the catalog (progressive discovery).

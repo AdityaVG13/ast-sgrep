@@ -5,8 +5,8 @@
 //! holds the confinement + writability predicates both phases share;
 //! [`apply`] stages and swaps the plan as one all-or-nothing transaction.
 
-mod apply;
-mod guard;
+pub mod apply;
+pub mod guard;
 mod plan;
 mod rewrite;
 
@@ -32,9 +32,9 @@ pub struct CodemodFilePlan {
     pub path: String,
     pub edits: Vec<CodemodEdit>,
     #[serde(skip)]
-    original: String,
+    pub original: String,
     #[serde(skip)]
-    rewritten: String,
+    pub rewritten: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,7 +53,7 @@ pub struct CodemodPlan {
     /// Serialized so the dry-run preview shows exactly what apply will do.
     pub read_only_refused: Vec<String>,
     #[serde(skip)]
-    root: PathBuf,
+    pub root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]

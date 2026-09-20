@@ -286,12 +286,9 @@ impl CodeModeSession {
     }
 
     pub(crate) fn search(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let raw_query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .context(
-                "query is required. Call asgrep.search(\"text\") or asgrep.search({ query: \"text\" })",
-            )?;
+        let raw_query = args.get("query").and_then(|v| v.as_str()).context(
+            "query is required. Call asgrep.search(\"text\") or asgrep.search({ query: \"text\" })",
+        )?;
         let query = scoped_search_query(args, raw_query);
         ast_sgrep_core::validate_query_len(&query).map_err(|e| anyhow::anyhow!(e))?;
         let lang_filter = optional_lang(args)?;
@@ -335,7 +332,9 @@ impl CodeModeSession {
             searcher.search(&query)?
         };
         if let Some(lang) = lang_filter.as_deref() {
-            response.hits.retain(|hit| hit.language.as_deref() == Some(lang));
+            response
+                .hits
+                .retain(|hit| hit.language.as_deref() == Some(lang));
         }
         // Searcher may be wider than this call's limit (warm-cache reuse).
         if response.hits.len() > limit {
@@ -458,7 +457,10 @@ impl CodeModeSession {
     }
 
     /// Cache hit path for NAPI `callNow`: bump the session budget like `call`.
-    pub fn take_cached_search(&mut self, args: &Value) -> Result<Option<Value>, crate::tools::CallError> {
+    pub fn take_cached_search(
+        &mut self,
+        args: &Value,
+    ) -> Result<Option<Value>, crate::tools::CallError> {
         let Some(value) = self.peek_cached_search(args) else {
             return Ok(None);
         };
@@ -723,7 +725,10 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
             paths.push(canonical);
         }
     }
-    Ok(Some(expand_incremental_path_list(paths, MAX_INCREMENTAL_PATHS)))
+    Ok(Some(expand_incremental_path_list(
+        paths,
+        MAX_INCREMENTAL_PATHS,
+    )))
 }
 
 fn scoped_search_query(args: &Value, query: &str) -> String {
@@ -731,11 +736,13 @@ fn scoped_search_query(args: &Value, query: &str) -> String {
         .into_iter()
         .find_map(|key| args.get(key).and_then(Value::as_str))
         .map(str::trim)
-        .filter(|path| {
-            !path.is_empty() && !path.split(['/', '\\']).any(|segment| segment == "..")
-        });
+        .filter(|path| !path.is_empty() && !path.split(['/', '\\']).any(|segment| segment == ".."));
     match scope {
-        Some(path) if !query.split_whitespace().any(|token| token.starts_with("in:")) => {
+        Some(path)
+            if !query
+                .split_whitespace()
+                .any(|token| token.starts_with("in:")) =>
+        {
             format!("in:{path} {query}")
         }
         _ => query.to_string(),

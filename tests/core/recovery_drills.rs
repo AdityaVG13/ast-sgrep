@@ -9,13 +9,11 @@
 //! across fault shapes). All assertions match discriminants, row counts, byte
 //! equality, or sorted hit keys — never message text.
 use ast_sgrep_core::tantivy_index::sidecar_path;
-use ast_sgrep_core::{
-    IndexOptions, IndexStore, Indexer, StoreError, INDEX_SCHEMA_VERSION,
-};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, StoreError, INDEX_SCHEMA_VERSION};
 use ast_sgrep_testkit::{
-    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, home_names,
-    quarantine_path, quiesced_db_bytes, remove_sqlite_sidecars, search_parity_keys,
-    store_snapshot, truncate_file, upsert_test_file, RECOVERY_CORPUS,
+    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, home_names, quarantine_path,
+    quiesced_db_bytes, remove_sqlite_sidecars, search_parity_keys, store_snapshot, truncate_file,
+    upsert_test_file, RECOVERY_CORPUS,
 };
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -24,11 +22,17 @@ const QUERIES: &[&str] = &["alpha_needle", "beta_needle", "gamma_caller"];
 
 fn integrity(root: &Path, db: &Path) -> String {
     let store = IndexStore::open_readonly(root, Some(db)).unwrap();
-    store.connection().query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap()
+    store
+        .connection()
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap()
 }
 
 fn assert_real_hits(keys: &[(String, Vec<String>)]) {
-    assert!(keys.iter().any(|(_, hits)| !hits.is_empty()), "parity must be over real hits, not mutual emptiness: {keys:?}");
+    assert!(
+        keys.iter().any(|(_, hits)| !hits.is_empty()),
+        "parity must be over real hits, not mutual emptiness: {keys:?}"
+    );
 }
 
 /// INTENT: SIGKILL inside an uncommitted bulk tx loses only uncommitted rows —
@@ -53,7 +57,11 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
     let hits_before = search_parity_keys(&root, &db, QUERIES, false);
     assert_real_hits(&hits_before);
     assert_eq!(
-        IndexStore::open_readonly(&root, Some(&db)).unwrap().status().unwrap().file_count,
+        IndexStore::open_readonly(&root, Some(&db))
+            .unwrap()
+            .status()
+            .unwrap()
+            .file_count,
         RECOVERY_CORPUS.len()
     );
 
@@ -70,12 +78,21 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     while !ready.exists() {
-        assert!(Instant::now() < deadline, "child writer never signalled readiness");
-        assert!(child.try_wait().unwrap().is_none(), "child exited before the kill window");
+        assert!(
+            Instant::now() < deadline,
+            "child writer never signalled readiness"
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "child exited before the kill window"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     let pid = child.id();
-    let killed = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().unwrap();
+    let killed = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .unwrap();
     assert!(killed.success(), "kill -9 must dispatch");
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
@@ -88,9 +105,14 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
     assert_eq!(status.signal(), Some(9), "child must die by SIGKILL");
 
     // RECOVER: plain reopen rolls back the uncommitted tx; no quarantine.
-    assert!(home_names(db.parent().unwrap()).iter().all(|n| !n.contains(".corrupt")));
+    assert!(home_names(db.parent().unwrap())
+        .iter()
+        .all(|n| !n.contains(".corrupt")));
     let store = IndexStore::open(&root, Some(&db)).unwrap();
-    assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+    assert_eq!(
+        store.on_disk_schema_version().unwrap(),
+        INDEX_SCHEMA_VERSION
+    );
     assert_eq!(
         store.status().unwrap().file_count,
         RECOVERY_CORPUS.len(),
@@ -106,7 +128,9 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
     // REBUILD: an explicit force-reindex over the recovered store converges
     // and still serves the baseline, still unquarantined.
     build_and_quiet(&root, &db, true, false);
-    assert!(home_names(db.parent().unwrap()).iter().all(|n| !n.contains(".corrupt")));
+    assert!(home_names(db.parent().unwrap())
+        .iter()
+        .all(|n| !n.contains(".corrupt")));
     assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_before);
 }
 
@@ -126,7 +150,12 @@ fn child_writer_entry() {
     let store = IndexStore::open(Path::new(&root), Some(Path::new(&db))).unwrap();
     store.begin_bulk_tx().unwrap();
     for i in 0..600 {
-        upsert_test_file(&store, &format!("victim/{i}.py"), "x = 1\n".to_string(), &format!("drill-victim-{i}"));
+        upsert_test_file(
+            &store,
+            &format!("victim/{i}.py"),
+            "x = 1\n".to_string(),
+            &format!("drill-victim-{i}"),
+        );
         if i == 0 {
             std::fs::write(&ready, b"ready").unwrap();
         }
@@ -206,14 +235,19 @@ fn missing_or_zeroed_store_cold_starts_to_baseline() {
         remove_sqlite_sidecars(&db);
         assert!(!db.exists());
         let err = err_of(IndexStore::open_readonly(&root, Some(&db)));
-        assert!(matches!(err, StoreError::Other(_)), "missing db must refuse read-only as Other, got {err:?}");
+        assert!(
+            matches!(err, StoreError::Other(_)),
+            "missing db must refuse read-only as Other, got {err:?}"
+        );
 
         build_and_quiet(&root, &db, false, false);
         assert!(db.is_file());
         assert_eq!(integrity(&root, &db), "ok");
         assert_eq!(store_snapshot(&root, &db), snap_before);
         assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_before);
-        assert!(home_names(db.parent().unwrap()).iter().all(|n| !n.contains(".corrupt")));
+        assert!(home_names(db.parent().unwrap())
+            .iter()
+            .all(|n| !n.contains(".corrupt")));
     }
 
     // Facet: the db is zeroed; a writable reopen initializes in place, then a
@@ -231,7 +265,10 @@ fn missing_or_zeroed_store_cold_starts_to_baseline() {
         assert_eq!(std::fs::metadata(&db).unwrap().len(), 0);
 
         let store = IndexStore::open(&root, Some(&db)).unwrap();
-        assert_eq!(store.on_disk_schema_version().unwrap(), INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            store.on_disk_schema_version().unwrap(),
+            INDEX_SCHEMA_VERSION
+        );
         assert_eq!(store.status().unwrap().file_count, 0);
         drop(store);
         build_and_quiet(&root, &db, false, false);
@@ -304,7 +341,10 @@ fn chained_double_crash_serves_original_baseline() {
     truncate_file(&db, torn_first.len() as u64);
     assert_torn(&db);
     build_and_quiet(&root, &db, true, false);
-    assert_eq!(std::fs::read(quarantine_path(&db, ".corrupt")).unwrap(), torn_first);
+    assert_eq!(
+        std::fs::read(quarantine_path(&db, ".corrupt")).unwrap(),
+        torn_first
+    );
 
     // SERVE mid-chain: the once-recovered store answers the baseline.
     assert_eq!(integrity(&root, &db), "ok");
