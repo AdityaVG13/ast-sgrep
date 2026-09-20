@@ -60,6 +60,93 @@ Also fixed on the way: `search_correctness_epics::lang_aliases_match_indexed_sou
 was red on `HEAD` (its snippet table did not know `cu`/`dart`/`mbt`, added after
 those languages joined `SOURCE_EXTENSIONS`).
 
+## 2026-09-20 (self corpus, HEAD `3e05d604`, competitor bake-off)
+
+**Status: `reproducible-in-tree`.** CLI process times via `hyperfine` on a
+copy of `git ls-files`, same protocol as 2026-08-28 plus `grep`, `tgrep`,
+and a semgrep reference set. Hit counts were verified non-empty for every
+timed query (16/16 on the capped retrieval cells). In-process
+`asgrep bench` times are a different surface and are not mixed in.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | `3e05d604` |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | tracked files → rsync workdir: **698 files** (index saw **649** after skip rules; includes a 10 MiB `.tgrep/` sidecar built mid-run — all tools scanned the same bytes) |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| rustc | 1.98.0 |
+| tools | ripgrep 15.1.0, ast-grep 0.45.3, semgrep 1.176.0, tgrep 1.0.9 (warm server, `--no-watch`), BSD grep 2.6.0, hyperfine 1.20.0 |
+| index | schema 16, hashed semantic embedder; 6,294 symbols, 12,138 semantic chunks, 63,094 callers; `index.db` **231 MiB** (+107 MiB vectors: `--no-embed` build is 133 MiB / 7.9 s) |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | comparator p95 | note |
+|---------|--:|----:|----:|-------------:|------|
+| cold index (`asgrep index .`) | 8 | 17.0 s | **17.4 s** | tgrep ~0.1 s / 10 MiB (single sample) | different index content (AST/graph/vectors vs trigrams) |
+| warm `literal:SearchHit` | 15 | 156 ms | **171 ms** | tgrep 6.1 ms, rg 13.8 ms, grep 107 ms | indexed retrieval slower than scan here; see note |
+| warm `pattern:SearchHit` | 12 | 9.6 ms | **14.6 ms** | ast-grep 60.1 ms | asgrep wins; narrow structural path |
+| warm `semantic 'credential renewal'` | 12 | 2.25 s | **2.34 s** | — | NL semantic one-shot is seconds-scale; needs a flamegraph |
+| serve distinct-query p50/p99 | 240 | 2.4 ms | (p99) 5.4 ms | — | `warm_distinct.mjs`, 2 rounds; the Pi product path is healthy |
+| semgrep 2-rule reference | 3 | ~10 s | — | — | `fn $F / struct $S` rules, 2,729 results; deep-analysis class, reference only |
+
+Notes, read before quoting:
+
+- **Literal vs August (19.0 ms → 171 ms) is not yet a controlled
+  regression.** Corpus differs (398 → 649 indexed files, schema 14 → 16,
+  embedder changes). The in-run comparison stands on its own: on this
+  corpus, one-shot indexed literal costs ~150 ms of searcher CPU
+  (`status` opens the same index in 9 ms; `--excerpt-lines 0` and
+  `--limit 1` do not move it; `--no-embed` index does not move it).
+  Prime suspect is per-invocation fusion/cascade work added since August;
+  the serve path (same engine, warm Searcher) answers the same class in
+  ~2.5 ms, so this is one-shot-invocation overhead, not engine speed.
+- **Pattern flipped the other way** (129 ms → 14.6 ms vs ast-grep 60 ms):
+  the narrow structural path won while the fusion path lost. Both
+  directions need the same flamegraph before any fix claim.
+- **Two earlier series were discarded, not averaged in.** (1) A literal
+  series ran during another agent's build storm (asgrep 199 ms, tight
+  σ — sustained load, verified by rerun at 4.7 ms on a then-unnoticed
+  fixture index, which voided it differently). (2) `asgrep bench
+  tests/fixtures/sample --index-path $INDEX` rewrites the target db to
+  the 8-file fixture, silently voiding every later cell until noticed
+  via a 45-row `symbols` table. Methodology rule adopted: verify
+  hit counts and `files`/`symbols` table counts alongside every timing
+  block, and never point `bench` at a measurement db.
+- tgrep was measured as designed (warm `serve`, client query); its 0.1 s
+  index covers trigram postings only. semgrep's seconds include Python
+  startup + full analysis; it answers a different (deeper) question.
+
+### Reproduce
+
+```bash
+cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep
+WORKDIR=/tmp/asgrep-speed-corpus
+INDEX=/tmp/asgrep-speed.db
+rm -rf "$WORKDIR" && mkdir -p "$WORKDIR"
+git ls-files -z | rsync -a --files-from=- --from0 . "$WORKDIR"
+cd "$WORKDIR"
+
+hyperfine --warmup 1 --runs 8 \
+  --prepare "rm -f $INDEX $INDEX-wal $INDEX-shm" \
+  --export-json /tmp/asgrep-cold-index.json \
+  "$OLDPWD/target/release-perf/asgrep --json --index-path $INDEX index ."
+
+"$OLDPWD/target/release-perf/asgrep" --json --index-path "$INDEX" index .
+ASG="$OLDPWD/target/release-perf/asgrep --no-auto-index --index-path $INDEX"
+hyperfine --warmup 3 --runs 15 --export-json /tmp/asgrep-literal.json \
+  "$ASG 'literal:SearchHit' ." "rg -n SearchHit ." "grep -rn SearchHit . --exclude-dir=.git" "tgrep search SearchHit ."
+hyperfine --warmup 3 --runs 12 --export-json /tmp/asgrep-pattern.json \
+  "$ASG 'pattern:SearchHit' ." "ast-grep --lang rust --pattern SearchHit ."
+hyperfine --warmup 3 --runs 12 --export-json /tmp/asgrep-semantic.json \
+  "$ASG semantic 'credential renewal' ."
+node benchmarks/warm_distinct.mjs ./target/release-perf/asgrep 2
+```
+
+`tgrep search` requires a warm server on the corpus (`tgrep index .`,
+then `tgrep serve --no-watch .` in the background). Verify hits and
+`select count(*) from files, symbols` after every block (see note).
+
 ## 2026-08-28 (self corpus, HEAD `2285ce29`)
 
 **Status: `reproducible-in-tree`.** CLI process times via `hyperfine` on a
