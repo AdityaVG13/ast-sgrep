@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v2.0.0** · 13 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
+**v2.0.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
 
 > **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
@@ -234,7 +234,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 |------|------|
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search, critic, planner |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
-| `crates/ast-sgrep-lang` | Tree-sitter extraction (13 languages) |
+| `crates/ast-sgrep-lang` | Tree-sitter extraction (15 languages) |
 | `crates/ast-sgrep-embed` | In-process embedding backends + optional rerank |
 | `crates/ast-sgrep-mmap` | Memory-map helpers |
 | `crates/ast-sgrep-lsp` | Language server |
@@ -252,7 +252,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v2.0.0.** Local-first embeddings, index schema 12, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 13 languages, fusion-normalized ranking, and the hashed semantic layer remain.
+**v2.0.0.** Local-first embeddings, index schema 12, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages, fusion-normalized ranking, and the hashed semantic layer remain.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 
