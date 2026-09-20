@@ -170,7 +170,12 @@ pub fn escape_glob_literal(term: &str) -> String {
     out
 }
 
-/// OR of `lower(col) LIKE %term%` over `columns` × `terms`, plus optional lang filter.
+/// OR of `col LIKE %term%` over `columns` × `terms`, plus optional lang filter.
+/// No `lower()` wrapping: stock SQLite LIKE is already ASCII
+/// case-insensitive and `lower()` folds ASCII only, so `x LIKE p` is exactly
+/// `lower(x) LIKE lower(p)` (same fold both sides; `case_sensitive_like` is
+/// never set, ICU is never linked). Dropping the two per-row `lower()` allocs
+/// measured 2.5x on a file-restricted caller scan (1.96 -> 0.79ms).
 fn or_like_filter(
     columns: &[&str],
     terms: &[String],
@@ -184,7 +189,7 @@ fn or_like_filter(
             .map(|_| {
                 let per_col: Vec<String> = columns
                     .iter()
-                    .map(|c| format!("lower({c}) LIKE '%' || lower(?) || '%' ESCAPE '\\'"))
+                    .map(|c| format!("{c} LIKE '%' || ? || '%' ESCAPE '\\'"))
                     .collect();
                 if per_col.len() == 1 {
                     per_col

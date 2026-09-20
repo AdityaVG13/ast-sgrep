@@ -1,8 +1,8 @@
 use super::super::embed_support::{embed_cache_cap, read_sym_loc};
 use super::super::sql::{
-    append_lang_filter, calls_matching, count_star, emb_vec, lang_and_clause, like_terms_filter,
-    optional_row, query_cached_map, query_limit_map, query_map_rows, read_legacy_emb, read_sem_row,
-    where_clause,
+    append_lang_filter, at_least_rows, calls_matching, count_star, emb_vec, lang_and_clause,
+    like_terms_filter, optional_row, query_cached_map, query_limit_map, query_map_rows,
+    read_legacy_emb, read_sem_row, where_clause,
 };
 use super::{
     sql_usize_from_byte_offset, CallEvidenceRow, CallRow, ImportQueryRow, ImportRow, IndexStore,
@@ -125,6 +125,11 @@ impl IndexStore {
     }
     pub fn indexed_line_count(&self) -> Result<usize> {
         count_star(&self.conn, "lines")
+    }
+    /// Fast non-emptiness probe for the open gate: LIMIT-1 instead of the six
+    /// COUNT(*)s in `status()`. The gate only ever tested `file_count == 0`.
+    pub fn has_indexed_files(&self) -> Result<bool> {
+        at_least_rows(&self.conn, "files", 1)
     }
     /// True when indexed lines ≥ threshold (LIMIT probe; avoids full COUNT).
     pub fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {

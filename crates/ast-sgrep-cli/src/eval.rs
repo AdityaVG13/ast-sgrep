@@ -449,7 +449,7 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     // Fail closed when the corpus indexes to an empty index — as search
     // and chain already do. An ok:true envelope of all-zero MRR/recall
     // would fabricate a quality measurement.
-    crate::index_cmd::ensure_nonempty_index(&root, indexer.store().status()?.file_count)?;
+    crate::index_cmd::ensure_nonempty_index(&root, !indexer.store().has_indexed_files()?)?;
     drop(indexer);
     let scip = ScipEvalState {
         requested: args.scip.is_some(),

@@ -114,6 +114,111 @@ fn contains_oracle(root: &std::path::Path, needle: &str, case_insensitive: bool)
 }
 
 #[test]
+fn static_match_equivalence_battery() {
+    // Unarmed searcher (never warmed): the static prior drives Match, and
+    // every UNDER-CAP needle must equal the contains-oracle — same guarantee
+    // as armed c1, without any vocab table. Over-cap needles ("value" floods
+    // 2520 postings here) legitimately return a 100-hit head on EVERY path,
+    // so fallback correctness lives in static_flood_falls_back_to_phrase,
+    // whose oracle is under-cap by construction.
+    let (temp, _searcher) = setup();
+    // Case-insensitive surface (setup's searcher is case-sensitive by
+    // default); unarmed on purpose — the static prior drives Match.
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(temp.path().join("index.db")),
+        limit: 50,
+        case_insensitive: true,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    for needle in [
+        "zzquux_marker",                          // rare multi-trigram
+        "beta_shared_rare_token",                 // shared across files
+        "ALPHA_ZZQUUX_MARKER_PAYLOAD",            // mixed case, present
+        "fill_7_13",                              // exact identifier
+        "sentinel",                               // single-file term
+        "payload",                                // four-file term
+        "no_such_needle_xyzzy_qq",                // absent
+        "zz",                                     // too short for trigram
+        "Flöral",                                 // non-ASCII takes Full
+        "a_very_long_needle_with_many_trigrams_over_budget_zz", // over budget
+    ] {
+        let query = format!("literal:{needle}");
+        assert_eq!(
+            hit_files(&searcher, &query),
+            contains_oracle(temp.path(), needle, true),
+            "static path must match oracle for {needle:?}"
+        );
+    }
+    assert_eq!(
+        searcher
+            .store()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master WHERE name = 'asgrep_trigram_vocab'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "static path must not create the vocab"
+    );
+}
+
+#[test]
+fn static_flood_falls_back_to_phrase() {
+    // 2000 decoy lines contain every needle trigram (space-separated, so the
+    // contiguous needle is absent): any static 2-term pick floods past the
+    // 400-row scan budget, the probe exhausts, and the phrase MATCH restores
+    // the exact 3-file answer. (Decoys exceed STATIC_SCAN_BUDGET 5x so the
+    // test survives budget retunes; update if the budget passes 2000.)
+    let temp = TempDir::new().unwrap();
+    let needle = "zzquux_qq";
+    let mut decoy = String::new();
+    for i in 0..2000 {
+        decoy.push_str(&format!("zzq zqu quu uux ux_ x_q _qq filler_{i}\n"));
+    }
+    std::fs::write(temp.path().join("decoys.txt"), &decoy).unwrap();
+    for (name, body) in [
+        ("hit_a.py", "first zzquux_qq occurrence\n"),
+        ("hit_b.py", "second zzquux_qq occurrence\n"),
+        ("hit_c.py", "third zzquux_qq occurrence\n"),
+    ] {
+        std::fs::write(temp.path().join(name), body).unwrap();
+    }
+    let root = temp.path();
+    let index_path = root.join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path),
+        limit: 50,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    assert_eq!(
+        hit_files(&searcher, &format!("literal:{needle}")),
+        vec![
+            "hit_a.py".to_string(),
+            "hit_b.py".to_string(),
+            "hit_c.py".to_string()
+        ],
+        "flooded static probe must fall back to the exact phrase answer"
+    );
+}
+
+#[test]
 fn cold_search_skips_vocab_ensure_until_warmed() {
     let (_temp, searcher) = setup();
     let vocab_tables = || -> i64 {

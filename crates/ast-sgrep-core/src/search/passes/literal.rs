@@ -91,11 +91,29 @@ fn literal_trigram(
             .map(|tri| crate::fts::escape_fts_term(tri))
             .collect::<Vec<_>>()
             .join(" AND ");
-        return scan_trigram_matches(store, options, parsed, needle, &query);
+        // Static (unarmed) picks are blind to this corpus: budget the probe
+        // scan and fall back to the phrase MATCH on exhaustion. Armed picks
+        // carry exact dfs, so they keep today's unbounded shape.
+        let budget = if store.trigram_df().is_armed() {
+            None
+        } else {
+            Some(STATIC_SCAN_BUDGET)
+        };
+        let (hits, exhausted) =
+            scan_trigram_matches(store, options, parsed, needle, &query, budget)?;
+        if !exhausted {
+            return Ok(hits);
+        }
     }
     let query = crate::fts::escape_fts_term(needle);
-    scan_trigram_matches(store, options, parsed, needle, &query)
+    let (hits, _) = scan_trigram_matches(store, options, parsed, needle, &query, None)?;
+    Ok(hits)
 }
+
+/// Posting rows a static-prior probe may examine before it falls back to
+/// the phrase MATCH. Good picks complete near the 100-hit cap; a locally
+/// flooding pick would otherwise walk thousands of rejects.
+const STATIC_SCAN_BUDGET: usize = 400;
 
 fn scan_trigram_matches(
     store: &IndexStore,
@@ -103,7 +121,8 @@ fn scan_trigram_matches(
     parsed: &ParsedQuery,
     needle: &str,
     query: &str,
-) -> Result<Vec<SearchHit>> {
+    scan_budget: Option<usize>,
+) -> Result<(Vec<SearchHit>, bool)> {
     // No ORDER BY here: a TEMP B-TREE sort would materialize the whole trigram
     // doclist before the first row, defeating the lazy budget break below.
     // Candidates stream in posting order, the loop stops at the retained
@@ -136,8 +155,6 @@ fn scan_trigram_matches(
         "trigram doclist walk + join",
     );
     let mut stmt = store.connection().prepare_cached(sql)?;
-    let glob_pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
-    let like_pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
     let needle_lower = options.case_insensitive.then(|| needle.to_lowercase());
     let cap = options.limit.max(100) as i64;
     // Lang-filtered scans must not SQL-LIMIT: skipped languages consume posting
@@ -145,10 +162,16 @@ fn scan_trigram_matches(
     // previous lazy break (posting order, first `cap` LIKE/GLOB rows).
     let sql_cap = if options.lang_filter.is_some() { i64::MAX } else { cap };
     let mut hits = Vec::new();
+    let mut scanned = 0usize;
     if sql_like {
+        let like_pattern = format!("%{}%", crate::store::sql::escape_like_term(needle));
         let rows = stmt.query_map(params![query, like_pattern, sql_cap], map_line_row)?;
         for row in rows {
             let (path, language, line_no, content) = row?;
+            scanned += 1;
+            if scan_budget.is_some_and(|budget| scanned > budget) {
+                return Ok((Vec::new(), true));
+            }
             if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
                 continue;
             }
@@ -158,9 +181,14 @@ fn scan_trigram_matches(
             }
         }
     } else if sql_glob {
+        let glob_pattern = format!("*{}*", crate::store::sql::escape_glob_literal(needle));
         let rows = stmt.query_map(params![query, glob_pattern, sql_cap], map_line_row)?;
         for row in rows {
             let (path, language, line_no, content) = row?;
+            scanned += 1;
+            if scan_budget.is_some_and(|budget| scanned > budget) {
+                return Ok((Vec::new(), true));
+            }
             if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
                 continue;
             }
@@ -173,6 +201,10 @@ fn scan_trigram_matches(
         let rows = stmt.query_map(params![query], map_line_row)?;
         for row in rows {
             let (path, language, line_no, content) = row?;
+            scanned += 1;
+            if scan_budget.is_some_and(|budget| scanned > budget) {
+                return Ok((Vec::new(), true));
+            }
             if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
                 continue;
             }
@@ -196,7 +228,7 @@ fn scan_trigram_matches(
     }
     hits.truncate(retained_limit(options));
     attach_context(store, options, &mut hits)?;
-    Ok(hits)
+    Ok((hits, false))
 }
 /// SQL templates for literal line scan: [case_insensitive][has_lang].
 /// Case-insensitive → LIKE ESCAPE; case-sensitive → GLOB (no ESCAPE).

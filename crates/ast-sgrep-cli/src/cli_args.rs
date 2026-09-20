@@ -443,6 +443,10 @@ pub(crate) enum Commands {
         queries_file: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         skip_index: bool,
+        /// Report a warmed-searcher block alongside the cold block, under
+        /// `warmed:` history labels (the sticky-session product path).
+        #[arg(long, default_value_t = false)]
+        warmed: bool,
     },
     /// Watch files and update the index incrementally
     #[command(about = "Watch files and update the index incrementally")]
@@ -635,6 +639,14 @@ impl Cli {
     /// Parent flags like `asgrep --format compact search ...` remain effective.
     pub(crate) fn should_auto_index(&self) -> bool {
         self.auto_index && !self.no_auto_index
+    }
+
+    /// Bench `--warmed`: measure the warmed product path as a second block.
+    pub(crate) fn bench_warmed(&self) -> bool {
+        matches!(
+            self.command.as_ref(),
+            Some(Commands::Bench { warmed: true, .. })
+        )
     }
 
     pub(crate) fn active_tuning(&self) -> SearchTuning {

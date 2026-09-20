@@ -47,8 +47,8 @@ fn index_db_display(root: &Path, index_path: Option<&Path>) -> PathBuf {
     index_db_path(root, index_path)
 }
 
-pub(crate) fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::Result<()> {
-    if file_count == 0 {
+pub(crate) fn ensure_nonempty_index(root: &Path, empty: bool) -> anyhow::Result<()> {
+    if empty {
         anyhow::bail!(
             "index is empty for {}; run: asgrep index {} --json",
             root.display(),
@@ -60,16 +60,11 @@ pub(crate) fn ensure_nonempty_index(root: &Path, file_count: usize) -> anyhow::R
 
 /// Index an empty checkout, or incrementally refresh a non-empty one.
 /// Returns true when the caller must reopen the store/searcher.
-pub(crate) fn ensure_fresh_index(
-    root: &Path,
-    cli: &Cli,
-    file_count: usize,
-) -> anyhow::Result<bool> {
+pub(crate) fn ensure_fresh_index(root: &Path, cli: &Cli, empty: bool) -> anyhow::Result<bool> {
     if !cli.should_auto_index() {
-        ensure_nonempty_index(root, file_count)?;
+        ensure_nonempty_index(root, empty)?;
         return Ok(false);
     }
-    let empty = file_count == 0;
     if empty && !cli.search_machine_output() && !agent::suppress_progress() {
         eprintln!("asgrep: indexing {} ...", root.display());
     }
@@ -87,22 +82,21 @@ pub(crate) fn ensure_fresh_index(
 pub(crate) fn open_indexed_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
     let root = ensure_existing_root(root, cli)?;
     if cli.should_auto_index() {
-        let count = peek_indexed_file_count(&root, cli);
-        ensure_fresh_index(&root, cli, count)?;
+        let nonempty = peek_index_nonempty(&root, cli);
+        ensure_fresh_index(&root, cli, !nonempty)?;
     }
     let store = open_readonly_store(&root, cli)?;
     if !cli.should_auto_index() {
-        ensure_nonempty_index(&root, store.status()?.file_count)?;
+        ensure_nonempty_index(&root, !store.has_indexed_files()?)?;
     }
     Ok(store)
 }
 
-fn peek_indexed_file_count(root: &Path, cli: &Cli) -> usize {
+fn peek_index_nonempty(root: &Path, cli: &Cli) -> bool {
     open_readonly_store(root, cli)
         .ok()
-        .and_then(|store| store.status().ok())
-        .map(|st| st.file_count)
-        .unwrap_or(0)
+        .and_then(|store| store.has_indexed_files().ok())
+        .unwrap_or(false)
 }
 
 pub(crate) fn open_readonly_store(root: &Path, cli: &Cli) -> anyhow::Result<IndexStore> {
@@ -500,15 +494,15 @@ pub(crate) fn print_status_command(cli: &Cli, root: &Path) -> anyhow::Result<()>
 pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
     let root = ensure_existing_root(root, cli)?;
     if cli.should_auto_index() {
-        let count = peek_indexed_file_count(&root, cli);
-        ensure_fresh_index(&root, cli, count)?;
+        let nonempty = peek_index_nonempty(&root, cli);
+        ensure_fresh_index(&root, cli, !nonempty)?;
     }
     let searcher = open_searcher_raw(&root, cli)?;
     // A foreign-root index was swapped for the empty in-memory stand-in;
     // the walk answers instead. That stand-in must not trip the
     // --no-auto-index non-empty gate (it is deliberately empty).
     if !cli.should_auto_index() && !searcher.store_is_inert() {
-        ensure_nonempty_index(&root, searcher.store().status()?.file_count)?;
+        ensure_nonempty_index(&root, !searcher.store().has_indexed_files()?)?;
     }
     Ok(searcher)
 }

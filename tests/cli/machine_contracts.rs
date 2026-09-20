@@ -1097,6 +1097,57 @@ fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
 }
 
 #[test]
+fn bench_warmed_flag_reports_cold_and_warmed_blocks() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
+    let history = session._temp.path().join("bench-history.json");
+    let output = Command::new(&session.bin)
+        .args([
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index,
+            "bench",
+            root,
+            "--query",
+            "process_request",
+            "--iterations",
+            "2",
+            "--skip-index",
+            "--warmed",
+        ])
+        .env("NO_COLOR", "1")
+        .env("ASGREP_BENCH_HISTORY_PATH", &history)
+        .env(
+            "ASGREP_BENCH_HISTORY_DIR",
+            session._temp.path().join("keep-history"),
+        )
+        // Structure contract, not the perf ratchet (see sibling test).
+        .env("ASGREP_BENCH_RATCHET", "0")
+        .output()
+        .expect("bench");
+    let value = assert_success(&output, "bench");
+    assert!(
+        value["avg_search_ms"].as_f64().is_some(),
+        "cold block intact: {value:#}"
+    );
+    let warmed = &value["warmed"];
+    assert!(
+        warmed["avg_search_ms"].as_f64().is_some(),
+        "warmed block must report its average: {value:#}"
+    );
+    assert!(
+        warmed["cv_pct"].as_f64().is_some(),
+        "warmed block must report cv: {value:#}"
+    );
+    assert!(
+        warmed["bench_history"].is_object(),
+        "warmed block must record keep-gate history: {value:#}"
+    );
+}
+
+#[test]
 fn bench_suite_json_is_single_envelope_even_on_failure() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");

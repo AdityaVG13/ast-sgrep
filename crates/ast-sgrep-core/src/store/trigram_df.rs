@@ -14,6 +14,16 @@
 //! bulk rebuild). Results are memoized per store keyed on
 //! `index_data_version`; every miss or error degrades silently to the
 //! previous full-phrase MATCH behavior.
+//!
+//! Cold one-shot search cannot afford the ~93ms vocab preload, so it uses a
+//! STATIC prior instead: occurrence counts baked from a 10GB multi-crate
+//! corpus (`benchmarks/trigram_bake.py`, checked in as
+//! `store/trigram_static_data.rs`). The prior only chooses WHICH needle
+//! trigrams to probe; the MATCH+reverify shape keeps output exact, and a
+//! scan budget in `passes::literal` falls back to the phrase MATCH when a
+//! static pick floods locally. Zero per-process cost (binary search over a
+//! baked array, no I/O, no init).
+use super::trigram_static_data::TRIGRAM_BAKE;
 use crate::store::IndexStore;
 use rusqlite::OptionalExtension as _;
 use std::collections::HashMap;
@@ -108,6 +118,12 @@ impl TrigramDfCache {
         }
     }
 
+    /// Whether a sticky session armed the exact-df path. Cold one-shot
+    /// search stays unarmed and uses the static prior instead.
+    pub(crate) fn is_armed(&self) -> bool {
+        self.inner.lock().map(|state| state.armed).unwrap_or(false)
+    }
+
     /// Shortcut decision for scanning `needle`, per the contract on
     /// [`TrigramShortcut`]. Never errors: every uncertain outcome degrades to
     /// [`TrigramShortcut::Full`], preserving pre-lever behavior.
@@ -125,10 +141,10 @@ impl TrigramDfCache {
         let Ok(mut state) = self.inner.lock() else {
             return TrigramShortcut::Full;
         };
-        // Cold one-shot search never arms: skip even the generation read so
-        // the vocab ensure/preload tax stays on explicitly warmed sessions.
+        // Cold one-shot search never arms: answer from the static prior
+        // (no generation read, no vocab) instead of degrading to Full.
         if !state.armed {
-            return TrigramShortcut::Full;
+            return pick_static(&trigrams);
         }
         let gen = match store.index_data_version() {
             Ok(gen) => gen,
@@ -225,6 +241,45 @@ pub(crate) fn pick_shortcut(ranked: &[(i64, &str)]) -> TrigramShortcut {
     if ranked[0].0 > RARE_ENOUGH_DF {
         return TrigramShortcut::Full;
     }
+    let mut terms = vec![ranked[0].1.to_string()];
+    if ranked.len() > 1 && ranked[0].1 != ranked[1].1 {
+        terms.push(ranked[1].1.to_string());
+    }
+    TrigramShortcut::Match(terms)
+}
+
+/// Baked occurrence count for a lowercase ASCII trigram, or 0 when the bake
+/// never saw it. Zero reads as rarest: absent from 10GB of code is the
+/// strongest rarity signal available without a live df lookup.
+fn bake_count(tri: &str) -> u32 {
+    let bytes = tri.as_bytes();
+    if bytes.len() != TRIGRAM_LEN {
+        return 0;
+    }
+    let key = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+    match TRIGRAM_BAKE.binary_search_by_key(&key, |&(k, _)| k) {
+        Ok(i) => TRIGRAM_BAKE[i].1,
+        Err(_) => 0,
+    }
+}
+
+/// Static-prior pick for unarmed (cold one-shot) search: the 1–2 relatively
+/// rarest needle trigrams by baked count. No absolute cutoff — the bake
+/// scale is unrelated to any single corpus, so a scan budget in
+/// `passes::literal` (not a threshold here) contains locally-flooding picks
+/// by falling back to the phrase MATCH. Output stays exact either way:
+/// every probed trigram derives from the needle (superset postings) and
+/// content reverify restores exactness.
+fn pick_static(trigrams: &[&str]) -> TrigramShortcut {
+    let mut ranked: Vec<(u32, &str)> = trigrams
+        .iter()
+        .filter(|tri| tri.len() == TRIGRAM_LEN)
+        .map(|tri| (bake_count(tri), *tri))
+        .collect();
+    if ranked.is_empty() {
+        return TrigramShortcut::Full;
+    }
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
     let mut terms = vec![ranked[0].1.to_string()];
     if ranked.len() > 1 && ranked[0].1 != ranked[1].1 {
         terms.push(ranked[1].1.to_string());
@@ -338,5 +393,32 @@ mod tests {
     fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
         let ranked = [(3000_i64, "the"), (5000_i64, "and")];
         assert_eq!(pick_shortcut(&ranked), TrigramShortcut::Full);
+    }
+
+    #[test]
+    fn static_bake_ranks_common_above_rare() {
+        // Triple-space tops every code corpus; 'ion' is common English;
+        // 'zzq' is absent-or-trace in a 10GB bake. Absent reads as 0.
+        let spaces = bake_count("   ");
+        let ion = bake_count("ion");
+        let zzq = bake_count("zzq");
+        assert!(spaces > ion, "triple-space must top the bake");
+        assert!(ion > zzq, "common English must beat rare 'zzq'");
+    }
+
+    #[test]
+    fn unarmed_scan_uses_static_prior() {
+        let store = IndexStore::open_in_memory(std::path::Path::new("mem"))
+            .expect("in-memory store");
+        let cache = TrigramDfCache::new();
+        assert!(!cache.is_armed(), "fresh cache starts unarmed");
+        match cache.scan_shortcut(&store, "zzquux") {
+            TrigramShortcut::Match(terms) => {
+                assert_eq!(terms[0], "zzq", "rarest static trigram leads");
+            }
+            TrigramShortcut::Full => {
+                panic!("cold one-shot must use the static prior, not Full")
+            }
+        }
     }
 }

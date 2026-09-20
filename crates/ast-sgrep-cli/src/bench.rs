@@ -51,7 +51,22 @@ fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Se
             db.display()
         );
     }
-    open_searcher(root, cli)
+    // Response cache OFF: bench repeats one query N times, and a warm cache
+    // turns iterations 2..N into microsecond hash hits (cold avg measured
+    // 0.35ms vs a 3.45ms true first search). Bench measures search cost,
+    // not cache hits. Methodology break vs pre-cache-off priors: re-delete
+    // `.bench-history/*.latest.json` to re-establish baselines deliberately.
+    Ok(open_searcher(root, cli)?.with_response_cache(false))
+}
+
+/// Pin sticky-session state (read snapshot, line corpus, df vocab, symbols)
+/// so a following block measures the warmed product path. Mirrors the serve
+/// session open (codemode session.rs), except a failed warm fails the bench:
+/// silently timing a half-warm searcher would publish lying numbers.
+fn warm_bench_session(searcher: &Searcher) -> anyhow::Result<()> {
+    let _ = searcher.hold_read_snapshot();
+    searcher.warm_search_path()?;
+    Ok(())
 }
 
 fn timed_searches(
@@ -423,6 +438,7 @@ fn run_bench_suite(
             "identity_max_rank": expected.max_rank,
             "ok": case_ok,
             "ast_grep_comparison": comparison,
+            "warmed": serde_json::Value::Null,
         }));
     }
     let suite_ok = results.iter().all(|r| r["ok"] == true);
@@ -445,6 +461,63 @@ fn run_bench_suite(
         suite_geomean,
     )?;
     enforce_bench_ratchet(&history, &format!("suite {selected}"))?;
+    // Warmed block: warm once, re-time every case on the sticky-session
+    // path. Identity contracts apply to the warmed block too — a warmed
+    // quality miss is reported, never folded into the cold suite_ok.
+    let warmed: Option<serde_json::Value> = if cli.bench_warmed() {
+        warm_bench_session(&searcher)?;
+        let mut warmed_avgs = Vec::with_capacity(cases.len());
+        let mut warmed_cvs = Vec::with_capacity(cases.len());
+        let mut warmed_suite_ok = true;
+        for (i, case) in cases.iter().enumerate() {
+            let expected =
+                ast_sgrep_core::bench_suite::benchmark_expectation(case).ok_or_else(|| {
+                    anyhow::anyhow!("benchmark case '{}' has no identity contract", case.name)
+                })?;
+            let semantic_only = expected.kind == Some(ast_sgrep_core::HitKind::Embed);
+            let (times, last) = timed_searches(&searcher, case.query, semantic_only, iterations)?;
+            let hits = last.as_ref().map_or(0, |r| r.hits.len());
+            let identity_ok = last.as_ref().is_some_and(|response| {
+                response
+                    .hits
+                    .iter()
+                    .take(expected.max_rank)
+                    .any(|hit| expected.matches(hit))
+            });
+            let avg = mean_ms(&times);
+            let cv = cv_pct(&times);
+            let case_ok = hits >= case.min_hits && identity_ok;
+            warmed_suite_ok &= case_ok;
+            warmed_avgs.push(avg);
+            warmed_cvs.push(cv);
+            results[i]["warmed"] = serde_json::json!({
+                "avg_search_ms": avg,
+                "cv_pct": cv,
+                "hits": hits,
+                "identity_ok": identity_ok,
+                "ok": case_ok,
+            });
+        }
+        let warmed_avg = mean_ms(&warmed_avgs);
+        let warmed_cv = mean_ms(&warmed_cvs);
+        let warmed_geomean = crate::keep_gate::geomean_ms(&warmed_avgs);
+        let warmed_history = update_bench_history(
+            &format!("warmed:suite:{fixture_name}:{selected}"),
+            warmed_avg,
+            warmed_cv,
+            warmed_geomean,
+        )?;
+        enforce_bench_ratchet(&warmed_history, &format!("warmed suite {selected}"))?;
+        Some(serde_json::json!({
+            "avg_search_ms": warmed_avg,
+            "geomean_search_ms": warmed_geomean,
+            "cv_pct": warmed_cv,
+            "suite_ok": warmed_suite_ok,
+            "bench_history": warmed_history,
+        }))
+    } else {
+        None
+    };
     if cli.json {
         let mut obj = serde_json::json!({
             "fixture": fixture_name,
@@ -456,6 +529,7 @@ fn run_bench_suite(
             "geomean_search_ms": suite_geomean,
             "cv_pct": suite_cv,
             "bench_history": history,
+            "warmed": warmed,
         });
         // Collapse skip-path fields into existing helper; keep indexed-path without index_ms.
         if let Some(s) = &stats {
@@ -483,6 +557,19 @@ fn run_bench_suite(
                 row["cv_pct"].as_f64().unwrap_or(0.0),
                 row["hits"].as_u64().unwrap_or(0)
             );
+            if row["warmed"].is_object() {
+                println!(
+                    "    warmed: {:.2}ms avg (cv {:.1}%), {} hits {}",
+                    row["warmed"]["avg_search_ms"].as_f64().unwrap_or(0.0),
+                    row["warmed"]["cv_pct"].as_f64().unwrap_or(0.0),
+                    row["warmed"]["hits"].as_u64().unwrap_or(0),
+                    if row["warmed"]["ok"].as_bool().unwrap_or(false) {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    }
+                );
+            }
             print_ast_grep_human(&row["ast_grep_comparison"], true, 0);
         }
         if !suite_ok {
@@ -520,6 +607,36 @@ fn run_bench(
     let comparison = ast_grep_comparison(query, root, ag_iters, avg);
     let history = update_bench_history(&format!("query:{query}"), avg, cv, None)?;
     enforce_bench_ratchet(&history, &format!("query {query:?}"))?;
+    // Cold block first (cold searcher), then warm once and re-time the same
+    // query on the sticky-session path. Separate `warmed:` history label:
+    // cold and warmed numbers are different surfaces, never one series.
+    let warmed: Option<serde_json::Value> = if cli.bench_warmed() {
+        warm_bench_session(&searcher)?;
+        let (times, last) = timed_searches(
+            &searcher,
+            query,
+            cli.active_tuning().semantic_only,
+            iterations,
+        )?;
+        let warmed_hits = last.as_ref().map_or(0, |r| r.hits.len());
+        let warmed_avg = mean_ms(&times);
+        let warmed_cv = cv_pct(&times);
+        let warmed_history = update_bench_history(
+            &format!("warmed:query:{query}"),
+            warmed_avg,
+            warmed_cv,
+            None,
+        )?;
+        enforce_bench_ratchet(&warmed_history, &format!("warmed query {query:?}"))?;
+        Some(serde_json::json!({
+            "avg_search_ms": warmed_avg,
+            "cv_pct": warmed_cv,
+            "hits": warmed_hits,
+            "bench_history": warmed_history,
+        }))
+    } else {
+        None
+    };
     if cli.json {
         let mut obj = serde_json::json!({
             "query": query,
@@ -532,6 +649,7 @@ fn run_bench(
             "hits": hits,
             "ast_grep_comparison": comparison,
             "bench_history": history,
+            "warmed": warmed,
         });
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
         print_machine_json("bench", &obj)?;
@@ -540,6 +658,14 @@ fn run_bench(
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         println!("Query: {query}");
         println!("Avg search: {avg:.2}ms over {iterations} iterations (cv {cv:.1}%, {hits} hits)");
+        if let Some(w) = warmed.as_ref().filter(|w| w.is_object()) {
+            println!(
+                "Warmed search: {:.2}ms over {iterations} iterations (cv {:.1}%, {} hits)",
+                w["avg_search_ms"].as_f64().unwrap_or(0.0),
+                w["cv_pct"].as_f64().unwrap_or(0.0),
+                w["hits"].as_u64().unwrap_or(0)
+            );
+        }
         print_ast_grep_human(&comparison, false, ag_iters);
     }
     Ok(())
@@ -614,7 +740,8 @@ fn run_bench_batch(
             "p50_search_ms": p50,
             "cv_pct": cv,
             "hits": hits,
-            "top_10": top_10
+            "top_10": top_10,
+            "warmed": serde_json::Value::Null
         }));
     }
     let batch_avgs: Vec<f64> = results
@@ -638,6 +765,60 @@ fn run_bench_batch(
     );
     let history = update_bench_history(&batch_label, batch_avg, batch_cv, batch_geomean)?;
     enforce_bench_ratchet(&history, &format!("batch {}", queries_path.display()))?;
+    // Warmed block: warm once, re-time every query. Lean report (no top_10):
+    // the warmed block exists for latency comparison; hit-identity is the
+    // suite's job.
+    let warmed: Option<serde_json::Value> = if cli.bench_warmed() {
+        warm_bench_session(&searcher)?;
+        let mut warmed_avgs = Vec::with_capacity(queries.len());
+        let mut warmed_cvs = Vec::with_capacity(queries.len());
+        for (i, query) in queries.iter().enumerate() {
+            let (mut samples, last) = timed_searches(
+                &searcher,
+                query,
+                cli.active_tuning().semantic_only,
+                iterations,
+            )?;
+            let cv = cv_pct(&samples);
+            samples.sort_by(f64::total_cmp);
+            let avg = mean_ms(&samples);
+            let p50 = if samples.is_empty() {
+                0.0
+            } else {
+                samples[(samples.len() - 1) / 2]
+            };
+            let hits = last.as_ref().map_or(0, |r| r.hits.len());
+            warmed_avgs.push(avg);
+            warmed_cvs.push(cv);
+            results[i]["warmed"] = serde_json::json!({
+                "avg_search_ms": avg,
+                "p50_search_ms": p50,
+                "cv_pct": cv,
+                "hits": hits,
+            });
+        }
+        let warmed_avg = mean_ms(&warmed_avgs);
+        let warmed_cv = mean_ms(&warmed_cvs);
+        let warmed_geomean = crate::keep_gate::geomean_ms(&warmed_avgs);
+        let warmed_history = update_bench_history(
+            &format!("warmed:{batch_label}"),
+            warmed_avg,
+            warmed_cv,
+            warmed_geomean,
+        )?;
+        enforce_bench_ratchet(
+            &warmed_history,
+            &format!("warmed batch {}", queries_path.display()),
+        )?;
+        Some(serde_json::json!({
+            "avg_search_ms": warmed_avg,
+            "geomean_search_ms": warmed_geomean,
+            "cv_pct": warmed_cv,
+            "bench_history": warmed_history,
+        }))
+    } else {
+        None
+    };
     if cli.json {
         let mut obj = serde_json::json!({
             "iterations": iterations,
@@ -646,6 +827,7 @@ fn run_bench_batch(
             "geomean_search_ms": batch_geomean,
             "cv_pct": batch_cv,
             "bench_history": history,
+            "warmed": warmed,
         });
         add_index_json(&mut obj, stats_opt.as_ref(), index_ms);
         print_machine_json("bench", &obj)?;
@@ -665,6 +847,15 @@ fn run_bench_batch(
                 r["cv_pct"].as_f64().unwrap_or(0.0),
                 r["hits"].as_u64().unwrap_or(0)
             );
+            if r["warmed"].is_object() {
+                println!(
+                    "    warmed: avg={:.2}ms p50={:.2}ms cv={:.1}% hits={}",
+                    r["warmed"]["avg_search_ms"].as_f64().unwrap_or(0.0),
+                    r["warmed"]["p50_search_ms"].as_f64().unwrap_or(0.0),
+                    r["warmed"]["cv_pct"].as_f64().unwrap_or(0.0),
+                    r["warmed"]["hits"].as_u64().unwrap_or(0)
+                );
+            }
         }
     }
     Ok(())

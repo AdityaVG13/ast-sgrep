@@ -6,6 +6,99 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
+## 2026-09-20 static trigram prior: cold one-shot Match (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Cold one-shot search answers from a
+baked trigram rarity table (`benchmarks/trigram_bake.py --min-count 100`
+over the local cargo registry: 5,167 crates, 9.9 GB, 138,909 trigrams
+kept of 824,147) instead of degrading to the full-phrase MATCH: the 1–2
+relatively rarest needle trigrams drive the probe, a 400-row scan budget
+falls back to the phrase on locally-flooding picks. Zero per-process
+cost (binary search, no I/O); binary grows +1.1 MB (37.5 → 38.6 MB).
+Working tree atop `c28bce4a`, uncommitted — re-run after commit to
+re-pin. Binaries: `/tmp/asgrep-static` (this tree) vs `/tmp/asgrep-hillF`
+(pre-static hillclimb) on the same index.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | working tree atop `c28bce4a` (static prior, uncommitted) |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | tracked files → rsync workdir, **648 files**; shared `/tmp/asgrep-speed.db` |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| tools | ripgrep 15.1.0, hyperfine 1.20.0 |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | note |
+|---------|--:|----:|----:|------|
+| one-shot `literal:SearchHit`, static | 15 | 7.2 ms | 7.8 ms | tie vs hillF; beats rg 1.59× mean |
+| one-shot `literal:SearchHit`, hillF | 15 | 7.2 ms | 7.7 ms | same block |
+| one-shot `rg -n SearchHit` | 15 | 11.6 ms | 12.4 ms | same block |
+| one-shot absent `literal:zzquux_no_such_token`, static | 15 | 7.3 ms | 9.2 ms | **1.20×** mean vs hillF (empty postings prove absence) |
+| one-shot absent, hillF | 15 | 9.1 ms | 11.3 ms | same block |
+| one-shot `literal:SnapshotStamp`, static | 15 | 7.6 ms | 8.1 ms | 1.06× mean vs hillF |
+| one-shot `literal:SnapshotStamp`, hillF | 15 | 8.1 ms | 8.7 ms | same block |
+| one-shot flood `literal:value`, static | 15 | 8.2 ms | 8.9 ms | 1.01× hillF (noise; wasted probe + fallback unmeasurable) |
+| one-shot flood `literal:value`, hillF | 15 | 7.9 ms | 9.5 ms | same block |
+
+Notes:
+
+- The lever moves total time only where MATCH evaluation dominates:
+  absent/long needles (phrase intersects every trigram posting list;
+  one rare trigram short-circuits). Few-hit needles tie — startup +
+  open/gate + cold pages are identical.
+- No-regress: 27/27 CLI outputs byte-identical static vs hillF (24
+  literal needles incl. short/non-ASCII/flood/absent + pattern +
+  semantic + hybrid); 7/7 `trigram_shortcut`, 4/4
+  `literal_warm_cold_parity`, 5/5 `trigram_df` unit, 5/5 bench
+  `default` identity ok. Bench `self` suite fails identically on both
+  binaries (pre-existing fixture/golden mismatch on this tree state —
+  out of scope, recorded here, not chased).
+- Static picks on this corpus: `searchhit → chh AND hhi`,
+  `snapshotstamp → ots AND tam`, `zzquux_no_such_token → zzq AND uux`.
+
+## 2026-09-20 hillclimb: open gate + LIKE lanes (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Two kept profile-guided wins atop
+`c28bce4a`, uncommitted — re-run after commit to re-pin. E-open-1: the
+open gate ran full `status()` (six COUNT(*)s) for a boolean; now a
+LIMIT-1 probe. E-like-1: redundant `lower()` dropped from LIKE lanes
+(behavior-identical under stock SQLite). Bench gained `--warmed` (cold
++ warmed blocks, separate history labels) and measures with the
+response cache off (repeats previously timed hash hits).
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | working tree atop `c28bce4a` (hillclimb, uncommitted) |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | one-shot/hybrid: tracked files → rsync workdir, **648 files**; serve: repo `.asgrep/index.db` |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| tools | ripgrep 15.1.0, hyperfine 1.20.0 |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | note |
+|---------|--:|----:|----:|------|
+| one-shot `literal:SearchHit`, pre-hill | 15 | 10.8 ms | 13.7 ms | same block as hill + rg |
+| one-shot `literal:SearchHit`, hill | 15 | 9.1 ms | **10.1 ms** | E-open-1; beats rg 1.39× mean |
+| one-shot `rg -n SearchHit` | 15 | 12.9 ms | 13.5 ms | — |
+| hybrid `SnapshotStamp` warmed, pre-hill | 10×2 | — | — | interleaved avg 0.84/0.97 ms |
+| hybrid `SnapshotStamp` warmed, hill | 10×2 | — | — | interleaved avg 0.67/0.73 ms (**−22%**, E-like-1) |
+| serve distinct-query p50, hill | 240×2 | 0.64/0.61 ms | (p99) 7.0/2.3 ms | `warm_distinct.mjs`; pre-hill 0.70/0.70 adjacent |
+
+Notes:
+
+- One-shot decomposition (same-session probes): ~3.8 ms startup
+  (`--version`; rg 2.4), ~2.1 ms open+gate pre-fix, ~4.4 ms first-search
+  (FTS5 + ~100 cold row fetches), ~0.3 ms render. Search steady-state is
+  0.24 ms; first-search is cold-page dominated.
+- Killed with data (see perf ledger): 100→16 fetch cap (pool feeds the
+  critic), exact+prefix skip-substring (9% need substr-only recall),
+  needle memo (4 distinct needles), fat LTO (I/O-bound), startup diet
+  (no lever found), PGO/mimalloc (deferred as infra-heavy).
+
 ## 2026-09-20 df shortcut resurrection, session-gated (self corpus, working tree)
 
 **Status: `reproducible-in-tree`.** Dropping `PRAGMA query_only` (keeping

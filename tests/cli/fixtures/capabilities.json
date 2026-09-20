@@ -39,7 +39,8 @@
         "--skip-index",
         "--snippet-tokens",
         "--suite",
-        "--tantivy"
+        "--tantivy",
+        "--warmed"
       ],
       "name": "bench",
       "usage": "asgrep bench"
