@@ -99,12 +99,13 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./packages/pi/release-contract.json').canonicalVersion.version")"
+          extension_version="$(node -p "require('./packages/pi/release-contract.json').packages.extension.version")"
           clean="$RUNNER_TEMP/clean-pi-npm-install"
           mkdir -p "$clean"
           npm install --force --no-audit --no-fund --prefix "$clean" \
             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz" \
             "$PWD/npm-packs/ast-sgrep-$version.tgz" \
-            "$PWD/npm-packs/pi-ast-sgrep-$version.tgz"
+            "$PWD/npm-packs/pi-ast-sgrep-$extension_version.tgz"
           node -e "const fs=require('fs'); console.log('[pi-ci] install inventory: '+fs.readdirSync(process.argv[1]).sort().join(','))" "$clean/node_modules"
       - name: Exercise installed launcher and extension
         shell: bash
