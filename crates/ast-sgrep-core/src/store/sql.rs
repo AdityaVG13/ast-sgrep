@@ -413,7 +413,13 @@ fn configure_connection_inner(
     conn.busy_timeout(busy)?;
     conn.set_prepared_statement_cache_capacity(128);
     if read_only {
-        conn.execute_batch("PRAGMA query_only = ON; PRAGMA foreign_keys = ON;")?;
+        // No `PRAGMA query_only`: SQLITE_OPEN_READ_ONLY already fail-closes
+        // main-schema writes at the VFS layer, while query_only also blocks
+        // TEMP DDL — which silently disabled the ephemeral fts5vocab df cache
+        // (store/trigram_df.rs) and voided its c2/c2b regressions. Temp tables
+        // are per-connection scratch: only in-process code reaches them, and
+        // ensure_vocab_table drops squatters before creating.
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     } else {
         let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
         if !journal_mode.eq_ignore_ascii_case("wal") {

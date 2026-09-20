@@ -6,6 +6,50 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
+## 2026-09-20 df shortcut resurrection, session-gated (self corpus, working tree)
+
+**Status: `reproducible-in-tree`.** Dropping `PRAGMA query_only` (keeping
+`SQLITE_OPEN_READ_ONLY`) re-enables the ephemeral fts5vocab df cache that
+`ea7ca709` silently disabled, but the ~93ms vocab preload is lethal on the
+9ms one-shot path (ungated binary: 102.3 ms mean) — so the shortcut arms
+only via `warm_search_path` (sticky/serve sessions). Binaries built from a
+working tree atop `dc35e5c7` with that change uncommitted — re-run after
+commit to re-pin.
+
+| Provenance | value |
+|------------|-------|
+| date | 2026-09-20 |
+| commit | working tree atop `dc35e5c7` (df session-gating + bench quarantine policy, uncommitted) |
+| machine | Apple M5 Max, 18 cores (arm64), macOS 26.6.2, APFS SSD |
+| corpus | one-shot: tracked files → rsync workdir, **648 files**; serve: repo `.asgrep/index.db` (322 MiB) |
+| build | `cargo build --profile release-perf -p ast-sgrep-cli --bin asgrep` |
+| tools | ripgrep 15.1.0, hyperfine 1.20.0 |
+
+p95 is nearest-rank on hyperfine's raw samples: `idx = floor((n - 1) * 95 / 100)`.
+
+| Surface | n | p50 | p95 | note |
+|---------|--:|----:|----:|------|
+| one-shot `literal:SearchHit`, base | 15 | 10.6 ms | 11.7 ms | same hyperfine block as gated + rg |
+| one-shot `literal:SearchHit`, gated | 15 | 10.4 ms | **10.9 ms** | no one-shot tax (cold search never creates the vocab) |
+| one-shot `rg -n SearchHit` | 15 | 13.8 ms | 17.2 ms | gated beats rg ~1.3× p50 |
+| serve distinct-query p50, base | 240×2 | 2.45/2.22 ms | (p99) 9.8/5.3 ms | `warm_distinct.mjs`, 2 rounds |
+| serve distinct-query p50, gated | 240×2 | 1.07/1.00 ms | (p99) 10.7/3.3 ms | **~2.2×**; back-to-back ungated 0.99 = gated 1.01 (identical steady state) |
+
+Notes:
+
+- The ungated intermediate (query_only dropped, no arming) timed 102.3 ms
+  mean one-shot: vocab ensure+preload on every cold process. The gated
+  binary matches base one-shot while keeping the full warmed win —
+  session-gating is load-bearing, not cosmetic.
+- An earlier ungated serve block read p50 0.63 ms; a back-to-back rerun
+  reads 0.99 (ungated) vs 1.01 (gated). The 0.63 was a quiet-machine
+  outlier; ~1.0 ms is the in-session warmed figure. Gated serve now sits
+  ~2× above fff's 0.5 ms warm-grep cell (different match-set semantics).
+- `asgrep bench` quarantine now warns (exit 0, measurements printed)
+  instead of failing the run; `ASGREP_BENCH_STRICT=1` restores fail-hard.
+  E2E: 3-iteration run quarantines at cv 173% → exit 0 + stderr warning;
+  strict → exit 2 JSON error envelope.
+
 ## 2026-09-20 one-shot literal fix (self corpus, working tree)
 
 **Status: `reproducible-in-tree`.** Same workdir protocol as the bake-off row

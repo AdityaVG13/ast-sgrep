@@ -71,6 +71,11 @@ struct DfState {
     /// Set once the vocab table could not be created (e.g. SQLite built
     /// without fts5vocab): stop retrying for this store generation.
     unavailable: bool,
+    /// The vocab preload costs ~93ms on the self corpus — lethal on the 9ms
+    /// one-shot path, amortized over sticky/serve sessions. Only an explicit
+    /// session warm arms the shortcut; cold one-shot search always takes
+    /// [`TrigramShortcut::Full`].
+    armed: bool,
 }
 
 impl TrigramDfCache {
@@ -82,7 +87,24 @@ impl TrigramDfCache {
                 },
                 gen: 0,
                 unavailable: false,
+                armed: false,
             }),
+        }
+    }
+
+    /// Arm the shortcut for a sticky session, preloading the vocab now so
+    /// the ~93ms bulk load lands in session warmup instead of on a live
+    /// query. Called only from `warm_search_path`, which runs solely at
+    /// sticky-session open — cold one-shot search stays unarmed (`Full`).
+    pub(crate) fn arm(&self, store: &IndexStore) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        state.armed = true;
+        if let Ok(gen) = store.index_data_version() {
+            if state.gen != gen {
+                refresh_vocab(store, &mut state, gen);
+            }
         }
     }
 
@@ -103,6 +125,11 @@ impl TrigramDfCache {
         let Ok(mut state) = self.inner.lock() else {
             return TrigramShortcut::Full;
         };
+        // Cold one-shot search never arms: skip even the generation read so
+        // the vocab ensure/preload tax stays on explicitly warmed sessions.
+        if !state.armed {
+            return TrigramShortcut::Full;
+        }
         let gen = match store.index_data_version() {
             Ok(gen) => gen,
             // Unreadable generation: no trustworthy invalidation signal.
@@ -112,29 +139,8 @@ impl TrigramDfCache {
         if state.unavailable && cache_valid {
             return TrigramShortcut::Full;
         }
-        if !cache_valid {
-            if ensure_vocab_table(store).is_err() {
-                state.unavailable = true;
-                state.gen = gen;
-                return TrigramShortcut::Full;
-            }
-            // fts5vocab point lookups walk the whole term index per probe
-            // (~ms each), which put ~11ms on every
-            // cold needle's df path. One bulk preload per generation turns
-            // every later probe into a HashMap hit. Bounded by corpus
-            // vocabulary size (~1-2MB for 30-50k trigrams here).
-            match preload_vocab(store) {
-                Ok(entries) => {
-                    state.unavailable = false;
-                    state.gen = gen;
-                    state.cache.entries = entries;
-                }
-                Err(_) => {
-                    state.unavailable = true;
-                    state.gen = gen;
-                    return TrigramShortcut::Full;
-                }
-            }
+        if !cache_valid && !refresh_vocab(store, &mut state, gen) {
+            return TrigramShortcut::Full;
         }
         let conn = store.connection();
         // After vocab preload, df lookups are HashMap hits. Collect every
@@ -178,6 +184,34 @@ impl TrigramDfCache {
             .collect::<Option<Vec<i64>>>()?
             .into_iter()
             .min()
+    }
+}
+
+/// (Re)create the vocab table and bulk-preload it for `gen`. Returns false
+/// when df data is unavailable — callers degrade to [`TrigramShortcut::Full`].
+fn refresh_vocab(store: &IndexStore, state: &mut DfState, gen: i64) -> bool {
+    if ensure_vocab_table(store).is_err() {
+        state.unavailable = true;
+        state.gen = gen;
+        return false;
+    }
+    // fts5vocab point lookups walk the whole term index per probe
+    // (~ms each), which put ~11ms on every
+    // cold needle's df path. One bulk preload per generation turns
+    // every later probe into a HashMap hit. Bounded by corpus
+    // vocabulary size (~1-2MB for 30-50k trigrams here).
+    match preload_vocab(store) {
+        Ok(entries) => {
+            state.unavailable = false;
+            state.gen = gen;
+            state.cache.entries = entries;
+            true
+        }
+        Err(_) => {
+            state.unavailable = true;
+            state.gen = gen;
+            false
+        }
     }
 }
 

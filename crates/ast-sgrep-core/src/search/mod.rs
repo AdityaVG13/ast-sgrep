@@ -299,7 +299,7 @@ impl Searcher {
     /// first unique sticky search is not the session-open tax.
     pub fn warm_search_path(&self) -> Result<()> {
         let _ = self.store.line_corpus()?;
-        let _ = self.store.trigram_df().min_df(&self.store, "aaa");
+        self.store.trigram_df().arm(&self.store);
         if let Ok(table) = WarmedSymbolTable::load(&self.store) {
             *lock_clear_on_poison(&self.symbol_table, |slot| *slot = None) = Some(table);
         }

@@ -10,6 +10,9 @@
 //! C3 freshness — foreign raw-SQL row deletion/addition flips results even
 //!    when the df memo holds the old generation (absence is never memoized;
 //!    MATCH always reads the live index).
+//! C4 session-gating — a cold one-shot search never creates the df vocab
+//!    (no ~93ms preload tax on the 9ms one-shot path); only an explicit
+//!    `warm_search_path` (sticky/serve sessions) arms it.
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 use tempfile::TempDir;
@@ -111,6 +114,46 @@ fn contains_oracle(root: &std::path::Path, needle: &str, case_insensitive: bool)
 }
 
 #[test]
+fn cold_search_skips_vocab_ensure_until_warmed() {
+    let (_temp, searcher) = setup();
+    let vocab_tables = || -> i64 {
+        searcher
+            .store()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master WHERE name = 'asgrep_trigram_vocab'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(vocab_tables(), 0, "precondition: no vocab before any search");
+    // Cold one-shot path: correct results with NO vocab creation (no preload tax).
+    assert_eq!(
+        hit_files(&searcher, "literal:beta_shared_rare_token").len(),
+        3,
+        "cold search stays correct without the df vocab"
+    );
+    assert_eq!(
+        vocab_tables(),
+        0,
+        "cold search must not create the df vocab (one-shot preload tax)"
+    );
+    // Explicit session warm arms the vocab; results stay identical.
+    searcher.warm_search_path().unwrap();
+    assert_eq!(
+        hit_files(&searcher, "literal:beta_shared_rare_token").len(),
+        3,
+        "warmed search stays correct with the df vocab engaged"
+    );
+    assert_eq!(
+        vocab_tables(),
+        1,
+        "warmed session must engage the df vocab"
+    );
+}
+
+#[test]
 fn c1_shortcut_matches_contains_oracle() {
     let (temp, _searcher) = setup();
     // Case-insensitive surface exercises the fold-identity fast path.
@@ -123,6 +166,8 @@ fn c1_shortcut_matches_contains_oracle() {
         ..SearchOptions::default()
     })
     .unwrap();
+    // Prove Match-path equivalence: arm the df vocab so the shortcut engages.
+    ci_searcher.warm_search_path().unwrap();
     let cases = [
         ("literal:zzquux", "zzquux"),
         ("literal:ZZQUUX_Marker", "zzquux_marker"),
@@ -170,6 +215,9 @@ fn c2_decoy_vocab_table_is_not_trusted() {
              ,('rke', 40, 40),('ker', 40, 40);",
         )
         .unwrap();
+    // Arm AFTER forging: ensure must drop the squatter before creating the
+    // real vocab.
+    searcher.warm_search_path().unwrap();
     let got = hit_files(&searcher, "literal:zzquux_marker");
     assert_eq!(got, vec!["src/mod_0.py".to_string()]);
 }
@@ -186,7 +234,9 @@ fn c2b_post_warm_forge_must_not_answer_silence() {
         ..SearchOptions::default()
     })
     .unwrap();
-    // Warm the df memo at the current generation (vocab ensured, entries cached).
+    // Arm the df path at the current generation (vocab ensured, entries
+    // cached), then verify the precondition before forging.
+    searcher.warm_search_path().unwrap();
     let got = hit_files(&searcher, "literal:beta_shared_rare_token");
     assert_eq!(got.len(), 3, "precondition: marker visible before forgery");
     // Forge AFTER warm-up: same connection, same index generation, so neither
@@ -223,7 +273,8 @@ fn c2b_post_warm_forge_must_not_answer_silence() {
 #[test]
 fn c3_foreign_mutation_flips_results_despite_warm_memo() {
     let (temp, searcher) = setup();
-    // Warm the df memo at the current generation.
+    // Arm so the memo is genuinely warm — stale-df safety is the point.
+    searcher.warm_search_path().unwrap();
     assert_eq!(
         hit_files(&searcher, "literal:beta_shared_rare_token"),
         vec![

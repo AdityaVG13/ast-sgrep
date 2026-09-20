@@ -146,12 +146,6 @@ fn quota_partition<T>(
     fns.into_iter().chain(types).chain(others).collect()
 }
 
-fn is_type_symbol_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "type" | "enum" | "class" | "interface" | "struct"
-    )
-}
 enum CallerMatchMode {
     Hybrid,
     CalleeOnly,

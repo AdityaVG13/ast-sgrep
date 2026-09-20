@@ -166,18 +166,28 @@ fn open_readonly_does_not_take_write_lock() {
         .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
         .expect("busy_timeout");
     assert_eq!(busy_ms, 250);
+    // Fail-closed is the SQLITE_OPEN_READ_ONLY flag, not PRAGMA query_only:
+    // main-schema writes must fail at the VFS layer, while TEMP DDL must
+    // stay available for the ephemeral df vocab (store/trigram_df.rs).
+    // Re-adding query_only re-disables the df lever and voids c2/c2b.
     let query_only: i64 = store
         .connection()
         .query_row("PRAGMA query_only", [], |row| row.get(0))
         .expect("query_only");
-    assert_eq!(query_only, 1);
+    assert_eq!(query_only, 0, "temp vocab DDL must stay available");
     let err = store
         .connection()
         .execute("INSERT INTO meta(key, value) VALUES('x', 'y')", [])
         .expect_err("readonly insert");
     let msg = err.to_string().to_ascii_lowercase();
     assert!(
-        msg.contains("readonly") || msg.contains("read-only") || msg.contains("query_only"),
+        msg.contains("readonly") || msg.contains("read-only"),
         "unexpected insert error: {err}"
     );
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TEMP TABLE asgrep_readonly_probe(x); DROP TABLE asgrep_readonly_probe;",
+        )
+        .expect("temp DDL stays available for the ephemeral df vocab");
 }
