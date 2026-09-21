@@ -304,3 +304,16 @@ pub fn store_lexicon(store: &crate::store::IndexStore, associations: &[Associati
 pub fn load_lexicon(store: &crate::store::IndexStore) -> Result<Lexicon> {
     Ok(Lexicon::from_associations(store.all_lexicon_rows()?))
 }
+
+/// Load only the lexicon rows `terms` can expand. Per-term lists are
+/// identical to the full load for every query (see
+/// `IndexStore::lexicon_rows_for_terms`); only unserved-row validation is
+/// skipped.
+pub fn load_lexicon_for_terms(
+    store: &crate::store::IndexStore,
+    terms: &[String],
+) -> Result<Lexicon> {
+    Ok(Lexicon::from_associations(
+        store.lexicon_rows_for_terms(terms)?,
+    ))
+}

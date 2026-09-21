@@ -979,6 +979,118 @@ impl IndexStore {
         })
     }
 
+    /// Decode one stored lexicon row, failing closed on oversized terms,
+    /// non-finite scores, and out-of-range support. Shared by the full and
+    /// targeted loads so their validation cannot diverge.
+    fn decode_lexicon_row(
+        term: String,
+        related: String,
+        ppmi: f64,
+        support: i64,
+        term_chars: i64,
+        related_chars: i64,
+    ) -> Result<crate::lexicon::Association> {
+        if term_chars > crate::lexicon::MAX_TERM_CHARS as i64
+            || related_chars > crate::lexicon::MAX_TERM_CHARS as i64
+        {
+            return Err(crate::StoreError::Other(format!(
+                "stored lexicon term exceeds maximum of {} characters",
+                crate::lexicon::MAX_TERM_CHARS
+            )));
+        }
+        if !ppmi.is_finite() {
+            return Err(crate::StoreError::Other(
+                "stored lexicon contains a non-finite score".into(),
+            ));
+        }
+        let support = u32::try_from(support).map_err(|_| {
+            crate::StoreError::Other("stored lexicon support is out of range".into())
+        })?;
+        Ok(crate::lexicon::Association {
+            term,
+            related,
+            ppmi,
+            support,
+        })
+    }
+
+    /// Read only the lexicon rows `terms` can expand. `Lexicon::expand`
+    /// consults `related(term)` for each query term, and each per-term list is
+    /// built solely from rows with `term` or `related` equal to that term, in
+    /// the same `ORDER BY term, related` sequence the full load sees — so the
+    /// per-term lists (and therefore every expansion) are identical to the
+    /// full load for every query. Only unserved-row validation is skipped:
+    /// corruption outside the served set no longer poisons the load.
+    pub fn lexicon_rows_for_terms(
+        &self,
+        terms: &[String],
+    ) -> Result<Vec<crate::lexicon::Association>> {
+        let mut unique: Vec<&str> = terms.iter().map(String::as_str).collect();
+        unique.sort();
+        unique.dedup();
+        if unique.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Two binds per term; every caller derives terms from `prose_terms`
+        // (capped at MAX_PROSE_TERMS), so binds stay at 2*64=128, far under
+        // SQLite's legacy 999 variable limit. Anything beyond that cap falls
+        // back to the full load, which is always correct.
+        if unique.len() > crate::lexicon::MAX_PROSE_TERMS {
+            return self.all_lexicon_rows();
+        }
+        let placeholders = std::iter::repeat_n("?", unique.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT SUBSTR(term, 1, {}), SUBSTR(related, 1, {}), ppmi, support,
+                    LENGTH(term), LENGTH(related)
+             FROM lexicon
+             WHERE term IN ({placeholders}) OR related IN ({placeholders})
+             ORDER BY term, related
+             LIMIT {}",
+            crate::lexicon::MAX_TERM_CHARS,
+            crate::lexicon::MAX_TERM_CHARS,
+            crate::lexicon::MAX_PAIRS + 1,
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let binds: Vec<&str> = unique
+            .iter()
+            .copied()
+            .chain(unique.iter().copied())
+            .collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
+        // One truncated per-term list per query term; fetched rows beyond the
+        // per-term truncation bound only cost a reallocation, never correctness.
+        let mut out = Vec::with_capacity(unique.len().saturating_mul(crate::lexicon::MAX_PER_TERM));
+        for row in rows {
+            let (term, related, ppmi, support, term_chars, related_chars) = row?;
+            out.push(Self::decode_lexicon_row(
+                term,
+                related,
+                ppmi,
+                support,
+                term_chars,
+                related_chars,
+            )?);
+        }
+        if out.len() > crate::lexicon::MAX_PAIRS {
+            return Err(crate::StoreError::Other(format!(
+                "stored lexicon exceeds maximum of {} associations",
+                crate::lexicon::MAX_PAIRS
+            )));
+        }
+        Ok(out)
+    }
+
     /// Read a bounded lexicon (ufk7). Ordered so loads are deterministic.
     pub fn all_lexicon_rows(&self) -> Result<Vec<crate::lexicon::Association>> {
         let mut stmt = self.conn.prepare_cached(
@@ -1007,28 +1119,14 @@ impl IndexStore {
         let mut out = Vec::with_capacity(crate::lexicon::MAX_PAIRS.min(1024));
         for row in rows {
             let (term, related, ppmi, support, term_chars, related_chars) = row?;
-            if term_chars > crate::lexicon::MAX_TERM_CHARS as i64
-                || related_chars > crate::lexicon::MAX_TERM_CHARS as i64
-            {
-                return Err(crate::StoreError::Other(format!(
-                    "stored lexicon term exceeds maximum of {} characters",
-                    crate::lexicon::MAX_TERM_CHARS
-                )));
-            }
-            if !ppmi.is_finite() {
-                return Err(crate::StoreError::Other(
-                    "stored lexicon contains a non-finite score".into(),
-                ));
-            }
-            let support = u32::try_from(support).map_err(|_| {
-                crate::StoreError::Other("stored lexicon support is out of range".into())
-            })?;
-            out.push(crate::lexicon::Association {
+            out.push(Self::decode_lexicon_row(
                 term,
                 related,
                 ppmi,
                 support,
-            });
+                term_chars,
+                related_chars,
+            )?);
         }
         if out.len() > crate::lexicon::MAX_PAIRS {
             return Err(crate::StoreError::Other(format!(

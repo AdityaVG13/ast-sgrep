@@ -110,7 +110,7 @@ pub struct Searcher {
     /// Searcher, so cache hits must stay available when stamps are off.
     cache_responses: bool,
     semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
-    lexicon_cache: Mutex<Option<(i64, crate::lexicon::Lexicon)>>,
+    lexicon_cache: Mutex<Option<(i64, Vec<String>, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
     /// S1: generation-keyed memo for snapshot-stamp parts that are pure
     /// functions of index contents (worktree revision + sidecar fingerprint).
@@ -569,16 +569,21 @@ impl Searcher {
             return Vec::new();
         }
         let mut cache = lock_clear_on_poison(&self.lexicon_cache, |cached| *cached = None);
-        if cache
+        // The targeted load is a function of (generation, terms): a cached
+        // lexicon serves only the exact term set it was loaded for.
+        let hit = cache
             .as_ref()
-            .is_none_or(|(cached_generation, _)| *cached_generation != lexicon_generation)
-        {
+            .is_some_and(|(cached_generation, cached_terms, _)| {
+                *cached_generation == lexicon_generation && *cached_terms == *terms
+            });
+        if !hit {
             // A corrupt externally modified lexicon fails closed once per data
             // generation rather than decoding the bounded maximum on every query.
-            let lexicon = crate::lexicon::load_lexicon(&self.store).unwrap_or_default();
-            *cache = Some((lexicon_generation, lexicon));
+            let lexicon =
+                crate::lexicon::load_lexicon_for_terms(&self.store, terms).unwrap_or_default();
+            *cache = Some((lexicon_generation, terms.to_vec(), lexicon));
         }
-        let Some((_, lexicon)) = cache.as_ref() else {
+        let Some((_, _, lexicon)) = cache.as_ref() else {
             return Vec::new();
         };
         if lexicon.is_empty() {

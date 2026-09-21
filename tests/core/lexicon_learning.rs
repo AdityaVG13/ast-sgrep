@@ -308,6 +308,127 @@ fn persisted_lexicon_rejects_oversized_rows_and_terms() {
 }
 
 #[test]
+fn targeted_lexicon_load_matches_full_load() {
+    use ast_sgrep_core::lexicon::{
+        load_lexicon, load_lexicon_for_terms, MAX_PER_TERM, MAX_TERM_CHARS,
+    };
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = ast_sgrep_core::IndexStore::open(temp.path(), None).unwrap();
+    // Crafted rows exercising every direction the loader merges: forward
+    // edges, reverse-only edges, per-term overflow past MAX_PER_TERM
+    // truncation, a duplicate-related pair ((hub,spoke) and (spoke,hub) both
+    // stored, so first-inserted order decides), and unrelated rows the
+    // targeted load must never read.
+    let mut rows: Vec<(String, String, f64, i64)> = vec![
+        ("hub".into(), "spoke".into(), 4.0, 9),
+        ("spoke".into(), "hub".into(), 2.0, 5),
+        ("hub".into(), "axle".into(), 3.0, 7),
+        ("rim".into(), "hub".into(), 5.0, 11),
+        ("elsewhere".into(), "faraway".into(), 6.0, 12),
+    ];
+    for index in 0..(MAX_PER_TERM + 4) {
+        rows.push((
+            "hub".into(),
+            format!("extra{index:02}"),
+            1.0 + index as f64 * 0.1,
+            3 + index as i64,
+        ));
+    }
+    assert!(rows.iter().all(
+        |(term, related, _, _)| term.chars().count() <= MAX_TERM_CHARS
+            && related.chars().count() <= MAX_TERM_CHARS
+    ));
+    for (term, related, ppmi, support) in &rows {
+        store
+            .connection()
+            .execute(
+                "INSERT INTO lexicon(term, related, ppmi, support) VALUES(?1, ?2, ?3, ?4)",
+                rusqlite::params![term, related, ppmi, support],
+            )
+            .unwrap();
+    }
+
+    let full = load_lexicon(&store).expect("full load");
+    // The duplicate-related pair pins first-inserted order: ORDER BY
+    // term,related puts (hub,spoke) before (spoke,hub), so the forward edge
+    // (ppmi 4.0) must win over the reverse (ppmi 2.0) on both paths.
+    let hub_spoke = full
+        .related("hub")
+        .iter()
+        .find(|a| a.related == "spoke")
+        .expect("hub->spoke edge");
+    assert_eq!(hub_spoke.ppmi, 4.0);
+    assert_eq!(full.related("hub").len(), MAX_PER_TERM);
+
+    for terms in [
+        vec!["hub".to_string()],
+        vec!["spoke".to_string()],
+        vec!["hub".to_string(), "spoke".to_string()],
+        vec!["hub".to_string(), "elsewhere".to_string()],
+        vec!["missing".to_string()],
+        vec![],
+    ] {
+        let targeted = load_lexicon_for_terms(&store, &terms).expect("targeted load");
+        for term in &terms {
+            assert_eq!(
+                targeted.related(term),
+                full.related(term),
+                "per-term list must match for {terms:?}"
+            );
+        }
+        assert_eq!(
+            targeted.expand(&terms, 64),
+            full.expand(&terms, 64),
+            "expansion must match for {terms:?}"
+        );
+    }
+}
+
+#[test]
+fn targeted_lexicon_load_validates_served_rows_only() {
+    use ast_sgrep_core::lexicon::{load_lexicon, load_lexicon_for_terms, MAX_TERM_CHARS};
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = ast_sgrep_core::IndexStore::open(temp.path(), None).unwrap();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO lexicon(term, related, ppmi, support) VALUES('alpha', 'beta', 1.0, 3)",
+            [],
+        )
+        .unwrap();
+    // Corruption outside the served set no longer poisons a targeted load;
+    // the full load still fails closed on it.
+    store
+        .connection()
+        .execute(
+            "INSERT INTO lexicon(term, related, ppmi, support) VALUES(?1, 'unrelated', 1.0, 3)",
+            rusqlite::params!["x".repeat(MAX_TERM_CHARS + 1)],
+        )
+        .unwrap();
+    assert!(load_lexicon(&store).is_err());
+    let targeted =
+        load_lexicon_for_terms(&store, &["alpha".to_string()]).expect("unserved row ignored");
+    assert_eq!(targeted.related("alpha").len(), 1);
+
+    // Corruption on a served row still fails closed.
+    store
+        .connection()
+        .execute(
+            "INSERT INTO lexicon(term, related, ppmi, support) VALUES(?1, 'alpha', 1.0, 3)",
+            rusqlite::params!["y".repeat(MAX_TERM_CHARS + 1)],
+        )
+        .unwrap();
+    let error = load_lexicon_for_terms(&store, &["alpha".to_string()])
+        .expect_err("served corrupt row must fail closed");
+    assert!(
+        error.to_string().contains("term exceeds maximum"),
+        "{error}"
+    );
+}
+
+#[test]
 fn prose_terms_survive_punctuation() {
     let terms = prose_terms("Rotate the credentials, then renew_session().");
     assert!(terms.contains(&"rotate".to_string()), "{terms:?}");
