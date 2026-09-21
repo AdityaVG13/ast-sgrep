@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the current contract (`2.5.1`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the current contract (`2.5.2`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 
 ## Pi packages.md compliance

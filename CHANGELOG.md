@@ -7,6 +7,14 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
+## [2.5.2] - 2026-09-21
+
+2.5.1 was tagged but never published (release-automation defects below); 2.5.2 supersedes it with identical product content plus the fixes.
+
+### Fixed
+
+- npm OIDC lane: publish jobs no longer pass `registry-url` to setup-node, which exports a placeholder `NODE_AUTH_TOKEN` that forced every publish into the token lane. Bootstrap auth is wired explicitly instead; verified end to end with a CI probe.
+
 ## [2.5.1] - 2026-09-21
 
 ### Added

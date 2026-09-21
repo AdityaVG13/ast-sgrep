@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v2.5.1** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
+**v2.5.2** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
 
 > **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
@@ -24,7 +24,7 @@ It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `
 
 **Upgrading to 2.0:** this is a breaking semver release. Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Local hashed semantic search remains the default, optional neural embeddings remain in-process, and indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. Pi users can update the package normally.
 
-Standalone CLI binaries are on the [v2.5.1 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.5.1) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
+Standalone CLI binaries are on the [v2.5.2 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.5.2) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
 
 To build from source:
 
@@ -274,7 +274,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 
 ## Project status and verification
 
-**v2.5.1.** Local-first embeddings, index schema 16, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages (Dart, MoonBit newest), fusion-normalized ranking, and the hashed semantic layer remain. Search is read-only by default; MCP runs on official rmcp.
+**v2.5.2.** Local-first embeddings, index schema 16, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages (Dart, MoonBit newest), fusion-normalized ranking, and the hashed semantic layer remain. Search is read-only by default; MCP runs on official rmcp.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

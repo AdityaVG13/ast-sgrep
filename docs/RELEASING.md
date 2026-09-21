@@ -163,7 +163,7 @@ Only a human release operator may run this block. It is noninteractive and publi
 
 ```bash
 set -euo pipefail
-release_version='2.5.1'
+release_version='2.5.2'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
@@ -206,7 +206,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.1'
+   release_version='2.5.2'
    release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
@@ -219,7 +219,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.1'
+   release_version='2.5.2'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    asgrep_version="$("$install_root/bin/asgrep" --version)"
@@ -229,14 +229,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$ast_sgrep_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.1`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.2`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
 The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="2.5.1"
+version="2.5.2"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

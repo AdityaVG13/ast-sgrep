@@ -16,7 +16,7 @@ members = [
 default-members = ["crates/ast-sgrep-cli"]
 
 [workspace.package]
-version = "2.5.1"
+version = "2.5.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/AdityaVG13/ast-sgrep"

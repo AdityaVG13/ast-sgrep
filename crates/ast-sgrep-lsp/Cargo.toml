@@ -20,6 +20,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.1" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.2" }
 serde.workspace = true
 serde_json.workspace = true
