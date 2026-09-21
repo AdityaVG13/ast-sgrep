@@ -6,10 +6,15 @@ import { fileURLToPath } from 'node:url';
 // release:prepare X.Y.Z — mechanical version bump for the canonical family.
 //
 // Covers version identity only: Cargo workspace + inter-crate path deps +
-// lockfile, the npm workspace/launcher/platform manifests, the release
-// contract canonical fields, the embedded source constants (+ tsc dist
-// rebuild), and the lockstep satellite manifests (agent-plugin, vscode,
-// napi helper). Then runs the contract, workflow, gate, and plugin checks.
+// lockfile, the npm workspace/launcher/platform/extension manifests (the
+// extension rides lockstep; the pi-v lane remains for out-of-band revs),
+// the release contract canonical fields, the embedded source constants (+
+// tsc dist rebuild), and the lockstep satellite manifests (agent-plugin,
+// vscode, napi helper). Then runs the contract, workflow, gate, and plugin
+// checks. The lockfile is deliberately NOT regenerated here: the new
+// version is unpublished, so regenerating would record unresolvable
+// {"optional": true} stubs (br-zvh) — the release workflow re-pins after
+// publication.
 //
 // Deliberately human: CHANGELOG prose, README (banner/link/status),
 // RELEASING.md release_version blocks, docs/pi-package.md pointer,
@@ -70,6 +75,7 @@ for (const manifest of ['ast-sgrep-cli', 'ast-sgrep-codemode-napi', 'ast-sgrep-c
 const manifests = [
   'package.json',
   'packages/pi/launcher/package.json',
+  'packages/pi/extension/package.json',
   'packages/pi/platforms/darwin-arm64/package.json',
   'packages/pi/platforms/darwin-x64/package.json',
   'packages/pi/platforms/linux-arm64-gnu/package.json',
@@ -83,8 +89,8 @@ const manifests = [
 for (const manifest of manifests) swap(manifest, versionLine, 1, 'manifest version');
 swap('packages/pi/launcher/package.json', (line) => line.includes('"@ast-sgrep/') && line.includes(`"${current}"`), 5, 'platform optionalDependencies');
 
-// 3. Release contract canonical fields (extension version/range untouched).
-swap('packages/pi/release-contract.json', versionLine, 4, 'canonical versions');
+// 3. Release contract canonical fields (launcherRange untouched).
+swap('packages/pi/release-contract.json', versionLine, 5, 'canonical versions');
 swap('packages/pi/release-contract.json', (line) => line.includes(`"tag": "v${current}"`), 1, 'official tag');
 swap('packages/pi/release-contract.json', (line) => line.includes(`"nativeCliVersion": "${current}"`), 1, 'native CLI version');
 swap('packages/pi/release-contract.json', (line) => line.includes(`"optionalDependencyVersion": "${current}"`), 5, 'platform pins');
@@ -111,5 +117,5 @@ for (const item of [
   'docs/RELEASING.md release_version blocks',
   'docs/pi-package.md contract pointer',
   'launcherRange judgment (extension floor/cap)',
-  'commit, signed tag, dispatch; Homebrew re-pin after the tag',
+  'commit + push, then npm run release (signs tag, dispatches, one approval); Homebrew re-pin after the tag',
 ]) console.log(`[prepare]   - ${item}`);

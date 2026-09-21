@@ -12,11 +12,6 @@ on:
         required: true
         type: boolean
         default: false
-      bootstrap_token:
-        description: One-time first-publication npm token bootstrap; leave off for all subsequent publications
-        required: true
-        type: boolean
-        default: false
       layer:
         description: Release lane — family publishes the canonical seven-package set; extension publishes only pi-ast-sgrep at packages.extension.version under a signed pi-v tag
         required: true
@@ -228,7 +223,6 @@ jobs:
     env:
       ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
       ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
-      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
     permissions:
       contents: write
       id-token: write
@@ -238,18 +232,9 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
-      - name: Fail fast when bootstrap token is missing
-        if: ${{ inputs.bootstrap_token }}
-        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
-      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
-      # set without a token, breaking OIDC-lane detection — so publish jobs
-      # omit registry-url and bootstrap auth is wired explicitly here.
-      - name: Configure npm token auth for bootstrap lane
-        if: ${{ inputs.bootstrap_token }}
-        run: |
-          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
-          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
-          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
+      # OIDC-only (br-r8k): setup-node exports a placeholder auth token
+      # when registry-url is set without one, breaking OIDC — so publish
+      # jobs omit registry-url and wire no token auth at all.
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
@@ -288,7 +273,6 @@ jobs:
     env:
       ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
       ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
-      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
     permissions:
       contents: write
       id-token: write
@@ -298,18 +282,9 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
-      - name: Fail fast when bootstrap token is missing
-        if: ${{ inputs.bootstrap_token }}
-        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
-      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
-      # set without a token, breaking OIDC-lane detection — so publish jobs
-      # omit registry-url and bootstrap auth is wired explicitly here.
-      - name: Configure npm token auth for bootstrap lane
-        if: ${{ inputs.bootstrap_token }}
-        run: |
-          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
-          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
-          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
+      # OIDC-only (br-r8k): setup-node exports a placeholder auth token
+      # when registry-url is set without one, breaking OIDC — so publish
+      # jobs omit registry-url and wire no token auth at all.
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
@@ -338,6 +313,45 @@ jobs:
         run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer launcher
       - name: Publish extension after launcher
         run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer extension
+
+  repin-lock:
+    name: Re-pin lockfile after publication
+    # always() so a skipped sibling (full vs publish-only) cannot veto the
+    # run: exactly one publish job succeeds per release. No environment —
+    # this runs under the publish approval, not a second one. If it fails,
+    # the release is already live; re-run `npm install --package-lock-only`
+    # on main and push.
+    if: ${{ always() && inputs.publish == true && (needs.publish.result == 'success' || needs.publish-retry.result == 'success') }}
+    needs: [publish, publish-retry]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - name: Re-pin lockfile against the live release
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          main_version="$(node -p "require('./package.json').version")"
+          if [ "$main_version" != "$tag_version" ]; then
+            echo "main is at $main_version, release was $tag_version; skipping lock re-pin"
+            exit 0
+          fi
+          npm install --package-lock-only --ignore-scripts
+          if git diff --quiet -- package-lock.json; then
+            echo "lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore(ci): re-pin lockfile after $GITHUB_REF_NAME publication"
+          git push origin main
 
   extension-gate:
     name: Validate signed extension tag
@@ -425,7 +439,6 @@ jobs:
     env:
       ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
       ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
-      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
     permissions:
       contents: write
       id-token: write
@@ -435,18 +448,9 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
-      - name: Fail fast when bootstrap token is missing
-        if: ${{ inputs.bootstrap_token }}
-        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
-      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
-      # set without a token, breaking OIDC-lane detection — so publish jobs
-      # omit registry-url and bootstrap auth is wired explicitly here.
-      - name: Configure npm token auth for bootstrap lane
-        if: ${{ inputs.bootstrap_token }}
-        run: |
-          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
-          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
-          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
+      # OIDC-only (br-r8k): setup-node exports a placeholder auth token
+      # when registry-url is set without one, breaking OIDC — so publish
+      # jobs omit registry-url and wire no token auth at all.
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets

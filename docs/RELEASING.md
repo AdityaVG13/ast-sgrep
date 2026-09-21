@@ -7,26 +7,22 @@ This repository publishes npm packages and public crates from one source commit 
 One terminal, five steps. Everything below the checklist is reference for when something deviates.
 
 ```bash
-# 1. Mechanical bump (workspace, npm family, contract, constants, lockfile,
+# 1. Mechanical bump (workspace, npm family + extension, contract, constants,
 #    dist) plus the check battery, then do the human remainder it prints
-#    (CHANGELOG prose, README, docs pointers, extension + launcherRange):
+#    (CHANGELOG prose, README, docs pointers, launcherRange judgment):
 npm run release:prepare X.Y.Z
 npm run check:pi-contract && npm run check:pi-dist && npm run check:pi-release
 git commit -am "release: ast-sgrep X.Y.Z" && git push origin main
 
-# 2. Signed tag on the release commit (SSH signature; tag message = release title):
-git tag -s vX.Y.Z -m "ast-sgrep X.Y.Z: <one-line summary>"
-git verify-tag vX.Y.Z && git push origin refs/tags/vX.Y.Z
+# 2. The release moment: verifies the prepared tree, runs preflight, signs
+#    and pushes the tag, dispatches the family lane, and opens the run page:
+npm run release -- X.Y.Z          # append --dry-run to print the plan only
 
-# 3. Dispatch the official release from the tag (NOT from main):
-gh workflow run pi-npm-release.yml --ref vX.Y.Z \
-  -f release_tag=vX.Y.Z -f publish=true -f layer=family
-
-# 4. Wait ~30 min for builds + verify, then approve the one
+# 3. Wait ~30 min for builds + verify, then approve the one
 #    `npm-production` deployment gate on the run page ("Review pending
 #    deployments"). Nothing else needs a click.
 
-# 5. Verify all seven packages are live at the release versions:
+# 4. Verify all seven packages are live at the release versions:
 for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
          @ast-sgrep/linux-arm64-gnu @ast-sgrep/linux-x64-gnu \
          @ast-sgrep/win32-x64-msvc pi-ast-sgrep; do
@@ -34,7 +30,7 @@ for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
 done
 ```
 
-Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). If the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch. The publish job fails fast with `ASGREP_RELEASE_BOOTSTRAP_TOKEN` if that token is rejected, and strips the Actions OIDC handshake so npm uses pure token auth. Keep `NPM_TOKEN` at repo level only: a same-named environment secret shadows the repo secret for jobs in that environment, which previously produced a misleading OIDC error from an empty token.
+Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). Publication is OIDC-only (br-r8k): there is no token lane, so an OIDC failure means the npm trusted-publisher registration is wrong — fix it on npmjs.com and re-dispatch publish-only. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher. After either publish job succeeds, the workflow re-pins `package-lock.json` against the live release and pushes it to `main` (br-zvh); this runs under the publish approval, not a second one.
 
 ## Pi npm package family
 
@@ -43,11 +39,11 @@ The npm release publishes the canonical family at the contract's canonical versi
 1. the five host-constrained native packages: `@ast-sgrep/darwin-arm64`, `@ast-sgrep/darwin-x64`, `@ast-sgrep/linux-arm64-gnu`, `@ast-sgrep/linux-x64-gnu`, and `@ast-sgrep/win32-x64-msvc`;
 2. the `ast-sgrep` launcher, whose optional native dependencies use that exact version.
 
-The `pi-ast-sgrep` extension is NOT part of the lockstep family: it versions independently under `packages.extension.version` and resolves its launcher through the declared `packages.extension.launcherRange` (see the extension lane below). The packaged executable is built from the release commit and reports the native CLI version recorded separately in [the release contract](../packages/pi/release-contract.json). Family artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
+The `pi-ast-sgrep` extension rides the lockstep family: `release:prepare` bumps it with everything else, and the family lane publishes it last. A `pi-v` extension lane remains for out-of-band extension revs (see below); it resolves its launcher through the declared `packages.extension.launcherRange`. The packaged executable is built from the release commit and reports the native CLI version recorded separately in [the release contract](../packages/pi/release-contract.json). Family artifacts share one source commit and recorded checksums. Pi validation does not run automatically on pull requests, pushes to `main`, or tag pushes; both Pi workflows are manual `workflow_dispatch` actions. npm and crates.io are independently approved registry operations over the same source release; neither waits for or proves completion of the other.
 
 ## Pi extension lane (pi-ast-sgrep)
 
-`pi-ast-sgrep` is deliberately decoupled from the canonical family: it is the primary dogfooding surface for the pi integration and releases on its own version line. The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.0.0 <3`), so installs automatically pick up newer native families once they ship while remaining schema-guarded at runtime.
+`pi-ast-sgrep` is the primary dogfooding surface for the pi integration. It normally releases in lockstep with the family; the lane below covers out-of-band revs (extension-only fixes between family releases). The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.0.0 <3`), so installs automatically pick up newer native families once they ship while remaining schema-guarded at runtime.
 
 Rules for the extension lane:
 

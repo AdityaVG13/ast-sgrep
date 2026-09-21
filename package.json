@@ -16,6 +16,7 @@
     "test:pi-e2e": "node packages/pi/scripts/release-gate-e2e.mjs",
     "release:preflight": "node packages/pi/scripts/release-preflight.mjs",
     "release:prepare": "node packages/pi/scripts/release-prepare.mjs",
-    "publish:pi-extension": "node packages/pi/scripts/publish-extension.mjs"
+    "publish:pi-extension": "node packages/pi/scripts/publish-extension.mjs",
+    "release": "node packages/pi/scripts/release.mjs"
   }
 }

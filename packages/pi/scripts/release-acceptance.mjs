@@ -300,30 +300,11 @@ const validatePublishContext = (state, manifest, environment = process.env) => {
   if (environment.GITHUB_REF_TYPE !== 'tag' || environment.GITHUB_REF_NAME !== expectedTag) fail('ASGREP_RELEASE_TAG_VERSION', 'publication context is not the expected official tag');
   if (environment.GITHUB_SHA?.toLowerCase() !== manifest.commit?.toLowerCase()) fail('ASGREP_RELEASE_TAG_COMMIT', 'preserved artifacts do not match the workflow commit');
 };
-// Bootstrap lane must hide the Actions OIDC handshake from npm: npm prefers
-// the OIDC exchange over NODE_AUTH_TOKEN whenever ACTIONS_ID_TOKEN_* is set
-// and fails the PUT on a trusted-publisher mismatch instead of falling back
-// to token auth (2.5.0 run 35549074188). Pure function of its inputs so the
-// self-test pins the behavior without spawning npm.
-const publishEnv = (environment, bootstrap) => {
-  if (!bootstrap) return undefined;
-  const filtered = { ...environment };
-  delete filtered.ACTIONS_ID_TOKEN_REQUEST_URL;
-  delete filtered.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  return filtered;
-};
 const publish = async () => {
   const { state, directory, manifest } = await verify();
   validatePublishContext(state, manifest);
   const layer = option('layer');
   if (!['native', 'launcher', 'extension'].includes(layer)) fail('ASGREP_RELEASE_LAYER', 'layer must be native, launcher, or extension');
-  const bootstrap = Boolean(process.env.NODE_AUTH_TOKEN);
-  if (bootstrap) {
-    // Fail fast on a dead bootstrap token (2.5.0: the stored NPM_TOKEN
-    // 401'd, which surfaced downstream as a confusing OIDC 403).
-    const probe = spawnSync('npm', ['whoami'], { cwd: root, encoding: 'utf8', windowsHide: true });
-    if (probe.status !== 0) fail('ASGREP_RELEASE_BOOTSTRAP_TOKEN', `bootstrap NPM_TOKEN rejected by the registry: ${String(probe.stderr ?? probe.stdout ?? '').trim()}`);
-  }
   const receiptPath = path.join(directory, 'publish-receipt.json');
   const receipt = await readJson(receiptPath).catch(() => ({ schemaVersion: 1, version: manifest.version, published: [] }));
   const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
@@ -337,15 +318,11 @@ const publish = async () => {
       console.log(`[pi-release] skip ${artifact.name}@${expectedArtifactVersion(state, artifact.name)}: already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
-      // Bootstrap lane publishes WITHOUT --provenance (attestation requires
-      // the OIDC identity) and with the OIDC handshake stripped by
-      // publishEnv, so the registry sees pure token auth while the
-      // trusted-publisher claims are unresolved (br-ijy). The OIDC lane (no
-      // token) always attests. Provenance returns to every lane once br-ijy
-      // closes; all pre-2.5.0 releases shipped unattested.
-      const args = ['publish', path.join(directory, artifact.filename), '--access', 'public'];
-      if (!bootstrap) args.push('--provenance');
-      run('npm', args, { stdio: 'inherit', env: publishEnv(process.env, bootstrap) });
+      // OIDC-only (br-r8k): every lane attests with --provenance under the
+      // Actions OIDC identity. No token fallback exists; a
+      // trusted-publisher mismatch fails here instead of downstream.
+      const args = ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'];
+      run('npm', args, { stdio: 'inherit' });
       published.push(artifact.name);
     }
     receipt.published.push(artifact.name);
@@ -411,11 +388,6 @@ const selfTest = async () => {
   // 2026-09-19 incident: the extension floor sat above every published launcher.
   expect('extension-launcher-unresolved', () => assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [] }));
   if (assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [state.version] }).join() !== state.version) fail('ASGREP_RELEASE_SELF_TEST', 'a published canonical launcher must satisfy the extension launcherRange');
-  // Bootstrap lane: OIDC handshake hidden from npm iff a token is present.
-  const oidcEnv = { NODE_AUTH_TOKEN: 'token', ACTIONS_ID_TOKEN_REQUEST_URL: 'url', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'jwt', KEEP: '1' };
-  const stripped = publishEnv(oidcEnv, true);
-  if (stripped.ACTIONS_ID_TOKEN_REQUEST_URL !== undefined || stripped.ACTIONS_ID_TOKEN_REQUEST_TOKEN !== undefined || stripped.NODE_AUTH_TOKEN !== 'token' || stripped.KEEP !== '1') fail('ASGREP_RELEASE_SELF_TEST', 'bootstrap publish must strip the OIDC handshake but keep the token');
-  if (publishEnv(oidcEnv, false) !== undefined) fail('ASGREP_RELEASE_SELF_TEST', 'OIDC publish must inherit the ambient environment');
   console.log(`[pi-release] gate self-test accepted canonical + extension lane input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);
   console.log('[pi-release] publication: disabled (self-test only)');
