@@ -1,63 +1,23 @@
 name: debug-env-probe
-# TEMPORARY diagnostic (delete after the 2.5.1 publish). Read-only except npm
-# whoami (authentication check, prints username only). Lengths only otherwise.
+# TEMPORARY diagnostic (delete after the publish works). Mints the Actions
+# OIDC JWT this pipeline would hand npm and prints ONLY the decoded payload
+# claims (identity strings, no credentials) for comparison with the npmjs.com
+# trusted-publisher entries. The token itself is never printed.
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  # Control: reproduces the 2.5.1 failure shape (expect len=23 placeholder).
-  control-registry-url:
+  claims:
+    # Same protected environment as the publish jobs, so the environment
+    # claim is minted exactly as npm would see it.
+    environment: npm-production
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ''
     steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22.19.0
-          registry-url: https://registry.npmjs.org
-      - run: echo "control len=${#NODE_AUTH_TOKEN}"
-
-  # Fix direction: no registry-url must leave an empty token empty (expect 0).
-  no-registry-url:
-    runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ''
-    steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22.19.0
-      - run: echo "no-registry-url len=${#NODE_AUTH_TOKEN}"
-      - run: npm view ast-sgrep version --json
-
-  # Does setup-node preserve a real token, or overwrite with placeholder?
-  # Also proves whether the fresh NPM_TOKEN secret is valid (username only).
-  bootstrap-preserve:
-    runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22.19.0
-          registry-url: https://registry.npmjs.org
-      - run: echo "preserve len=${#NODE_AUTH_TOKEN}"
-      - run: npm whoami
-
-  # End-to-end bootstrap mechanism for the workflow fix (verbatim step shape).
-  bootstrap-npmrc:
-    runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22.19.0
-      - name: Configure npm token auth for bootstrap lane
-        run: |
-          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
-          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
-          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
-      - run: npm whoami
+      - run: |
+          resp="$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org")"
+          payload="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"].split(".")[1])')"
+          echo "$payload" | python3 -c 'import base64,json,sys; d=sys.stdin.read().strip(); print(json.dumps(json.loads(base64.urlsafe_b64decode(d+"="*(-len(d)%4)).decode()), indent=1))'
