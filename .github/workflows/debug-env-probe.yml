@@ -1,44 +1,63 @@
 name: debug-env-probe
-# TEMPORARY diagnostic (delete after the 2.5.1 publish). Read-only: finds which
-# step materializes NODE_AUTH_TOKEN when the bootstrap input is false.
-# Prints lengths only, plus the (non-secret) literal rendering the runner shows.
+# TEMPORARY diagnostic (delete after the 2.5.1 publish). Read-only except npm
+# whoami (authentication check, prints username only). Lengths only otherwise.
 on:
   workflow_dispatch:
-    inputs:
-      probe:
-        description: Set true to engage the token path
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
-  probe-v5:
+  # Control: reproduces the 2.5.1 failure shape (expect len=23 placeholder).
+  control-registry-url:
     runs-on: ubuntu-latest
     env:
-      NODE_AUTH_TOKEN: ${{ inputs.probe && secrets.NPM_TOKEN || '' }}
+      NODE_AUTH_TOKEN: ''
     steps:
-      - run: echo "v5/before-setup len=${#NODE_AUTH_TOKEN}"
       - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           registry-url: https://registry.npmjs.org
-      - run: echo "v5/after-setup len=${#NODE_AUTH_TOKEN}"
-      - run: npm install --global npm@11
-      - run: echo "v5/after-npm11 len=${#NODE_AUTH_TOKEN}"
+      - run: echo "control len=${#NODE_AUTH_TOKEN}"
 
-  probe-v4:
+  # Fix direction: no registry-url must leave an empty token empty (expect 0).
+  no-registry-url:
     runs-on: ubuntu-latest
     env:
-      NODE_AUTH_TOKEN: ${{ inputs.probe && secrets.NPM_TOKEN || '' }}
+      NODE_AUTH_TOKEN: ''
     steps:
-      - run: echo "v4/before-setup len=${#NODE_AUTH_TOKEN}"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+      - run: echo "no-registry-url len=${#NODE_AUTH_TOKEN}"
+      - run: npm view ast-sgrep version --json
+
+  # Does setup-node preserve a real token, or overwrite with placeholder?
+  # Also proves whether the fresh NPM_TOKEN secret is valid (username only).
+  bootstrap-preserve:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           registry-url: https://registry.npmjs.org
-      - run: echo "v4/after-setup len=${#NODE_AUTH_TOKEN}"
-      - run: npm install --global npm@11
-      - run: echo "v4/after-npm11 len=${#NODE_AUTH_TOKEN}"
+      - run: echo "preserve len=${#NODE_AUTH_TOKEN}"
+      - run: npm whoami
+
+  # End-to-end bootstrap mechanism for the workflow fix (verbatim step shape).
+  bootstrap-npmrc:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+      - name: Configure npm token auth for bootstrap lane
+        run: |
+          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
+          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
+      - run: npm whoami
