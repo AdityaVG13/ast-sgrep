@@ -1,0 +1,44 @@
+name: debug-env-probe
+# TEMPORARY diagnostic (delete after the 2.5.1 publish). Read-only: finds which
+# step materializes NODE_AUTH_TOKEN when the bootstrap input is false.
+# Prints lengths only, plus the (non-secret) literal rendering the runner shows.
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Set true to engage the token path
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe-v5:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ inputs.probe && secrets.NPM_TOKEN || '' }}
+    steps:
+      - run: echo "v5/before-setup len=${#NODE_AUTH_TOKEN}"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+      - run: echo "v5/after-setup len=${#NODE_AUTH_TOKEN}"
+      - run: npm install --global npm@11
+      - run: echo "v5/after-npm11 len=${#NODE_AUTH_TOKEN}"
+
+  probe-v4:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ inputs.probe && secrets.NPM_TOKEN || '' }}
+    steps:
+      - run: echo "v4/before-setup len=${#NODE_AUTH_TOKEN}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+      - run: echo "v4/after-setup len=${#NODE_AUTH_TOKEN}"
+      - run: npm install --global npm@11
+      - run: echo "v4/after-npm11 len=${#NODE_AUTH_TOKEN}"
