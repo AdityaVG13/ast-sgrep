@@ -23,7 +23,9 @@ type Registered = {
 
 function registered(): Registered[] {
   const tools: Registered[] = [];
-  const pi = { registerTool(tool: Registered) { tools.push(tool); }, on() {} } as unknown as ExtensionAPI;
+  // Emulate a normal Pi host (built-in read/edit active) so the budget
+  // measures the common path, including the host-aware guideline variant.
+  const pi = { registerTool(tool: Registered) { tools.push(tool); }, on() {}, getActiveTools: () => ["read", "edit"] } as unknown as ExtensionAPI;
   registerAstSgrepTools(pi, { run: async () => ({ tool: "asgrep", schema_version: "1.0.0", ok: true }) }, { ensureFresh: async () => "", markAffectedPath() {} });
   return tools;
 }
@@ -39,16 +41,17 @@ test("tool definitions stay inside the always-on token budget", () => {
   const tools = registered();
   const perTool = Object.fromEntries(tools.map((tool) => [tool.name, toolCost(tool)]));
   const total = Object.values(perTool).reduce((sum, cost) => sum + cost, 0);
-  // 902 BPE tokens measured when the budget was set (1714 before the lean pass).
-  assert.ok(total <= 3415, `static tool surface grew: ${total} chars (${JSON.stringify(perTool)})`);
-  assert.ok(perTool.asgrep <= 1216, `asgrep schema grew: ${perTool.asgrep}`);
+  // 750 BPE tokens measured (1714 before the first lean pass, 902 before the
+  // second: deduped instructions, host-aware guidelines, schema trims).
+  assert.ok(total <= 2999, `static tool surface grew: ${total} chars (${JSON.stringify(perTool)})`);
+  assert.ok(perTool.asgrep <= 1061, `asgrep schema grew: ${perTool.asgrep}`);
   assert.deepEqual(tools.map((tool) => tool.name), ["asgrep", "asgrep_search", "asgrep_edit", "asgrep_read", "asgrep_index"]);
 
   // On a host that already ships read/edit built in, the one-shot duplicates
   // are inactive: pi sends only active tools, so the effective surface is the
-  // three unique tools (547 BPE tokens measured, 843 with everything active).
+  // three unique tools (479 BPE tokens measured, 750 with everything active).
   const unique = ["asgrep", "asgrep_search", "asgrep_index"].reduce((sum, name) => sum + perTool[name], 0);
-  assert.ok(unique <= 2221, `unique-tool surface grew: ${unique} chars`);
+  assert.ok(unique <= 1916, `unique-tool surface grew: ${unique} chars`);
 });
 
 const HITS = Array.from({ length: 8 }, (_, index) => ({

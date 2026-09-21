@@ -13,7 +13,7 @@ export declare const DEFAULT_LIMIT = 8;
  * session, or a host that drops the built-ins still gets them — but they are
  * left out of the active set when the host already provides read+edit. Pi only
  * sends ACTIVE tools (schema, snippet, guidelines) to the model, so this is the
- * difference between ~296 tokens per request and nothing.
+ * difference between ~271 tokens per request and nothing.
  *
  * ASGREP_KEEP_FILE_TOOLS=1 pins them active regardless.
  */

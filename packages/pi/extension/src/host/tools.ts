@@ -28,6 +28,7 @@ import type { FreshnessRuntime } from "../runtime/freshness.js";
 import { RESOLVED_ROOT } from "../runtime/types.js";
 import {
   ASGREP_PROMPT_GUIDELINES,
+  ASGREP_PROMPT_GUIDELINES_HOST_FILES,
   ASGREP_PROMPT_SNIPPET,
   formatCodemodeResult,
 } from "../ui/present.js";
@@ -51,15 +52,14 @@ const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
 
 const searchParameters = Type.Object({
-  query: Type.String({ maxLength: 4_096, description: "Query, symbol, or pattern" }),
+  query: Type.String({ maxLength: 4_096 }),
   mode: Type.Optional(Type.Unsafe<SearchMode>({
     type: "string",
     enum: ["natural", "pattern", "defs", "callers", "chain", "semantic", "word", "literal", "regex", "imports"],
     default: "natural",
-    description: "Search strategy",
   })),
   limit: Type.Optional(Type.Integer({ default: DEFAULT_LIMIT })),
-  excerptLines: Type.Optional(Type.Integer({ default: 0, description: "Inline N excerpt lines per hit" })),
+  excerptLines: Type.Optional(Type.Integer({ default: 0 })),
   in: Type.Optional(Type.String({ maxLength: 512, description: "Bound to a directory or glob" })),
   lang: Type.Optional(Type.String({ maxLength: 32, description: "Language filter (rs, ts, py)" })),
 }, { additionalProperties: false });
@@ -70,9 +70,9 @@ const indexParameters = Type.Object({
 
 
 const editParameters = Type.Object({
-  path: Type.Optional(Type.String({ maxLength: 512, description: "File to edit" })),
+  path: Type.Optional(Type.String({ maxLength: 512 })),
   oldText: Type.Optional(Type.String({ description: "Exact text to replace (must match once)" })),
-  newText: Type.Optional(Type.String({ description: "Replacement" })),
+  newText: Type.Optional(Type.String()),
   edits: Type.Optional(Type.Array(Type.Object({
     path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
     oldText: Type.String({ minLength: 1 }),
@@ -81,7 +81,7 @@ const editParameters = Type.Object({
 }, { additionalProperties: false });
 
 const readParameters = Type.Object({
-  path: Type.Optional(Type.String({ maxLength: 512, description: "File to read" })),
+  path: Type.Optional(Type.String({ maxLength: 512 })),
   ref: Type.Optional(Type.String({ description: "Hit ref path#L12-L40" })),
   refs: Type.Optional(Type.Array(Type.String(), { maxItems: 24, description: "Several refs in one call" })),
   start: Type.Optional(Type.Integer()),
@@ -94,7 +94,7 @@ const codemodeParameters = Type.Object({
   code: Type.String({
     minLength: 1,
     maxLength: 32_000,
-    description: "JavaScript: async () => { ... } or a bare body with return. The returned value is the tool result.",
+    description: "JavaScript: async () => { ... } or a bare body with return.",
   }),
   timeoutMs: Type.Optional(Type.Integer({ description: "Timeout ms (default 30000)" })),
 }, { additionalProperties: false });
@@ -147,7 +147,7 @@ function withSearchLang(argv: string[], lang: string | undefined): string[] {
  * session, or a host that drops the built-ins still gets them — but they are
  * left out of the active set when the host already provides read+edit. Pi only
  * sends ACTIVE tools (schema, snippet, guidelines) to the model, so this is the
- * difference between ~296 tokens per request and nothing.
+ * difference between ~271 tokens per request and nothing.
  *
  * ASGREP_KEEP_FILE_TOOLS=1 pins them active regardless.
  */
@@ -619,10 +619,10 @@ export function registerAstSgrepTools(
     name: "asgrep",
     label: "asgrep",
     promptSnippet: ASGREP_PROMPT_SNIPPET,
-    promptGuidelines: [...ASGREP_PROMPT_GUIDELINES],
+    promptGuidelines: [...(hostProvidesFileTools(pi) ? ASGREP_PROMPT_GUIDELINES_HOST_FILES : ASGREP_PROMPT_GUIDELINES)],
     description: [
-      "Code search (in-process, warm Searcher): use it for any code lookup instead of grep.",
-      "Write JavaScript; the returned value is your result.",
+      "Code search: use it for any code lookup instead of grep.",
+      "The returned value is your result.",
       CODEMODE_TYPES_FOR_MODEL,
       "Example: async () => (await asgrep.search(\"auth\", { limit: 5 })).hits",
     ].join("\n"),
@@ -713,7 +713,7 @@ export function registerAstSgrepTools(
   pi.registerTool({
     name: "asgrep_search",
     label: "asgrep search",
-    promptSnippet: "One-shot asgrep search",
+    promptSnippet: "One-shot search",
     description: "One-shot search. Use asgrep (Code Mode) for anything multi-step, parallel, or filtered.",
     parameters: searchParameters,
     renderShell: "self",
@@ -779,7 +779,7 @@ export function registerAstSgrepTools(
     name: "asgrep_edit",
     label: "asgrep edit",
     promptSnippet: "Exact-string edit",
-    description: "Edit by exact-string replace; oldText must match once. edits[] applies many atomically.",
+    description: "Edit by exact-string replace. edits[] applies many atomically.",
     parameters: editParameters,
     renderShell: "self",
     renderCall() {
@@ -839,7 +839,7 @@ export function registerAstSgrepTools(
     name: "asgrep_index",
     label: "asgrep index",
     promptSnippet: "Build or rebuild the index",
-    description: "Build or rebuild the index (embeddings included).",
+    description: "Build or rebuild the index.",
     parameters: indexParameters,
     renderShell: "self",
     renderCall() {

@@ -27,8 +27,16 @@ export type EnvelopeLike = {
     backend?: unknown;
     [key: string]: unknown;
 };
-export declare const ASGREP_PROMPT_SNIPPET = "Code search by intent, symbol, defs, callers, pattern (asgrep; use without being asked)";
+export declare const ASGREP_PROMPT_SNIPPET = "Code search by intent, symbol, defs, callers, pattern (use without being asked)";
 export declare const ASGREP_PROMPT_GUIDELINES: readonly ["Any code lookup: call asgrep first; read code with asgrep_read, change it with asgrep_edit.", "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next."];
+/**
+ * Guideline variant for hosts that already ship read/edit built in: our
+ * one-shot file tools are inactive there, so naming them would point the
+ * model at tools it cannot see. The host's own builtins describe
+ * themselves; this keeps only the asgrep-first routing plus the shared
+ * composition guideline.
+ */
+export declare const ASGREP_PROMPT_GUIDELINES_HOST_FILES: readonly ["Any code lookup: call asgrep first.", "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next."];
 export declare function paint(theme: PresentTheme | undefined, role: string, text: string, bold?: boolean): string;
 export declare function hitLocation(hit: HitLike): string;
 export declare function hitLabel(hit: HitLike): string;

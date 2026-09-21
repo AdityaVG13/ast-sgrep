@@ -52,9 +52,9 @@ The `pi-ast-sgrep` extension is NOT part of the lockstep family: it versions ind
 Rules for the extension lane:
 
 - The extension version lives in two places that MUST agree: `packages/pi/extension/package.json` and `packages/pi/release-contract.json` at `packages.extension.version`. Bump both together.
-- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.2.1`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.2.1`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment — the npm trusted-publisher registration is shared with the family workflow file.
+- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.2`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.2`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment — the npm trusted-publisher registration is shared with the family workflow file.
 - Features that need newer native envelope fields must degrade gracefully on older launchers; when a feature genuinely requires a new native floor, raise `launcherRange` and `compatibility.layers.extension.minLauncherVersion` in the contract and ship a family release first.
-- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.2.1 --commit <sha> --ref-type tag` against a real signed tag.
+- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.5.2 --commit <sha> --ref-type tag` against a real signed tag.
 
 ### Dogfood publish (one command)
 

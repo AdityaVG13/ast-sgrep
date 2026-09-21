@@ -17,7 +17,7 @@
     "extension": {
       "name": "pi-ast-sgrep",
       "directory": "packages/pi/extension",
-      "version": "2.2.1",
+      "version": "2.5.2",
       "independent": true,
       "tagPrefix": "pi-v",
       "launcherRange": ">=2.0.0 <3",

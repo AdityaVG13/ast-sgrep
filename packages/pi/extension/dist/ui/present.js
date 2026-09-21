@@ -1,8 +1,19 @@
 /** Neat asgrep tool chrome for the Pi TUI and the model-visible content. */
-export const ASGREP_PROMPT_SNIPPET = "Code search by intent, symbol, defs, callers, pattern (asgrep; use without being asked)";
+export const ASGREP_PROMPT_SNIPPET = "Code search by intent, symbol, defs, callers, pattern (use without being asked)";
 export const ASGREP_PROMPT_GUIDELINES = [
     "Any code lookup: call asgrep first; read code with asgrep_read, change it with asgrep_edit.",
     "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next.",
+];
+/**
+ * Guideline variant for hosts that already ship read/edit built in: our
+ * one-shot file tools are inactive there, so naming them would point the
+ * model at tools it cannot see. The host's own builtins describe
+ * themselves; this keeps only the asgrep-first routing plus the shared
+ * composition guideline.
+ */
+export const ASGREP_PROMPT_GUIDELINES_HOST_FILES = [
+    "Any code lookup: call asgrep first.",
+    ASGREP_PROMPT_GUIDELINES[1],
 ];
 export function paint(theme, role, text, bold = false) {
     const body = bold && theme ? theme.bold(text) : text;
