@@ -1,0 +1,295 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "hits": [
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub struct SearchHit {\n    pub kind: HitKind,\n    pub file: String,\n    pub line_start: u32,\n    pub line_end: u32,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub symbol: Option<String>,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub caller: Option<String>,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub callee: Option<String>,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub language: Option<String>,\n    pub score: f64,\n    pub signal: HitSignal,\n    pub contributors: Vec<HitKind>,\n    pub margin: f64,\n    /// Calibrated-independent relevance estimate, deliberately separate from\n    #[serde(default)]\n    pub confidence: f64,\n    /// How a graph edge was resolved, when this hit came from one (dvc4).\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    pub resolution: Option<crate::resolution::Resolution>,\n    /// Per-field embed similarities when multi-field vectors were used (7d5x.3).\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    pub embed_fields: Option<super::field_weight::EmbedFieldScores>,\n    /// Deterministic critic annotations (P0 critic-on-shortlist). Engine-derived,\n    /// never trusted from the wire (same policy as `resolution`).\n    #[serde(default, skip_serializing_if = \"Vec::is_empty\")]\n    pub critic: Vec<super::critic::CriticNote>,\n    #[serde(serialize_with = \"serialize_excerpt\")]\n    pub excerpt: String,\n    /// In-process byte span of the matched node, when the producing lane\n    /// knows it (the native pattern walk). Routing-internal only — the\n    /// same-line dedup key (fusion `DedupKey`) distinguishes two\n    /// INDEPENDENT same-line hits (different spans) from the same node\n    /// found twice (equal spans). The span NEVER serializes — a conditional\n    /// `skip_serializing_if` attribute leaked `\"byte_span\"` onto every\n    /// native-walk hit row of the `search --json` wire, flipping the frozen\n    /// golden T1-SEARCH-PATTERN-ENVELOPE. `skip_serializing` is\n    /// unconditional; the\n    /// wire deserializer (`SearchHitWire`) never reads the field.\n    #[serde(skip_serializing)]\n    pub byte_span: Option<(usize, usize)>,\n}",
+      "file": "crates/ast-sgrep-core/src/search/types.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 113,
+      "line_start": 69,
+      "margin": 0.0,
+      "score": 1.0,
+      "signal": "structural",
+      "symbol": "SearchHit"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "interface SearchHit {\n  path?: string;\n  file?: string;\n  file_path?: string;\n  excerpt?: string;\n  line?: number;\n  start_line?: number;\n  line_start?: number;\n  column?: number;\n  start_column?: number;\n}",
+      "file": "editors/vscode/src/extension.ts",
+      "kind": "def",
+      "language": "typescript",
+      "line_end": 21,
+      "line_start": 11,
+      "margin": 0.0,
+      "score": 1.0,
+      "signal": "structural",
+      "symbol": "SearchHit"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "const needle = process.argv[3] || 'SearchHit';",
+      "file": "benchmarks/fff_grep_leg.mjs",
+      "kind": "asgrep",
+      "language": "javascript",
+      "line_end": 12,
+      "line_start": 12,
+      "margin": 0.005980392156862746,
+      "score": 0.305,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "use crate::search::{HitKind, SearchHit};",
+      "file": "crates/ast-sgrep-core/src/bench_suite.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 1,
+      "line_start": 1,
+      "margin": 0.0029031029887683357,
+      "score": 0.29901960784313725,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "    pub fn matches(&self, hit: &SearchHit) -> bool {",
+      "file": "crates/ast-sgrep-core/src/bench_suite.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 23,
+      "line_start": 23,
+      "margin": 0.002847274085138185,
+      "score": 0.2961165048543689,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "use crate::search::{SearchHit, SearchOptions, Searcher};",
+      "file": "crates/ast-sgrep-core/src/chain.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 1,
+      "line_start": 1,
+      "margin": 0.002793040293040283,
+      "score": 0.2932692307692307,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "fn hit_symbol(store: &IndexStore, hit: &SearchHit) -> Option<(String, u32, u32)> {",
+      "file": "crates/ast-sgrep-core/src/chain.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 74,
+      "line_start": 74,
+      "margin": 0.0027403414195867337,
+      "score": 0.29047619047619044,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Vec<ChainEntry> {",
+      "file": "crates/ast-sgrep-core/src/chain.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 97,
+      "line_start": 97,
+      "margin": 0.0026891200846411167,
+      "score": 0.2877358490566037,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "    let mut best_per_file: HashMap<&str, (&SearchHit, usize)> = HashMap::new();",
+      "file": "crates/ast-sgrep-core/src/chain.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 98,
+      "line_start": 98,
+      "margin": 0.002639321564555208,
+      "score": 0.2850467289719626,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "use crate::search::{HitKind, SearchHit};",
+      "file": "crates/ast-sgrep-core/src/fusion.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 3,
+      "line_start": 3,
+      "margin": 0.002590893645939507,
+      "score": 0.2824074074074074,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {",
+      "file": "crates/ast-sgrep-core/src/fusion.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 207,
+      "line_start": 207,
+      "margin": 0.002543786488740596,
+      "score": 0.2798165137614679,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "use crate::search::{HitKind, SearchHit};",
+      "file": "crates/ast-sgrep-core/src/intent.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 6,
+      "line_start": 6,
+      "margin": 0.002497952497952538,
+      "score": 0.2772727272727273,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {",
+      "file": "crates/ast-sgrep-core/src/intent.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 176,
+      "line_start": 176,
+      "margin": 0.002453346203346196,
+      "score": 0.27477477477477474,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {",
+      "file": "crates/ast-sgrep-core/src/intent.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 213,
+      "line_start": 213,
+      "margin": 0.0024099241466497556,
+      "score": 0.27232142857142855,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "use crate::search::types::{merge_channel_evidence, SearchHit};",
+      "file": "crates/ast-sgrep-core/src/search/conjunction.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 26,
+      "line_start": 26,
+      "margin": 0.002367644775655986,
+      "score": 0.2699115044247788,
+      "signal": "exact"
+    },
+    {
+      "confidence": 0.75,
+      "contributors": [
+        "asgrep"
+      ],
+      "excerpt": "fn spans_overlap(a: &SearchHit, b: &SearchHit) -> bool {",
+      "file": "crates/ast-sgrep-core/src/search/conjunction.rs",
+      "kind": "asgrep",
+      "language": "rust",
+      "line_end": 150,
+      "line_start": 150,
+      "margin": 0.002326468344774957,
+      "score": 0.2675438596491228,
+      "signal": "exact"
+    }
+  ],
+  "limit": 16,
+  "ok": true,
+  "prevented_read_bytes": 89634,
+  "query": "literal:SearchHit",
+  "query_expansions": [
+    {
+      "because": "repository association: \"literal\" → \"literally\" through 4 co-occurrences",
+      "related": "literally",
+      "support": 4,
+      "term": "literal"
+    },
+    {
+      "because": "repository association: \"literal\" → \"lit\" through 3 co-occurrences",
+      "related": "lit",
+      "support": 3,
+      "term": "literal"
+    },
+    {
+      "because": "repository association: \"literal\" → \"enter\" through 4 co-occurrences",
+      "related": "enter",
+      "support": 4,
+      "term": "literal"
+    },
+    {
+      "because": "repository association: \"literal\" → \"calc\" through 7 co-occurrences",
+      "related": "calc",
+      "support": 7,
+      "term": "literal"
+    },
+    {
+      "because": "repository association: \"literal\" → \"f100\" through 3 co-occurrences",
+      "related": "f100",
+      "support": 3,
+      "term": "literal"
+    }
+  ],
+  "read_bytes_estimate": 92878,
+  "returned_excerpt_bytes": 3244,
+  "schema_version": "1.0.0",
+  "snapshot": {
+    "generation": 2843,
+    "git_head": "6b0db16984c75e2d43f0f83e8043d89f70a6af2b",
+    "schema_version": 16,
+    "semantic_manifest": "794c22ec09d7aaeb863c37c812cc06dbef2612ecebb561f822bff4a441cd136c",
+    "worktree_revision": 1789986293
+  },
+  "tool": "asgrep"
+}

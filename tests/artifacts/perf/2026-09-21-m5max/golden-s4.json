@@ -1,0 +1,309 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "hits": [
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "use ast_sgrep_core::{try_index_db_path, IndexStats, SearchResponse, Searcher};",
+      "file": "crates/ast-sgrep-cli/src/bench.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 7,
+      "line_start": 7,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {",
+      "file": "crates/ast-sgrep-cli/src/bench.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 45,
+      "line_start": 45,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "fn warm_bench_session(searcher: &Searcher) -> anyhow::Result<()> {",
+      "file": "crates/ast-sgrep-cli/src/bench.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 66,
+      "line_start": 66,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    s: &Searcher,",
+      "file": "crates/ast-sgrep-cli/src/bench.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 73,
+      "line_start": 73,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "use ast_sgrep_core::{Indexer, SearchHit, SearchOptions, Searcher};",
+      "file": "crates/ast-sgrep-cli/src/eval.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 5,
+      "line_start": 5,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    searcher: &Searcher,",
+      "file": "crates/ast-sgrep-cli/src/eval.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 257,
+      "line_start": 257,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    let searcher = Searcher::new(opts)",
+      "file": "crates/ast-sgrep-cli/src/eval.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 385,
+      "line_start": 385,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "pub(crate) fn open_searcher(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {",
+      "file": "crates/ast-sgrep-cli/src/index_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 495,
+      "line_start": 495,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "fn open_searcher_raw(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {",
+      "file": "crates/ast-sgrep-cli/src/index_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 511,
+      "line_start": 511,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    ast_sgrep_core::Searcher::new(opts).with_context(|| {",
+      "file": "crates/ast-sgrep-cli/src/index_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 514,
+      "line_start": 514,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    format_hit_line, SearchResponse, Searcher,",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 9,
+      "line_start": 9,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "pub(crate) fn do_search(s: &Searcher, q: &str, semantic: bool) -> anyhow::Result<SearchResponse> {",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 387,
+      "line_start": 387,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    s: &Searcher,",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 396,
+      "line_start": 396,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    Language, SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,",
+      "file": "crates/ast-sgrep-codemode/src/session.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 7,
+      "line_start": 7,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "    searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,",
+      "file": "crates/ast-sgrep-codemode/src/session.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 67,
+      "line_start": 67,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "pattern"
+      ],
+      "excerpt": "        F: FnOnce(&Searcher) -> anyhow::Result<T>,",
+      "file": "crates/ast-sgrep-codemode/src/session.rs",
+      "kind": "pattern",
+      "language": "rust",
+      "line_end": 225,
+      "line_start": 225,
+      "margin": 0.0,
+      "score": 7.0,
+      "signal": "structural",
+      "symbol": "Searcher"
+    }
+  ],
+  "limit": 16,
+  "ok": true,
+  "prevented_read_bytes": 112170,
+  "query": "pattern:Searcher",
+  "query_expansions": [
+    {
+      "because": "repository association: \"searcher\" → \"hconf036\" through 3 co-occurrences",
+      "related": "hconf036",
+      "support": 3,
+      "term": "searcher"
+    },
+    {
+      "because": "repository association: \"searcher\" → \"ranks\" through 12 co-occurrences",
+      "related": "ranks",
+      "support": 12,
+      "term": "searcher"
+    },
+    {
+      "because": "repository association: \"searcher\" → \"quoted\" through 4 co-occurrences",
+      "related": "quoted",
+      "support": 4,
+      "term": "searcher"
+    },
+    {
+      "because": "repository association: \"searcher\" → \"loudly\" through 6 co-occurrences",
+      "related": "loudly",
+      "support": 6,
+      "term": "searcher"
+    },
+    {
+      "because": "repository association: \"searcher\" → \"bracket\" through 4 co-occurrences",
+      "related": "bracket",
+      "support": 4,
+      "term": "searcher"
+    }
+  ],
+  "read_bytes_estimate": 113142,
+  "returned_excerpt_bytes": 972,
+  "schema_version": "1.0.0",
+  "snapshot": {
+    "generation": 2843,
+    "git_head": "6b0db16984c75e2d43f0f83e8043d89f70a6af2b",
+    "schema_version": 16,
+    "semantic_manifest": "794c22ec09d7aaeb863c37c812cc06dbef2612ecebb561f822bff4a441cd136c",
+    "worktree_revision": 1789986293
+  },
+  "tool": "asgrep"
+}

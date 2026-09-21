@@ -1,0 +1,317 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "hits": [
+    {
+      "confidence": 0.83,
+      "contributors": [
+        "asgrep",
+        "def"
+      ],
+      "excerpt": "function compactCommandResult(result) {\n    if (!result.ok)\n        return `${result.command} failed [${result.error.code}]: ${result.error.message}`;\n    const response = result.response;\n    const counts = response.counts && typeof response.counts === \"object\"\n        ? Object.entries(response.counts).map(([key, value]) => `${key}=${String(value)}`).join(\" \")\n        : \"\";\n    const state = typeof response.status === \"string\" ? response.status\n        : typeof response.index_status === \"string\" ? response.index_status\n            : response.ok ? \"healthy\" : \"failed\";\n    return bounded([`${result.command}: ${state}`, counts].filter(Boolean).join(\" · \"));\n}",
+      "file": "packages/pi/extension/dist/host/commands.js",
+      "kind": "def",
+      "language": "javascript",
+      "line_end": 36,
+      "line_start": 25,
+      "margin": 0.0006517210144927482,
+      "score": 0.04405797101449275,
+      "signal": "structural",
+      "symbol": "compactCommandResult"
+    },
+    {
+      "confidence": 0.83,
+      "contributors": [
+        "asgrep",
+        "def"
+      ],
+      "excerpt": "function compactCommandResult(result: CommandResult): string {\n  if (!result.ok) return `${result.command} failed [${result.error.code}]: ${result.error.message}`;\n  const response = result.response;\n  const counts = response.counts && typeof response.counts === \"object\"\n    ? Object.entries(response.counts).map(([key, value]) => `${key}=${String(value)}`).join(\" \")\n    : \"\";\n  const state = typeof response.status === \"string\" ? response.status\n    : typeof response.index_status === \"string\" ? response.index_status\n    : response.ok ? \"healthy\" : \"failed\";\n  return bounded([`${result.command}: ${state}`, counts].filter(Boolean).join(\" · \"));\n}",
+      "file": "packages/pi/extension/src/host/commands.ts",
+      "kind": "def",
+      "language": "typescript",
+      "line_end": 42,
+      "line_start": 32,
+      "margin": 0.012922379032258065,
+      "score": 0.04340625,
+      "signal": "structural",
+      "symbol": "compactCommandResult"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "fn blank_compact_snippets(envelope: &mut serde_json::Value) {\n    let Some(hits) = envelope.get_mut(\"h\").and_then(|v| v.as_array_mut()) else {\n        return;\n    };\n    for hit in hits {\n        let Some(row) = hit.as_array_mut() else {\n            continue;\n        };\n        if let Some(snippet) = row.get_mut(4) {\n            *snippet = serde_json::Value::String(String::new());\n        }\n    }\n}",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 351,
+      "line_start": 339,
+      "margin": 0.000483870967741936,
+      "score": 0.030483870967741935,
+      "signal": "structural",
+      "symbol": "blank_compact_snippets"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub fn to_budgeted_compact_json(\n    response: &SearchResponse,\n    budget: budget::OutputBudget,\n) -> serde_json::Value {\n    let rendered = budget::select(&response.hits, budget);\n    let mut envelope = to_compact_json(response, CompactBudget::default());\n    if let Some(hits) = envelope\n        .get_mut(\"h\")\n        .and_then(serde_json::Value::as_array_mut)\n    {\n        for (row, plan) in hits.iter_mut().zip(rendered.iter()) {\n            let Some(row) = row.as_array_mut() else {\n                continue;\n            };\n            if row.len() >= 5 {\n                row[4] = serde_json::Value::String(plan.body.clone());\n            }\n            // Detail level is per-result, so it has to travel with the result.\n            row.push(serde_json::Value::String(plan.detail.as_str().to_owned()));\n        }\n    }\n    envelope[\"zd\"] = serde_json::json!([budget.max_tokens, budget::plan_cost(&rendered)]);\n    envelope\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 194,
+      "line_start": 171,
+      "margin": 0.0004687500000000004,
+      "score": 0.03,
+      "signal": "structural",
+      "symbol": "to_budgeted_compact_json"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serde_json::Value {\n    let mut paths = std::collections::BTreeMap::<String, String>::new();\n    let mut path_ids = std::collections::BTreeMap::<String, String>::new();\n    for path in response\n        .hits\n        .iter()\n        .map(|hit| hit.file.as_str())\n        .collect::<std::collections::BTreeSet<_>>()\n    {\n        let base = base36(fnv1a64(path.as_bytes()));\n        let mut id = base.clone();\n        let mut suffix = 1_u32;\n        while paths.get(&id).is_some_and(|existing| existing != path) {\n            id = format!(\"{base}~{suffix}\");\n            suffix += 1;\n        }\n        paths.insert(id.clone(), path.to_owned());\n        path_ids.insert(path.to_owned(), id);\n    }\n\n    let mut remaining = budget.response_tokens;\n    let mut used = 0_usize;\n    let mut truncated = 0_usize;\n    let hits: Vec<_> = response\n        .hits\n        .iter()\n        .map(|hit| {\n            let path_id = &path_ids[&hit.file];\n            let id = format!(\"{path_id}:{}-{}\", hit.line_start, hit.line_end);\n            let allowance = budget.per_result_tokens.min(remaining);\n            let (snippet, was_truncated) = utf8_prefix(hit.excerpt.trim(), allowance);\n            let snippet_bytes = snippet.len();\n            remaining -= snippet_bytes;\n            used += snippet_bytes;\n            truncated += usize::from(was_truncated);\n            serde_json::json!([\n                id,\n                compact_kind(hit.kind),\n                compact_signal(hit.signal),\n                hit_symbol(hit),\n                snippet\n            ])\n        })\n        .collect();\n\n    // am4a: fold shared directory prefixes out of the path table when doing so\n    // is actually smaller on the wire.\n    let (roots, paths) = fold_path_roots(&paths);\n\n    // 9q0l: serde_json orders object keys alphabetically (its Map is a\n    // BTreeMap unless `preserve_order` is enabled), so key NAMES decide wire\n    // order. Per-call accounting is therefore named `z*` to sort after the\n    // content keys, giving every envelope a stable head and a volatile tail:\n    //\n    //   h (hits) . p (paths) . q (query) . r (roots) . v (schema) . zb . zn . zt\n    //\n    // A consumer can drop the `z*` tail without touching the content, and\n    // repeated identical calls differ only in that tail.\n    let mut envelope = serde_json::json!({\n        \"v\": 1,\n        \"q\": response.query,\n        \"p\": paths,\n        \"h\": hits,\n        \"zn\": hits.len(),\n        \"zb\": [budget.per_result_tokens, budget.response_tokens, used],\n        \"zt\": truncated,\n    });\n    if !roots.is_empty() {\n        envelope[\"r\"] = serde_json::Value::from(roots);\n    }\n    envelope\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 267,
+      "line_start": 196,
+      "margin": 0.0004543269230769184,
+      "score": 0.02953125,
+      "signal": "structural",
+      "symbol": "to_compact_json"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "fn compact_kind(kind: HitKind) -> &'static str {\n    match kind {\n        HitKind::Asgrep => \"x\",\n        HitKind::Def => \"d\",\n        HitKind::Caller => \"c\",\n        HitKind::Graph => \"g\",\n        HitKind::Anchor => \"a\",\n        HitKind::Import => \"i\",\n        HitKind::Pattern => \"p\",\n        HitKind::Embed => \"e\",\n    }\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 396,
+      "line_start": 385,
+      "margin": 0.0004405594405594397,
+      "score": 0.02907692307692308,
+      "signal": "structural",
+      "symbol": "compact_kind"
+    },
+    {
+      "callee": "to_compact_miss_json",
+      "caller": "render_search_json",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "        return to_compact_miss_json(&response.query, &miss_context(command, cli));",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 262,
+      "line_start": 262,
+      "margin": 0.00011898466419883649,
+      "score": 0.007377049180327869,
+      "signal": "structural"
+    },
+    {
+      "callee": "to_budgeted_compact_json",
+      "caller": "render_search_json",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "            return to_budgeted_compact_json(",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 272,
+      "line_start": 272,
+      "margin": 0.00011520737327188994,
+      "score": 0.007258064516129033,
+      "signal": "structural"
+    },
+    {
+      "confidence": 0.83,
+      "contributors": [
+        "asgrep",
+        "def"
+      ],
+      "excerpt": "fn compact_output_path_interning_ranks_intern_paths() {\n    let (_temp, searcher) = indexed_corpus();\n    let query = \"compact output path interning\";\n    let response = searcher.search(query).expect(\"search\");\n    require_first(\n        query,\n        &response.hits,\n        \"plugins.rs\",\n        \"intern_paths\",\n        \"conceptual NL must retrieve intern_paths without a hardcoded concept-def allowlist.\",\n    );\n}",
+      "file": "tests/core/identifier_ranking.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 504,
+      "line_start": 493,
+      "margin": 0.0,
+      "score": 0.003703656998738967,
+      "signal": "structural",
+      "symbol": "compact_output_path_interning_ranks_intern_paths"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "fn compact_signal(signal: ast_sgrep_core::search::HitSignal) -> &'static str {\n    match signal {\n        ast_sgrep_core::search::HitSignal::Exact => \"x\",\n        ast_sgrep_core::search::HitSignal::Structural => \"t\",\n        ast_sgrep_core::search::HitSignal::Semantic => \"m\",\n    }\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 404,
+      "line_start": 398,
+      "margin": 0.0004274084124830449,
+      "score": 0.02863636363636364,
+      "signal": "structural",
+      "symbol": "compact_signal"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub fn to_compact_miss_json(query: &str, context: &MissContext) -> serde_json::Value {\n    let reason = context.reason();\n    let first_filter = context.scope.first().map(|(name, _)| name.as_str());\n    let mut envelope = serde_json::json!({\n        \"v\": 1,\n        \"q\": query,\n        \"h\": [],\n        \"zn\": 0,\n        \"why\": reason.as_str(),\n        \"next\": reason.next_step(first_filter),\n    });\n    if !context.tried.is_empty() {\n        envelope[\"tried\"] = serde_json::Value::from(context.tried.clone());\n    }\n    if !context.unavailable.is_empty() {\n        envelope[\"down\"] = serde_json::Value::from(context.unavailable.clone());\n    }\n    if !context.scope.is_empty() {\n        envelope[\"scope\"] = serde_json::Value::Object(\n            context\n                .scope\n                .iter()\n                .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))\n                .collect(),\n        );\n    }\n    envelope\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 562,
+      "line_start": 535,
+      "margin": 0.00041483757682177214,
+      "score": 0.028208955223880595,
+      "signal": "structural",
+      "symbol": "to_compact_miss_json"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub fn resolve_compact_paths(envelope: &serde_json::Value) -> Vec<(String, String)> {\n    let roots: Vec<&str> = envelope\n        .get(\"r\")\n        .and_then(serde_json::Value::as_array)\n        .map(|roots| roots.iter().filter_map(serde_json::Value::as_str).collect())\n        .unwrap_or_default();\n    let Some(paths) = envelope.get(\"p\").and_then(serde_json::Value::as_object) else {\n        return Vec::new();\n    };\n    paths\n        .iter()\n        .filter_map(|(id, entry)| {\n            let path = match entry {\n                serde_json::Value::String(path) => path.clone(),\n                serde_json::Value::Array(parts) => {\n                    let index = usize::try_from(parts.first()?.as_u64()?).ok()?;\n                    format!(\"{}{}\", roots.get(index)?, parts.get(1)?.as_str()?)\n                }\n                _ => return None,\n            };\n            Some((id.clone(), path))\n        })\n        .collect()\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 592,
+      "line_start": 569,
+      "margin": 0.001174399337199667,
+      "score": 0.027794117647058823,
+      "signal": "structural",
+      "symbol": "resolve_compact_paths"
+    },
+    {
+      "confidence": 0.6,
+      "contributors": [
+        "def"
+      ],
+      "excerpt": "pub struct CompactBudget {\n    pub per_result_tokens: usize,\n    pub response_tokens: usize,\n}",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "def",
+      "language": "rust",
+      "line_end": 39,
+      "line_start": 36,
+      "margin": 0.019242669129531285,
+      "score": 0.026619718309859156,
+      "signal": "structural",
+      "symbol": "CompactBudget"
+    },
+    {
+      "callee": "blank_compact_snippets",
+      "caller": "render_search_json",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "                blank_compact_snippets(&mut env);",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 291,
+      "line_start": 291,
+      "margin": 0.00011160714285714246,
+      "score": 0.007142857142857143,
+      "signal": "structural"
+    },
+    {
+      "callee": "to_budgeted_compact_json",
+      "caller": "render_search_json",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "            PreviewMode::Full => to_budgeted_compact_json(",
+      "file": "crates/ast-sgrep-cli/src/search_cmd.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 303,
+      "line_start": 303,
+      "margin": 0.00010817307692307689,
+      "score": 0.00703125,
+      "signal": "structural"
+    },
+    {
+      "callee": "to_compact_json",
+      "caller": "format_response_with_budget",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "        OutputFormat::Compact => to_compact_json(response, compact_budget),",
+      "file": "crates/ast-sgrep-plugins/src/lib.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 74,
+      "line_start": 74,
+      "margin": 0.00010489510489510457,
+      "score": 0.006923076923076923,
+      "signal": "structural"
+    }
+  ],
+  "limit": 16,
+  "ok": true,
+  "prevented_read_bytes": 57229,
+  "query": "compact output path interning",
+  "query_expansions": [
+    {
+      "because": "repository association: \"output\" → \"secret\" through 4 co-occurrences",
+      "related": "secret",
+      "support": 4,
+      "term": "output"
+    },
+    {
+      "because": "repository association: \"compact\" → \"agent\" through 4 co-occurrences",
+      "related": "agent",
+      "support": 4,
+      "term": "compact"
+    },
+    {
+      "because": "repository association: \"output\" → \"scrub\" through 4 co-occurrences",
+      "related": "scrub",
+      "support": 4,
+      "term": "output"
+    },
+    {
+      "because": "repository association: \"compact\" → \"ids\" through 3 co-occurrences",
+      "related": "ids",
+      "support": 3,
+      "term": "compact"
+    },
+    {
+      "because": "repository association: \"output\" → \"human\" through 3 co-occurrences",
+      "related": "human",
+      "support": 3,
+      "term": "output"
+    }
+  ],
+  "read_bytes_estimate": 65925,
+  "returned_excerpt_bytes": 8696,
+  "schema_version": "1.0.0",
+  "snapshot": {
+    "generation": 2843,
+    "git_head": "6b0db16984c75e2d43f0f83e8043d89f70a6af2b",
+    "schema_version": 16,
+    "semantic_manifest": "794c22ec09d7aaeb863c37c812cc06dbef2612ecebb561f822bff4a441cd136c",
+    "worktree_revision": 1789986293
+  },
+  "tool": "asgrep"
+}

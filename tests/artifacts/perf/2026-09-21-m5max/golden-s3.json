@@ -1,0 +1,169 @@
+{
+  "command": "search",
+  "exit_code": 0,
+  "hits": [
+    {
+      "callee": "process_request",
+      "caller": "other",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "    process_request();",
+      "file": "tests/fixtures/pattern_diff/lib.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 11.5,
+      "signal": "structural"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "  process_request(\"hello\")",
+      "file": "tests/fixtures/sample/src/app.rb",
+      "kind": "caller",
+      "language": "ruby",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 11.5,
+      "signal": "structural"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "    process_request(\"hello\")",
+      "file": "tests/fixtures/sample/src/main.py",
+      "kind": "caller",
+      "language": "python",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 11.5,
+      "signal": "structural"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "caller"
+      ],
+      "excerpt": "    let _ = process_request(\"hello\");",
+      "file": "tests/fixtures/sample/src/main.rs",
+      "kind": "caller",
+      "language": "rust",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 11.5,
+      "signal": "structural"
+    },
+    {
+      "callee": "process_request",
+      "caller": "other",
+      "confidence": 0.6,
+      "contributors": [
+        "graph"
+      ],
+      "excerpt": "other calls process_request",
+      "file": "tests/fixtures/pattern_diff/lib.rs",
+      "kind": "graph",
+      "language": "rust",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 5.0,
+      "signal": "structural",
+      "symbol": "process_request"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "graph"
+      ],
+      "excerpt": "main calls process_request",
+      "file": "tests/fixtures/sample/src/app.rb",
+      "kind": "graph",
+      "language": "ruby",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 5.0,
+      "signal": "structural",
+      "symbol": "process_request"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "graph"
+      ],
+      "excerpt": "main calls process_request",
+      "file": "tests/fixtures/sample/src/main.py",
+      "kind": "graph",
+      "language": "python",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 5.0,
+      "signal": "structural",
+      "symbol": "process_request"
+    },
+    {
+      "callee": "process_request",
+      "caller": "main",
+      "confidence": 0.6,
+      "contributors": [
+        "graph"
+      ],
+      "excerpt": "main calls process_request",
+      "file": "tests/fixtures/sample/src/main.rs",
+      "kind": "graph",
+      "language": "rust",
+      "line_end": 4,
+      "line_start": 4,
+      "margin": 0.0,
+      "resolution": "file_local_unique",
+      "score": 5.0,
+      "signal": "structural",
+      "symbol": "process_request"
+    }
+  ],
+  "limit": 16,
+  "ok": true,
+  "prevented_read_bytes": 1513,
+  "query": "callers:process_request",
+  "read_bytes_estimate": 1731,
+  "returned_excerpt_bytes": 218,
+  "schema_version": "1.0.0",
+  "snapshot": {
+    "generation": 2843,
+    "git_head": "6b0db16984c75e2d43f0f83e8043d89f70a6af2b",
+    "schema_version": 16,
+    "semantic_manifest": "794c22ec09d7aaeb863c37c812cc06dbef2612ecebb561f822bff4a441cd136c",
+    "worktree_revision": 1789986293
+  },
+  "tool": "asgrep"
+}
