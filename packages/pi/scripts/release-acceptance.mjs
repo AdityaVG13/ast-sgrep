@@ -314,7 +314,15 @@ const publish = async () => {
       console.log(`[pi-release] skip ${artifact.name}@${expectedArtifactVersion(state, artifact.name)}: already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
-      run('npm', ['publish', path.join(directory, artifact.filename), '--access', 'public', '--provenance'], { stdio: 'inherit' });
+      // Bootstrap lane (classic token present) publishes WITHOUT --provenance:
+      // the registry checks the OIDC/provenance identity even on token-authed
+      // PUTs, and the trusted-publisher claims are unresolved (br-ijy), so an
+      // attested bootstrap PUT 403s identically to a pure-OIDC PUT. The OIDC
+      // lane (no token) always attests. Provenance returns to every lane once
+      // br-ijy closes; all pre-2.5.0 releases shipped unattested.
+      const args = ['publish', path.join(directory, artifact.filename), '--access', 'public'];
+      if (!process.env.NODE_AUTH_TOKEN) args.push('--provenance');
+      run('npm', args, { stdio: 'inherit' });
       published.push(artifact.name);
     }
     receipt.published.push(artifact.name);
