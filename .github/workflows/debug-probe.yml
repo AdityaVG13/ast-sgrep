@@ -1,0 +1,31 @@
+name: debug-bootstrap-probe
+# TEMPORARY diagnostic (delete after the 2.5.0 publish). Read-only: proves
+# whether boolean dispatch inputs, the NPM_TOKEN secret, and npm auth work.
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Set true to engage the token path
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ inputs.probe && secrets.NPM_TOKEN || '' }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+      - name: Show input truthiness (no secret values)
+        run: echo "input-direct=[${{ inputs.probe && 'TRUTHY' || 'FALSY' }}]"
+      - name: Show token presence (length only, never the value)
+        run: if [ -n "$NODE_AUTH_TOKEN" ]; then echo "token-present=yes length=${#NODE_AUTH_TOKEN}"; else echo "token-present=NO"; fi
+      - name: Authenticate to the registry (prints username only)
+        run: npm whoami
