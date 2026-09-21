@@ -13,11 +13,10 @@ This prevents incomparable channel score scales from dominating fusion. Each fil
 The critic adjudicates with the **same concept set retrieval used**: the static
 concept groups plus this repository's learned vocabulary associations
 (`Searcher::critic_vocabulary`). A symbol that covers several distinct query
-concepts -- including learned ones such as `compact -> budget` -- is credited
+concepts, including learned ones such as `compact -> budget`, is credited
 for multi-concept affinity, so a file whose symbols cover the field outranks a
 single rare-token symbol. Keeping the two stages on one concept set is the
 contract; divergence is a ranking bug, not a tuning knob.
-
 
 After weighted RRF, a deterministic critic pass reviews the fused shortlist
 (`search/critic.rs`). It is the in-process replacement for "have a second model

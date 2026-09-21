@@ -1,7 +1,6 @@
 # Audit 1: response-finishing correctness (finish.rs / fusion.rs dedup_hits / types.rs signal+confidence)
 
-Repo: ast-sgrep @ fix/bun-sqlite-and-auto-index (read-only inline audit by session agent;
-two subagent attempts died to provider 524 timeouts at delivery).
+Repo: ast-sgrep @ fix/bun-sqlite-and-auto-index (read-only inline audit).
 Date: 2026-08-23. Scope: finish.rs (371 lines, full), fusion.rs (72 lines, full),
 types.rs targeted reads (assign_signal_margins L566-606, assign_hit_confidence L608-613,
 estimate_confidence L658-673, merge_channel_evidence L616-655).

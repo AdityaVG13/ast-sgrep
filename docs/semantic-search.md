@@ -112,7 +112,7 @@ at 8 so unique-query scoring stays under 1 ms (16 probes was p90 1.2 ms on the
 54k-chunk corpus). The IVF payload is prefaulted on first load so unique-query
 p90 is not a cold page-fault walk. Hybrid search scores only mmap rows whose
 files survived the lexical/structural cascade, then SQLite-fetches those top-N
-survivors -- not every concat blob in the cascade files. Hybrid cascade
+survivors, not every concatenated vector in the candidate files. Hybrid cascade
 prefilter skips 1-2 character tokens (they cannot use trigrams and would
 full-table `LIKE` scan). `--ann-probes` still requests an explicit probe count.
 
@@ -165,8 +165,6 @@ is tens of microseconds; remaining hybrid time is lexical discovery plus
 finish/fanout, not nprobe. High-df conceptual terms (for example `encode
 payload`) still sit in the p90 tail. `pi-ast-sgrep` Code Mode `asgrep.search`
 is this hybrid path; `asgrep.semantic` is the sub-1 ms unique path.
-
-
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).
 

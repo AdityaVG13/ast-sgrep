@@ -24,13 +24,13 @@ For **searching an indexed repo**, ast-sgrep replaces the scan tools. Identifier
 
 Latency cells are the 2.5.0 re-pin (self corpus, 650 indexed files,
 `release-perf`): [head-to-head](../benchmarks/results/head-to-head.md).
-Warm-server tools are compared separately below — a cold one-shot
+Warm-server tools are compared separately below. A cold one-shot
 process and a warm server are different contests.
 
 ### Also in the arena: tgrep and fff
 
 **tgrep** (warm trigram server,
-1.0.9) answers the same `SearchHit` query in **5.8 ms p95** — it leads
+1.0.9) answers the same `SearchHit` query in **5.8 ms p95**. It leads
 asgrep's 8.5 ms cold one-shot. asgrep's own warm path (`codemode-serve`,
 0.75 ms p50) is the apples-to-apples contest, not the one-shot CLI.
 
@@ -58,7 +58,7 @@ latency only, never match sets.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Indexed repo — search                                  │
+│  Indexed repo: search                                   │
 │    asgrep  (hybrid / defs / callers / pattern / NL)     │
 ├─────────────────────────────────────────────────────────┤
 │  Not search                                             │
@@ -161,8 +161,8 @@ This does **not** require the ast-grep CLI. Unsupported shapes return no hits ra
 
 ## Performance expectations
 
-Measured cells (2.5.0 re-pin, self corpus, 650 indexed files) —
-[head-to-head](../benchmarks/results/head-to-head.md):
+Measured cells (2.5.0 re-pin, self corpus, 650 indexed files;
+see [head-to-head](../benchmarks/results/head-to-head.md)):
 
 | Scenario | ast-sgrep | ripgrep | ast-grep |
 |----------|-----------|---------|----------|
@@ -171,7 +171,7 @@ Measured cells (2.5.0 re-pin, self corpus, 650 indexed files) —
 | One-shot structural query | 9.5 ms p95 (`pattern:`, indexed) | N/A | 61.3 ms p95 (hand-written code) |
 | Warm-server query | 0.75 ms p50 (`codemode-serve`) | N/A (no server) | N/A (no server) |
 
-ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Choose based on query frequency and whether you need graph/semantic ranking. On trees with large generated files, scan/parse-per-query tools pay per query while the index does not (ast-grep 279.8 ms with the generated file included vs 61.3 ms without — same 9.5 ms for asgrep).
+ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Choose based on query frequency and whether you need graph/semantic ranking. On trees with large generated files, scan/parse-per-query tools pay per query while the index does not (ast-grep 279.8 ms with the generated file included vs 61.3 ms without, while asgrep stays at 9.5 ms).
 
 ## Migration mental model
 

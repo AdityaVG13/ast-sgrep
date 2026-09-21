@@ -14,7 +14,7 @@ Shared agent envelope fields (CLI `--json`, Pi runtime, capabilities catalog):
 
 Capabilities: `asgrep capabilities --json` lists `machine_schema` plus boolish env spellings.
 CLI and Pi both require `tool` + `schema_version` + boolean `ok`.
-MCP uses JSON-RPC tool results (`isError`) rather than the CLI envelope; see surface-parity.
+MCP uses JSON-RPC tool results (`isError`) rather than the CLI envelope.
 
 Pin: `MACHINE_SCHEMA_VERSION = "1.0.0"` in `crates/ast-sgrep-cli/src/machine.rs`.
 
@@ -43,7 +43,7 @@ run). `assert_golden` migration of hit dumps is **nz7i.2**, not this matrix.
 | ID | Gap | Why it is not a MUST here | Pointer |
 |---|---|---|---|
 | MJ-011 | Full **search hit-array** golden freeze | Envelope/shape is frozen; ranked hit bodies are nz7i.2 | `COVERAGE` S6 partial; golden program |
-| MJ-012 | MCP does **not** use this CLI envelope | JSON-RPC `isError`; not a second copy of `--json` | `DISC-mcp-not-full-suite`, `surface-parity.md` |
+| MJ-012 | MCP does **not** use this CLI envelope | JSON-RPC `isError`; not a second copy of `--json` | `DISC-mcp-not-full-suite` |
 
 Do not force MCP onto MJ-001…010. Multi-consumer (CLI + Pi + MCP) is not one
 suite.

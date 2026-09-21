@@ -55,7 +55,7 @@ intentionally. Tool `root` is **not** a free absolute-path escape hatch.
 An absolute (or otherwise writable) index path is a **privileged sink**: the
 process will create/open that SQLite database wherever the path points. Do not
 accept untrusted values for this env/flag. Pinning also disables generation
-atomic reindex (in-place rebuild crash window) — see
+atomic reindex (in-place rebuild crash window). See
 `docs/index-consistency.md`.
 
 ## Durability (`ASGREP_DURABILITY`)

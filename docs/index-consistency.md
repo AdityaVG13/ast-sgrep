@@ -1,6 +1,6 @@
 # Index consistency model
 
-This document is the audit record for epics `ast-sgrep-ht1h` and `ast-sgrep-esyi.4`: what a searcher may observe under concurrent reindex, how IVF and hybrid caches invalidate, and what SQLite durability settings guarantee.
+This document records what a searcher may observe during a concurrent reindex, how IVF and hybrid caches invalidate, and what the SQLite durability settings guarantee. It is the audit record for epics `ast-sgrep-ht1h` and `ast-sgrep-esyi.4`.
 
 ## Source of truth
 
@@ -23,9 +23,9 @@ guarantee and is not part of the published platform matrix.
 
 ## Generations and fingerprints
 
-1. **`index_data_version`** (meta) — monotonic counter bumped on every searchable-index mutation on any connection. Used by `ResponseCache` together with `PRAGMA data_version` (other-connection commits).
-2. **`semantic_data_version`** (meta) — content-generation counter bumped on every `semantic_chunks` mutation. Included in the IVF ANN fingerprint and `SemanticCache` identity.
-3. **IVF fingerprint** — `blake3("asgrep-semantic-ivf-v2" ‖ count ‖ max_id ‖ dim ‖ backend ‖ "gen" ‖ semantic_data_version)`. A delete/re-add that reuses `max_id` still changes the generation and forces rebuild.
+1. **`index_data_version`** (meta): a monotonic counter bumped on every searchable-index mutation on any connection. Used by `ResponseCache` together with `PRAGMA data_version` (other-connection commits).
+2. **`semantic_data_version`** (meta): a content-generation counter bumped on every `semantic_chunks` mutation. Included in the IVF ANN fingerprint and `SemanticCache` identity.
+3. **IVF fingerprint**: `blake3("asgrep-semantic-ivf-v2" ‖ count ‖ max_id ‖ dim ‖ backend ‖ "gen" ‖ semantic_data_version)`. A delete/re-add that reuses `max_id` still changes the generation and forces rebuild.
 
 Optional helper `vectors_content_digest` / `compute_ann_fingerprint_with_content` bind fingerprints to raw vector bytes in tests and tooling; the on-disk gate uses the generation-backed fingerprint so lazy ANN and rebuild paths agree.
 
@@ -55,7 +55,7 @@ IVF hits require fingerprint match or flat fallback.
 
 **Concurrent writers:** supported at the SQLite level via WAL + busy timeout. Application-level indexing should prefer a single indexer process per index path; two bulk indexers on one DB will serialize on `BEGIN IMMEDIATE` and may contend. Searchers may open additional read connections safely.
 
-**Cross-process Searcher caches (R-XPROC-MULTIWRITER Option C lite):** writers (`Indexer::index_all`, watch `update_paths` / deferred sidecar flush) publish a unique `writer_generation` epoch beside the index home (`.asgrep/writer_generation`, or next to a pinned `ASGREP_INDEX_PATH`). The stamp is not `read+1`: concurrent writers must not publish the same value, or a peer that already observed it will skip the second mutation. Long-lived MCP and Code Mode Searcher caches poll the stamp for the **cached Searcher's root** (the per-call index, not the session workspace) and reopen when it changes, so `asgrep watch` / CLI index cannot silently leave a warm peer serving a pre-mutation snapshot. This is an epoch poll, not a flock or IPC bus. `asgrep status` reports `writer_generation`.
+**Cross-process Searcher caches:** writers (`Indexer::index_all`, watch `update_paths`, deferred sidecar flush) publish a unique `writer_generation` epoch beside the index home (`.asgrep/writer_generation`, or next to a pinned `ASGREP_INDEX_PATH`). The stamp is never `read+1`: concurrent writers must not publish the same value, or a peer that already observed it will skip the second mutation. Long-lived MCP and Code Mode Searcher caches poll the stamp for the **cached Searcher's root** (the per-call index, not the session workspace) and reopen when it changes. This keeps `asgrep watch` and CLI indexing from silently leaving a warm peer on a pre-mutation snapshot. The mechanism is an epoch poll, not a file lock or IPC bus. `asgrep status` reports `writer_generation`.
 
 **Writer-generation fail-open (intentional contract):**
 

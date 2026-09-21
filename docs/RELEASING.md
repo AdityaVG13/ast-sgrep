@@ -30,7 +30,7 @@ for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
 done
 ```
 
-Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). Publication is OIDC-only (br-r8k): there is no token lane, so an OIDC failure means the npm trusted-publisher registration is wrong — fix it on npmjs.com and re-dispatch publish-only. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher. After either publish job succeeds, the workflow re-pins `package-lock.json` against the live release and pushes it to `main` (br-zvh); this runs under the publish approval, not a second one.
+Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts. A broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). Publication is OIDC-only (br-r8k): there is no token lane, so an OIDC failure means the npm trusted-publisher registration is wrong. Fix it on npmjs.com and re-dispatch publish-only. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher. After either publish job succeeds, the workflow re-pins `package-lock.json` against the live release and pushes it to `main` (br-zvh); this runs under the publish approval, not a second one.
 
 ## Pi npm package family
 
@@ -48,20 +48,20 @@ The `pi-ast-sgrep` extension rides the lockstep family: `release:prepare` bumps 
 Rules for the extension lane:
 
 - The extension version lives in two places that MUST agree: `packages/pi/extension/package.json` and `packages/pi/release-contract.json` at `packages.extension.version`. Bump both together.
-- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.2`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.2`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment — the npm trusted-publisher registration is shared with the family workflow file.
+- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.2`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.2`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment. The npm trusted-publisher registration is shared with the family workflow file.
 - Features that need newer native envelope fields must degrade gracefully on older launchers; when a feature genuinely requires a new native floor, raise `launcherRange` and `compatibility.layers.extension.minLauncherVersion` in the contract and ship a family release first.
 - Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.5.2 --commit <sha> --ref-type tag` against a real signed tag.
 
 ### Dogfood publish (one command)
 
-For everyday iteration the extension may be published locally — this is the dogfooding lane the release contract blesses:
+For everyday iteration the extension may be published locally. This is the dogfooding lane the release contract blesses:
 
 ```bash
 npm run publish:pi-extension            # publish the version in the contract
-npm run publish:pi-extension -- 2.1.1   # bump manifest+contract, commit them, publish
+npm run publish:pi-extension -- X.Y.Z   # bump manifest+contract, commit them, publish
 ```
 
-The script enforces the same invariants the tag lane checks: manifest and `packages.extension.version` agree, `ast-sgrep` dependency equals `launcherRange`, the extension tree and dist are fully committed (packed content = committed content, i.e. off origin/main once pushed), `check:pi-contract` passes, and the build is clean. Only then does it run `npm publish`. Provenance attestation and OIDC remain exclusive to the signed `pi-v` tag lane — use it for releases you want attestable.
+The script enforces the same invariants the tag lane checks: manifest and `packages.extension.version` agree, `ast-sgrep` dependency equals `launcherRange`, the extension tree and dist are fully committed (packed content = committed content, i.e. off origin/main once pushed), `check:pi-contract` passes, and the build is clean. Only then does it run `npm publish`. Provenance attestation and OIDC remain exclusive to the signed `pi-v` tag lane. Use it for releases you want attestable.
 
 Local preparation is side-effect free:
 

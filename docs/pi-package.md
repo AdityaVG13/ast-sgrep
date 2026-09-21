@@ -8,7 +8,6 @@ pi install npm:pi-ast-sgrep
 
 This is the canonical package-user guide for the current contract (`2.5.2`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
-
 ## Pi packages.md compliance
 
 This package follows [Pi packages](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md):
@@ -26,13 +25,13 @@ This package follows [Pi packages](https://github.com/earendil-works/pi/blob/mai
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.0.0 <3`), which selects one of five host-constrained native packages. Launcher and native packages move in lockstep at the canonical version; the extension versions independently and keeps working against older launchers in its range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
+The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.0.0 <3`), which selects one of five host-constrained native packages. Launcher, native packages, and extension move in lockstep at the canonical version; the extension keeps working against older launchers in its range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
 Restart Pi after installation if the current session does not reload package resources. The package contributes:
 
-- Tools: **`asgrep`** (primary — JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_edit`, `asgrep_read`, and `asgrep_index` for one-shot search/edit/read/index. Search tools share one warm in-process Searcher per project root — no CLI spawn on the hot path (MCP-class native feel). The tools register `promptSnippet` and `promptGuidelines` so Pi calls asgrep for code lookup without a skill file. There is no `asgrep_status` tool: status is a diagnostic read in Code Mode or via `/asgrep-status`, not a lookup.
+- Tools: **`asgrep`** (primary: JS Code Mode on an **in-process NAPI** `CodeModeSession`), plus `asgrep_search`, `asgrep_edit`, `asgrep_read`, and `asgrep_index` for one-shot search/edit/read/index. Search tools share one warm in-process Searcher per project root, so there is no CLI spawn on the hot path. The tools register `promptSnippet` and `promptGuidelines` so Pi calls asgrep for code lookup without a skill file. There is no `asgrep_status` tool: status is a diagnostic read in Code Mode or via `/asgrep-status`, not a lookup.
 - Commands: `/asgrep-doctor`, `/asgrep-status`, `/asgrep-index`, and `/asgrep-reindex`. These commands accept no arguments.
 
 Start in the project you want Pi to search. A first search (Code Mode or direct) checks index health and lazily creates the index when it is missing, so an explicit setup command is optional. To build it before searching, run `/asgrep-index`.
@@ -47,7 +46,7 @@ Ask Pi to use `asgrep`, or call it with a JavaScript program:
 }
 ```
 
-The executor runs that code with typed `asgrep.*` methods backed by a warm in-process native session. Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP — **do not also register `asgrep-mcp` in this Pi session** (Code Mode XOR MCP).
+The executor runs that code with typed `asgrep.*` methods backed by a warm in-process native session. Use `Promise.all` for independent lookups; filter and shape results in JS; return only what the model needs. See [codemode.md](codemode.md). Code Mode is independent of MCP. **Do not also register `asgrep-mcp` in this Pi session** (Code Mode XOR MCP).
 
 ### Direct search examples
 
@@ -59,7 +58,7 @@ For a single lookup, `asgrep_search` still works:
 {"query":"where are credentials renewed?","mode":"semantic","limit":8}
 ```
 
-Use `natural` when you know the intent but not the spelling, `pattern` for a structural pattern, and `chain` to trace relationships. Limits are 1–100 (default 8). Result excerpts are off by default; request `excerptLines` only after narrowing the result set.
+Use `natural` when you know the intent but not the spelling, `pattern` for a structural pattern, and `chain` to trace relationships. Limits are 1 to 100 (default 8). Result excerpts are off by default; request `excerptLines` only after narrowing the result set.
 
 `asgrep_index` accepts `{"force":false}`; set `force` to `true` only when a full rebuild is needed. `asgrep_read` takes a file window or hit ref; `asgrep_edit` takes exact-string replacements. Runtime status has no tool: use `/asgrep-status` or read it in Code Mode. The slash commands provide the same operational paths for interactive use.
 
@@ -73,7 +72,9 @@ The first index or search that needs an index creates `<project-root>/.asgrep/`.
 
 Only `.git` and `.asgrep` are always skipped. Other dotfiles and directories are indexed unless excluded by the repository's ignore rules, so project-specific generated directories belong in the project's own ignore configuration rather than a public hardcoded list.
 
-After a successful Pi `write` or `edit` tool call, the extension records the affected path and incrementally updates only those known created, changed, or deleted paths before the next search. A recursive project watcher does the same for unambiguous external file changes. Renames, directory events, ignore-file edits, watcher errors, and ambiguous events require a full incremental reconciliation; `.asgrep` self-writes are ignored. If recursive watching is unavailable, the extension performs one immediate correctness scan on first use. A ready, clean index is not walked on first search or when the refresh interval elapses; the interval re-checks index health (missing/incompatible) without hashing the tree. Missing indexes are built and incompatible indexes use the controlled rebuild path. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work. A waiter may stop waiting without cancelling that shared work while other callers still depend on it; when the last waiter cancels or times out, the in-flight index is aborted so workers cannot keep burning CPU after Pi has moved on. Code Mode indexing uses the host's available parallelism by default (`ASGREP_INDEX_THREADS` overrides).
+After a successful Pi `write` or `edit` tool call, the extension records the affected path and incrementally updates only those known created, changed, or deleted paths before the next search. A recursive project watcher does the same for unambiguous external file changes. Renames, directory events, ignore-file edits, watcher errors, and ambiguous events require a full incremental reconciliation; `.asgrep` self-writes are ignored. If recursive watching is unavailable, the extension performs one immediate correctness scan on first use.
+
+A ready, clean index is not walked on first search or when the refresh interval elapses; the interval re-checks index health (missing/incompatible) without hashing the tree. Missing indexes are built and incompatible indexes use the controlled rebuild path. Concurrent searches for the same root share one in-flight refresh and wait for it rather than starting duplicate index work. A waiter may stop waiting without cancelling that shared work while other callers still depend on it; when the last waiter cancels or times out, the in-flight index is aborted so workers cannot keep burning CPU after Pi has moved on. Code Mode indexing uses the host's available parallelism by default (`ASGREP_INDEX_THREADS` overrides).
 
 Run `/asgrep-index` when freshness is needed immediately after a large generator, branch switch, or other external operation the watcher did not see. Use `/asgrep-status` to inspect the root, index, backend, counts, IVF state, and capabilities; use `/asgrep-reindex` only for an explicit strict full rebuild or recovery.
 
@@ -105,10 +106,10 @@ Pi packages are trusted code, not a sandbox. Installing grants the JavaScript ex
 
 Run these in order:
 
-1. `/asgrep-doctor` — checks the extension/runtime version, machine protocol, native binary, index, and project configuration.
-2. `/asgrep-status` — shows the selected root and current index/backend state.
-3. `/asgrep-index` — creates or incrementally refreshes a missing/stale index.
-4. `/asgrep-reindex` — performs a full rebuild when doctor reports incompatible or corrupt data.
+1. `/asgrep-doctor`: checks the extension/runtime version, machine protocol, native binary, index, and project configuration.
+2. `/asgrep-status`: shows the selected root and current index/backend state.
+3. `/asgrep-index`: creates or incrementally refreshes a missing/stale index.
+4. `/asgrep-reindex`: performs a full rebuild when doctor reports incompatible or corrupt data.
 
 Common actionable failures:
 
@@ -167,7 +168,7 @@ Deleting `.asgrep` is irreversible but does not delete source files; a later sea
 
 ## Release cadence and provenance
 
-Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `vX.Y.Z` tag and commit for the five native npm packages and launcher at the canonical version; the extension ships independently under its own `pi-v` tags (see `docs/RELEASING.md`). The contract separately pins the embedded native CLI. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
+Pi release validation does not run automatically on pull requests, pushes to `main`, or tag pushes. Both Pi workflows are manual `workflow_dispatch` actions. Manually dispatch **Pi native artifacts** (`.github/workflows/pi-native-artifacts.yml`) for a safe dry-run that packs and tests without publishing. An official Pi/npm release is one human-approved `vX.Y.Z` tag and commit for the five native npm packages, launcher, and extension at the canonical version; `pi-v` tags remain for out-of-band extension revs between family releases (see `docs/RELEASING.md`). The contract separately pins the embedded native CLI. The `Pi npm official release` workflow must be dispatched against that exact tag with `publish=true`.
 
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 

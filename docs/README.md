@@ -1,6 +1,6 @@
 # Documentation index
 
-Canonical entry points for humans and agents. Prefer this list over scavenging the repo root.
+Canonical entry points for humans and agents. Prefer this list over searching the repo root.
 
 ## Start here
 
@@ -43,6 +43,8 @@ Canonical entry points for humans and agents. Prefer this list over scavenging t
 | [validation/neural-trust.md](validation/neural-trust.md) | Optional in-process neural embeddings |
 | [validation/semantic-ivf-mmap.md](validation/semantic-ivf-mmap.md) | IVF sidecar layout |
 | [validation/golden-files.md](validation/golden-files.md) | Compare-only goldens; how to refresh locally |
+| [validation/audits/](validation/audits/) | Dated audit notes |
+| [progress/README.md](progress/README.md) | Perf, conformance, and surface ledgers |
 
 Published result tables live under [`../benchmarks/results/`](../benchmarks/results/); start from [`../benchmarks/README.md`](../benchmarks/README.md).
 
@@ -57,6 +59,7 @@ ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
 ast-sgrep-codemode → Code Mode / PTC tools + plan runner
+ast-sgrep-codemode-napi → Native Node-API addon for Pi
 ast-sgrep-plugins→ JSON/output formats
 ast-sgrep-testkit→ shared fixtures for search/index/Pi tests
 ```

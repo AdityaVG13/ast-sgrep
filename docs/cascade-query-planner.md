@@ -14,9 +14,9 @@ The final result gate receives lexical, structural, and semantic evidence from t
 
 | Stage empty | Hybrid behavior |
 |-------------|-----------------|
-| **Lexical** (identifier / literal intent) | Cascade stops — no hybrid hits. |
+| **Lexical** (identifier / literal intent) | Cascade stops: no hybrid hits. |
 | **Lexical** (conceptual intent, embed on) | **Invent-path escape:** run unconstrained semantic (same machinery as `asgrep semantic`), then conceptual fan-out. Still no neural download and no daemon. |
-| **Lexical** (conceptual intent, embed off) | Cascade stops — empty. |
+| **Lexical** (conceptual intent, embed off) | Cascade stops: empty. |
 | **Structural** | Cascade **continues** on lexical survivors (+ optional embed on those files). |
 
 When discovery already found files, semantic still cannot widen beyond the working-file set. The escape only fires when conceptual discovery is empty. Prefixed `literal:`, `regex:`, `pattern:`, `defs:`, `callers:`, and `imports:` modes continue to execute their dedicated retrieval path directly.

@@ -244,7 +244,7 @@ Tune ANN: `--ann-threshold N` or `ASGREP_ANN_THRESHOLD`.
 
 ## Benchmarks
 
-On the sample fixture (tiny corpus; informational only — not a CI-enforced product SLO):
+On the sample fixture (tiny corpus; informational only, not a CI-enforced product SLO):
 
 ```bash
 asgrep bench . --iterations 100

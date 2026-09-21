@@ -10,17 +10,17 @@ Code Mode is a **tool-use pattern**, not a transport:
 
 That is the same idea as:
 
-- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/) — one `codemode` tool, typed connector globals
-- [OpenCode CodeMode](https://github.com/anomalyco/opencode/tree/dev/packages/codemode) — orchestration over host-supplied tools (authority = tools you expose, not an OS jail)
-- [Anthropic programmatic tool calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling) — tools callable from code execution via `allowed_callers`
-- [OpenAI programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling) — JS in a V8 runtime coordinates tools
+- [Cloudflare Code Mode](https://developers.cloudflare.com/agents/tools/codemode/): one `codemode` tool, typed connector globals
+- [OpenCode CodeMode](https://github.com/anomalyco/opencode/tree/dev/packages/codemode): orchestration over host-supplied tools (authority = tools you expose, not an OS jail)
+- [Anthropic programmatic tool calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling): tools callable from code execution via `allowed_callers`
+- [OpenAI programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling): JS in a V8 runtime coordinates tools
 
 Traditional MCP/tool calling does **one model round-trip per operation**. Code Mode
 moves loops, branching, filtering, and parallel fan-out into executable code.
 
-## MCP vs Code Mode — pick one (XOR)
+## MCP vs Code Mode: pick one (XOR)
 
-**Use either Code Mode or MCP in a given client — not both.** They are sibling
+**Use either Code Mode or MCP in a given client, not both.** They are sibling
 front ends on the same retrieval core. Stacking them doubles tool catalogs,
 duplicates index opens, and confuses the model about which surface to call.
 
@@ -53,7 +53,7 @@ duplicates index opens, and confuses the model about which surface to call.
 | Unit of work | One `tools/call` | One JS program (many calls inside) |
 | Parallelism | Host/model schedules calls | `Promise.all` / loops in the program |
 | Pi | Not used | **Primary Pi agent surface** |
-| Coupling | — | **Never imports MCP; MCP never imports Code Mode** |
+| Coupling | None | **Never imports MCP; MCP never imports Code Mode** |
 
 ## Pi: built on Code Mode
 
@@ -97,7 +97,7 @@ cannot leave rayon workers running.
 **Root jail (host duty):** `CodeModeSession` / NAPI tool `root` args are jailed
 under the configured session workspace the same way MCP jails under
 `ASGREP_ROOT` (`canonicalize` + containment; message
-`escapes configured workspace`). NAPI has no separate resolver — it inherits
+`escapes configured workspace`). NAPI has no separate resolver; it inherits
 Session. Hosts must set Session root intentionally; this is policy confinement,
 not an OS security boundary. `ASGREP_INDEX_PATH` remains a privileged sink
 (see `docs/env-trust.md`).
@@ -112,20 +112,20 @@ Wall time ≈ serial + parallel_work / N.
 
 Same-tick coalesce turns N serial spawn costs into **one** batch process. Prefer
 **session-scoped sticky serve** (`codemode-serve`): one warm Searcher per project
-root for the whole Pi session — shared by Code Mode programs, direct tools, and
-freshness checks (same idea as pi-codex-conversion's long-lived Code Mode host).
+root for the whole Pi session, shared by Code Mode programs, direct tools, and
+freshness checks.
 Inside a one-shot batch, Rust **Auto is always serial warm**. Unique search/find
-is ~0.5–1 ms; N parallel SQLite opens are the serial wall. Force `Parallel`
+is ~0.5 to 1 ms; N parallel SQLite opens are the serial wall. Force `Parallel`
 only for an explicit experiment.
 
 ### Why no CLI spawn (Pi / Code Mode)
 
 | Surface | Process model |
 |---------|----------------|
-| **MCP** (`asgrep-mcp`) | **In-process** — links `ast-sgrep-core`, warm `Searcher`. |
-| **Pi / Code Mode** | **In-process NAPI** — `ast-sgrep-codemode-napi` loads `CodeModeSession` inside Node. Same retrieval core as MCP; no `asgrep` child on the hot path. |
+| **MCP** (`asgrep-mcp`) | **In-process**: links `ast-sgrep-core`, warm `Searcher`. |
+| **Pi / Code Mode** | **In-process NAPI**: `ast-sgrep-codemode-napi` loads `CodeModeSession` inside Node. Same retrieval core as MCP; no `asgrep` child on the hot path. |
 
-Install **either** MCP **or** the Pi package (Code Mode) — siblings, not a stack. Both should feel like a native grep: warm index, zero process spawn, microseconds-to-milliseconds per lookup after the first open.
+Install **either** MCP **or** the Pi package (Code Mode); they are siblings, not a stack. Both should feel like a native grep: warm index, zero process spawn, microseconds-to-milliseconds per lookup after the first open.
 
 CLI `codemode-serve` remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Official npm installs ship `ast-sgrep-codemode.node` inside each `@ast-sgrep/<platform>` package next to the CLI binary.
 
@@ -160,8 +160,7 @@ Runner capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
 direct `require`, `process`, `fetch`, or filesystem globals. The configured wall
 deadline interrupts synchronous `vm` loops and aborts awaited host calls.
 Call arguments, logs, and serialized results are capped. There is no Worker:
-a busy microtask loop after `await` can pin the Pi event loop (same as nicknisi
-in-process Code Mode). Do not treat this as an OS jail.
+a busy microtask loop after `await` can pin the Pi event loop. Do not treat this as an OS jail.
 
 ## Rust crate `ast-sgrep-codemode`
 

@@ -1,16 +1,16 @@
 # MCP server (asgrep-mcp)
 
-`asgrep-mcp` exposes hierarchical ast-sgrep code retrieval (separate keyword / AST / semantic channels; no auto-fusion) to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
-
+`asgrep-mcp` exposes hierarchical ast-sgrep code retrieval (separate keyword, AST, and semantic channels with no auto-fusion) to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
 
 ## Code Mode XOR MCP
 
 Pick **one** agent surface per client:
 
 - **MCP hosts** → this server (`asgrep-mcp`)
-- **Pi** → Code Mode (`pi install npm:pi-ast-sgrep`) — do **not** also enable this MCP server in that Pi session
+- **Pi** → Code Mode (`pi install npm:pi-ast-sgrep`). Do **not** also enable this MCP server in that Pi session.
 
 They share `ast-sgrep-core` but must not be stacked. See [codemode.md](codemode.md).
+
 ## Install
 
 ```bash
@@ -53,8 +53,8 @@ Environment variables:
 | Variable | Purpose |
 |----------|---------|
 | `ASGREP_ROOT` | Project / workspace root (default: cwd). Tool `root` args must stay under this jail. |
-| `ASGREP_INDEX_PATH` | **Privileged sink** — absolute writable DB path. Pins which file; rebuilds stay in-place (no generation swap). |
-| `ASGREP_DURABILITY` | `strict` \| `balanced` \| `fast-unsafe` (MCP inherits; FastUnsafe is power-loss risky) |
+| `ASGREP_INDEX_PATH` | **Privileged sink**: absolute writable DB path. Pins which file; rebuilds stay in-place (no generation swap). |
+| `ASGREP_DURABILITY` | `strict` \| `balanced` \| `fast-unsafe` (MCP inherits the CLI setting; `fast-unsafe` risks data loss on power failure) |
 | `ASGREP_LIMIT` | Max hits per search (default 16) |
 | `ASGREP_NO_EMBED` | Set to `1` to disable semantic pass |
 
@@ -62,7 +62,7 @@ Environment variables:
 
 ### `search` (preferred)
 
-Fused hybrid retrieval — same cascade as CLI `asgrep` (lexical + structural + semantic, critic, follow-ups). Use this for workspace-grounded questions when wording or location is unknown.
+Fused hybrid retrieval using the same cascade as CLI `asgrep` (lexical + structural + semantic, critic, follow-ups). Use this for workspace-grounded questions when wording or location is unknown.
 
 Accepts `query`, optional `root`, `limit`, `file_filter`, `lang`, `preview` (`none|short|full`), `resend_seen`, and `budget_tokens`. Returns the compact envelope with stable node IDs for `code_read`.
 
@@ -109,7 +109,7 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 2. Choose one of `keyword_search`, `ast_search`, or `semantic_search` with a bounded limit.
 3. Inspect abbreviated previews and retain only relevant node IDs.
 4. Call `code_read` for selected IDs, adding adjacent context only when needed.
-5. Use the one-shot CLI when automatic fusion is explicitly desired. Structural rewrites, multi-statement templates, and YAML rules are out of contract; use standalone ast-grep, they are not silently delegated (`DISC-pattern-native-subset`). Single-statement nested templates (`fn $N($$$) { $STMT }`, `if ($COND) { $BODY }`) are native — see `docs/structural-patterns.md`.
+5. Use the one-shot CLI when automatic fusion is explicitly desired. Structural rewrites, multi-statement templates, and YAML rules are out of contract; use standalone ast-grep, they are not silently delegated (`DISC-pattern-native-subset`). Single-statement nested templates (`fn $N($$$) { $STMT }`, `if ($COND) { $BODY }`) are native; see `docs/structural-patterns.md`.
 
 ## LSP vs MCP
 
@@ -218,7 +218,7 @@ fixed-query identity and 89.0% reduction evidence is recorded in
 ## Capsule mode (`--format agent-capsule`)
 
 For agent pipelines where context is the budget, capsule mode returns refs
-and one-line previews instead of full excerpts -- roughly 3x smaller than
+and one-line previews instead of full excerpts, roughly 3x smaller than
 the `agent` format at the same limit, with identical ranking:
 
 ```bash
@@ -241,7 +241,7 @@ your own file reader (editor API, `sed`/`nl`, MCP filesystem tools, etc.):
 # Example: search, then read only the top hit span
 asgrep --json --format agent-capsule 'auth refresh' .
 # Each hit has file + lines.start/end + ref; open that window in your editor
-# or agent file-read tool -- no special host product required.
+# or agent file-read tool; no special host product required.
 ```
 
 This keeps the search step capsule-cheap and defers content bytes to the

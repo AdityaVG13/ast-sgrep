@@ -1,7 +1,7 @@
 # Query prefixes
 
-Normative surface for `ParsedQuery::parse` in `crates/ast-sgrep-core/src/query.rs`.
-The parser has no composable `path:` / `lang:` / `sem:` grammar — unprefixed
+This document specifies how query strings parse (`ParsedQuery::parse` in `crates/ast-sgrep-core/src/query.rs`), so implementations and tests agree.
+The parser has no composable `path:` / `lang:` / `sem:` grammar. Unprefixed
 input is hybrid retrieval; one leading mode prefix selects a single channel.
 One layer above the parser, `Searcher::search` recognizes exactly one
 two-channel conjunction form; see "Two-channel conjunction" below.
@@ -123,6 +123,6 @@ Tests: `tests/core/conjunction_queries.rs`.
 
 ## Related
 
-- [How it works](how-it-works.md) — hybrid ranking overview
-- [Semantic search](semantic-search.md) — embed backends
-- [Structural patterns](../README.md) — pattern examples in the main README
+- [How it works](how-it-works.md), hybrid ranking overview
+- [Semantic search](semantic-search.md), embed backends
+- [Structural patterns](../README.md), pattern examples in the main README

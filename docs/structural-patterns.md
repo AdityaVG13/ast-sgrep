@@ -51,7 +51,7 @@ if-node (Rust/TS/Go/Java `else if`; Python `elif` is a distinct node and does
 not match).
 
 Body templates are matched only by the native tree-sitter scan, never by
-indexed `pattern_nodes` signatures — the index cannot express statement
+indexed `pattern_nodes` signatures. The index cannot express statement
 counts, so serving these shapes from it would over-match
 (`cached_pattern_signatures` returns `None` for any `{` pattern).
 

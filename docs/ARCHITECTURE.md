@@ -20,21 +20,23 @@ source tree
 | `ast-sgrep-core` | Index orchestration, SQLite storage, query parsing, retrieval passes, ranking, semantic chunks/ANN, and result models |
 | `ast-sgrep-lang` | Language-aware parsing and extraction of symbols, calls, imports, and pattern nodes |
 | `ast-sgrep-embed` | Embedding providers and the always-available offline semantic backend |
+| `ast-sgrep-mmap` | Memory-map helpers for index sidecars |
 | `ast-sgrep-mcp` | stdio MCP server (transport only; never linked to Code Mode) |
 | `ast-sgrep-codemode` | Code Mode catalog/session/plan + host adapters (sibling to MCP; Pi JS runner is the agent executor) |
+| `ast-sgrep-codemode-napi` | Native Node-API addon: in-process Code Mode sessions for Pi |
 | `ast-sgrep-lsp` | Language Server Protocol navigation surfaces |
 | `ast-sgrep-plugins` | Platform/output integrations |
 | `ast-sgrep-testkit` | Shared fixtures and helpers for integration tests |
 
 The dependency direction is intentionally toward `ast-sgrep-core`: front ends translate their protocol into core operations instead of reimplementing retrieval.
 
-### Prod Bill vs with-dev SCC
+### Production vs dev-only dependency cycles
 
-Primary (prod path deps) is a DAG. Do not file a "break prod cycle" bead.
+Production path dependencies form a DAG (no cycles). There is no production cycle to break.
 
-`ast-sgrep-testkit` default prod edges are `core` and `lang` only (E14/E16 Keep). `ast-sgrep-lsp` is optional behind the testkit `lsp` feature (E17 B3, `e32f004`). `ast-sgrep-embed` is not a testkit path dep (E15 cut).
+`ast-sgrep-testkit` links only `core` and `lang` in its default production edges (E14/E16). `ast-sgrep-lsp` stays optional behind the testkit `lsp` feature (E17), and `ast-sgrep-embed` is not a testkit path dependency (E15).
 
-With-dev still has harness tax: `core` and `lang` `--dev-->` testkit, and testkit `--prod-->` those crates, so `{core, lang, testkit}` remain mutually reachable. `lsp --dev--> testkit` (D05) stays; default testkit does not depend on lsp, so lsp is not in that component. Keep under the Cargo dev/prod split. Break options (extract fixtures, move LSP helpers into `ast-sgrep-lsp` tests) need a separate transform wave.
+Dev-dependencies still carry harness coupling: `core` and `lang` dev-depend on testkit while testkit production-depends on both, so `{core, lang, testkit}` remain mutually reachable. `lsp` dev-depends on testkit (D05), but default testkit does not depend on `lsp`, so `lsp` sits outside that component. Keep this split along the Cargo dev/prod boundary. Fully separating the dev cycle (extracting fixtures, moving LSP helpers into `ast-sgrep-lsp` tests) needs its own change.
 
 Re-measure (2026-08-14, this worktree, `cargo tree --edges normal[,dev] --depth 1 --offline`):
 
@@ -59,7 +61,7 @@ The default index is `<root>/.asgrep/index.db`. File updates are incremental and
 | `semantic_chunks` and embeddings | Symbol-level semantic documents and their vectors |
 | `embed_cache` | Reusable embedding results, avoiding recomputation for unchanged content |
 
-Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. An optional **secondary SQLite FTS5** lexical database (`.asgrep/lexical.db`, historically flagged `--tantivy` / `ASGREP_TANTIVY`) can be enabled for larger repositories — there is no Tantivy crate dependency. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
+Large semantic indexes may also persist `.asgrep/semantic.ivf`, an IVF approximate-nearest-neighbor sidecar. The IVF file accelerates vector candidate selection; SQLite remains the source of indexed symbol/chunk metadata. An optional **secondary SQLite FTS5** lexical database (`.asgrep/lexical.db`, historically flagged `--tantivy` / `ASGREP_TANTIVY`) can be enabled for larger repositories. Despite the flag name, there is no Tantivy crate dependency. Sidecars are derived data and are tied to the index configuration, not independent sources of truth.
 
 ### Indexing flow
 
@@ -76,7 +78,7 @@ The [query prefixes](QUERY_GRAMMAR.md) doc is the public routing contract. Prefi
 
 ### Candidate passes
 
-The core search module owns independent passes for literal/BMH scanning, regex, lexical FTS, symbol/graph lookup, structural modes, and semantic embedding retrieval. Mode dispatch avoids running unrelated work—for example, a definition lookup can favor symbol facts, while a semantic-only command does not pretend to be a lexical query.
+The core search module owns independent passes for literal/BMH scanning, regex, lexical FTS, symbol/graph lookup, structural modes, and semantic embedding retrieval. Mode dispatch avoids running unrelated work. For example, a definition lookup can favor symbol facts, while a semantic-only command does not pretend to be a lexical query.
 
 ### Fusion
 
@@ -90,7 +92,7 @@ Reranking applies query intent and code-aware evidence such as symbol identity, 
 
 On Unix the CLI supervisor wraps the worker process and can enforce a wall-time duty cycle (SIGSTOP/CONT in a 10 ms window). It does not maintain a second index or a separate ranking implementation. Retrieval stays in `ast-sgrep-core`; the supervisor only bounds runnable time and process lifecycle.
 
-Supervision is **opt-in** (H-PERF-001 option b): when `ASGREP_CPU_LIMIT_PERCENT` is unset the command runs as a single in-process process with the supervisor's thread-cap environment, no duty-cycle stretch, and no two-process floor. Setting `ASGREP_CPU_LIMIT_PERCENT` (1..=80) re-enables the supervisor with that duty bound; a malformed value still opts in at the default bound (80) so the CPU contract fails safe. `asgrep doctor --json` reports the active policy under `supervision`. The supervisor's process-lifecycle guards (orphan reaping, parent-watch) are supervision-scoped: unsupervised runs rely on the parent shell's own process management.
+Supervision is **opt-in** (H-PERF-001 option b): when `ASGREP_CPU_LIMIT_PERCENT` is unset the command runs as a single process with the supervisor's thread-cap environment, no duty-cycle stretch, and no two-process floor. Setting `ASGREP_CPU_LIMIT_PERCENT` (1..=80) re-enables the supervisor with that duty bound; a malformed value still opts in at the default bound (80) so the CPU contract fails safe. `asgrep doctor --json` reports the active policy under `supervision`. The supervisor's process-lifecycle guards (orphan reaping, parent-watch) are supervision-scoped: unsupervised runs rely on the parent shell's own process management.
 
 ## Agent surfaces
 
@@ -105,7 +107,7 @@ Two self-describing CLI surfaces let an agent discover the live contract instead
 - `robot-docs guide` prints the operational guide intended for tool-using agents.
 - Read-side commands accept `--json`; `--format agent` and `--format agent-capsule` provide agent-oriented result shapes.
 - `ast-sgrep-mcp` exposes search over MCP (transport). `ast-sgrep-lsp` maps indexed navigation to editor protocol operations.
-- Code Mode is a separate execution model: Pi's `asgrep` JS runner (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode are XOR siblings — pick one per client. See [codemode.md](codemode.md).
+- Code Mode is a separate execution model: Pi's `asgrep` JS runner (and the `ast-sgrep-codemode` Rust catalog/session) let the model write code that orchestrates parallel search. MCP and Code Mode are XOR siblings: pick one per client. See [codemode.md](codemode.md).
 
 Protocol consumers should discover capabilities first, treat stdout JSON as data, and interpret documented exit codes rather than scraping human-readable lines.
 

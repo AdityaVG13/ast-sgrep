@@ -48,13 +48,18 @@ flowchart TB
 
 ```
 ast-sgrep/
-├── crates/ast-sgrep-core/    # Index + hybrid search engine
-├── crates/ast-sgrep-cli/     # asgrep / ast-sgrep binaries
-├── crates/ast-sgrep-lang/    # tree-sitter parsers (15 languages)
-├── crates/ast-sgrep-embed/   # Hashed semantic + optional in-process neural
-├── crates/ast-sgrep-plugins/ # GitHub / GitLab / agent JSON
-├── crates/ast-sgrep-lsp/     # asgrep-lsp
-└── tests/fixtures/           # Polyglot sample + regression fixtures
+├── crates/ast-sgrep-core/          # Index + hybrid search engine
+├── crates/ast-sgrep-cli/           # asgrep / ast-sgrep binaries
+├── crates/ast-sgrep-lang/          # tree-sitter parsers (15 languages)
+├── crates/ast-sgrep-embed/         # Hashed semantic + optional in-process neural
+├── crates/ast-sgrep-mmap/          # Memory-map helpers
+├── crates/ast-sgrep-plugins/       # GitHub / GitLab / agent JSON
+├── crates/ast-sgrep-lsp/           # asgrep-lsp
+├── crates/ast-sgrep-mcp/           # MCP stdio server
+├── crates/ast-sgrep-codemode/      # Code Mode catalog/session/plan
+├── crates/ast-sgrep-codemode-napi/ # Native Node-API addon for Pi
+├── crates/ast-sgrep-testkit/       # Shared test fixtures
+└── tests/fixtures/                 # Polyglot sample + regression fixtures
 ```
 
 | Crate | Role |
@@ -62,9 +67,14 @@ ast-sgrep/
 | `ast-sgrep-lang` | Language detection, tree-sitter parsing, symbol/caller extraction |
 | `ast-sgrep-core` | SQLite store, hybrid search passes, ranking, IVF-ANN |
 | `ast-sgrep-embed` | Embedding provider chain and semantic local model |
+| `ast-sgrep-mmap` | Memory-map helpers for index sidecars |
 | `ast-sgrep-cli` | User-facing CLI |
 | `ast-sgrep-lsp` | Language Server Protocol |
+| `ast-sgrep-mcp` | MCP stdio server (transport only) |
+| `ast-sgrep-codemode` | Code Mode catalog, sessions, and plans |
+| `ast-sgrep-codemode-napi` | Native Node-API addon for Pi Code Mode |
 | `ast-sgrep-plugins` | Output format adapters |
+| `ast-sgrep-testkit` | Shared fixtures for integration tests |
 
 ## Search pipeline
 
@@ -99,7 +109,7 @@ flowchart LR
    - `pattern:` → indexed signatures + tree-sitter reparse (native subset, not ast-grep CLI)
 
 2. **Hybrid queries** (no prefix) run multiple passes in parallel conceptually, then fuse:
-   - **Lexical**, FTS5 BM25 on `lines_fts` (and optional Tantivy sidecar at scale)
+   - **Lexical**, FTS5 BM25 on `lines_fts` (and the optional FTS5 `lexical.db` sidecar at scale; despite the historical `--tantivy` flag name, there is no Tantivy dependency)
    - **Symbol**, name/kind match on `symbols`
    - **Graph**, caller/callee neighborhood for matched symbols
    - **Anchor**, line-bounded excerpts around symbol definitions
@@ -128,7 +138,7 @@ Metadata (SQLite `meta` table) stores embed backend, dimension, and index finger
 
 | File | When | Purpose |
 |------|------|---------|
-| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Dedicated FTS5 / Tantivy lexical index |
+| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Dedicated FTS5 lexical index |
 | `.asgrep/semantic.ivf` | ≥ `ann_threshold` symbols | Persisted IVF clusters + vectors; fingerprint-invalidated on reindex |
 
 Below the ANN threshold, semantic search uses brute-force cosine over all symbol vectors (sub-millisecond for typical repos).
@@ -190,7 +200,7 @@ let agent = format_response(&response, OutputFormat::Agent);
 
 ## Supported languages
 
-Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, Dart, PHP and MoonBit -- unified index, single query surface.
+Rust, TypeScript, JavaScript, Python, Go, Java, C#, Ruby, Swift, C, C++, Kotlin, Dart, PHP, and MoonBit share one unified index behind a single query surface.
 
 Adding a language (contributors): tree-sitter grammar in `ast-sgrep-lang`, implement `LanguageParser`, register in `ParserRegistry`, map extensions in `detect_language()`.
 
