@@ -237,11 +237,19 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
-          registry-url: https://registry.npmjs.org
           cache: npm
       - name: Fail fast when bootstrap token is missing
         if: ${{ inputs.bootstrap_token }}
         run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
+      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
+      # set without a token, breaking OIDC-lane detection — so publish jobs
+      # omit registry-url and bootstrap auth is wired explicitly here.
+      - name: Configure npm token auth for bootstrap lane
+        if: ${{ inputs.bootstrap_token }}
+        run: |
+          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
+          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
@@ -289,11 +297,19 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
-          registry-url: https://registry.npmjs.org
           cache: npm
       - name: Fail fast when bootstrap token is missing
         if: ${{ inputs.bootstrap_token }}
         run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
+      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
+      # set without a token, breaking OIDC-lane detection — so publish jobs
+      # omit registry-url and bootstrap auth is wired explicitly here.
+      - name: Configure npm token auth for bootstrap lane
+        if: ${{ inputs.bootstrap_token }}
+        run: |
+          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
+          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
@@ -418,11 +434,19 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
-          registry-url: https://registry.npmjs.org
           cache: npm
       - name: Fail fast when bootstrap token is missing
         if: ${{ inputs.bootstrap_token }}
         run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
+      # setup-node exports a placeholder NODE_AUTH_TOKEN when registry-url is
+      # set without a token, breaking OIDC-lane detection — so publish jobs
+      # omit registry-url and bootstrap auth is wired explicitly here.
+      - name: Configure npm token auth for bootstrap lane
+        if: ${{ inputs.bootstrap_token }}
+        run: |
+          npmrc="$RUNNER_TEMP/bootstrap-npmrc"
+          printf "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n" > "$npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$npmrc" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
