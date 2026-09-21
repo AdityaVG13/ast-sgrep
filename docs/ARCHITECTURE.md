@@ -115,5 +115,5 @@ Protocol consumers should discover capabilities first, treat stdout JSON as data
 - [Semantic search](semantic-search.md)
 - [Index and retrieval walkthrough](how-it-works.md)
 - [MCP setup](mcp.md)
-- [Benchmark methodology](benchmarks.md)
+- [Benchmark methodology](../benchmarks/results/baselines.md)
 - [Head-to-head table](../benchmarks/results/head-to-head.md), [bake-off](../benchmarks/results/bakeoff.md), and [known losses](../benchmarks/results/losses.md)

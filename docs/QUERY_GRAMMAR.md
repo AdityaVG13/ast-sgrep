@@ -126,4 +126,3 @@ Tests: `tests/core/conjunction_queries.rs`.
 - [How it works](how-it-works.md) — hybrid ranking overview
 - [Semantic search](semantic-search.md) — embed backends
 - [Structural patterns](../README.md) — pattern examples in the main README
-- [DISCREPANCIES](validation/DISCREPANCIES.md) — registered intentional divergences

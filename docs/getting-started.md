@@ -20,7 +20,14 @@ No Cargo build, source checkout, PATH configuration, MCP adapter, API key, or ru
 
 ### Standalone CLI/LSP from source
 
-Requires a Rust toolchain. Until the crates are published, build from source:
+Requires a Rust toolchain. Install the published CLI:
+
+```bash
+cargo install ast-sgrep-cli --locked
+asgrep --help
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/AdityaVG13/ast-sgrep
@@ -44,7 +51,7 @@ cargo build --release -j1
 ./target/release/asgrep bench . --query auth_refresh --iterations 1
 ```
 
-The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, two-channel conjunction, and a one-iteration local benchmark smoke test. See the [query prefixes](QUERY_GRAMMAR.md) for mode prefixes, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](benchmarks.md) before interpreting timing output.
+The commands above cover installation from source, incremental indexing, grammar-directed search, semantic-only retrieval, relationship traversal, two-channel conjunction, and a one-iteration local benchmark smoke test. See the [query prefixes](QUERY_GRAMMAR.md) for mode prefixes, the [architecture](ARCHITECTURE.md) for data flow, and [benchmark methodology](../benchmarks/results/baselines.md) before interpreting timing output.
 
 ## First index
 

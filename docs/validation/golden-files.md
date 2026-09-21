@@ -1,7 +1,8 @@
 # Golden files
 
-Frozen dumps live next to their tests (`tests/*/fixtures/`) or under
-`tests/golden/`. Provenance: [`tests/golden/PROVENANCE.md`](../../tests/golden/PROVENANCE.md).
+Frozen dumps live next to their tests (`tests/*/fixtures/`). There is no
+central `tests/golden/` root; the testkit `_at` helpers address crate-local
+fixtures directly.
 Compare helper: `assert_golden` / `assert_golden_json_at` in `ast-sgrep-testkit`.
 
 ## Env
