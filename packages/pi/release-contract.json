@@ -1,16 +1,16 @@
 {
   "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "2.5.0",
+    "version": "2.5.1",
     "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v2.5.0",
+    "tag": "v2.5.1",
     "coupledComponents": [
       "npm-launcher",
       "native-platform-packages"
     ],
     "driftPolicy": "The npm launcher, native platform packages, and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. The pi-extension package is deliberately decoupled: it versions independently under packages.extension and may be published ahead of the canonical family via its own signed pi-v<version> tag lane. Its launcher floor (layers.extension.minLauncherVersion) may lag the canonical version; the extension MUST install and function against any launcher satisfying launcherRange. Mixed launcher/platform versions or unexpected CLI versions are still rejected.",
-    "nativeCliVersion": "2.5.0",
+    "nativeCliVersion": "2.5.1",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
@@ -45,7 +45,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.0"
+        "optionalDependencyVersion": "2.5.1"
       },
       {
         "name": "@ast-sgrep/darwin-x64",
@@ -59,7 +59,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.0"
+        "optionalDependencyVersion": "2.5.1"
       },
       {
         "name": "@ast-sgrep/linux-arm64-gnu",
@@ -75,7 +75,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.0"
+        "optionalDependencyVersion": "2.5.1"
       },
       {
         "name": "@ast-sgrep/linux-x64-gnu",
@@ -91,7 +91,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.0"
+        "optionalDependencyVersion": "2.5.1"
       },
       {
         "name": "@ast-sgrep/win32-x64-msvc",
@@ -105,7 +105,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "2.5.0"
+        "optionalDependencyVersion": "2.5.1"
       }
     ],
     "unsupportedTargets": [
@@ -135,11 +135,11 @@
         "policy": "Extension accepts any launcher satisfying launcherRange, including official releases behind the canonical version; machine-schema assertions fail closed on incompatible envelopes. Binary identity accepts the same major; the in-process NAPI binding requires an exact native generation while CLI lanes cover older ones. Features requiring newer native fields gate on envelope content, not version; tools the launcher predates fall back to extension-side implementations with native-identical shapes."
       },
       "launcher": {
-        "version": "2.5.0",
+        "version": "2.5.1",
         "compatibility": "exact"
       },
       "binary": {
-        "version": "2.5.0",
+        "version": "2.5.1",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {
@@ -283,7 +283,7 @@
         ],
         "reservationGuaranteed": false,
         "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
-        "version": "2.5.0"
+        "version": "2.5.1"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },
@@ -322,6 +322,7 @@
     ],
     "idempotence": "Refuse dirty, unsigned, wrong-tag, wrong-commit, version-skewed, checksum-incomplete, registry-integrity-mismatched, or fully published releases; identical live tarballs may be skipped during an approved partial-family retry.",
     "rustToolchain": "1.97.1",
+    "nativeBuildProfile": "release",
     "nativeExecution": "Every native artifact is packed, clean-installed, and exercised on its matching matrix runner before upload.",
     "durableAssetPolicy": "Existing GitHub Release assets are downloaded and byte-compared; mismatches fail and assets are never clobbered."
   },

@@ -425,6 +425,8 @@ fn alias_source(ext: &str, needle: &str) -> String {
         "cu" | "cuh" => format!("__global__ void {needle}() {{}}\n"),
         "dart" => format!("void {needle}() {{}}\n"),
         "mbt" | "mbti" => format!("fn {needle}() -> Unit {{}}\n"),
+        // gh-35: script-shaped content (top-level let + main) must index as MoonBit.
+        "mbtx" => format!("let {needle} = 1\nfn main() -> Unit {{ println({needle}) }}\n"),
         other => panic!("missing snippet for extension {other}"),
     }
 }

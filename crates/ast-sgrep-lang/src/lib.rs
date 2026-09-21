@@ -99,6 +99,8 @@ impl Language {
         ("dart", Language::Dart),
         ("mbt", Language::MoonBit),
         ("mbti", Language::MoonBit),
+        // gh-35: MoonBit scripting mode files index as MoonBit.
+        ("mbtx", Language::MoonBit),
     ];
 
     /// Language for a file extension (`ts`, `hpp`, `pyi`, …). Case-insensitive.

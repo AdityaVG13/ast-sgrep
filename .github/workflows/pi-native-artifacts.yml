@@ -11,8 +11,8 @@ jobs:
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -33,8 +33,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.target-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -59,6 +59,7 @@ jobs:
         shell: bash
         env:
           RUSTC_WRAPPER: ""
+          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}
         run: |
           cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
           cargo build --locked --release -p ast-sgrep-codemode-napi --target "${{ matrix.rustTarget }}"
@@ -118,7 +119,7 @@ jobs:
             --install-root "$clean" \
             --fixture "$RUNNER_TEMP/pi-native-fixture"
       - name: Upload native artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.id }}
           path: dist/${{ matrix.id }}/
@@ -130,8 +131,8 @@ jobs:
     needs: [target-matrix, native-artifact]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -144,7 +145,7 @@ jobs:
         env:
           RUSTC_WRAPPER: ""
         run: cargo build --locked -p ast-sgrep-cli --bin asgrep
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: "*"
           path: dist/native
@@ -155,7 +156,7 @@ jobs:
           node packages/pi/scripts/release-acceptance.mjs self-test
           npm run test:pi-e2e
       - name: Preserve dry-run tarballs and checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pi-npm-dry-run-${{ github.sha }}
           path: npm-packs/

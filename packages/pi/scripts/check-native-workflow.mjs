@@ -24,6 +24,7 @@ const parse = (text) => {
   return value;
 };
 const activeRun = (step) => typeof step?.run === 'string' ? step.run.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#')).join('\n') : '';
+const deterministicRustflags = "${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}";
 const validate = (text) => {
   const errors = [];
   let workflow;
@@ -38,6 +39,7 @@ const validate = (text) => {
   report(native?.['runs-on'] === '${{ matrix.runner }}', 'native job must run on the matrix runner');
   const loadRuns = (load?.steps ?? []).map(activeRun);
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/release-artifact.mjs matrix')), 'authoritative matrix command is missing');
+  report((native?.steps ?? []).find((step) => step.name === 'Build target-local release artifacts')?.env?.RUSTFLAGS === deterministicRustflags, 'win32 builds must set the deterministic /Brepro link flag (br-l46)');
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/check-contract.mjs') && run.includes('node packages/pi/scripts/check-native-workflow.mjs')), 'contract checker commands are missing');
   const steps = new Map((native?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]));
   report(steps.get('Build target-local release artifacts')?.includes('cargo build --locked --release') && steps.get('Build target-local release artifacts')?.includes('ast-sgrep-codemode-napi'), 'locked native CLI+NAPI build step is missing');
@@ -52,7 +54,7 @@ const validate = (text) => {
     'clean local install is missing'
   );
   report((steps.get('Exercise installed launcher and extension') ?? '').includes('node packages/pi/scripts/ci-install-smoke.mjs'), 'installed smoke command is missing');
-  report((native?.steps ?? []).some((step) => step.name === 'Upload native artifact' && step.uses === 'actions/upload-artifact@v4'), 'artifact upload is missing');
+  report((native?.steps ?? []).some((step) => step.name === 'Upload native artifact' && step.uses === 'actions/upload-artifact@v5'), 'artifact upload is missing');
   const acceptance = workflow.jobs?.['release-acceptance'];
   const acceptanceRuns = (acceptance?.steps ?? []).map(activeRun).join('\n');
   report(JSON.stringify(acceptance?.needs) === '["target-matrix","native-artifact"]', 'complete dry-run must wait for every native artifact');
@@ -74,6 +76,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(inputs?.publish?.required === true && inputs.publish.type === 'boolean' && inputs.publish.default === false, 'official publication requires an explicit publish intent defaulting to false');
   report(inputs?.bootstrap_token?.required === true && inputs.bootstrap_token.type === 'boolean' && inputs.bootstrap_token.default === false, 'official publication requires an explicit bootstrap_token intent defaulting to false');
   report(inputs?.layer?.required === true && inputs.layer.type === 'choice' && JSON.stringify(inputs.layer.options) === '["family","extension"]' && inputs.layer.default === 'family', 'official publication requires an explicit family/extension layer input defaulting to family');
+  report(inputs?.mode?.required === true && inputs.mode.type === 'choice' && JSON.stringify(inputs.mode.options) === '["full","publish-only"]' && inputs.mode.default === 'full', 'official publication requires an explicit full/publish-only mode input defaulting to full');
   const gate = workflow.jobs?.['release-gate'];
   report(gate?.if === "${{ inputs.publish == true && inputs.layer == 'family' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}", 'official release gate must require publish intent, the family lane, and an exact tag ref match');
   const build = workflow.jobs?.['build-native'];
@@ -81,6 +84,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const publish = workflow.jobs?.publish;
   const bootstrapToken = "${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}";
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
+  report((build?.steps ?? []).find((step) => step.name === 'Build target-local release artifacts once')?.env?.RUSTFLAGS === deterministicRustflags, 'official win32 builds must set the deterministic /Brepro link flag (br-l46)');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
   const sshSetupIndex = gateRuns.indexOf(sshSetup);
@@ -89,15 +93,30 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(signersText === expectedAllowedSigner, 'tracked SSH allowed signer must contain the exact release principal and public key');
   const gateRunText = gateRuns.join('\n');
   report(gateRunText.includes('release-acceptance.mjs gate') && gateRunText.includes('npm run check:pi-contract') && gateRunText.includes('npm run check:pi-release'), 'official tag/version/duplicate gate is missing');
+  report(gateRunText.includes("'--tolerate-duplicate'"), 'official gate must tolerate duplicates in publish-only mode');
   const verifyRuns = (verify?.steps ?? []).map(activeRun).join('\n');
   report(verifyRuns.includes('release-acceptance.mjs pack --native-root dist/native') && verifyRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && verifyRuns.includes('npm run test:pi-e2e'), 'official release must pack and verify the complete family exactly once');
   report(verify?.permissions?.['id-token'] === 'write' && verify?.permissions?.attestations === 'write' && (verify?.steps ?? []).some((step) => step.uses === 'actions/attest-build-provenance@v2'), 'artifact provenance attestation is missing');
   report(publish?.environment === 'npm-production' && publish?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && publish?.permissions?.['id-token'] === 'write' && publish?.needs === 'verify-release', 'npm publication must use protected npm-production OIDC after verification');
   report(publish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'npm bootstrap token must use the exact default-off opt-in expression');
-  report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 2 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 2, 'npm bootstrap token wiring must appear exactly once per publish job (family and extension lanes)');
+  report(text.split('\n').filter((line) => line.trim() === 'NODE_AUTH_TOKEN: ' + bootstrapToken).length === 3 && (text.match(/secrets\.NPM_TOKEN/gu) ?? []).length === 3, 'npm bootstrap token wiring must appear exactly once per publish job (family, retry, and extension lanes)');
+  const bootstrapGuard = (job) => (job?.steps ?? []).some((step) => step.if === '${{ inputs.bootstrap_token }}' && (step.run ?? '').includes('test -n "$NODE_AUTH_TOKEN"'));
+  report(bootstrapGuard(publish), 'family npm publish job must fail fast when bootstrap is requested but NPM_TOKEN is empty');
+  report(build?.if === "${{ inputs.layer == 'family' && inputs.mode == 'full' }}" && verify?.if === "${{ inputs.layer == 'family' && inputs.mode == 'full' }}" && publish?.if === "${{ inputs.mode == 'full' }}", 'official rebuild jobs must run only in full mode');
   const publishSteps = (publish?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
   const layers = publishSteps.filter(([, run]) => run.includes('release-acceptance.mjs publish')).map(([, run]) => run.match(/--layer (native|launcher|extension)/u)?.[1]);
   report(JSON.stringify(layers) === '["native","launcher","extension"]', 'publication order must be native -> launcher -> extension');
+
+  // Publish-only retry lane (br-kpv): gate, download preserved tarballs,
+  // re-verify, publish — no rebuild. Mirrors the publish job's protections.
+  const retry = workflow.jobs?.['publish-retry'];
+  report(retry?.if === "${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}" && retry?.needs === 'release-gate', 'publish-only retry must run the family lane after the gate without rebuilding');
+  report(retry?.environment === 'npm-production' && retry?.env?.ASGREP_NPM_PROTECTED_ENVIRONMENT === 'npm-production' && retry?.env?.ASGREP_NPM_OWNERSHIP_APPROVED === '${{ secrets.NPM_OWNERSHIP_APPROVED }}' && retry?.permissions?.['id-token'] === 'write', 'publish-only retry must use protected npm-production OIDC with the ownership record');
+  report(retry?.env?.NODE_AUTH_TOKEN === bootstrapToken && bootstrapGuard(retry), 'publish-only retry must carry the bootstrap opt-in and its empty-token guard');
+  const retrySteps = (retry?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]);
+  const retryLayers = retrySteps.filter(([, run]) => run.includes('release-acceptance.mjs publish')).map(([, run]) => run.match(/--layer (native|launcher|extension)/u)?.[1]);
+  report(JSON.stringify(retryLayers) === '["native","launcher","extension"]', 'publish-only retry order must be native -> launcher -> extension');
+  report(retrySteps.some(([, run]) => run.includes('release-acceptance.mjs verify --artifacts npm-packs')), 'publish-only retry must re-verify preserved checksums before publishing');
 
   // Extension lane: independent pi-v<version> releases of pi-ast-sgrep only.
   const extGate = workflow.jobs?.['extension-gate'];
@@ -114,6 +133,7 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(extPublish?.env?.NODE_AUTH_TOKEN === bootstrapToken, 'extension publish bootstrap token must use the exact default-off opt-in expression');
   const extPublishRuns = (extPublish?.steps ?? []).map(activeRun).join('\n');
   report(extPublishRuns.includes('release-acceptance.mjs verify --artifacts npm-packs') && extPublishRuns.includes('release-acceptance.mjs publish --artifacts npm-packs --layer extension'), 'extension publish must re-verify preserved checksums before publishing only the extension layer');
+  report(bootstrapGuard(extPublish), 'extension npm publish job must fail fast when bootstrap is requested but NPM_TOKEN is empty');
 
   return errors;
 };
@@ -128,7 +148,8 @@ const mutations = [
   workflowText.replace('matrix: ${{ fromJSON(needs.target-matrix.outputs.matrix) }}', 'matrix: {}'),
   workflowText.replace('  workflow_dispatch:', '  push:'),
   workflowText.replace('          node packages/pi/scripts/ci-install-smoke.mjs', '          # node packages/pi/scripts/ci-install-smoke.mjs'),
-  workflowText.replace('          node packages/pi/scripts/release-acceptance.mjs self-test', '          # node packages/pi/scripts/release-acceptance.mjs self-test')
+  workflowText.replace('          node packages/pi/scripts/release-acceptance.mjs self-test', '          # node packages/pi/scripts/release-acceptance.mjs self-test'),
+  workflowText.replace("          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}", '          # RUSTFLAGS removed')
 ];
 for (const [index, mutation] of mutations.entries()) if (validate(mutation).length === 0) errors.push('negative dry-run mutation ' + (index + 1) + ' was not rejected');
 const officialMutations = [
@@ -142,8 +163,13 @@ const officialMutations = [
   officialText.replace("      bootstrap_token:", "      bootstrap_token_removed:"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      # NODE_AUTH_TOKEN omitted"),
+  officialText.replace('      - name: Fail fast when bootstrap token is missing\n        if: ${{ inputs.bootstrap_token }}\n        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }\n', ''),
   officialText.replace("      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}", "      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN }}"),
   officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
+  officialText.replace("          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}", '          # RUSTFLAGS removed'),
+  officialText.replace("        default: full", "        default: publish-only"),
+  officialText.replace(" gate ${{ inputs.mode == 'publish-only' && '--tolerate-duplicate' || '' }}", ' gate'),
+  officialText.replace("  publish-retry:\n    name: Publish-only retry without rebuild\n    if: ${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}\n    needs: release-gate", "  publish-retry:\n    name: Publish-only retry without rebuild\n    if: ${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}\n    needs: verify-release"),
   officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');

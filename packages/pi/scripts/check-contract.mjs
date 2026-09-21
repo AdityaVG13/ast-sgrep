@@ -166,6 +166,7 @@ report(equal(automation.packageOrder, [...expectedPlatforms.map(([name]) => name
 report(/dirty/.test(automation.idempotence ?? '') && /wrong-tag/.test(automation.idempotence ?? '') && /fully published/.test(automation.idempotence ?? ''), 'release idempotence refusal contract is incomplete');
 
 report(contract.releaseAutomation?.rustToolchain === '1.97.1', 'release Rust toolchain must be pinned to 1.97.1');
+report(contract.releaseAutomation?.nativeBuildProfile === 'release', 'npm matrix native build profile must be the default release profile (br-kpt documents the DSR split)');
 report(contract.firstPublication?.ownershipApprovalVariable === 'npm-production environment secret NPM_OWNERSHIP_APPROVED=true', 'ownership approval variable contract changed');
 
 if (errors.length) {

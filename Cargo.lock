@@ -122,7 +122,7 @@ checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
 name = "ast-sgrep-cli"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-codemode",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode-napi"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-testkit",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-core"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-embed"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lang"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lsp"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mcp"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mmap"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "memmap2",
  "tempfile",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-plugins"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "ast-sgrep-core",
  "serde",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-testkit"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-core",

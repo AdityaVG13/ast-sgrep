@@ -25,6 +25,14 @@ on:
           - family
           - extension
         default: family
+      mode:
+        description: Full rebuilds, verifies, and publishes; publish-only reuses the preserved GitHub Release tarballs with no rebuild (family lane only; extension lane always runs full)
+        required: true
+        type: choice
+        options:
+          - full
+          - publish-only
+        default: full
 
 concurrency:
   group: pi-npm-${{ github.ref }}
@@ -41,12 +49,12 @@ jobs:
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Restore annotated signed release tag
         run: git fetch --force origin "refs/tags/${{ inputs.release_tag }}:refs/tags/${{ inputs.release_tag }}"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -61,13 +69,13 @@ jobs:
         run: |
           npm run check:pi-contract
           npm run check:pi-release
-          node packages/pi/scripts/release-acceptance.mjs gate
+          node packages/pi/scripts/release-acceptance.mjs gate ${{ inputs.mode == 'publish-only' && '--tolerate-duplicate' || '' }}
       - id: targets
         run: echo "matrix=$(node packages/pi/scripts/release-artifact.mjs matrix)" >> "$GITHUB_OUTPUT"
 
   build-native:
     name: Build ${{ matrix.package }} once
-    if: ${{ inputs.layer == 'family' }}
+    if: ${{ inputs.layer == 'family' && inputs.mode == 'full' }}
     needs: release-gate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -75,8 +83,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.release-gate.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -91,6 +99,7 @@ jobs:
         shell: bash
         env:
           RUSTC_WRAPPER: ""
+          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}
         run: |
           cargo build --locked --release -p ast-sgrep-cli --bin asgrep --no-default-features --target "${{ matrix.rustTarget }}"
           cargo build --locked --release -p ast-sgrep-codemode-napi --target "${{ matrix.rustTarget }}"
@@ -136,7 +145,7 @@ jobs:
           mkdir -p "$clean"
           npm install --force --no-audit --no-fund --prefix "$clean"             "$PWD/npm-packs/ast-sgrep-${{ matrix.id }}-$version.tgz"             "$PWD/npm-packs/ast-sgrep-$version.tgz"             "$PWD/npm-packs/pi-ast-sgrep-$extension_version.tgz"
           node packages/pi/scripts/ci-install-smoke.mjs             --launcher "$clean/node_modules/ast-sgrep/bin/asgrep.js"             --install-root "$clean"             --fixture "$RUNNER_TEMP/pi-official-native-fixture"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.id }}
           path: dist/${{ matrix.id }}/
@@ -145,7 +154,7 @@ jobs:
 
   verify-release:
     name: Pack and verify complete npm family once
-    if: ${{ inputs.layer == 'family' }}
+    if: ${{ inputs.layer == 'family' && inputs.mode == 'full' }}
     needs: [release-gate, build-native]
     runs-on: ubuntu-latest
     permissions:
@@ -153,13 +162,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: "*"
           path: dist/native
@@ -182,7 +191,7 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: npm-packs/*.tgz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: pi-npm-${{ github.ref_name }}-${{ github.sha }}
           path: npm-packs/
@@ -212,6 +221,7 @@ jobs:
 
   publish:
     name: Protected npm OIDC publication
+    if: ${{ inputs.mode == 'full' }}
     needs: verify-release
     runs-on: ubuntu-latest
     environment: npm-production
@@ -223,12 +233,67 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Fail fast when bootstrap token is missing
+        if: ${{ inputs.bootstrap_token }}
+        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
+      - run: npm ci --ignore-scripts
+      - run: npm install --global npm@11
+      - name: Download immutable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p npm-packs
+          # Draft releases are not resolvable via /releases/tags/:tag (404 even
+          # with full auth) — use the list endpoint and select by tag_name.
+          api="repos/${GITHUB_REPOSITORY}/releases"
+          release_id="$(gh api "$api" --jq ".[] | select(.tag_name == \"${{ github.ref_name }}\") | .id" | head -1)"
+          test -n "$release_id" || { echo "release ${{ github.ref_name }} not found" >&2; exit 1; }
+          gh api "$api/$release_id/assets" --jq '.[] | [.name, .id] | @tsv' | while IFS=$'\t' read -r name id; do
+            case "$name" in
+              *.tgz|release-manifest.json)
+                gh api -H "Accept: application/octet-stream" "repos/${GITHUB_REPOSITORY}/releases/assets/$id" > "npm-packs/$name"
+                ;;
+            esac
+          done
+          ls -la npm-packs
+      - name: Re-verify preserved checksums
+        run: node packages/pi/scripts/release-acceptance.mjs verify --artifacts npm-packs
+      - name: Publish five native packages
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer native
+      - name: Publish launcher after every native package
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer launcher
+      - name: Publish extension after launcher
+        run: node packages/pi/scripts/release-acceptance.mjs publish --artifacts npm-packs --layer extension
+
+  publish-retry:
+    name: Publish-only retry without rebuild
+    if: ${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}
+    needs: release-gate
+    runs-on: ubuntu-latest
+    environment: npm-production
+    env:
+      ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production
+      ASGREP_NPM_OWNERSHIP_APPROVED: ${{ secrets.NPM_OWNERSHIP_APPROVED }}
+      NODE_AUTH_TOKEN: ${{ inputs.bootstrap_token && secrets.NPM_TOKEN || '' }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.19.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Fail fast when bootstrap token is missing
+        if: ${{ inputs.bootstrap_token }}
+        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets
@@ -263,12 +328,12 @@ jobs:
     if: ${{ inputs.publish == true && inputs.layer == 'extension' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Restore annotated signed release tag
         run: git fetch --force origin "refs/tags/${{ inputs.release_tag }}:refs/tags/${{ inputs.release_tag }}"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -293,8 +358,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -307,7 +372,7 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: npm-packs/*.tgz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: pi-extension-${{ github.ref_name }}-${{ github.sha }}
           path: npm-packs/
@@ -349,12 +414,15 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Fail fast when bootstrap token is missing
+        if: ${{ inputs.bootstrap_token }}
+        run: test -n "$NODE_AUTH_TOKEN" || { echo "bootstrap_token=true but NPM_TOKEN is empty or missing" >&2; exit 1; }
       - run: npm ci --ignore-scripts
       - run: npm install --global npm@11
       - name: Download immutable GitHub Release assets

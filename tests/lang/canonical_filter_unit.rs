@@ -40,6 +40,28 @@ fn every_source_extension_canonicalizes_and_detects() {
 }
 
 #[test]
+fn moonbit_script_extension_detects() {
+    // gh-35: MoonBit scripting mode (.mbtx) detects, parses, and filters as MoonBit.
+    assert_eq!(
+        Language::from_extension("mbtx"),
+        Some(Language::MoonBit)
+    );
+    assert_eq!(
+        Language::from_extension("MBTX"),
+        Some(Language::MoonBit)
+    );
+    assert_eq!(Language::parse("mbtx"), Some(Language::MoonBit));
+    assert_eq!(
+        Language::canonical_filter(Some("mbtx")).as_deref(),
+        Some("moonbit")
+    );
+    assert_eq!(
+        detect_language(Path::new("script.mbtx"), None),
+        Some(Language::MoonBit)
+    );
+}
+
+#[test]
 fn stored_ids_and_name_aliases_parse() {
     for lang in Language::all() {
         assert_eq!(Language::parse(lang.as_str()), Some(*lang));

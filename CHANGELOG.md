@@ -7,6 +7,17 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
+## [2.5.1] - 2026-09-21
+
+### Added
+
+- MoonBit scripting mode (`.mbtx`) files are detected, indexed, and searchable as MoonBit (gh-35).
+
+### Fixed
+
+- npm release bootstrap lane: token-authed publishes no longer attempt the GitHub Actions OIDC exchange (npm prefers OIDC whenever it is available and failed the PUT on a trusted-publisher mismatch instead of falling back to the token). The publish job fails fast when the bootstrap token is empty or rejected.
+- Inter-crate path dependencies now pin the release version (`2.5.1`) per the release policy instead of the stale `2.0.0` floor.
+
 ## [2.5.0] - 2026-09-20
 
 ### Added

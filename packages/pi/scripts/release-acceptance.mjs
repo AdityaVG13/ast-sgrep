@@ -227,14 +227,17 @@ const registryVersions = async (state, snapshotPath, specs) => {
   }
   return observed;
 };
-const gateState = (state, input, observed) => {
+const gateState = (state, input, observed, options = {}) => {
   if (!input.clean) fail('ASGREP_RELEASE_DIRTY', 'release checkout must be clean');
   if (input.refType !== 'tag' || input.tag !== state.contract.canonicalVersion.tag) fail('ASGREP_RELEASE_TAG_VERSION', `expected official tag ${state.contract.canonicalVersion.tag}`);
   if (!/^[a-f0-9]{40}$/u.test(input.commit) || input.tagCommit !== input.commit) fail('ASGREP_RELEASE_TAG_COMMIT', 'tag, checkout, and workflow commit must be identical');
   const names = packageOrder(state);
   const live = names.filter((name) => observed[`${name}@${expectedArtifactVersion(state, name)}`] !== null);
   const pending = names.filter((name) => !live.includes(name));
-  if (live.length === names.length) fail('ASGREP_RELEASE_DUPLICATE_VERSION', `all ${names.length} packages already exist at ${state.version}; bump the canonical version for a new release`);
+  // Publish-only retries (br-kpv) pass --tolerate-duplicate: against a fully
+  // published version every layer idempotent-skips, so accepting the gate is
+  // a verified no-op rather than a duplicate release.
+  if (live.length === names.length && !options.tolerateDuplicate) fail('ASGREP_RELEASE_DUPLICATE_VERSION', `all ${names.length} packages already exist at ${state.version}; bump the canonical version for a new release`);
   return { live, pending };
 };
 const gateExtensionState = (state, input, observed) => {
@@ -286,21 +289,41 @@ const gate = async () => {
   run('git', ['verify-tag', tag]);
   const tagCommit = run('git', ['rev-list', '-n', '1', tag]).trim().toLowerCase();
   const observed = await registryVersions(state, option('registry-snapshot'));
-  const { live, pending } = gateState(state, { clean, refType, tag, commit, tagCommit }, observed);
+  const { live, pending } = gateState(state, { clean, refType, tag, commit, tagCommit }, observed, { tolerateDuplicate: process.argv.includes('--tolerate-duplicate') });
   console.log(`[pi-release] gate accepted signed ${tag} at ${commit}; publish plan at ${state.version}: ${pending.length} to publish, ${live.length} already live${live.length ? ` (idempotent skip: ${live.join(', ')})` : ''}`);
 };
 const validatePublishContext = (state, manifest, environment = process.env) => {
   if (environment.GITHUB_ACTIONS !== 'true' || !environment.ACTIONS_ID_TOKEN_REQUEST_URL) fail('ASGREP_RELEASE_OIDC_REQUIRED', 'publication is only allowed from GitHub Actions OIDC');
   if (environment.ASGREP_NPM_PROTECTED_ENVIRONMENT !== 'npm-production') fail('ASGREP_RELEASE_PROTECTED_ENVIRONMENT', 'npm-production approval marker is required');
+  if (environment.ASGREP_NPM_OWNERSHIP_APPROVED !== 'true') fail('ASGREP_RELEASE_OWNERSHIP_UNAPPROVED', 'npm-production NPM_OWNERSHIP_APPROVED=true authorization record is required');
   const expectedTag = manifest.lane === 'extension' ? manifest.tag : state.contract.canonicalVersion.tag;
   if (environment.GITHUB_REF_TYPE !== 'tag' || environment.GITHUB_REF_NAME !== expectedTag) fail('ASGREP_RELEASE_TAG_VERSION', 'publication context is not the expected official tag');
   if (environment.GITHUB_SHA?.toLowerCase() !== manifest.commit?.toLowerCase()) fail('ASGREP_RELEASE_TAG_COMMIT', 'preserved artifacts do not match the workflow commit');
+};
+// Bootstrap lane must hide the Actions OIDC handshake from npm: npm prefers
+// the OIDC exchange over NODE_AUTH_TOKEN whenever ACTIONS_ID_TOKEN_* is set
+// and fails the PUT on a trusted-publisher mismatch instead of falling back
+// to token auth (2.5.0 run 35549074188). Pure function of its inputs so the
+// self-test pins the behavior without spawning npm.
+const publishEnv = (environment, bootstrap) => {
+  if (!bootstrap) return undefined;
+  const filtered = { ...environment };
+  delete filtered.ACTIONS_ID_TOKEN_REQUEST_URL;
+  delete filtered.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  return filtered;
 };
 const publish = async () => {
   const { state, directory, manifest } = await verify();
   validatePublishContext(state, manifest);
   const layer = option('layer');
   if (!['native', 'launcher', 'extension'].includes(layer)) fail('ASGREP_RELEASE_LAYER', 'layer must be native, launcher, or extension');
+  const bootstrap = Boolean(process.env.NODE_AUTH_TOKEN);
+  if (bootstrap) {
+    // Fail fast on a dead bootstrap token (2.5.0: the stored NPM_TOKEN
+    // 401'd, which surfaced downstream as a confusing OIDC 403).
+    const probe = spawnSync('npm', ['whoami'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (probe.status !== 0) fail('ASGREP_RELEASE_BOOTSTRAP_TOKEN', `bootstrap NPM_TOKEN rejected by the registry: ${String(probe.stderr ?? probe.stdout ?? '').trim()}`);
+  }
   const receiptPath = path.join(directory, 'publish-receipt.json');
   const receipt = await readJson(receiptPath).catch(() => ({ schemaVersion: 1, version: manifest.version, published: [] }));
   const expectedPrior = layer === 'native' ? [] : layer === 'launcher' ? manifest.artifacts.filter((item) => item.layer === 'native').map((item) => item.name) : manifest.artifacts.filter((item) => item.layer !== 'extension').map((item) => item.name);
@@ -314,15 +337,15 @@ const publish = async () => {
       console.log(`[pi-release] skip ${artifact.name}@${expectedArtifactVersion(state, artifact.name)}: already live (idempotent re-run)`);
     } else {
       if (publishDelayMs > 0) await delay(publishDelayMs);
-      // Bootstrap lane (classic token present) publishes WITHOUT --provenance:
-      // the registry checks the OIDC/provenance identity even on token-authed
-      // PUTs, and the trusted-publisher claims are unresolved (br-ijy), so an
-      // attested bootstrap PUT 403s identically to a pure-OIDC PUT. The OIDC
-      // lane (no token) always attests. Provenance returns to every lane once
-      // br-ijy closes; all pre-2.5.0 releases shipped unattested.
+      // Bootstrap lane publishes WITHOUT --provenance (attestation requires
+      // the OIDC identity) and with the OIDC handshake stripped by
+      // publishEnv, so the registry sees pure token auth while the
+      // trusted-publisher claims are unresolved (br-ijy). The OIDC lane (no
+      // token) always attests. Provenance returns to every lane once br-ijy
+      // closes; all pre-2.5.0 releases shipped unattested.
       const args = ['publish', path.join(directory, artifact.filename), '--access', 'public'];
-      if (!process.env.NODE_AUTH_TOKEN) args.push('--provenance');
-      run('npm', args, { stdio: 'inherit' });
+      if (!bootstrap) args.push('--provenance');
+      run('npm', args, { stdio: 'inherit', env: publishEnv(process.env, bootstrap) });
       published.push(artifact.name);
     }
     receipt.published.push(artifact.name);
@@ -367,10 +390,16 @@ const selfTest = async () => {
   expect('wrong-tag', () => gateState(state, { ...canonicalInput, tag: 'v0.0.0' }, empty));
   expect('wrong-commit', () => gateState(state, { ...canonicalInput, tagCommit: 'b'.repeat(40) }, empty));
   expect('fully-published', () => gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [specOf(name), expectedArtifactVersion(state, name)]))));
+  const tolerated = gateState(state, canonicalInput, Object.fromEntries(packageOrder(state).map((name) => [specOf(name), expectedArtifactVersion(state, name)])), { tolerateDuplicate: true });
+  if (tolerated.live.length !== 7 || tolerated.pending.length !== 0) fail('ASGREP_RELEASE_SELF_TEST', 'a tolerated duplicate must plan zero publishes against seven live packages');
   expect('version-skew', () => validateAlignment({ ...state, launcher: { ...state.launcher, version: '0.0.0' } }));
   expect('missing-checksum', () => validateChecksumRecord(state.matrix.targets[0], state.matrix.napiAddon, null, { executable: '0'.repeat(64), napi: '0'.repeat(64) }));
   expect('checksum-mismatch', () => validateChecksumRecord(state.matrix.targets[0], state.matrix.napiAddon, `${'1'.repeat(64)}  asgrep\n${'2'.repeat(64)}  ${state.matrix.napiAddon}\n`, { executable: '0'.repeat(64), napi: '0'.repeat(64) }));
   expect('local-publish', () => validatePublishContext(state, { commit }, {}));
+  // Ownership record (br-aco): the approved context publishes, anything else fails closed.
+  const approvedEnv = { GITHUB_ACTIONS: 'true', ACTIONS_ID_TOKEN_REQUEST_URL: 'https://actions.example/oidc', ASGREP_NPM_PROTECTED_ENVIRONMENT: 'npm-production', ASGREP_NPM_OWNERSHIP_APPROVED: 'true', GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: state.contract.canonicalVersion.tag, GITHUB_SHA: commit };
+  validatePublishContext(state, { commit }, approvedEnv);
+  expect('ownership-unapproved', () => validatePublishContext(state, { commit }, { ...approvedEnv, ASGREP_NPM_OWNERSHIP_APPROVED: '' }));
   // Extension lane: accepts a fresh signed pi-v<version> tag, rejects skews and duplicates.
   const extInput = { clean: true, refType: 'tag', tag: extensionTag(state), commit, tagCommit: commit };
   const extSpec = `${state.extension.name}@${state.extension.version}`;
@@ -382,6 +411,11 @@ const selfTest = async () => {
   // 2026-09-19 incident: the extension floor sat above every published launcher.
   expect('extension-launcher-unresolved', () => assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [] }));
   if (assertLauncherRangeResolves({ launcher: state.launcher.name, range: extensionSpec(state).launcherRange, extension: extSpec, canonical: state.version, versions: [state.version] }).join() !== state.version) fail('ASGREP_RELEASE_SELF_TEST', 'a published canonical launcher must satisfy the extension launcherRange');
+  // Bootstrap lane: OIDC handshake hidden from npm iff a token is present.
+  const oidcEnv = { NODE_AUTH_TOKEN: 'token', ACTIONS_ID_TOKEN_REQUEST_URL: 'url', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'jwt', KEEP: '1' };
+  const stripped = publishEnv(oidcEnv, true);
+  if (stripped.ACTIONS_ID_TOKEN_REQUEST_URL !== undefined || stripped.ACTIONS_ID_TOKEN_REQUEST_TOKEN !== undefined || stripped.NODE_AUTH_TOKEN !== 'token' || stripped.KEEP !== '1') fail('ASGREP_RELEASE_SELF_TEST', 'bootstrap publish must strip the OIDC handshake but keep the token');
+  if (publishEnv(oidcEnv, false) !== undefined) fail('ASGREP_RELEASE_SELF_TEST', 'OIDC publish must inherit the ambient environment');
   console.log(`[pi-release] gate self-test accepted canonical + extension lane input and rejected ${rejected.join(', ')}`);
   console.log(`[pi-release] publish order: ${packageOrder(state).join(' -> ')}`);
   console.log('[pi-release] publication: disabled (self-test only)');

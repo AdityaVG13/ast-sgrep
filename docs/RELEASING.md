@@ -7,9 +7,10 @@ This repository publishes npm packages and public crates from one source commit 
 One terminal, five steps. Everything below the checklist is reference for when something deviates.
 
 ```bash
-# 1. Bump versions on main, then prove the tree is coherent:
-#    Cargo workspace, npm launcher + 5 platforms, release-contract.json
-#    (canonical + extension + launcherRange), Homebrew formula, docs.
+# 1. Mechanical bump (workspace, npm family, contract, constants, lockfile,
+#    dist) plus the check battery, then do the human remainder it prints
+#    (CHANGELOG prose, README, docs pointers, extension + launcherRange):
+npm run release:prepare X.Y.Z
 npm run check:pi-contract && npm run check:pi-dist && npm run check:pi-release
 git commit -am "release: ast-sgrep X.Y.Z" && git push origin main
 
@@ -33,7 +34,7 @@ for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
 done
 ```
 
-Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); if the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch.
+Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts — a broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). If the OIDC publish fails, the one-time escape hatch is a repo `NPM_TOKEN` secret plus `-f bootstrap_token=true` on a fresh dispatch. The publish job fails fast with `ASGREP_RELEASE_BOOTSTRAP_TOKEN` if that token is rejected, and strips the Actions OIDC handshake so npm uses pure token auth. Keep `NPM_TOKEN` at repo level only: a same-named environment secret shadows the repo secret for jobs in that environment, which previously produced a misleading OIDC error from an empty token.
 
 ## Pi npm package family
 
@@ -81,6 +82,25 @@ The release-gate and E2E commands exercise packed artifacts and the official Pi 
 External npm publication requires explicit human approval of its protected `npm-production` environment, the `NPM_OWNERSHIP_APPROVED=true` secret in that environment, and trusted-publishing OIDC/provenance. Before first publication, re-verify every npm name and publisher ownership; a prior 404 is not a reservation. Publish native packages before the launcher and the launcher before the extension. GitHub Release assets are immutable: reruns download and byte-compare existing assets and never clobber them.
 
 If publication stops after a package becomes visible, retry the same preserved family only when npm's integrity for every live package exactly matches its local release tarball. The retry skips identical packages and continues in canonical order. Any mismatch requires a new version, repeated checks, and new approval.
+
+## Native build profiles (npm vs DSR)
+
+Deliberate split (br-kpt option b), recorded in the contract as `releaseAutomation.nativeBuildProfile`:
+
+- The npm matrix builds with plain `cargo build --locked --release` (default codegen, no LTO, unstripped). npm binaries therefore differ from DSR binaries.
+- DSR ships the `release-ship` profile (thin LTO, `codegen-units = 1`, stripped).
+
+Unifying the npm matrix on `release-ship` stays open pending measurement: the win32 warm baseline is ~4 min of cargo, and the cold-cache cost is unknown until br-7ie measures it. Do not change profiles without that measurement. Revisit if cold builds show headroom or install weight becomes a blocker.
+
+Recorded 2.5.0 sizes (unpacked MiB from `release-manifest.json`; packed decimal MB from the release assets):
+
+| platform package | CLI | NAPI addon | packed tarball |
+|---|---|---|---|
+| `@ast-sgrep/darwin-arm64` | 37.8 | 35.6 | 14.5 |
+| `@ast-sgrep/darwin-x64` | 38.1 | 35.8 | 14.6 |
+| `@ast-sgrep/linux-arm64-gnu` | 39.1 | 36.7 | 14.9 |
+| `@ast-sgrep/linux-x64-gnu` | 39.7 | 37.2 | 15.1 |
+| `@ast-sgrep/win32-x64-msvc` | 36.8 | 34.7 | 13.9 |
 
 ## Version policy
 
@@ -143,7 +163,7 @@ Only a human release operator may run this block. It is noninteractive and publi
 
 ```bash
 set -euo pipefail
-release_version='2.0.0'
+release_version='2.5.1'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
@@ -186,7 +206,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.0.0'
+   release_version='2.5.1'
    release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
@@ -199,7 +219,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.0.0'
+   release_version='2.5.1'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    asgrep_version="$("$install_root/bin/asgrep" --version)"
@@ -209,14 +229,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$ast_sgrep_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.0.0`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.1`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
 The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="2.0.0"
+version="2.5.1"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"
