@@ -132,7 +132,6 @@ dependencies = [
  "ast-sgrep-testkit",
  "clap",
  "nix",
- "notify",
  "serde",
  "serde_json",
  "signal-hook",
@@ -292,6 +291,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tree-sitter",
+]
+
+[[package]]
+name = "ast-sgrep-watch"
+version = "2.5.2"
+dependencies = [
+ "anyhow",
+ "ast-sgrep-cli",
+ "ast-sgrep-core",
+ "notify",
 ]
 
 [[package]]

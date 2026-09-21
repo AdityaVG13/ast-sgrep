@@ -58,6 +58,7 @@ ast-sgrep-mmap   → memory-map helpers
 ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server
 ast-sgrep-mcp    → MCP stdio server
+ast-sgrep-watch  → asgrep-watch helper (owns notify link)
 ast-sgrep-codemode → Code Mode / PTC tools + plan runner
 ast-sgrep-codemode-napi → Native Node-API addon for Pi
 ast-sgrep-plugins→ JSON/output formats

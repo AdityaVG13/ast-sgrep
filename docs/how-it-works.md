@@ -56,6 +56,7 @@ ast-sgrep/
 ├── crates/ast-sgrep-plugins/       # GitHub / GitLab / agent JSON
 ├── crates/ast-sgrep-lsp/           # asgrep-lsp
 ├── crates/ast-sgrep-mcp/           # MCP stdio server
+├── crates/ast-sgrep-watch/         # asgrep-watch helper (owns notify link)
 ├── crates/ast-sgrep-codemode/      # Code Mode catalog/session/plan
 ├── crates/ast-sgrep-codemode-napi/ # Native Node-API addon for Pi
 ├── crates/ast-sgrep-testkit/       # Shared test fixtures
@@ -71,6 +72,7 @@ ast-sgrep/
 | `ast-sgrep-cli` | User-facing CLI |
 | `ast-sgrep-lsp` | Language Server Protocol |
 | `ast-sgrep-mcp` | MCP stdio server (transport only) |
+| `ast-sgrep-watch` | `asgrep-watch` helper: `watch` loop, owns the `notify` link |
 | `ast-sgrep-codemode` | Code Mode catalog, sessions, and plans |
 | `ast-sgrep-codemode-napi` | Native Node-API addon for Pi Code Mode |
 | `ast-sgrep-plugins` | Output format adapters |

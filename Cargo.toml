@@ -12,6 +12,7 @@ members = [
     "crates/ast-sgrep-mmap",
     "crates/ast-sgrep-codemode",
     "crates/ast-sgrep-codemode-napi",
+    "crates/ast-sgrep-watch",
 ]
 default-members = ["crates/ast-sgrep-cli"]
 

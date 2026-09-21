@@ -63,7 +63,7 @@ const versionLine = (line) => line.includes(`"version": "${current}"`);
 
 // 1. Cargo workspace version + inter-crate path deps (ast-sgrep path lines only).
 swap('Cargo.toml', (line) => /^\s*version\s*=\s*"[^"]+"\s*$/.test(line) && line.includes(`"${current}"`), 1, 'workspace version');
-for (const manifest of ['ast-sgrep-cli', 'ast-sgrep-codemode-napi', 'ast-sgrep-codemode', 'ast-sgrep-core', 'ast-sgrep-lsp', 'ast-sgrep-mcp', 'ast-sgrep-plugins', 'ast-sgrep-testkit']) {
+for (const manifest of ['ast-sgrep-cli', 'ast-sgrep-codemode-napi', 'ast-sgrep-codemode', 'ast-sgrep-core', 'ast-sgrep-lsp', 'ast-sgrep-mcp', 'ast-sgrep-plugins', 'ast-sgrep-testkit', 'ast-sgrep-watch']) {
   const file = `crates/${manifest}/Cargo.toml`;
   const text = readFileSync(path.join(root, file), 'utf8');
   const expected = text.split('\n').filter((line) => line.includes('path = "../ast-sgrep-') && line.includes(`version = "${current}"`)).length;

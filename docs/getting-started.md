@@ -27,6 +27,14 @@ cargo install ast-sgrep-cli --locked
 asgrep --help
 ```
 
+`asgrep watch` re-execs the `asgrep-watch` helper, which ships as a
+separate crate (keeping file-watcher frameworks out of one-shot search);
+install it alongside the CLI if you use watch:
+
+```bash
+cargo install ast-sgrep-watch --locked
+```
+
 Or build from source:
 
 ```bash

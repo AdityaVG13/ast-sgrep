@@ -1,0 +1,20 @@
+[package]
+name = "ast-sgrep-watch"
+description = "asgrep-watch helper: incremental file-watch index updates (owns the notify link)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "asgrep-watch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ast-sgrep-cli = { path = "../ast-sgrep-cli", version = "2.5.2" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.2" }
+notify.workspace = true

@@ -136,7 +136,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release CLI and MCP
-        run: cargo build --release -p ast-sgrep-cli -p ast-sgrep-mcp
+        run: cargo build --release -p ast-sgrep-cli -p ast-sgrep-mcp -p ast-sgrep-watch
 
       - name: Exercise Windows CLI and cancellation paths
         shell: pwsh

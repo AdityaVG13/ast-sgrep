@@ -146,7 +146,14 @@ Recorded 2.5.0 sizes (unpacked MiB from `release-manifest.json`; packed decimal 
      --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
      --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
      --config 'patch.crates-io.ast-sgrep-core.path="crates/ast-sgrep-core"' \
-     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"' 
+     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"'
+   CARGO_BUILD_JOBS=1 cargo package --locked -p ast-sgrep-watch \
+     --config 'patch.crates-io.ast-sgrep-lang.path="crates/ast-sgrep-lang"' \
+     --config 'patch.crates-io.ast-sgrep-embed.path="crates/ast-sgrep-embed"' \
+     --config 'patch.crates-io.ast-sgrep-core.path="crates/ast-sgrep-core"' \
+     --config 'patch.crates-io.ast-sgrep-plugins.path="crates/ast-sgrep-plugins"' \
+     --config 'patch.crates-io.ast-sgrep-codemode.path="crates/ast-sgrep-codemode"' \
+     --config 'patch.crates-io.ast-sgrep-cli.path="crates/ast-sgrep-cli"'
    ```
 
    The temporary `patch.crates-io` overrides let dependent archives verify before their unpublished leaf crates exist in the crates.io index; they do not alter packaged manifests. Add `--allow-dirty` only during local preparation when reviewing intentional, uncommitted release changes. Do not use it for the approved release commit.
@@ -155,7 +162,7 @@ Recorded 2.5.0 sizes (unpacked MiB from `release-manifest.json`; packed decimal 
 
 ## Publish after explicit approval
 
-Only a human release operator may run this block. It is noninteractive and publishes the nine public crates in the only valid leaf order. It waits until each immutable version is resolvable from the crates.io index before publishing a dependent crate.
+Only a human release operator may run this block. It is noninteractive and publishes the ten public crates in the only valid leaf order. It waits until each immutable version is resolvable from the crates.io index before publishing a dependent crate.
 
 ```bash
 set -euo pipefail
@@ -170,6 +177,7 @@ release_crates=(
   ast-sgrep-lsp
   ast-sgrep-cli
   ast-sgrep-mcp
+  ast-sgrep-watch
 )
 start_at="${START_AT:-${release_crates[0]}}"
 
@@ -198,12 +206,12 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
 ## Post-publish verification
 
-1. Verify the exact immutable version exists for all nine crates and that docs.rs has completed each build:
+1. Verify the exact immutable version exists for all ten crates and that docs.rs has completed each build:
 
    ```bash
    set -euo pipefail
    release_version='2.5.2'
-   release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp)
+   release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp ast-sgrep-watch)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
      curl --fail --location --silent --show-error --output /dev/null \
@@ -218,11 +226,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    release_version='2.5.2'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
+   cargo install ast-sgrep-watch --version "=${release_version}" --locked --root "$install_root"
    asgrep_version="$("$install_root/bin/asgrep" --version)"
    ast_sgrep_version="$("$install_root/bin/ast-sgrep" --version)"
-   printf '%s\n%s\n' "$asgrep_version" "$ast_sgrep_version"
+   watch_version="$("$install_root/bin/asgrep-watch" --version)"
+   printf '%s\n%s\n%s\n' "$asgrep_version" "$ast_sgrep_version" "$watch_version"
    [[ "$asgrep_version" == *" ${release_version}" ]]
    [[ "$ast_sgrep_version" == *" ${release_version}" ]]
+   [[ "$watch_version" == *" ${release_version}" ]]
    ```
 
 3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.2`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
@@ -246,7 +257,7 @@ For local source installation after replacing the digest, run:
 brew install --build-from-source ./packaging/homebrew/ast-sgrep.rb
 ```
 
-The formula invokes `cargo install --locked` through Homebrew's `std_cargo_args` helper for the `crates/ast-sgrep-cli` package, installs `asgrep`, and checks `asgrep --version` in its test block.
+The formula invokes `cargo install --locked` through Homebrew's `std_cargo_args` helper for the `crates/ast-sgrep-cli` and `crates/ast-sgrep-watch` packages, installs `asgrep` and `asgrep-watch`, and checks both `--version` outputs in its test block.
 
 ### Homebrew tap follow-ups
 

@@ -70,6 +70,7 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 | `ast-sgrep-embed` | Embeddings (+ optional neural/rerank features) |
 | `ast-sgrep-lsp` | Language server |
 | `ast-sgrep-mcp` | MCP server for agents |
+| `ast-sgrep-watch` | `asgrep-watch` helper (`watch` loop; owns the `notify` link) |
 | `ast-sgrep-mmap` | Sealed read-only mmap wrapper (sole hand-written unsafe boundary) |
 | `ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `ast-sgrep-codemode-napi` | Node-API bindings for in-process Code Mode |

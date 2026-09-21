@@ -22,6 +22,7 @@ source tree
 | `ast-sgrep-embed` | Embedding providers and the always-available offline semantic backend |
 | `ast-sgrep-mmap` | Memory-map helpers for index sidecars |
 | `ast-sgrep-mcp` | stdio MCP server (transport only; never linked to Code Mode) |
+| `ast-sgrep-watch` | `asgrep-watch` helper: `watch` implementation, owns the `notify` link so one-shot search never pays its dyld tax |
 | `ast-sgrep-codemode` | Code Mode catalog/session/plan + host adapters (sibling to MCP; Pi JS runner is the agent executor) |
 | `ast-sgrep-codemode-napi` | Native Node-API addon: in-process Code Mode sessions for Pi |
 | `ast-sgrep-lsp` | Language Server Protocol navigation surfaces |

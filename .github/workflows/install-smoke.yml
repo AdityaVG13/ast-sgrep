@@ -34,14 +34,17 @@ jobs:
           install_root="$(mktemp -d)"
           printf 'CARGO_INSTALL_ROOT=%s\n' "$install_root" >> "$GITHUB_ENV"
           cargo install ast-sgrep-cli --version "=${RELEASE_VERSION}" --locked --root "$install_root"
+          cargo install ast-sgrep-watch --version "=${RELEASE_VERSION}" --locked --root "$install_root"
       - name: Verify installed binaries report the requested version
         shell: bash
         run: |
           asgrep_version="$("$CARGO_INSTALL_ROOT/bin/asgrep" --version)"
           ast_sgrep_version="$("$CARGO_INSTALL_ROOT/bin/ast-sgrep" --version)"
-          printf '%s\n%s\n' "$asgrep_version" "$ast_sgrep_version"
+          watch_version="$("$CARGO_INSTALL_ROOT/bin/asgrep-watch" --version)"
+          printf '%s\n%s\n%s\n' "$asgrep_version" "$ast_sgrep_version" "$watch_version"
           [[ "$asgrep_version" == *" ${RELEASE_VERSION}" ]]
           [[ "$ast_sgrep_version" == *" ${RELEASE_VERSION}" ]]
+          [[ "$watch_version" == *" ${RELEASE_VERSION}" ]]
 
   docs-smoke:
     name: docs.rs (${{ matrix.crate }})
@@ -60,6 +63,7 @@ jobs:
           - ast-sgrep-lsp
           - ast-sgrep-cli
           - ast-sgrep-mcp
+          - ast-sgrep-watch
     steps:
       - name: Verify exact-version documentation is available
         env:

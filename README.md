@@ -237,6 +237,7 @@ Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [
 | `crates/ast-sgrep-mmap` | Memory-map helpers |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |
+| `crates/ast-sgrep-watch` | `asgrep-watch` helper (`watch` implementation; owns the `notify` link) |
 | `crates/ast-sgrep-codemode` | Code Mode / programmatic tool-calling |
 | `crates/ast-sgrep-plugins` | Output formats |
 | `crates/ast-sgrep-testkit` | Shared fixtures for search/index/Pi tests |

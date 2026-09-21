@@ -257,7 +257,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             queries_file.as_deref(),
             *skip_index,
         ),
-        Commands::Watch { root, debounce_ms } => watch::run_watch(&root.root, cli, *debounce_ms),
+        Commands::Watch { .. } => watch::run_watch_via_helper(),
         Commands::Keyword(q) => search_cmd::run_keyword_search(&q.query.root, cli, &q.query.query),
         Commands::Semantic(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, true),
         Commands::Chain(q) => search_cmd::run_chain(&q.root, cli, &q.query),
@@ -270,6 +270,40 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
         Commands::CodemodeServe => run_codemode_serve(cli),
         Commands::Install(args) => install::run_install(args),
+    }
+}
+
+/// Parsed `watch` launch for the `asgrep-watch` helper: plain data, no CLI
+/// types, so the helper reuses the identical parser without duplicating it.
+/// The shim already parsed successfully, so a parse failure here is an
+/// internal inconsistency (or a direct hand-invocation of the helper).
+pub struct WatchLaunch {
+    pub opts: ast_sgrep_core::IndexOptions,
+    pub debounce_ms: u64,
+}
+
+/// Re-parse the shim-forwarded argv into a [`WatchLaunch`]. Uses the same
+/// alias/typo rewrites and the same `Cli` parser as the shim, so index
+/// options can never drift between the two processes. Typo warnings are
+/// dropped: the shim's identical parse already printed them.
+pub fn parse_watch_launch() -> anyhow::Result<WatchLaunch> {
+    let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
+    let (raw_args, _warnings) = agent::rewrite_typos(raw_args);
+    let cli = match Cli::try_parse_from(&raw_args) {
+        Ok(cli) => cli,
+        // Only reachable by direct hand-invocation (the shim's identical
+        // parse already succeeded): mirror the main binary's rendering.
+        Err(error) => error.exit(),
+    };
+    match &cli.command {
+        Some(Commands::Watch { root, debounce_ms }) => {
+            let opts = index_cmd::index_options(&root.root, &cli);
+            Ok(WatchLaunch {
+                opts,
+                debounce_ms: *debounce_ms,
+            })
+        }
+        _ => anyhow::bail!("asgrep-watch only runs `watch`; use asgrep for other commands"),
     }
 }
 

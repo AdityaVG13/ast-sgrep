@@ -17,6 +17,7 @@ class AstSgrep < Formula
 
   def install
     system "cargo", "install", *std_cargo_args(path: "crates/ast-sgrep-cli")
+    system "cargo", "install", *std_cargo_args(path: "crates/ast-sgrep-watch")
   end
 
   def caveats
@@ -30,5 +31,6 @@ class AstSgrep < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/asgrep --version")
+    assert_match version.to_s, shell_output("#{bin}/asgrep-watch --version")
   end
 end
