@@ -86,30 +86,6 @@ reconstructed from `lines` (no duplicated source text); `--lang` accepts
 every indexed extension; C `typedef`s match `type:` patterns; Pi boots
 under Bun and degrades gracefully against older launchers.
 
-## What's new in 2.0
-
-2.0 is the local-first major release. It lands five merged PRs on top of v1.4.0 -- [#27](https://github.com/AdityaVG13/ast-sgrep/pull/27), [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29), [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30), [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31), [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32) -- plus stacked and follow-on commits. Full notes: [CHANGELOG](CHANGELOG.md#v200-2026-08-15).
-
-| You can now... | How |
-|----------------|-----|
-| Search without a remote embed API | Cloud and Ollama clients are removed. Hashed semantic is default; optional ONNX MiniLM stays in-process (`--features neural-embed`). |
-| Compose two indexed channels | `callers:process_request AND pattern:fn $NAME($$$)` joins by overlapping span. Other pairs join by file. `AND NOT` subtracts. Plain English `and` is still hybrid search. |
-| See why a hit ranked | A deterministic post-fusion **critic** boosts multi-channel agreement, penalizes identifier-fragment collisions, and writes `critic:` notes into agent JSON `why`. |
-| Drill without guessing prefixes | `follow_up_queries` / `suggested_next` are derived from the actual top hit (kind, symbol, missing evidence, margin). Settled hits get an empty list. |
-| Overlay SCIP facts | `asgrep index . --scip path/to/index.json` (JSON SCIP only). Missing or malformed input degrades; it never fails the index. Matching graph edges upgrade to `ScipExact`. |
-| Trace a directed call path | `asgrep call-path SOURCE SINK .` -- call graph only, not value flow, with resolution-tier evidence. Reports at most one shortest path (a deterministic function of the index: SCIP-exact evidence first, then file path, line, callee name); it is an edge sampler, not an enumerator -- use `callers:` / `callees:` search for full edge evidence. A hop is `precise` only when it resolves to a unique same-file definition (or compiler/import evidence), so same-named symbols in different languages never serialize as exact edges. |
-| Dry-run an indexed rewrite | `asgrep codemod --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' --dry-run .` then omit `--dry-run` to apply transactionally. |
-| Keep Pi results on the model path | One-shot tools and Code Mode put bounded hits in `content`, not only display-only `details`. Native search runs off the Node event loop. |
-
-Also in this release, without changing the day-to-day query prefixes:
-
-- **Index schema 12** with atomic generations, durability profiles, separate code vs prose FTS, and controlled rebuilds for older formats.
-- **Ignore rules stay yours.** `.git` and `.asgrep` are the only unconditional directory skips. Dotfiles and user-specific directories are not silently hardcoded.
-- **Multi-field semantic vectors** persist beside each chunk; query intent weights those fields. Large repos still use `.asgrep/semantic.ivf`.
-- **Repository-learned vocabulary** can widen conceptual candidate discovery (PPMI); final lexical/structural scoring still uses the original query.
-- **Watch** bounds freshness under sustained same-path writes and ignores `.asgrep` artifacts before they enter the queue.
-- **Native `pattern:`** covers nested structural templates in-process. Optional keep-gates compare `literal:` presence to pinned ripgrep and Pattern-1 to pinned ast-grep when those binaries are provisioned; they do not claim full tool identity.
-
 ---
 
 ## Why this exists

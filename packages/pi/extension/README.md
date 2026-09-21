@@ -6,7 +6,7 @@ Native Code Mode, structural, graph, and semantic code search for [Pi](https://g
 
 `pi-ast-sgrep` gives Pi a warm, project-aware search engine for understanding code. It finds behavior by intent, resolves definitions and callers, traces relationships, matches syntax-aware patterns, joins two indexed channels, and searches local semantic embeddings. The primary `asgrep` tool lets Pi compose several searches in one JavaScript program instead of spending one model round trip per lookup.
 
-**v2.0.0** · 13 languages · local-first semantic · critic + two-channel `AND` · **Code Mode** (on by default, no API key)
+**v2.5.2** · 15 languages · local-first semantic · critic + two-channel `AND` · **Code Mode** (on by default, no API key)
 
 **Upgrading to 2.0:** this is a breaking semver release because the cloud/Ollama embedding backends were removed. Update the Pi package normally; local hashed semantic search remains the default, optional neural embeddings remain in-process, and indexes that still store `embed_backend=cloud|ollama` fail closed until `/asgrep-reindex`. One-shot tools and Code Mode now put bounded hits in `content` so the model sees them, not only display-only `details`.
 
