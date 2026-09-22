@@ -23,6 +23,12 @@ export type DispatchSurface = {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
 };
+type SymbolArgs = Omit<SearchArgs, "query"> & {
+    symbol: string;
+};
+type ImportArgs = Omit<SearchArgs, "query"> & {
+    module: string;
+};
 export type AsgrepConnector = {
     search(input: SearchArgs, options?: {
         signal?: AbortSignal;
@@ -42,25 +48,13 @@ export type AsgrepConnector = {
     chain(input: ChainArgs, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    defs(input: {
-        symbol: string;
-        limit?: number;
-        excerptLines?: number;
-    }, options?: {
+    defs(input: SymbolArgs, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    callers(input: {
-        symbol: string;
-        limit?: number;
-        excerptLines?: number;
-    }, options?: {
+    callers(input: SymbolArgs, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
-    imports(input: {
-        module: string;
-        limit?: number;
-        excerptLines?: number;
-    }, options?: {
+    imports(input: ImportArgs, options?: {
         signal?: AbortSignal;
     }): Promise<MachineEnvelope>;
     indexStatus(options?: {
@@ -106,3 +100,4 @@ export declare function createAsgrepConnector(host: BatchCapableHost, context: {
     scope?: string;
     localReads?: boolean;
 }): ConnectorBundle;
+export {};

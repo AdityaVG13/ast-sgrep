@@ -3,15 +3,23 @@
  * rebuild-failure reporting, containment helper. Imports types + sqlite.
  */
 import { existsSync, readdirSync } from "node:fs";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { INDEX_FORMAT_VERSION, RuntimeError, type MachineEnvelope } from "./types.js";
 import { openIndexDatabase, type IndexDatabase } from "./sqlite.js";
 
 export type IndexHealth = "ready" | "missing" | "incompatible";
 
+/** Never turn a canonical byte path into another file's replacement-character name. */
+export async function realpathUtf8(path: string): Promise<string> {
+  if (Buffer.from(path, "utf8").toString("utf8") !== path) throw new Error("invalid Unicode path");
+  const bytes = await realpath(path, { encoding: "buffer" });
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
 export function pathContained(parent: string, child: string): boolean {
   const rel = relative(parent, child);
-  const first = rel.split(/[\\/]/u, 1)[0];
+  const first = rel.split(sep, 1)[0];
   return rel === "" || (!isAbsolute(rel) && first !== "..");
 }
 

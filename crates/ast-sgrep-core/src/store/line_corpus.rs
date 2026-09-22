@@ -93,7 +93,8 @@ pub fn file_first_lines(file_idx: &[u32], n_files: usize) -> Vec<u32> {
 }
 
 fn cascade_prefers_file(path: &str) -> bool {
-    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    // DB keys already normalize host separators; a Unix backslash is content.
+    let normalized = path.to_ascii_lowercase();
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     if file.ends_with(".md")
         || file.ends_with(".mdx")

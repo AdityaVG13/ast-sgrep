@@ -67,15 +67,19 @@ test("result text stays inside the per-call token budget", () => {
   const empty = formatSearchResult({ hits: [], suggested_next: ["defs:Foo", "callers:Foo"] }, { command: "search" });
   const read = formatReadResult({ windows: [{ path: "src/lib.rs", start: 1, end: 40, text: Array.from({ length: 40 }, (_, i) => `line ${i} of the window`).join("\n") }] });
   const edit = formatEditResult({ edits: [{ path: "src/lib.rs", line: 12, changed: true }] });
-  const codemode = formatCodemodeResult({ symbol: "refresh_token", n: 2, hits: [{ file: "a.rs", symbol: "x" }] }, { stats: { calls: 3, batchedCalls: 0, parallelSpawnCalls: 0, stickyCalls: 3, waves: 1 }, wallMs: 12, backend: "napi" });
+  // Explicit Code Mode returns retain the complete hit data, unlike the lean
+  // one-shot search summary. Their small-payload budget includes that data.
+  const codemode = formatCodemodeResult({ hits: [{ file: "a.rs", symbol: "x" }] }, { stats: { calls: 3, batchedCalls: 0, parallelSpawnCalls: 0, stickyCalls: 3, waves: 1 }, wallMs: 12, backend: "napi" });
   // Floors measured when the budget was set (BPE tokens: search 227, empty 18,
-  // read 220, edit 12, codemode 9). One char over fails on purpose.
+  // read 220, edit 12). Code Mode now budgets complete selected data instead
+  // of the old 24-character lossy hit row.
   assert.ok(search.length <= 1030, `search content grew: ${search.length} chars`);
   assert.equal(search.split("\n")[0], "search: 8 hits");
   assert.ok(empty.length <= 49, `empty-result content grew: ${empty.length}`);
   assert.ok(read.length <= 887, `read content grew: ${read.length}`);
   assert.ok(edit.length <= 33, `edit content grew: ${edit.length}`);
-  assert.ok(codemode.length <= 24, `codemode content grew: ${codemode.length}`);
+  assert.ok(codemode.length <= 128, `codemode content grew: ${codemode.length}`);
+  assert.ok(codemode.includes(JSON.stringify([{ file: "a.rs", symbol: "x" }], null, 2)));
   // Excerpts are only present when the caller asked (excerptLines): the budget
   // bounds that explicitly requested growth.
   const withExcerpts = formatSearchResult(

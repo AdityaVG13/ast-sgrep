@@ -37,8 +37,9 @@ cargo build --release -p ast-sgrep-cli
 
 Standalone binaries: `asgrep` and `ast-sgrep` (aliases).
 
-On Unix, the CLI runs commands through the process supervisor. `ASGREP_CPU_LIMIT_PERCENT`
-sets the worker process runnable wall-time fraction in each 10 ms SIGSTOP/CONT cycle; it is not
+On Unix, the CLI runs directly unless `ASGREP_CPU_LIMIT_PERCENT` opts into the
+process supervisor. The variable sets the worker process runnable wall-time
+fraction in each 10 ms SIGSTOP/CONT cycle; it is not
 a machine-wide or one-core CPU percentage, and multi-threaded work may consume several cores
 while runnable. On Windows, commands run directly: search, indexing, cancellation, and path
 handling are supported, but the duty cycle is not enforced.

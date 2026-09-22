@@ -1537,7 +1537,9 @@ fn native_match_file(
     if let Some(allowed) = ctx.candidate_paths {
         let rel_ok = path
             .strip_prefix(ctx.root)
-            .map(|rel| allowed.contains(&rel.to_string_lossy().replace('\\', "/")))
+            .ok()
+            .and_then(|rel| crate::index::indexed_rel_path(rel).ok())
+            .map(|rel| allowed.contains(&rel))
             .unwrap_or(false);
         if !rel_ok {
             return NativeFileResult::default();
@@ -1609,10 +1611,13 @@ fn native_match_file(
     }
     let prefilter_ns = prefilter_started.elapsed().as_nanos();
     let parse_match_started = Instant::now();
-    let rel = path
+    let Some(rel) = path
         .strip_prefix(ctx.root)
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+        .ok()
+        .and_then(|path| crate::index::indexed_rel_path(path).ok())
+    else {
+        return bail();
+    };
     let hits = match_pattern(lang, content, ctx.pattern)
         .unwrap_or_default()
         .into_iter()

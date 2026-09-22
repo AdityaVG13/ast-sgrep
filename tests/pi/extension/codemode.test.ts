@@ -966,6 +966,15 @@ test("Code Mode activation stays off serve-process spawn", async () => {
  * searches stay scoped to the subdirectory — the caller never sees a second
  * `.asgrep` appear inside the tree.
  */
+test("doctor obeys connector cancellation even without a per-call signal", async () => {
+  let calls = 0;
+  const controller = new AbortController();
+  controller.abort();
+  const bundle = createAsgrepConnector({ async run() { calls++; return { ok: true } as never; } }, { cwd: "/repo" }, { signal: controller.signal });
+  await assert.rejects(bundle.asgrep.doctor(), /abort|cancel/i);
+  assert.equal(calls, 0);
+});
+
 test("anchor scope rebases paths and scopes searches under the checkout root", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const host = {
@@ -989,11 +998,14 @@ test("anchor scope rebases paths and scopes searches under the checkout root", a
   await bundle.asgrep.search({ query: "auth" });
   await bundle.asgrep.search({ query: "auth", in: "lib" });
   await bundle.asgrep.read({ path: "src/lib.rs", start: 1, end: 20 });
-  await bundle.asgrep.read({ ref: "src/lib.rs#L3-L9" });
+  await bundle.asgrep.read({ ref: "packages/x/src/src/lib.rs#L3-L9" });
   await bundle.asgrep.edit({ path: "./src/lib.rs", oldText: "a", newText: "b" });
+  await bundle.asgrep.defs({ symbol: "same_name" });
+  await bundle.asgrep.callers({ symbol: "same_name" });
+  await bundle.asgrep.imports({ module: "same_module" });
 
   const queries = calls.filter((call) => call.tool === "search").map((call) => call.args.query);
-  assert.deepEqual(queries, ["in:packages/x/src auth", "in:packages/x/src/lib auth"]);
+  assert.deepEqual(queries, ["in:packages/x/src auth", "in:packages/x/src/lib auth", "in:packages/x/src defs:same_name", "in:packages/x/src callers:same_name", "in:packages/x/src imports:same_module"]);
   const reads = calls.filter((call) => call.tool === "read").map((call) => call.args.path ?? call.args.ref);
   assert.deepEqual(reads, ["packages/x/src/src/lib.rs", "packages/x/src/src/lib.rs#L3-L9"]);
   const edit = calls.find((call) => call.tool === "edit");

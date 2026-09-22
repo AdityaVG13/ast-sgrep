@@ -203,14 +203,18 @@ fn tightness(sym: &SymbolRow, byte_in_line: usize) -> (u32, usize) {
 }
 
 pub fn path_to_file_uri(path: &Path) -> String {
-    let s = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .replace('\\', "/");
-    let encoded = pct_enc(&s);
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut bytes = path.as_os_str().as_encoded_bytes().to_vec();
+    if std::path::MAIN_SEPARATOR == '\\' {
+        for byte in &mut bytes {
+            if *byte == b'\\' {
+                *byte = b'/';
+            }
+        }
+    }
+    let encoded = pct_enc(&bytes);
     // Windows drive paths (`C:/…`) need three slashes; Unix absolute paths use `file://`.
-    if is_windows_drive(&s) || !s.starts_with('/') {
+    if !bytes.starts_with(b"/") {
         format!("file:///{encoded}")
     } else {
         format!("file://{encoded}")
@@ -227,7 +231,7 @@ pub fn file_uri_to_path(uri: &str) -> anyhow::Result<PathBuf> {
         .or_else(|| uri.strip_prefix("file:"))
         .ok_or_else(|| anyhow::anyhow!("not a file URI: {uri}"))?;
     let rest = rest.strip_prefix("//").unwrap_or(rest);
-    let decoded = pct_dec(rest);
+    let decoded = pct_dec(rest)?;
     let path = if rest.starts_with('/') && is_windows_drive(&decoded) {
         decoded.trim_start_matches('/').to_string()
     } else {
@@ -249,16 +253,16 @@ pub fn uri_to_rel_path(uri: &str, root: &Path) -> anyhow::Result<String> {
     if rel.components().any(|c| matches!(c, Component::ParentDir)) {
         anyhow::bail!("path traversal in document URI");
     }
-    Ok(rel.to_string_lossy().replace('\\', "/"))
+    Ok(ast_sgrep_core::index::indexed_rel_path(rel)?)
 }
 
 pub fn canonicalize_workspace_root(root: PathBuf) -> PathBuf {
     root.canonicalize().unwrap_or(root)
 }
 
-fn pct_enc(path: &str) -> String {
+fn pct_enc(path: &[u8]) -> String {
     let mut out = String::with_capacity(path.len());
-    for b in path.bytes() {
+    for &b in path {
         if matches!(
             b,
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/' | b':'
@@ -271,7 +275,7 @@ fn pct_enc(path: &str) -> String {
     out
 }
 
-fn pct_dec(input: &str) -> String {
+fn pct_dec(input: &str) -> anyhow::Result<String> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -288,7 +292,7 @@ fn pct_dec(input: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).map_err(|error| anyhow::anyhow!("invalid UTF-8 in file URI: {error}"))
 }
 
 pub fn utf16_char_to_byte(line: &str, utf16_offset: u32) -> usize {

@@ -60,7 +60,7 @@ duplicates index opens, and confuses the model about which surface to call.
 `pi-ast-sgrep` exposes **`asgrep`** as the primary tool:
 
 ```text
-Model ──► asgrep({ code }) ──► in-process `node:vm` (no Worker)
+Model ──► asgrep({ code }) ──► single-use Worker (`node:vm` inside)
                                               │
                                               │  asgrep.search / find / read / edit
                                               │  Promise.all → same-tick coalesce
@@ -73,11 +73,12 @@ Model ──► asgrep({ code }) ──► in-process `node:vm` (no Worker)
                                         shaped return + stats
 ```
 
-The runner is **in-process** (OpenCode / nicknisi: no Worker sandbox, no OS jail).
-`node:vm` hides `process` / `require` and can interrupt synchronous loops.
-`asgrep` / `console` are constructed inside the context from a JSON host bridge
-so host `Function` cannot leak. Node does not consider `vm` an adversarial-code
-security boundary. Same trust as Pi `bash`.
+The guest runs in a **single-use `worker_threads` isolate**, with a `node:vm`
+context inside it. The host retains the native session; guest tool calls cross
+a JSON message bridge. `asgrep` / `console` are built inside the context, which
+hides `process` / `require`. Deadlines terminate the guest Worker, including
+runaway microtasks, while aborting outstanding host calls. This is not an OS
+jail; Node does not consider `vm` an adversarial-code security boundary.
 
 Each program is limited to 256 host calls, bounded arguments, logs, and
 serialized results. Raw memory and WebAssembly globals are unavailable.
@@ -108,7 +109,7 @@ Wall time ≈ serial + parallel_work / N.
 
 | Serial cost (cut hard) | Parallel fraction |
 |------------------------|-------------------|
-| SQLite open once per session; in-process `vm` (no Worker spawn) | Independent `search`/`find`/`read` inside `Promise.all` |
+| SQLite open once per session; single-use guest Worker | Independent `search`/`find`/`read` inside `Promise.all` |
 
 Same-tick coalesce turns N serial spawn costs into **one** batch process. Prefer
 **session-scoped sticky serve** (`codemode-serve`): one warm Searcher per project
@@ -141,6 +142,21 @@ no numeric speedup is claimed.
 
 Direct tools (`asgrep_search`, `asgrep_edit`, `asgrep_read`, `asgrep_index`) remain for simple one-shot lookups. Prefer Code Mode whenever the task needs composition, parallel lookups, or filtering before the model sees data.
 
+Returned `ref` strings are checkout-relative and can be passed straight back to
+`read`, including from a subdirectory session. Path-form requests are anchored
+to that session; paths already under its checkout-relative scope are not
+prefixed twice. Symbol lookups retain the same scope as general searches.
+
+Edits validate all replacements before writing and serialize within a native
+session (or a canonical-root filesystem fallback queue). They are not a
+multi-file filesystem transaction: I/O or reindex failures can leave changes,
+and unrelated external writers are not locked. Inspect files before retrying
+a failed edit; ambiguous transport failures are not automatically replayed.
+
+Explicit Code Mode returns retain their selected data, including hit fields.
+Model-visible output has an 8,000-character cap with a truncation notice; stale
+index qualifications reserve space in that budget.
+
 Example the model writes:
 
 ```js
@@ -158,9 +174,10 @@ async () => {
 
 Runner capabilities: `asgrep.*`, `Promise`, `JSON`, arrays/objects/math. No
 direct `require`, `process`, `fetch`, or filesystem globals. The configured wall
-deadline interrupts synchronous `vm` loops and aborts awaited host calls.
-Call arguments, logs, and serialized results are capped. There is no Worker:
-a busy microtask loop after `await` can pin the Pi event loop. Do not treat this as an OS jail.
+deadline terminates the guest Worker and aborts awaited host calls.
+Call arguments, logs, serialized results, and the guest heap are capped.
+Native work that already holds the session mutex follows the cancellation
+limits above; Worker termination is not an OS jail.
 
 ## Rust crate `ast-sgrep-codemode`
 

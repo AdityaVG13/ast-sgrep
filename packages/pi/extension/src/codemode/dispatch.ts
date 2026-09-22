@@ -90,7 +90,7 @@ type Pending = {
 };
 
 const MAX_WAVE = 32;
-const MUTATING_TOOLS = new Set(["index_repo", "edit"]);
+export const MUTATING_TOOLS: ReadonlySet<string> = new Set(["index_repo", "edit"]);
 
 const abortError = (): Error => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
 

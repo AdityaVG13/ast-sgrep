@@ -3,11 +3,9 @@
  *
  * Severed-lane contract: when native answers `unknown tool: <name>` for
  * read/edit/find, the connector serves the call here instead of failing, so
- * an extension tracking main keeps working on an official launcher. Every
- * shape, default, cap, jail rule, and error string mirrors
- * crates/ast-sgrep-codemode/src/io.rs exactly — callers cannot distinguish
- * this lane from a native one. Errors are plain Errors carrying the native
- * text (the native lane surfaces them the same way); no new error codes.
+ * an extension tracking main keeps working on an official launcher. Shapes,
+ * defaults, caps, and confinement follow crates/ast-sgrep-codemode/src/io.rs.
+ * Errors are plain Errors; adapter-specific filesystem messages can differ.
  *
  * Deliberate divergences from native, both strictly safer:
  * - Reads come from disk, never the index (the extension has no row reader

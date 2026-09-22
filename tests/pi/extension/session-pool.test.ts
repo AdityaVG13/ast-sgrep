@@ -233,6 +233,20 @@ test("acquire restarts a closed sticky worker", async () => {
   await pool.shutdown();
 });
 
+test("mutating pool calls never replay after an ambiguous transport failure", async () => {
+  for (const tool of ["edit", "index_repo"]) {
+    let calls = 0;
+    const pool = new NativeSessionPool(async () => ({
+      ...fakeWorker([]),
+      async call() { calls++; throw new Error("codemode-serve is closed"); },
+    }));
+    pool.configure({ binary: "/fake/asgrep" });
+    await assert.rejects(pool.call("/p", tool), /closed/);
+    assert.equal(calls, 1, "the first call may have committed before transport failure");
+    await pool.shutdown();
+  }
+});
+
 test("call retries once after codemode-serve is closed", async () => {
   let starts = 0;
   const pool = new NativeSessionPool(async () => {

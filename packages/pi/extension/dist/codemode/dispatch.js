@@ -16,7 +16,7 @@ function callTarget(args) {
     return text.length > 60 ? text.slice(0, 59) + "…" : text;
 }
 const MAX_WAVE = 32;
-const MUTATING_TOOLS = new Set(["index_repo", "edit"]);
+export const MUTATING_TOOLS = new Set(["index_repo", "edit"]);
 const abortError = () => Object.assign(new Error("codemode aborted"), { name: "AbortError" });
 function rejectWave(wave, cause) {
     for (const item of wave)

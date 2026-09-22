@@ -6,6 +6,7 @@ import {
   displayWidth,
   hitLabel,
   hitLocation,
+  hitsOf,
   paint,
   sanitizeContent,
   summarizeValue,
@@ -283,13 +284,6 @@ function editsOf(value: unknown): Array<{ path?: string; line?: number; removed?
         if (Array.isArray(e.added)) entry.added = (e.added as unknown[]).map((line) => sanitizeContent(String(line)));
         return entry;
       });
-  }
-  return undefined;
-}
-
-function hitsOf(value: unknown): HitLike[] | undefined {
-  if (value && typeof value === "object" && Array.isArray((value as EnvelopeLike).hits)) {
-    return (value as EnvelopeLike).hits as HitLike[];
   }
   return undefined;
 }

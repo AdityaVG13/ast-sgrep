@@ -65,6 +65,22 @@ fn ident_token_map_prefers_code_over_markdown() {
     assert_eq!(hits[0].path, "search/types.rs");
 }
 
+#[cfg(unix)]
+#[test]
+fn filename_backslashes_do_not_turn_source_files_into_test_directories() {
+    let corpus = pack(&[
+        (
+            r"a\tests\source.rs",
+            Some("rust"),
+            1,
+            "pub struct SnapshotStamp;",
+        ),
+        ("z.rs", Some("rust"), 1, "pub struct SnapshotStamp;"),
+    ]);
+    let hits = corpus.scan_distinct_files_cs("snapshot", 1, &HashSet::new());
+    assert_eq!(hits[0].path, r"a\tests\source.rs");
+}
+
 #[test]
 fn packed_scan_is_path_sorted_and_respects_cap() {
     let corpus = pack(&[

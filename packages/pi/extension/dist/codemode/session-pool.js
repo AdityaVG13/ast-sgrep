@@ -7,7 +7,7 @@
  * Fallback: sticky `codemode-serve` child only when the `.node` addon is missing
  * (unsupported host / incomplete install). Doctor reports that as degraded.
  */
-import { asEnvelope } from "./dispatch.js";
+import { asEnvelope, MUTATING_TOOLS } from "./dispatch.js";
 import { loadCodemodeNative } from "./native.js";
 import { defined } from "./types.js";
 import { startStickyWorker } from "./worker.js";
@@ -200,7 +200,7 @@ export class NativeSessionPool {
             return await worker.call(tool, args, options);
         }
         catch (cause) {
-            if (options?.signal?.aborted || !isClosedWorkerError(cause))
+            if (options?.signal?.aborted || MUTATING_TOOLS.has(tool) || !isClosedWorkerError(cause))
                 throw cause;
             await this.invalidate(root);
             const retry = await this.acquire(root);

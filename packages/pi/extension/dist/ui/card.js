@@ -1,7 +1,7 @@
 /** Pi TUI result card — supernova-style: the call slot is empty; one card
  * owns the whole lifecycle (running → ops ledger → result → error). Rows are
  * fixed-column and theme-painted; nothing here writes to the model channel. */
-import { displayWidth, hitLabel, hitLocation, paint, sanitizeContent, summarizeValue, truncateToWidth, visibleWidth, } from "./present.js";
+import { displayWidth, hitLabel, hitLocation, hitsOf, paint, sanitizeContent, summarizeValue, truncateToWidth, visibleWidth, } from "./present.js";
 /** Header text that rides the top border: "asgrep search · 4 hits · 12ms · napi". */
 function frameLabel(model) {
     const bits = ["asgrep", model.command, ...model.title.filter((b) => Boolean(b))];
@@ -247,12 +247,6 @@ function editsOf(value) {
                 entry.added = e.added.map((line) => sanitizeContent(String(line)));
             return entry;
         });
-    }
-    return undefined;
-}
-function hitsOf(value) {
-    if (value && typeof value === "object" && Array.isArray(value.hits)) {
-        return value.hits;
     }
     return undefined;
 }

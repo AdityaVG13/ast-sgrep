@@ -1,11 +1,10 @@
-import { realpath } from "node:fs/promises";
 import { constants, accessSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { resolveBinary } from "ast-sgrep";
 import { CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, RESOLVED_ROOT, } from "./types.js";
 import { finitePositive, migrateConfig, resolveConfig, rollbackConfig, } from "./config.js";
-import { indexCompletion, indexPathFor, indexQuarantines, inspectIndexFile, pathContained, record, throwIndexRebuildFailed, } from "./index-health.js";
+import { indexCompletion, indexPathFor, indexQuarantines, inspectIndexFile, pathContained, realpathUtf8 as realpath, record, throwIndexRebuildFailed, } from "./index-health.js";
 // The public surface of ./runtime is a contract (package.json exports +
 // tests): re-export the symbols that moved to their own modules.
 export { CONFIG_SCHEMA_VERSION, DEFAULT_FRESHNESS_WAIT_MS, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, } from "./types.js";

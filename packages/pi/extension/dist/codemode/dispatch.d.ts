@@ -67,6 +67,7 @@ export type BatchCapableHost = ConnectorHost & {
     /** Sticky NDJSON worker for the whole Code Mode program (preferred). */
     sticky?: StickyWorker | null;
 };
+export declare const MUTATING_TOOLS: ReadonlySet<string>;
 /**
  * Wraps a host so Promise.all([asgrep.search, asgrep.defs, …]) collapses into
  * one microtask wave. Prefers sticky serve → one-shot batch → overlapped spawn.

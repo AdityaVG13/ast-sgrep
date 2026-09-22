@@ -1,5 +1,7 @@
 import { type MachineEnvelope } from "./types.js";
 export type IndexHealth = "ready" | "missing" | "incompatible";
+/** Never turn a canonical byte path into another file's replacement-character name. */
+export declare function realpathUtf8(path: string): Promise<string>;
 export declare function pathContained(parent: string, child: string): boolean;
 export declare function record(value: unknown): Record<string, unknown> | undefined;
 export declare function indexHealth(status: MachineEnvelope): IndexHealth;

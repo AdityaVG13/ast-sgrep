@@ -39,10 +39,12 @@ export declare const ASGREP_PROMPT_GUIDELINES: readonly ["Any code lookup: call 
 export declare const ASGREP_PROMPT_GUIDELINES_HOST_FILES: readonly ["Any code lookup: call asgrep first.", "Compose in Code Mode (search/defs/read, Promise.all, small shaped value); grep only exact strings/filenames. Bound with in:\"path\"; on 0 hits use suggested_next."];
 export declare function paint(theme: PresentTheme | undefined, role: string, text: string, bold?: boolean): string;
 export declare function hitLocation(hit: HitLike): string;
+/** A caller may return arbitrary data named `hits`; only locations are search hits. */
+export declare function hitsOf(value: unknown): HitLike[] | undefined;
 export declare function hitLabel(hit: HitLike): string;
 export declare function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): string;
 /** Model-visible text for a read envelope: the window contents themselves. */
-export declare function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string;
+export declare function formatReadResult(response: EnvelopeLike, theme?: PresentTheme, maxChars?: number): string;
 /**
  * Model-facing result text is deliberately lean: the tool call already carries
  * the query/mode, the TUI card renders timing and backend for the human, and
@@ -84,6 +86,7 @@ export declare function truncateToWidth(text: string, maxWidth: number, ellipsis
  * value compacted. Transport fields are dropped rather than rendered.
  */
 export declare function summarizeValue(value: unknown, limit?: number): string[];
+export declare function boundedText(text: string, maxChars?: number, notice?: string): string;
 export declare function formatCodemodeResult(value: unknown, meta?: {
     stats?: {
         calls: number;

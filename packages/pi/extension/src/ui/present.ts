@@ -65,10 +65,19 @@ export function hitLocation(hit: HitLike): string {
   return file || "?";
 }
 
+/** A caller may return arbitrary data named `hits`; only locations are search hits. */
+export function hitsOf(value: unknown): HitLike[] | undefined {
+  const hits = value && typeof value === "object" ? (value as EnvelopeLike).hits : undefined;
+  return Array.isArray(hits) && hits.every(hit => hit && typeof hit === "object" &&
+    (typeof hit.file === "string" || typeof hit.path === "string" || typeof hit.ref === "string"))
+    ? hits : undefined;
+}
+
 /** Hard caps for one result: rows shown, excerpt lines per hit, longest preview. */
 const MAX_HIT_ROWS = 24;
 const MAX_EXCERPT_LINES_OUT = 12;
 const MAX_PREVIEW_CHARS = 96;
+const MAX_RESULT_CHARS = 8_000;
 
 export function hitLabel(hit: HitLike): string {
   const symbol = typeof hit.symbol === "string" ? sanitizeContent(hit.symbol) : "";
@@ -93,19 +102,34 @@ export function formatEditResult(response: EnvelopeLike, theme?: PresentTheme): 
 }
 
 /** Model-visible text for a read envelope: the window contents themselves. */
-export function formatReadResult(response: EnvelopeLike, theme?: PresentTheme): string {
+export function formatReadResult(response: EnvelopeLike, theme?: PresentTheme, maxChars = MAX_RESULT_CHARS): string {
   const windows = Array.isArray(response.windows) ? (response.windows as Array<Record<string, unknown>>) : [];
   if (windows.length === 0) return "read: 0 windows";
   const out: string[] = [];
+  let displayed = 0;
+  const moreWindows = (count: number): string[] => count > 0 ? [`… ${count} more windows`] : [];
   for (const w of windows.slice(0, 8)) {
     const path = sanitizeContent(typeof w.path === "string" ? w.path : "?");
-    // The window's own path+range is the line the model needs to cite back.
-    out.push(path + "#L" + (w.start ?? 1) + "-L" + (w.end ?? ""));
     const text = sanitizeContent(typeof w.text === "string" ? w.text : "");
-    for (const line of text.split("\n").slice(0, 80)) out.push(line);
+    const lines = text.split("\n");
+    const start = w.start ?? 1;
+    const render = (count: number): string => {
+      const end = count < lines.length && typeof start === "number" ? start + Math.max(0, count - 1) : (w.end ?? "");
+      return [path + "#L" + start + "-L" + end, ...lines.slice(0, count),
+        ...(count < lines.length || w.truncated === true ? ["… (truncated; read a smaller window)"] : [])].join("\n");
+    };
+    // Reserve the omission notice and fit whole lines before finalizing refs;
+    // a later character clip would otherwise overstate the displayed range.
+    const suffix = moreWindows(windows.length - displayed - 1);
+    let count = Math.min(lines.length, 80);
+    const fits = (): boolean => [...out, render(count), ...suffix].join("\n").length <= maxChars;
+    while (count > 0 && !fits()) count--;
+    if (!fits()) break;
+    out.push(render(count));
+    displayed++;
+    if (count < Math.min(lines.length, 80)) break;
   }
-  if (windows.length > 8) out.push("… " + (windows.length - 8) + " more windows");
-  return out.join("\n");
+  return boundedText([...out, ...moreWindows(windows.length - displayed)].join("\n"), maxChars);
 }
 
 /**
@@ -358,7 +382,7 @@ export function summarizeValue(value: unknown, limit = 4): string[] {
   }
   const recordValue = value as Record<string, unknown>;
   const rows: string[] = [];
-  const hits = Array.isArray(recordValue.hits) ? recordValue.hits : undefined;
+  const hits = hitsOf(value);
   const windows = Array.isArray(recordValue.windows)
     ? (recordValue.windows as Array<Record<string, unknown>>)
     : undefined;
@@ -389,6 +413,24 @@ function compactValue(value: unknown): string {
   return json.length <= 80 ? json : `${json.slice(0, 79)}…`;
 }
 
+/** Model output is data, not the TUI's lossy summary. Keep a visible size bound. */
+function codemodePayload(value: unknown): string {
+  return sanitizeContent(typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
+}
+
+export function boundedText(text: string, maxChars = MAX_RESULT_CHARS, notice = "\n… (truncated)"): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= notice.length) return notice.slice(0, Math.max(0, maxChars));
+  let end = maxChars - notice.length;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end--;
+  return text.slice(0, end) + notice;
+}
+
+function boundedCodemode(text: string): string {
+  return boundedText(text, MAX_RESULT_CHARS, "\n… (truncated; return fewer items or smaller windows)");
+}
+
 export function formatCodemodeResult(
   value: unknown,
   meta: {
@@ -398,16 +440,14 @@ export function formatCodemodeResult(
   } = {},
   theme?: PresentTheme,
 ): string {
-  if (value && typeof value === "object" && Array.isArray((value as EnvelopeLike).hits)) {
-    const searchMeta: { command: string; activationMs?: number; backend?: string } = { command: "codemode" };
-    if (meta.wallMs !== undefined) searchMeta.activationMs = meta.wallMs;
-    if (meta.backend !== undefined) searchMeta.backend = meta.backend;
-    return formatSearchResult(value as EnvelopeLike, searchMeta, theme);
-  }
+  const result = value && typeof value === "object" ? value as EnvelopeLike : undefined;
+  const hits = hitsOf(value);
+  const envelope = result?.tool === "asgrep" && typeof result.schema_version === "string" && typeof result.ok === "boolean";
   const bits: string[] = [];
+  if (hits) bits.push(`${hits.length} hit${hits.length === 1 ? "" : "s"}`);
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    if (typeof record.hit_count === "number") bits.push(`${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`);
+    if (!hits && typeof record.hit_count === "number") bits.push(`${record.hit_count} hit${record.hit_count === 1 ? "" : "s"}`);
     else if (typeof record.node_count === "number") bits.push(`${record.node_count} node${record.node_count === 1 ? "" : "s"}`);
   }
   if (meta.stats && meta.stats.calls > 0) {
@@ -421,13 +461,12 @@ export function formatCodemodeResult(
     return `${title}\n${paint(theme, "muted", "  (no return statement; add `return` to send a value to the model)")}`;
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {
-    // The program's own return shape is a deliberate choice: summarize it
-    // wider than a hit preview, or the model has to re-run to see its value.
-    const rows = summarizeValue(value, 12).map((row) => paint(theme, "toolOutput", `  ${row}`));
-    return [title, ...rows].join("\n");
+    // The chosen return value is data. Lossy hit summaries belong only to the
+    // TUI or one-shot search, never this explicit model-facing return channel.
+    const rows = Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !envelope || !TRANSPORT_KEYS.has(key))
+      .map(([key, entry]) => paint(theme, "toolOutput", `  ${sanitizeContent(key)}: ${codemodePayload(entry)}`));
+    return boundedCodemode([title, ...rows].join("\n"));
   }
-  if (Array.isArray(value)) {
-    return [title, paint(theme, "toolOutput", `  ${value.length} value${value.length === 1 ? "" : "s"}`)].join("\n");
-  }
-  return `${title}\n${paint(theme, "toolOutput", `  ${compactValue(value)}`)}`;
+  return boundedCodemode(`${title}\n${paint(theme, "toolOutput", `  ${codemodePayload(value)}`)}`);
 }

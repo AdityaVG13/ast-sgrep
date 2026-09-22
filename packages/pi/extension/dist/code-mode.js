@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
+import { realpathUtf8 as realpath } from "./runtime/index-health.js";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { RuntimeError } from "./runtime/runtime.js";
 const DEFAULT_LIMIT = 20;
@@ -179,7 +180,7 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
         throw new RuntimeError("READ_FAILED", `${parsed.file} is not a regular file`);
     const wantedStart = Math.max(1, parsed.start - contextLines);
     const wantedEnd = Math.min(MAX_LINE_NUMBER, parsed.end + contextLines);
-    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
     const stream = handle.createReadStream({
         autoClose: false,
         highWaterMark: 64 * 1024,
@@ -195,20 +196,22 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
     let truncated = false;
     let rangeComplete = false;
     let scannedBytes = 0;
-    const consumeLine = (line) => {
-        if (lineNumber >= wantedStart && lineNumber <= wantedEnd) {
-            selectedStart ??= lineNumber;
-            selectedEnd = lineNumber;
-            if (!truncated) {
-                const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
-                const clamped = rawLine.length > MAX_LINE_CHARS ? `${rawLine.slice(0, MAX_LINE_CHARS)}…` : rawLine;
-                const addition = `${selectedLines > 0 ? "\n" : ""}${clamped}`;
-                const bounded = boundedPrefix(addition, maxChars - contentChars);
+    const consumeLine = (line, terminated = false) => {
+        if (lineNumber >= wantedStart && lineNumber <= wantedEnd && !truncated) {
+            const rawLine = terminated && line.endsWith("\r") ? line.slice(0, -1) : line;
+            const clamped = boundedPrefix(rawLine, MAX_LINE_CHARS);
+            const addition = `${selectedLines > 0 ? "\n" : ""}${clamped.text}`;
+            const bounded = boundedPrefix(addition, maxChars - contentChars);
+            // Continue scanning to validate the requested range, but do not advance
+            // the returned ref/resume offset over text the caller never received.
+            if (bounded.text.length > 0 || addition.length === 0) {
+                selectedStart ??= lineNumber;
+                selectedEnd = lineNumber;
                 content += bounded.text;
                 contentChars += bounded.chars;
-                truncated = bounded.truncated;
+                selectedLines += 1;
             }
-            selectedLines += 1;
+            truncated = clamped.truncated || bounded.truncated;
         }
         if (lineNumber >= wantedEnd)
             rangeComplete = true;
@@ -231,7 +234,7 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
             }
             let newline = pending.indexOf("\n");
             while (newline >= 0) {
-                consumeLine(pending.slice(0, newline));
+                consumeLine(pending.slice(0, newline), true);
                 pending = pending.slice(newline + 1);
                 if (rangeComplete)
                     break;
@@ -252,7 +255,7 @@ async function readLineWindow(handle, parsed, contextLines, maxChars, signal) {
             catch {
                 throw new RuntimeError("BINARY_FILE", `${parsed.file} is not valid UTF-8 text`);
             }
-            if (pending.length > 0 || lineNumber === 1)
+            if (pending.length > 0)
                 consumeLine(pending);
         }
     }

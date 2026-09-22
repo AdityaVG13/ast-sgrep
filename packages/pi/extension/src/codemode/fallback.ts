@@ -3,11 +3,9 @@
  *
  * Severed-lane contract: when native answers `unknown tool: <name>` for
  * read/edit/find, the connector serves the call here instead of failing, so
- * an extension tracking main keeps working on an official launcher. Every
- * shape, default, cap, jail rule, and error string mirrors
- * crates/ast-sgrep-codemode/src/io.rs exactly — callers cannot distinguish
- * this lane from a native one. Errors are plain Errors carrying the native
- * text (the native lane surfaces them the same way); no new error codes.
+ * an extension tracking main keeps working on an official launcher. Shapes,
+ * defaults, caps, and confinement follow crates/ast-sgrep-codemode/src/io.rs.
+ * Errors are plain Errors; adapter-specific filesystem messages can differ.
  *
  * Deliberate divergences from native, both strictly safer:
  * - Reads come from disk, never the index (the extension has no row reader
@@ -16,9 +14,9 @@
  *   an external editor write, which the freshness layer already reconciles.
  */
 
-import { readFile, realpath, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
-import { pathContained } from "../runtime/index-health.js";
+import { readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { pathContained, realpathUtf8 as realpath } from "../runtime/index-health.js";
 
 // Native caps (crates/ast-sgrep-codemode/src/io.rs + core limits).
 const MAX_READ_REFS = 32;
@@ -31,6 +29,11 @@ const U32_MAX = 4_294_967_295;
 
 type ReadSpec = { path: string; start: number; end: number };
 type EditSpec = { path: string; oldText: string; newText: string };
+const editTails = new Map<string, Promise<void>>();
+
+function assertUnicode(text: string): void {
+  if (Buffer.from(text, "utf8").toString("utf8") !== text) throw new Error("invalid Unicode: unpaired UTF-16 surrogate");
+}
 
 /** Mirror serde as_u64 (integers only, then wrapping `as u32`). */
 function u32(value: unknown): number | undefined {
@@ -53,7 +56,8 @@ function present(args: Record<string, unknown>, ...keys: string[]): unknown {
 /** Mirror str::lines: \n or \r\n separators, no phantom trailing line. */
 function rustLines(text: string): string[] {
   if (text === "") return [];
-  const lines = text.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  const lines = text.split("\n").map((line, index, all) =>
+    index < all.length - 1 && line.endsWith("\r") ? line.slice(0, -1) : line);
   if (text.endsWith("\n")) lines.pop();
   return lines;
 }
@@ -74,6 +78,7 @@ async function jailRoot(configuredCwd: string, args: Record<string, unknown>): P
   });
   const raw = args.root;
   if (typeof raw !== "string") return configured;
+  assertUnicode(raw);
   const candidate = isAbsolute(raw) ? raw : join(configured, raw);
   const resolved = await realpath(candidate).catch(() => {
     throw new Error(`cannot resolve requested root: ${candidate}`);
@@ -86,13 +91,14 @@ async function jailRoot(configuredCwd: string, args: Record<string, unknown>): P
 
 /** Mirror jail_rel_path: explicit '..' rejection, canonicalize, containment. */
 async function jailPath(root: string, raw: string): Promise<{ abs: string; display: string }> {
-  if (raw.split(/[\\/]/u).includes("..")) throw new Error("path must not contain '..'");
+  assertUnicode(raw);
+  if (raw.split(sep === "\\" ? /[\\/]/u : "/").includes("..")) throw new Error("path must not contain '..'");
   const candidate = isAbsolute(raw) ? raw : join(root, raw);
   const abs = await realpath(candidate).catch(() => {
     throw new Error(`cannot resolve path ${raw}`);
   });
   if (!pathContained(root, abs)) throw new Error(`path escapes session root: ${raw}`);
-  return { abs, display: relative(root, abs).replace(/\\/g, "/") };
+  return { abs, display: relative(root, abs).split(sep).join("/") };
 }
 
 function parseU32Strict(text: string): number | undefined {
@@ -124,9 +130,9 @@ function parseRefValue(value: unknown): ReadSpec {
   if (typeof obj.ref === "string") return parseRefString(obj.ref);
   const path = present(obj, "path", "file");
   if (typeof path !== "string") throw new Error("ref.path is required");
-  const start = u32(present(obj, "start", "line_start")) ?? 1;
+  const start = Math.max(1, u32(present(obj, "start", "line_start")) ?? 1);
   const end = u32(present(obj, "end", "line_end")) ?? start;
-  return { path, start: Math.max(1, start), end: Math.max(start, end) };
+  return { path, start, end: Math.max(start, end) };
 }
 
 function collectRefs(args: Record<string, unknown>): ReadSpec[] {
@@ -134,9 +140,9 @@ function collectRefs(args: Record<string, unknown>): ReadSpec[] {
   if (args.ref !== undefined) return [parseRefValue(args.ref)];
   const path = present(args, "path", "file");
   if (typeof path !== "string") throw new Error("path is required");
-  const start = u32(present(args, "start", "line_start")) ?? 1;
+  const start = Math.max(1, u32(present(args, "start", "line_start")) ?? 1);
   const end = u32(present(args, "end", "line_end")) ?? start;
-  return [{ path, start: Math.max(1, start), end: Math.max(start, end) }];
+  return [{ path, start, end: Math.max(start, end) }];
 }
 
 function sliceWindow(numbered: Array<[number, string]>, start: number, end: number, maxChars: number): { text: string; actualStart: number; actualEnd: number; truncated: boolean } {
@@ -159,23 +165,31 @@ function sliceWindow(numbered: Array<[number, string]>, start: number, end: numb
     if (first) {
       actualStart = no;
       first = false;
+    } else {
+      out += "\n";
     }
-    if (out !== "") out += "\n";
     out += line;
     actualEnd = no;
     chars += add;
   }
-  if (first) return { text: "", actualStart: start, actualEnd: start, truncated: false };
+  if (first) return { text: "", actualStart: start, actualEnd: start, truncated };
   return { text: out, actualStart, actualEnd, truncated };
 }
 
 async function readFileCapped(abs: string, display: string, signal?: AbortSignal): Promise<string> {
-  const text = await readFile(abs, "utf8").catch(() => {
+  const bytes = await readFile(abs, { signal }).catch(() => {
+    signal?.throwIfAborted();
     throw new Error(`cannot read ${display}`);
   });
-  if (Buffer.byteLength(text) > MAX_INDEX_FILE_BYTES) throw new Error(`${display} exceeds max ${MAX_INDEX_FILE_BYTES} bytes`);
+  if (bytes.length > MAX_INDEX_FILE_BYTES) throw new Error(`${display} exceeds max ${MAX_INDEX_FILE_BYTES} bytes`);
   signal?.throwIfAborted();
-  return text;
+  try {
+    // Match Rust's strict UTF-8 reads. Replacement decoding would corrupt bytes
+    // outside the requested edit; ignoreBOM retains a literal source BOM.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Error(`cannot read ${display}: invalid UTF-8`);
+  }
 }
 
 /** Mirror read_windows (disk-backed; see module note). */
@@ -222,6 +236,8 @@ function parseEditValue(value: unknown): EditSpec {
   const newText = present(obj, "newText", "new_string", "new");
   if (typeof newText !== "string") throw new Error("newText is required");
   if (oldText === "") throw new Error("oldText must not be empty");
+  assertUnicode(oldText);
+  assertUnicode(newText);
   return { path, oldText, newText };
 }
 
@@ -248,6 +264,20 @@ export async function editFilesFallback(
 ): Promise<{ ok: true; changed: number; edits: Array<{ path: string; changed: boolean; line: number; removed: string[]; added: string[]; truncated?: true }> }> {
   signal?.throwIfAborted();
   const root = await jailRoot(configuredCwd, args);
+  // Native mutations serialize per session. Fallbacks can be reached through
+  // different connectors, so their read/modify/write queue belongs here.
+  const operation = (editTails.get(root) ?? Promise.resolve()).then(() => applyEdits(root, args, signal));
+  const tail = operation.then(() => undefined, () => undefined);
+  editTails.set(root, tail);
+  try {
+    return await operation;
+  } finally {
+    if (editTails.get(root) === tail) editTails.delete(root);
+  }
+}
+
+async function applyEdits(root: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const edits = collectEdits(args);
   if (edits.length === 0) throw new Error("edit requires path+oldText+newText or edits[]");
   if (edits.length > MAX_EDITS) throw new Error(`edit exceeds max ${MAX_EDITS} replacements`);
@@ -291,5 +321,5 @@ export async function editFilesFallback(
       throw new Error(`cannot write ${entry.display}`);
     });
   }
-  return { ok: true, changed: applied.filter((row) => row.changed).length, edits: applied };
+  return { ok: true as const, changed: applied.filter((row) => row.changed).length, edits: applied };
 }

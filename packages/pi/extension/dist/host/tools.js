@@ -6,7 +6,7 @@ import { AstSgrepRuntime, FreshnessCoordinator, RuntimeError } from "../runtime/
 import { RESOLVED_ROOT } from "../runtime/types.js";
 import { ASGREP_PROMPT_GUIDELINES, ASGREP_PROMPT_GUIDELINES_HOST_FILES, ASGREP_PROMPT_SNIPPET, formatCodemodeResult, } from "../ui/present.js";
 import { EMPTY_CALL, renderAsgrepResult } from "../ui/card.js";
-import { bounded, errorDetails, failure, isFreshnessTimeout, extractInPath, report, success, } from "./results.js";
+import { bounded, errorDetails, failure, isFreshnessTimeout, report, success, withNotes, } from "./results.js";
 export const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
@@ -33,7 +33,7 @@ const editParameters = Type.Object({
         path: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
         oldText: Type.String({ minLength: 1 }),
         newText: Type.String(),
-    }), { maxItems: 64, description: "Multi-edit entries; top-level path is the default" })),
+    }), { maxItems: 16, description: "Multi-edit entries; top-level path is the default" })),
 }, { additionalProperties: false });
 const readParameters = Type.Object({
     path: Type.Optional(Type.String({ maxLength: 512 })),
@@ -352,8 +352,8 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         };
     }
     /**
-     * Freshness gate shared by the one-shot tools: ensureFresh with a bounded
-     * timeout fallback, or a scoped-path index when the query carries in:/fileFilter.
+     * Shared freshness gate. Query scopes (including directories and globs) filter
+     * retrieval; they are not file-only index --path mutation requests.
      *
      * Bounded means serve-stale, not fail: a caller that ran out of freshness
      * budget still queries the current index and is told the result may be stale.
@@ -361,23 +361,10 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
      * invalidating would kill the index work the caller just stopped waiting for
      * and leave the root permanently stale.
      */
-    const freshRoot = async (cwd, signal, scopedPath) => {
+    const freshRoot = async (cwd, signal) => {
         const options = signal ? { signal } : {};
         const anchor = await anchorRoot(cwd);
         const scope = anchor.scope;
-        // A subtree refresh still lands in the checkout's own index.
-        const target = scopedPath ? (scope ? `${scope}/${scopedPath}` : scopedPath) : undefined;
-        if (target) {
-            try {
-                await nativeCall("index_repo", { paths: [target] }, rootedAt(anchor.root), options);
-            }
-            catch (cause) {
-                if (!isFreshnessTimeout(cause, signal))
-                    throw cause;
-                return { root: anchor.root, ...(scope ? { scope } : {}), freshness: "stale" };
-            }
-            return { root: anchor.root, ...(scope ? { scope } : {}) };
-        }
         try {
             const resolved = await freshness.ensureFresh(warmRuntime, rootedAt(anchor.root), options);
             // The contract is a root string; a host/test double that returns nothing
@@ -541,18 +528,19 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         },
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             report(onUpdate, "codemode", "started");
+            const timeoutMs = typeof params.timeoutMs === "number"
+                ? params.timeoutMs
+                : runtime.config?.timeoutMs ?? 30_000;
+            let timeoutSignal;
             try {
-                const timeoutMs = typeof params.timeoutMs === "number"
-                    ? params.timeoutMs
-                    : runtime.config?.timeoutMs ?? 30_000;
                 const deadline = Date.now() + timeoutMs;
-                const timeoutSignal = AbortSignal.timeout(timeoutMs);
+                timeoutSignal = AbortSignal.timeout(timeoutMs);
                 const operationSignal = signal
                     ? AbortSignal.any([signal, timeoutSignal])
                     : timeoutSignal;
                 const options = { signal: operationSignal };
                 ensurePool();
-                const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, signal);
+                const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, operationSignal);
                 const { env, binary } = nativeLaunch();
                 // In-process NAPI first; CLI sticky only if addon missing.
                 const sticky = await pool.acquire(root);
@@ -585,14 +573,16 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                     backend: pool.backend(),
                 });
                 const activationMs = outcome.wallMs;
+                const notes = fresh ? ["index refresh is still running; this answer came from the current index and may be stale"] : [];
                 return {
-                    content: [{ type: "text", text: bounded(rendered) }],
+                    content: [{ type: "text", text: withNotes(rendered, notes) }],
                     details: {
                         ok: true,
                         command: "codemode",
                         result: outcome.result,
                         logs: outcome.logs,
                         rendered,
+                        notes,
                         stats: outcome.stats,
                         trace: bundle.trace(),
                         wallMs: outcome.wallMs,
@@ -603,6 +593,9 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 };
             }
             catch (cause) {
+                if (timeoutSignal?.aborted && !signal?.aborted) {
+                    return failure("codemode", new RuntimeError("TIMEOUT", `codemode timed out after ${timeoutMs}ms`));
+                }
                 return failure("codemode", cause, signal);
             }
         },
@@ -628,9 +621,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             report(onUpdate, "search", "started");
             try {
                 ensurePool();
-                const scopedPath = (typeof params.in === "string" ? params.in : undefined)
-                    ?? extractInPath(params.query);
-                const fresh = await freshRoot(ctx.cwd, signal, scopedPath);
+                const fresh = await freshRoot(ctx.cwd, signal);
                 // The checkout owns the index; the caller's scope rides under it.
                 const anchored = withAnchorScope(params, fresh.scope);
                 const [tool, args] = searchToolCall(anchored);
@@ -679,7 +670,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         name: "asgrep_edit",
         label: "asgrep edit",
         promptSnippet: "Exact-string edit",
-        description: "Edit by exact-string replace. edits[] applies many atomically.",
+        description: "Exact-string edits, validated together before writing.",
         parameters: editParameters,
         renderShell: "self",
         renderCall() {
@@ -800,6 +791,9 @@ function searchToolCall(params) {
     if (spec.tool === "search") {
         const prefixed = spec.prefix ? `${spec.prefix}: ${query}` : query;
         return ["search", { query: prefixed, limit, excerpt_lines, format: "capsule", ...(lang ? { lang } : {}) }];
+    }
+    if (/(?:^|\s)in:/u.test(query)) {
+        return ["search", { query: queryForMode(query, mode), limit, excerpt_lines, format: "capsule", ...(lang ? { lang } : {}) }];
     }
     return [spec.tool, { [spec.key]: params.query, limit, excerpt_lines, ...(lang ? { lang } : {}) }];
 }

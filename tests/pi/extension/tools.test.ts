@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAstSgrepTools } from "../../../packages/pi/extension/src/index.js";
 import { hostProvidesFileTools } from "../../../packages/pi/extension/src/host/tools.js";
 import { writesOffSession } from "../../../packages/pi/extension/src/host/tools.js";
-import { argvFor } from "../../../packages/pi/extension/src/codemode/index.js";
+import { argvFor, NativeSessionPool } from "../../../packages/pi/extension/src/codemode/index.js";
 import { errorDetails } from "../../../packages/pi/extension/src/host/results.js";
 import { RESOLVED_ROOT } from "../../../packages/pi/extension/src/runtime/types.js";
 import { RuntimeError, type MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
@@ -295,6 +295,63 @@ test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path"
   assert.equal((out.details.error as { code: string }).code, "BACKEND_UNAVAILABLE");
 });
 
+test("Code Mode deadline cancels freshness before executing the program", async () => {
+  const tools: Tool[] = [];
+  const pi = { registerTool(tool: Tool) { tools.push(tool); }, on() {} } as unknown as ExtensionAPI;
+  let programCalls = 0;
+  let freshnessCancelled = false;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run() { programCalls++; return { tool: "asgrep", ok: true, hits: [] }; },
+  };
+  const freshness = {
+    async ensureFresh(_runtime: unknown, _ctx: unknown, options: { signal?: AbortSignal }) {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          clearTimeout(watchdog);
+          freshnessCancelled = true;
+          reject(options.signal!.reason);
+        };
+        const watchdog = setTimeout(() => {
+          options.signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, 250);
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+      return "/project";
+    },
+    markAffectedPath() {},
+  };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const out = await invoke(tools.find(tool => tool.name === "asgrep")!, {
+    code: "async () => asgrep.search('must-not-execute')", timeoutMs: 20,
+  });
+  assert.equal(freshnessCancelled, true, "the Code Mode deadline must reach freshness work");
+  assert.equal(programCalls, 0);
+  assert.equal(out.result.details.ok, false);
+  assert.equal((out.result.details.error as { code: string }).code, "TIMEOUT");
+  const cancelled = new AbortController();
+  cancelled.abort();
+  const aborted = await invoke(tools.find(tool => tool.name === "asgrep")!, {
+    code: "async () => asgrep.search('must-not-execute')", timeoutMs: 20,
+  }, cancelled.signal);
+  assert.equal((aborted.result.details.error as { code: string }).code, "CANCELLED");
+  assert.equal(programCalls, 0);
+});
+
+test("Code Mode exposes stale-index qualifications in model-visible output", async () => {
+  const tools: Tool[] = [];
+  const pi = { registerTool(tool: Tool) { tools.push(tool); }, on() {} } as unknown as ExtensionAPI;
+  registerAstSgrepTools(pi, { async run() { return { tool: "asgrep", ok: true }; } }, {
+    async ensureFresh() { throw new RuntimeError("TIMEOUT", "refresh timed out after 5ms"); }, markAffectedPath() {},
+  });
+  const out = await invoke(tools.find(tool => tool.name === "asgrep")!, { code: "return 'x'.repeat(9000)" });
+  assert.equal(out.result.details.ok, true);
+  assert.match(out.result.content[0]!.text, /may be stale/);
+  assert.ok(out.result.content[0]!.text.length <= 8000);
+});
+
 test("asgrep_search freshness timeout still searches", async () => {
   const tools: Tool[] = [];
   const calls: Call[] = [];
@@ -320,7 +377,28 @@ test("asgrep_search freshness timeout still searches", async () => {
   assert.ok(calls.some((call) => call.args.includes("model training") || call.args.some((arg) => String(arg).includes("model"))));
 });
 
-test("asgrep_search in:path indexes that directory instead of a full refresh", async () => {
+test("one-shot symbol modes retain directory filters on the typed transport", async () => {
+  const original = NativeSessionPool.prototype.call;
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  NativeSessionPool.prototype.call = async (_root, tool, args = {}) => {
+    calls.push({ tool, args });
+    return { tool: "asgrep", ok: true, hits: [{ file: "src/a.ts" }] };
+  };
+  try {
+    const { byName } = fixture();
+    for (const mode of ["defs", "callers", "imports"]) {
+      const out = await invoke(byName("asgrep_search"), { query: "same_name", mode, in: "src" });
+      assert.equal(out.result.details.ok, true);
+      assert.equal(calls.at(-1)!.tool, "search");
+      assert.match(String(calls.at(-1)!.args.query), /in:src/);
+      assert.ok(String(calls.at(-1)!.args.query).includes(`${mode}:`));
+    }
+  } finally {
+    NativeSessionPool.prototype.call = original;
+  }
+});
+
+test("scoped searches use normal freshness without passing directories or globs to index --path", async () => {
   const tools: Tool[] = [];
   const calls: Call[] = [];
   const pi = {
@@ -340,18 +418,21 @@ test("asgrep_search in:path indexes that directory instead of a full refresh", a
       };
     },
   };
+  let refreshed = 0;
   const freshness = {
-    async ensureFresh() { throw new Error("ensureFresh must not run for in: queries"); },
+    async ensureFresh() { refreshed++; },
     markAffectedPath() {},
   };
   registerAstSgrepTools(pi, runtime as never, freshness as never);
   const search = tools.find((t) => t.name === "asgrep_search")!;
-  const out = await search.execute("c1", { query: "in:ARCHANA-3/src model training" }, new AbortController().signal, () => {}, { cwd: "/project" });
-  assert.equal(out.details.ok, true, JSON.stringify(out.details));
-  assert.ok(
-    calls.some((call) => call.args.includes("index") && call.args.includes("--path") && call.args.includes("ARCHANA-3/src")),
-    `expected targeted index of ARCHANA-3/src, got ${JSON.stringify(calls)}`,
-  );
+  for (const params of [{ query: "in:ARCHANA-3/src model training" }, { query: "model training", in: "**/*.ts" }]) {
+    const out = await search.execute("c1", params, new AbortController().signal, () => {}, { cwd: "/project" });
+    assert.equal(out.details.ok, true, JSON.stringify(out.details));
+  }
+  assert.equal(refreshed, 2, "scoped queries must use the shared freshness coordinator");
+  assert.ok(!calls.some(call => call.args.includes("--path")), JSON.stringify(calls));
+  assert.ok(calls.some(call => call.args.some(arg => arg.includes("in:ARCHANA-3/src"))));
+  assert.ok(calls.some(call => call.args.some(arg => arg.includes("in:**/*.ts"))));
 });
 
 test("closed sticky-session errors are SESSION_CLOSED not UNEXPECTED_ERROR", async () => {

@@ -3,9 +3,12 @@ import test from "node:test";
 import { realpathSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  CODEMODE_BINDING_VERSION,
   loadCodemodeNative,
   resetNativeCache,
   nativeAvailable,
@@ -21,6 +24,12 @@ function requireNative() {
   delete process.env.ASGREP_CODEMODE_BACKEND;
   resetNativeCache();
   const binding = loadCodemodeNative();
+  const override = process.env.ASGREP_CODEMODE_NAPI_PATH;
+  if (override) {
+    const expected = createRequire(import.meta.url)(resolve(override));
+    assert.equal(binding, expected, "the suite must test the explicitly requested addon, not a fallback");
+    assert.ok(binding, "the explicitly requested native addon must load, not silently skip the suite");
+  }
   if (!binding) {
     return null;
   }
@@ -38,6 +47,24 @@ async function indexedNative(
   return { dir, indexPath };
 }
 
+test("native discovery probes the workspace release directory", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const seen = [];
+    fs.existsSync = path => { seen.push(String(path)); return false; };
+    syncBuiltinESMExports();
+    delete process.env.ASGREP_CODEMODE_BACKEND;
+    delete process.env.ASGREP_CODEMODE_NAPI_PATH;
+    delete process.env.CARGO_TARGET_DIR;
+    const { loadCodemodeNative } = await import(process.argv[1]);
+    loadCodemodeNative();
+    console.log(JSON.stringify(seen));
+  `, new URL("../../../packages/pi/extension/dist/codemode/native.js", import.meta.url).href], { encoding: "utf8" });
+  const searched = JSON.parse(output) as string[];
+  assert.ok(searched.includes(resolve(here, "../../..", "target/release/ast-sgrep-codemode.node")), output);
+});
+
 test("NAPI addon loads and reports version", (t) => {
   const binding = requireNative();
   if (!binding) {
@@ -45,7 +72,7 @@ test("NAPI addon loads and reports version", (t) => {
     return;
   }
   assert.equal(binding.isNative(), true);
-  assert.equal(binding.bindingVersion(), "2.1.0");
+  assert.equal(binding.bindingVersion(), CODEMODE_BINDING_VERSION);
   assert.equal(binding.asyncApiVersion(), 1);
 });
 
@@ -94,6 +121,19 @@ test("native indexing returns a Promise and does not block the event loop", asyn
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("pre-aborted native call and batch reject before executing any tools", async (t) => {
+  const binding = requireNative();
+  if (!binding) { t.skip("native addon not built"); return; }
+  const session = new binding.Session({ root: sample, useEmbed: false });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(session.call("catalog_search", { query: "search" }, controller.signal), /cancel|abort/i);
+  await assert.rejects(session.batch([{ id: "blocked", tool: "catalog_search", args: { query: "search" } }], controller.signal), /cancel|abort/i);
+  assert.equal(session.callCount, 0, "pre-aborted work must not reach the catalog");
+  await session.call("catalog_search", { query: "search" });
+  assert.equal(session.callCount, 1, "the same session must recover for later callers");
 });
 
 test("aborting an in-flight native call does not leave the session busy", async (t) => {

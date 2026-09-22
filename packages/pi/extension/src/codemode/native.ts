@@ -106,7 +106,7 @@ function candidatePaths(): string[] {
     join(here, "..", "..", "native"),
     join(here, "..", "native"),
     // Workspace release output
-    join(here, "..", "..", "..", "..", "target", "release"),
+    join(here, "..", "..", "..", "..", "..", "target", "release"),
   ];
   const cargoTarget = process.env.CARGO_TARGET_DIR;
   if (cargoTarget) dirs.push(join(cargoTarget, "release"));

@@ -26,7 +26,7 @@ pub(crate) fn run_outline(cli: &Cli, root: &Path, path: &PathBuf) -> anyhow::Res
     } else {
         path
     };
-    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    let rel_str = ast_sgrep_core::index::indexed_rel_path(rel)?;
     let symbols = crate::index_cmd::open_readonly_store(&root, cli)?
         .symbols_in_file(&rel_str)
         .context("outline failed")?;

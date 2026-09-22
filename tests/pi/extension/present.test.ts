@@ -3,11 +3,13 @@ import test from "node:test";
 import {
   displayWidth,
   formatCodemodeResult,
+  formatReadResult,
   formatSearchResult,
   formatStatusResult,
   sanitizeContent,
 } from "../../../packages/pi/extension/src/ui/present.js";
 import { renderAsgrepResult } from "../../../packages/pi/extension/src/ui/card.js";
+import { success } from "../../../packages/pi/extension/src/host/results.js";
 
 /** Painted theme: the card must measure around SGR codes, not through them, and
  * a box background must not change any line's width. */
@@ -30,6 +32,35 @@ test("search result text is the payload: one header line plus hit rows", () => {
   assert.doesNotMatch(text, /asgrep|napi|ms$/);
 });
 
+test("read output discloses line and character truncation without overstating its range", () => {
+  const text = formatReadResult({ windows: [{ path: "a.ts", start: 5, end: 94,
+    text: Array.from({ length: 90 }, (_, i) => `line ${i + 5}`).join("\n") }] });
+  assert.match(text, /^a\.ts#L5-L84\n/);
+  assert.match(text, /line 84\n.*truncated/);
+  assert.doesNotMatch(text, /line 85/);
+  const bounded = formatReadResult({ windows: [{ path: "a.ts", start: 5, end: 5, text: "", truncated: true }] });
+  assert.match(bounded, /truncated/);
+  assert.doesNotMatch(formatReadResult({ windows: [{ path: "a.ts", start: 1, end: 1, text: "whole" }] }), /truncated/);
+});
+
+test("read character limits preserve complete lines, accurate refs, and omitted-window notices", () => {
+  const lines = Array.from({ length: 90 }, (_, i) => `line-${i + 5}:` + "x".repeat(190));
+  const windows = [
+    { path: "a.ts", start: 5, end: 94, text: lines.join("\n") },
+    { path: "b.ts", start: 1, end: 1, text: "not displayed" },
+  ];
+  const result = success("read", { tool: "asgrep", ok: true, windows });
+  const text = result.content[0]!.text;
+  assert.ok(text.length <= 8_000);
+  assert.match(text, /truncated/);
+  assert.match(text, /1 more windows/);
+  const end = Number(/^a\.ts#L5-L(\d+)/.exec(text)?.[1]);
+  const displayed = text.split("\n").filter(line => line.startsWith("line-"));
+  assert.ok(displayed.length > 0 && displayed.length < 80);
+  assert.equal(end, 5 + displayed.length - 1, "the citation must stop at the last complete displayed line");
+  assert.deepEqual(displayed, lines.slice(0, displayed.length));
+});
+
 test("empty search results include a recovery hint", () => {
   const withNext = formatSearchResult(
     { hits: [], suggested_next: ["callers:Foo", "defs:Foo"] },
@@ -46,13 +77,13 @@ test("undefined Code Mode result tells the model to return", () => {
   assert.match(text, /no return statement/);
 });
 
-test("codemode result uses hit rows when the program returned hits", () => {
+test("codemode result labels hits and preserves their full payload", () => {
   const text = formatCodemodeResult(
     { hits: [{ path: "src/a.ts", line: 3, symbol: "ensureFresh" }] },
     { wallMs: 2, backend: "napi" },
   );
   assert.equal(text.split("\n")[0], "codemode: 1 hit");
-  assert.match(text, /src\/a\.ts:3 ensureFresh/);
+  assert.ok(text.includes(JSON.stringify([{ path: "src/a.ts", line: 3, symbol: "ensureFresh" }], null, 2)));
 });
 
 test("codemode result lists shaped keys instead of dumping JSON", () => {
@@ -62,6 +93,79 @@ test("codemode result lists shaped keys instead of dumping JSON", () => {
   assert.match(text, /n: 2/);
   assert.doesNotMatch(text, /\{"symbol"/);
   assert.doesNotMatch(text, /in-process|napi|3ms/);
+});
+
+test("Code Mode exposes returned arrays, windows, and nested values to the model", () => {
+  const source = "export function visible_result() { return 'window-body'; }";
+  const nested = "nested-detail-" + "x".repeat(180) + "-tail";
+  for (const value of [
+    [{ path: "src/a.ts", text: source }],
+    { windows: [{ path: "src/a.ts", start: 1, end: 1, text: source }] },
+    { chosen: { source, nested } },
+    { hits: [{ file: "src/a.ts", symbol: "visible_result" }], source, nested },
+  ]) {
+    const text = formatCodemodeResult(value);
+    assert.ok(text.includes(source), text);
+    if ("chosen" in value || "nested" in value) assert.ok(text.includes(nested), text);
+  }
+  assert.match(formatCodemodeResult(["first", "second"]), /first[\s\S]*second/);
+});
+
+test("Code Mode preserves arbitrary hits arrays without treating them as search envelopes", () => {
+  for (const hits of [[null], ["user-result"], [42], [{ chosen: "user-result" }]]) {
+    const text = formatCodemodeResult({ hits });
+    assert.ok(text.includes(JSON.stringify(hits, null, 2)), text);
+    for (const expanded of [false, true]) {
+      const card = renderAsgrepResult({ content: [{ type: "text", text }], details: { ok: true, command: "codemode", result: { hits } } }, { expanded }, THEME);
+      assert.ok(card.render(80).length > 0, "custom hits must not crash the Pi card");
+    }
+  }
+});
+
+test("Code Mode preserves complete chosen hit objects rather than guessing redundant fields", () => {
+  const hit = { file: "a.ts", path: "chosen-path", start_line: 1, line: 2, symbol: null, kind: "chosen-kind" };
+  const text = formatCodemodeResult({ hits: [hit] });
+  assert.ok(text.includes(JSON.stringify([hit], null, 2)), text);
+});
+
+test("answer qualifications survive output budgets without corrupting read citations", () => {
+  const lines = Array.from({ length: 80 }, (_, i) => `${i + 1}:` + "x".repeat(200));
+  const note = "index refresh is still running; this answer may be stale";
+  const read = success("read", { tool: "asgrep", ok: true, windows: [{ path: "a.ts", start: 1, end: 80, text: lines.join("\n") }] }, { notes: [note] });
+  const text = read.content[0]!.text;
+  assert.ok(text.includes(note));
+  assert.ok(text.length <= 8000);
+  const shown = text.split("\n").filter(line => /^\d+:/.test(line));
+  assert.deepEqual(shown, lines.slice(0, shown.length));
+  assert.ok(text.includes(`a.ts#L1-L${shown.length}`));
+  const search = success("search", { tool: "asgrep", ok: true, hits: Array.from({ length: 24 }, () => ({ file: "x".repeat(500) })) }, { notes: [note] });
+  assert.ok(search.content[0]!.text.includes(note));
+});
+
+test("Code Mode retains custom hit fields and does not interpret arbitrary siblings as a chain", () => {
+  const text = formatCodemodeResult({ hits: [{ file: "a.ts", excerpt: "full-body", chosen: "DO-NOT-DROP", score: 42 }] });
+  assert.match(text, /full-body/);
+  assert.match(text, /DO-NOT-DROP/);
+  assert.match(text, /42/);
+  const arbitrary = formatCodemodeResult({ hits: [], nodes: [null, "custom-node"] });
+  assert.match(arbitrary, /null/);
+  assert.match(arbitrary, /custom-node/);
+});
+
+test("Code Mode preserves deliberate fields even when their names resemble transport metadata", () => {
+  const text = formatCodemodeResult({ hits: [{ file: "a.ts" }], refs: ["a.ts#L1-L4"], ok: "chosen-status", backend: "chosen-backend" });
+  assert.match(text, /a\.ts#L1-L4/);
+  assert.match(text, /chosen-status/);
+  assert.match(text, /chosen-backend/);
+  const envelope = formatCodemodeResult({ tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [{ file: "a.ts" }], backend: "napi" });
+  assert.doesNotMatch(envelope, /schema_version|backend|napi|ok:/);
+});
+
+test("Code Mode bounds returned data with an explicit truncation notice", () => {
+  const text = formatCodemodeResult({ values: ["start-" + "x".repeat(20_000)] });
+  assert.match(text, /start-/);
+  assert.match(text, /truncated/);
+  assert.ok(text.length <= 8_000);
 });
 
 test("status result is one lean line", () => {

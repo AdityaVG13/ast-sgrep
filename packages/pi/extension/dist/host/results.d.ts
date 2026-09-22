@@ -67,7 +67,8 @@ export type Update = (result: {
     }>;
     details: Record<string, unknown>;
 }) => void;
-export declare function bounded(text: string): string;
+export declare function bounded(text: string, maxChars?: number): string;
+export declare function withNotes(text: string, notes?: string[]): string;
 export declare function success(command: string, response: MachineEnvelope, extra?: {
     query?: string;
     mode?: string;

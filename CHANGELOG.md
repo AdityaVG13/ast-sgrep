@@ -7,6 +7,28 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
+## [Unreleased]
+
+### Fixed
+
+- Preserve explicitly returned Code Mode arrays, read windows, and nested data in model-visible output, with an 8,000-character bound and an explicit truncation notice. Arbitrary `hits` arrays and caller-owned `nodes` no longer crash rendering; custom hit fields, excerpts, and deliberate fields such as `refs` and `ok` remain visible.
+- Keep directory/glob search scopes as retrieval filters instead of passing them to the file-only incremental indexing API.
+- Reject pre-aborted native calls and batches before executing any tools; preserve session reuse afterward. This fix requires rebuilding and releasing the native packages, not only the Pi extension.
+- Make explicitly requested native test addons fail on load errors or fallback substitution, and derive their expected version from the binding contract.
+- Apply the Code Mode deadline to freshness work, not only guest execution, and distinguish deadline expiry from caller cancellation.
+- Preserve leading blank lines and truncation flags in native and filesystem read windows, plus lone carriage returns in filesystem reads; disclose presentation truncation and label only the displayed line range, including at the final character cap.
+- Preserve literal POSIX backslashes in read/edit paths and indexed lookups; normalize zero read ranges consistently across native and filesystem paths.
+- Reject invalid UTF-8 in filesystem reads/edits rather than silently rewriting bytes, while preserving valid source BOMs.
+- Retain environment-free Rust call/batch construction while checking pre-aborted native signals.
+- Correct the documented guest Worker and opt-in CLI supervisor execution models.
+- Preserve path identity through ignore matching, pattern candidates/results, outline, LSP URIs, SCIP overlays, and code/test classification; reject invalid UTF-8 file URIs and canonical filesystem paths rather than opening a replacement-character alias.
+- Keep indexed EOF cursor rows out of source windows, and preserve final carriage returns during indexing. Reindex existing affected files to restore previously discarded carriage returns.
+- Repair the exported typed reader's BOM, Unicode-line-limit, empty-file, truncation-ref, and resume-offset handling.
+- Serialize filesystem fallback edits across connectors, reject unpaired-surrogate edits/paths, and never replay ambiguous native mutations after a transport failure. Edit validation is grouped; filesystem writes are not a multi-file transaction.
+- Keep checkout-relative refs stable in anchored sessions, scope symbol lookups on every transport, propagate connector cancellation to doctor, and preserve stale-index qualifications within output budgets.
+- Preserve complete explicitly returned hit objects instead of inferring redundant fields; keep lossy summaries on the TUI/one-shot search surfaces only.
+- Probe the actual workspace release directory for development addons, and align the Pi edit schema with the native 16-replacement limit.
+
 ## [pi-ast-sgrep 2.5.3] - 2026-09-22
 
 Extension-only patch; the CLI, launcher, and native packages remain at 2.5.2.

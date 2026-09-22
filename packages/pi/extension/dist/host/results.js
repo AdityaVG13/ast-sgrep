@@ -4,12 +4,18 @@
  */
 import { isClosedWorkerError } from "../codemode/index.js";
 import { RuntimeError } from "../runtime/types.js";
-import { formatEditResult, formatIndexResult, formatReadResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
+import { boundedText, formatEditResult, formatIndexResult, formatReadResult, formatSearchResult, formatStatusResult } from "../ui/present.js";
 export const MAX_CONTENT_CHARS = 8_000;
-export function bounded(text) {
-    return text.length <= MAX_CONTENT_CHARS ? text : `${text.slice(0, MAX_CONTENT_CHARS - 1)}…`;
+export function bounded(text, maxChars = MAX_CONTENT_CHARS) {
+    return boundedText(text, maxChars);
+}
+const noteText = (notes = []) => bounded(notes.map(note => `  ! ${note}`).join("\n"), 2000);
+export function withNotes(text, notes = []) {
+    const prefix = noteText(notes);
+    return prefix ? `${prefix}\n${bounded(text, MAX_CONTENT_CHARS - prefix.length - 1)}` : bounded(text);
 }
 export function success(command, response, extra = {}) {
+    const notes = noteText(extra.notes);
     const text = command === "status"
         ? formatStatusResult(response)
         : command === "index" || command === "reindex"
@@ -17,13 +23,11 @@ export function success(command, response, extra = {}) {
             : command === "edit"
                 ? formatEditResult(response)
                 : command === "read"
-                    ? formatReadResult(response)
+                    ? formatReadResult(response, undefined, MAX_CONTENT_CHARS - (notes ? notes.length + 1 : 0))
                     : formatSearchResult(response, { command, ...extra });
     // Notes qualify the answer the agent is about to trust (stale index, empty
     // index): they stay in the model-visible text, not only in the details bag.
-    const body = (extra.notes ?? []).length > 0
-        ? `${text}\n${(extra.notes ?? []).map((note) => `  ! ${note}`).join("\n")}`
-        : text;
+    const body = withNotes(text, extra.notes);
     return {
         content: [{ type: "text", text: bounded(body) }],
         // The tool execute owns its machine command: normalize the envelope's

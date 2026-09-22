@@ -6,4 +6,5 @@
 #
 # Pi loads the resulting `.node` and calls `Session` / `batch` with zero CLI spawn.
 
-See `src/lib.rs` and `docs/codemode.md`.
+See [CONTRACT.md](CONTRACT.md), `src/lib.rs`, and
+[docs/codemode.md](../../docs/codemode.md).

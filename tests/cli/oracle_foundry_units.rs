@@ -13,7 +13,7 @@ use ast_sgrep_cli::supervisor::{
 use ast_sgrep_lsp::support::{document_symbol_kind, try_apply_text_edit};
 use ast_sgrep_lsp::symbols::line_at_index;
 use ast_sgrep_lsp::text_edit::{apply_text_edit, extract_identifier_at, utf16_char_to_byte};
-use ast_sgrep_lsp::uri::{file_uri_to_path, path_to_file_uri};
+use ast_sgrep_lsp::uri::{file_uri_to_path, path_to_file_uri, uri_to_rel_path};
 use ast_sgrep_testkit::{edit_full_replace, edit_ranged, edit_ranged_len};
 
 /// INTENT: cpu-limit bounds contract — (min,max,default) are (1,80,80),
@@ -254,6 +254,107 @@ fn file_uri_decode_matches_hand_paths() {
     assert!(uri.starts_with("file://"), "uri={uri}");
     let back = file_uri_to_path(&uri).expect("decode");
     assert_eq!(back, file.canonicalize().expect("canonical"));
+}
+
+#[cfg(unix)]
+#[test]
+fn path_identity_survives_lsp_and_ignore_boundaries() {
+    use ast_sgrep_core::gitignore::IgnoreMatcher;
+    use std::path::Path;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "literal/\n").unwrap();
+    let file = dir.path().join(r"literal\name.rs");
+    std::fs::write(&file, "fn intended() {}\n").unwrap();
+    let uri = path_to_file_uri(&file);
+    assert_eq!(
+        file_uri_to_path(&uri).unwrap(),
+        file.canonicalize().unwrap()
+    );
+    assert_eq!(
+        uri_to_rel_path(&uri, dir.path()).unwrap(),
+        r"literal\name.rs"
+    );
+    let ignores = IgnoreMatcher::new(dir.path());
+    assert!(!ignores.is_ignored(Path::new(r"literal\name.rs")));
+    assert!(!ignores.is_dir_ignored(Path::new(r"literal\sub")));
+    assert!(ignores.is_ignored(Path::new("literal/name.rs")));
+}
+
+#[test]
+fn file_uris_reject_invalid_utf8_instead_of_aliasing_replacement_characters() {
+    assert!(file_uri_to_path("file:///tmp/%FF.rs").is_err());
+    assert!(file_uri_to_path("file:///tmp/%ED%A0%80.rs").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn scip_overlay_keeps_distinct_indexed_paths_distinct() {
+    let session = ast_sgrep_testkit::isolated_index_session();
+    session.write(r"literal\name.rs", "fn backslash_symbol() {}\n");
+    session.write("literal/name.rs", "fn slash_symbol() {}\n");
+    session.index_all(ast_sgrep_core::IndexOptions {
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let index = serde_json::from_value(serde_json::json!({"documents": [
+        {"relative_path": "literal\\name.rs", "occurrences": [{"symbol": "backslash_symbol", "symbol_roles": 1, "range": [0, 0, 5]}]},
+        {"relative_path": "literal/name.rs", "occurrences": [{"symbol": "slash_symbol", "symbol_roles": 1, "range": [0, 0, 5]}]}
+    ]})).unwrap();
+    let stats = session.open_store().apply_scip(&index).unwrap();
+    assert_eq!(
+        stats.defs_upgraded, 2,
+        "a normalized file map must not merge different DB keys"
+    );
+    assert_eq!(stats.skipped, 0);
+}
+
+#[test]
+fn indexed_lines_preserve_final_carriage_returns() {
+    assert_eq!(
+        ast_sgrep_core::index::split_content_lines("first\r\nlast\r").lines,
+        vec![(1, "first".into()), (2, "last\r".into())]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_patterns_preserve_backslash_paths_with_and_without_index_candidates() {
+    use ast_sgrep_core::{IndexOptions, SearchOptions};
+    let session = ast_sgrep_testkit::isolated_index_session();
+    session.write(r"literal\name.rs", "fn run() { needle(1); }\n");
+    session.write("literal/name.rs", "fn wrong_file() {}\n");
+    let store = session.open_store();
+    let hits = ast_sgrep_core::pattern::search_pattern(
+        "needle($$$ARGS)",
+        &store,
+        &session.corpus_root,
+        Some("rust"),
+        20,
+    )
+    .unwrap();
+    assert!(!hits.is_empty());
+    assert!(
+        hits.iter().all(|hit| hit.file == r"literal\name.rs"),
+        "{hits:?}"
+    );
+    session.index_all(IndexOptions {
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let searcher = session.searcher(SearchOptions {
+        use_embed: false,
+        ..session.search_options()
+    });
+    let response = searcher.search("pattern:needle($$$ARGS)").unwrap();
+    assert!(!response.hits.is_empty());
+    assert!(
+        response
+            .hits
+            .iter()
+            .all(|hit| hit.file == r"literal\name.rs"),
+        "{:?}",
+        response.hits
+    );
 }
 
 /// INTENT: text-edit contracts — full/ranged replaces apply, rangeLength

@@ -63,7 +63,9 @@ impl IgnoreMatcher {
         self.chains.borrow_mut().clear();
     }
     pub fn is_ignored(&self, rel: &Path) -> bool {
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        let rel_str = rel
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
         let rules = self.chain_for(&parent_prefix(rel));
         if parent_dir_excluded(&rel_str, &rules) {
             return true;
@@ -78,7 +80,9 @@ impl IgnoreMatcher {
     }
     pub fn is_dir_ignored(&self, rel_dir: &Path) -> bool {
         dir_ignored(
-            &rel_dir.to_string_lossy().replace('\\', "/"),
+            &rel_dir
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
             &self.chain_for(&parent_prefix(rel_dir)),
         )
     }

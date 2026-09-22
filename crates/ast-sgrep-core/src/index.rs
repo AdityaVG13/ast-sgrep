@@ -179,14 +179,15 @@ pub fn split_content_lines(content: &str) -> SplitLines {
             "lf"
         },
         lines: content
-            .split('\n')
-            .enumerate()
-            .map(|(i, line)| {
-                (
-                    (i + 1) as u32,
-                    line.strip_suffix('\r').unwrap_or(line).into(),
-                )
+            .split_inclusive('\n')
+            .map(|line| {
+                line.strip_suffix('\n')
+                    .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
             })
+            // The index retains an EOF cursor row; only CR before LF is framing.
+            .chain(content.ends_with('\n').then_some(""))
+            .enumerate()
+            .map(|(i, line)| ((i + 1) as u32, line.into()))
             .collect(),
     }
 }

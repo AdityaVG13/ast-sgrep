@@ -30,6 +30,8 @@ fn outline_session() -> OutlineSession {
     )
     .expect("write a.rs");
     fs::write(root.join("c.txt"), "plain text, no rust here\n").expect("write c.txt");
+    #[cfg(unix)]
+    fs::write(root.join(r"src\a.rs"), "fn literal_backslash() {}\n").expect("write distinct path");
     let index_path = temp.path().join("index.db");
     let index_out = Command::new(asgrep_bin())
         .args([
@@ -92,6 +94,17 @@ fn outline_lists_indexed_symbols_json() {
     assert_eq!(symbols[0]["kind"], "function");
     assert_eq!(symbols[0]["line_start"], 1);
     assert_eq!(symbols[0]["line_end"], 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn outline_preserves_literal_backslash_filename_identity() {
+    let session = outline_session();
+    let (code, stdout, stderr) = run_outline(&session, &[r"src\a.rs", "--json"]);
+    assert_eq!(code, 0, "{stderr}");
+    let value: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(value["file"], r"src\a.rs");
+    assert_eq!(value["symbols"][0]["name"], "literal_backslash");
 }
 
 #[test]

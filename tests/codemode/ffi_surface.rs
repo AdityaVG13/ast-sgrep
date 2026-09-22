@@ -33,6 +33,129 @@ use std::path::Path;
 mod shared;
 use shared::{empty_root, js_call, materialize, session_on};
 
+/// Read-window refs must describe the exact returned line layout, and an
+/// omitted over-budget first line must not masquerade as an empty file.
+#[test]
+fn read_windows_preserve_blank_lines_and_budget_truncation() {
+    let temp = empty_root();
+    std::fs::write(temp.path().join("blank.ts"), "\n\nconst visible = 1;\n\n").unwrap();
+    let session = session_on(temp.path(), "ffi_read.db");
+    materialize(&session);
+    let read = |start, end, max_chars| {
+        session
+            .call_now(
+                "read".into(),
+                Some(json!({
+                    "path": "blank.ts", "start": start, "end": end, "max_chars": max_chars
+                })),
+            )
+            .unwrap()
+    };
+    let window = read(1, 4, 100);
+    assert_eq!(window["windows"][0]["text"], "\n\nconst visible = 1;\n");
+    assert_eq!(window["windows"][0]["ref"], "blank.ts#L1-L4");
+    assert_eq!(window["windows"][0]["truncated"], false);
+    assert_eq!(read(3, 3, 1)["windows"][0]["truncated"], true);
+    assert_eq!(read(20, 21, 100)["windows"][0]["truncated"], false);
+}
+
+/// Index rows retain an EOF cursor, which is not an extra source line in read windows.
+#[test]
+fn indexed_and_disk_reads_agree_at_eof() {
+    let temp = empty_root();
+    let fixtures = [
+        ("empty.ts", "", ""),
+        ("blank.ts", "\n", ""),
+        ("line.ts", "one\n", "one"),
+        ("cr.ts", "\u{feff}first\r\nlast\r", "\u{feff}first\nlast\r"),
+    ];
+    for (path, source, _) in fixtures {
+        std::fs::write(temp.path().join(path), source).unwrap();
+    }
+    let (session, mut core) = shared::pair(temp.path(), "ffi_eof.db");
+    materialize(&session);
+    let mut before = Vec::new();
+    for (path, _, expected) in fixtures {
+        let read = session
+            .call_now(
+                "read".into(),
+                Some(json!({"path": path, "start": 1, "end": 20})),
+            )
+            .unwrap();
+        assert_eq!(read["windows"][0]["text"], expected);
+        before.push(read);
+    }
+    core.call("index_repo", json!({})).unwrap();
+    for ((path, _, _), expected) in fixtures.into_iter().zip(before) {
+        let read = session
+            .call_now(
+                "read".into(),
+                Some(json!({"path": path, "start": 1, "end": 20})),
+            )
+            .unwrap();
+        assert_eq!(
+            read, expected,
+            "indexed {path} must not invent a trailing source line"
+        );
+    }
+}
+
+// APFS rejects the fixture's filename bytes; Linux exercises this boundary.
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_symlink_targets_cannot_alias_indexed_utf8_paths() {
+    use std::os::unix::ffi::OsStringExt;
+    let temp = empty_root();
+    let invalid = std::ffi::OsString::from_vec(b"invalid-\xff.ts".to_vec());
+    std::fs::write(temp.path().join(&invalid), "intended").unwrap();
+    std::fs::write(temp.path().join("invalid-�.ts"), "wrong file").unwrap();
+    std::os::unix::fs::symlink(&invalid, temp.path().join("alias.ts")).unwrap();
+    let session = session_on(temp.path(), "ffi_non_utf8.db");
+    materialize(&session);
+    assert!(session
+        .call_now("read".into(), Some(json!({"path": "alias.ts"})))
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("invalid-�.ts")).unwrap(),
+        "wrong file"
+    );
+}
+
+/// On Unix a backslash is part of a filename, not a separator. Indexed reads
+/// must not alias that filename to a different file under a real directory.
+#[cfg(unix)]
+#[test]
+fn read_refs_preserve_literal_backslashes() {
+    let temp = empty_root();
+    std::fs::create_dir(temp.path().join("literal")).unwrap();
+    std::fs::write(
+        temp.path().join("literal/name.ts"),
+        "export const wrong_file = 1;\n",
+    )
+    .unwrap();
+    for path in [r"literal\name.ts", r"literal\..\name.ts"] {
+        std::fs::write(temp.path().join(path), "export const intended_file = 1;\n").unwrap();
+    }
+    let (session, mut core) = shared::pair(temp.path(), "ffi_paths.db");
+    core.call("index_repo", json!({})).unwrap();
+    for path in [r"literal\name.ts", r"literal\..\name.ts"] {
+        let response = session
+            .call_now(
+                "read".into(),
+                Some(json!({"path": path, "start": 1, "end": 1})),
+            )
+            .unwrap();
+        let window = &response["windows"][0];
+        assert_eq!(window["text"], "export const intended_file = 1;");
+        assert_eq!(window["path"], path);
+        assert_eq!(window["ref"], format!("{path}#L1-L1"));
+        let again = session
+            .call_now("read".into(), Some(json!({"ref": window["ref"]})))
+            .unwrap();
+        assert_eq!(again["windows"], response["windows"]);
+    }
+}
+
 /// INTENT: pin the addon identity markers Pi verifies against the extension
 /// contract. KILLS: constant-change (`async_api_version`), version drift.
 #[test]

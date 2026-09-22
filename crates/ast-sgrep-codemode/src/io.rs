@@ -91,8 +91,9 @@ impl CodeModeSession {
             return Err(anyhow!("edit exceeds max {MAX_EDITS} replacements"));
         }
         // Phase 1: resolve, read, and compute every rewrite before any write.
-        // A validation failure anywhere aborts the batch with zero writes —
-        // callers must never observe ok:false on a partially applied edits[].
+        // A validation failure anywhere aborts the batch with zero writes.
+        // Write/reindex failures can still leave changes; this is not a
+        // multi-file filesystem transaction.
         // Edits to one file compose on the evolving buffer (each edit sees the
         // previous edit's output); the file is written once in phase 2.
         struct PendingWrite {
@@ -388,6 +389,9 @@ fn jail_rel_path(root: &Path, raw: &str) -> anyhow::Result<PathBuf> {
     let canon = candidate
         .canonicalize()
         .with_context(|| format!("cannot resolve path {raw}"))?;
+    if canon.to_str().is_none() {
+        return Err(anyhow!("canonical path is not valid UTF-8: {raw}"));
+    }
     if !canon.starts_with(root) {
         return Err(anyhow!("path escapes session root: {raw}"));
     }
@@ -398,7 +402,8 @@ fn jail_rel_path(root: &Path, raw: &str) -> anyhow::Result<PathBuf> {
 }
 
 fn rel_display(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    path.to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 fn read_one_window(
@@ -417,7 +422,14 @@ fn read_one_window(
     let (text, actual_start, actual_end, truncated) = if indexed.is_empty() {
         read_disk_window(root, &rel, start, end, max_chars)?
     } else {
-        slice_indexed(&indexed, start, end, max_chars)
+        // The index stores an empty EOF cursor row after a final LF (and for
+        // empty files). Source windows follow str::lines, like disk reads.
+        let source_lines = if indexed.last().is_some_and(|(_, line)| line.is_empty()) {
+            &indexed[..indexed.len() - 1]
+        } else {
+            &indexed
+        };
+        slice_indexed(source_lines, start, end, max_chars)
     };
     Ok(json!({
         "path": rel_s,
@@ -466,8 +478,7 @@ fn slice_indexed(
         if first {
             actual_start = *no;
             first = false;
-        }
-        if !out.is_empty() {
+        } else {
             out.push('\n');
         }
         out.push_str(line);
@@ -475,7 +486,7 @@ fn slice_indexed(
         chars += add;
     }
     if first {
-        (String::new(), start, start, false)
+        (String::new(), start, start, truncated)
     } else {
         (out, actual_start, actual_end, truncated)
     }

@@ -9,7 +9,7 @@
  */
 
 import type { MachineEnvelope } from "../runtime/runtime.js";
-import { asEnvelope, type BatchResult, type StickyWorker } from "./dispatch.js";
+import { asEnvelope, MUTATING_TOOLS, type BatchResult, type StickyWorker } from "./dispatch.js";
 import { loadCodemodeNative, type NativeSession } from "./native.js";
 import { defined } from "./types.js";
 import { startStickyWorker, type StickyWorkerOptions } from "./worker.js";
@@ -236,7 +236,7 @@ export class NativeSessionPool {
       }
       return await worker.call(tool, args, options);
     } catch (cause) {
-      if (options?.signal?.aborted || !isClosedWorkerError(cause)) throw cause;
+      if (options?.signal?.aborted || MUTATING_TOOLS.has(tool) || !isClosedWorkerError(cause)) throw cause;
       await this.invalidate(root);
       const retry = await this.acquire(root);
       if (!retry) {

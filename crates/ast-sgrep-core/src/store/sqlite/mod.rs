@@ -766,7 +766,7 @@ impl IndexStore {
             })?;
             for row in rows {
                 let (id, path) = row?;
-                files.insert(crate::scip::normalize_scip_path(&path), id);
+                files.insert(path, id);
             }
         }
         let mut symbols = Vec::new();
@@ -807,7 +807,11 @@ impl IndexStore {
             "INSERT OR IGNORE INTO scip_facts(file_id, line_no, name, is_def) VALUES(?1, ?2, ?3, ?4)",
         )?;
         for doc in &index.documents {
-            let Some(&file_id) = files.get(&crate::scip::normalize_scip_path(&doc.relative_path))
+            // Indexed paths already have host-correct identity. Prefer an
+            // exact document key before accepting alternate wire separators.
+            let Some(&file_id) = files
+                .get(doc.relative_path.trim_start_matches("./"))
+                .or_else(|| files.get(&crate::scip::normalize_scip_path(&doc.relative_path)))
             else {
                 stats.skipped += doc.occurrences.len();
                 continue;

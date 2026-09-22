@@ -61,6 +61,17 @@ async function runtimeError(action: () => Promise<unknown>, code: string): Promi
   await assert.rejects(action, (error: unknown) => error instanceof RuntimeError && error.code === code);
 }
 
+// Linux supports the raw filename bytes; APFS rejects the fixture itself.
+it("typed reads reject non-UTF8 symlink targets instead of opening an alias", { skip: process.platform !== "linux" }, async () => {
+  const root = await project();
+  const target = Buffer.concat([Buffer.from(root + "/invalid-"), Buffer.from([255]), Buffer.from(".ts")]);
+  await writeFile(target, "intended");
+  await writeFile(join(root, "invalid-�.ts"), "wrong file");
+  await symlink(target, join(root, "alias.ts"));
+  const api = createSgrepCodeMode(new FakeRuntime(root), { cwd: root });
+  await runtimeError(() => api.read("alias.ts#L1-L1"), "READ_FAILED");
+});
+
 describe("SgrepCodeMode", () => {
   it("executes a typed multi-search plan over CLI JSON", async () => {
     const root = await project();
@@ -166,6 +177,24 @@ describe("SgrepCodeMode", () => {
     const pending = mode.read("src/auth.ts#L1-L1" as SgrepRef, { signal: inFlight.signal });
     queueMicrotask(() => inFlight.abort());
     await runtimeError(() => pending, "CANCELLED");
+  });
+
+  it("preserves BOM and final CR and cites only displayed lines after truncation", async () => {
+    const root = await project();
+    const mode = createSgrepCodeMode(new FakeRuntime(root), { cwd: root });
+    await writeFile(join(root, "fidelity.ts"), "\uFEFFfirst\nlast\r");
+    assert.equal((await mode.read("fidelity.ts#L1-L2"))[0]!.content, "\uFEFFfirst\nlast\r");
+    const limited = (await mode.read("fidelity.ts#L1-L2", { maxChars: 2 }))[0]!;
+    assert.equal(limited.content, "\uFEFFf");
+    assert.equal(limited.ref, "fidelity.ts#L1-L1");
+    assert.equal(limited.resumeOffset, 1);
+    await writeFile(join(root, "long.ts"), "a".repeat(1999) + "😀tail\nsecond");
+    const long = (await mode.read("long.ts#L1-L2"))[0]!;
+    assert.equal(long.content, "a".repeat(1999) + "😀");
+    assert.equal(long.truncated, true);
+    assert.equal(long.ref, "long.ts#L1-L1");
+    await writeFile(join(root, "empty.ts"), "");
+    assert.match((await mode.read("empty.ts#L1-L1"))[0]!.note!, /empty/);
   });
 
   it("publishes a typed code-mode package subpath", async () => {

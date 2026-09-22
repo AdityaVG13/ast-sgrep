@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { argvFor, asEnvelope, createCodemodeDispatcher, } from "./dispatch.js";
 import { editFilesFallback, readWindowsFallback } from "./fallback.js";
 import { coerceHostArgs } from "./guest-api.js";
@@ -36,14 +37,25 @@ export function createAsgrepConnector(host, context, options = {}) {
         ? options.scope.replace(/^(?:\.\/)+/u, "").replace(/\/+$/u, "")
         : undefined;
     const rebasePath = (path) => {
-        if (!scope || path.startsWith("/") || path.startsWith("~"))
+        if (!scope || isAbsolute(path))
             return path;
         const clean = path.replace(/^(?:\.\/)+/u, "");
+        if (clean === scope || clean.startsWith(`${scope}/`))
+            return clean;
         return clean === "" || clean === "." ? scope : `${scope}/${clean}`;
     };
-    const rebaseRef = (ref) => {
-        const hash = ref.indexOf("#");
-        return hash === -1 ? rebasePath(ref) : rebasePath(ref.slice(0, hash)) + ref.slice(hash);
+    const rebaseReadSpec = (value) => {
+        // Refs emitted by search/read are already checkout-relative. Path-form
+        // requests may be cwd-relative, including objects inside refs[].
+        if (!value || typeof value !== "object" || Array.isArray(value))
+            return value;
+        const spec = value;
+        if (typeof spec.ref === "string")
+            return spec;
+        return { ...spec,
+            ...(typeof spec.path === "string" ? { path: rebasePath(spec.path) } : {}),
+            ...(typeof spec.file === "string" ? { file: rebasePath(spec.file) } : {}),
+        };
     };
     /** Directories below the checkout combine with the anchor scope, never replace it. */
     const withScope = (input) => {
@@ -109,6 +121,15 @@ export function createAsgrepConnector(host, context, options = {}) {
             payload.lang = scoped.lang.trim();
         return payload;
     };
+    const symbolCall = (tool, input, signal) => {
+        const args = coerceHostArgs(tool, input);
+        const key = tool === "imports" ? "module" : "symbol";
+        if (scope || ["in", "fileFilter", "file_filter", "lang"].some(key => typeof args[key] === "string" && args[key].trim())) {
+            return call("search", searchPayload("search", { ...args, query: `${tool}:${args[key] ?? ""}` }), signal);
+        }
+        return call(tool, defined({ [key]: args[key], limit: clampLimit(args.limit),
+            excerpt_lines: clampExcerpt(args.excerptLines) }), signal);
+    };
     // Bound function properties (not methods) so vm call sites cannot lose `this`.
     const asgrep = {
         search: (input, callOptions) => call("search", searchPayload("search", input), callOptions?.signal),
@@ -117,8 +138,8 @@ export function createAsgrepConnector(host, context, options = {}) {
             path: typeof input.path === "string" ? rebasePath(input.path) : input.path,
             start: input.start,
             end: input.end,
-            ref: typeof input.ref === "string" ? rebaseRef(input.ref) : input.ref,
-            refs: Array.isArray(input.refs) ? input.refs.map((ref) => (typeof ref === "string" ? rebaseRef(ref) : ref)) : input.refs,
+            ref: input.ref,
+            refs: Array.isArray(input.refs) ? input.refs.map(rebaseReadSpec) : input.refs,
             context_lines: input.contextLines,
             max_chars: input.maxChars,
         }), callOptions?.signal),
@@ -139,28 +160,18 @@ export function createAsgrepConnector(host, context, options = {}) {
         },
         semantic: (input, callOptions) => call("semantic", searchPayload("semantic", input), callOptions?.signal),
         chain: (input, callOptions) => call("chain", { query: input.query, limit: clampLimit(input.limit), top_n: 20 }, callOptions?.signal),
-        defs: (input, callOptions) => {
-            const scoped = coerceHostArgs("defs", { ...input });
-            return call("defs", {
-                symbol: scoped.symbol,
-                limit: clampLimit(input.limit),
-                excerpt_lines: clampExcerpt(input.excerptLines),
-            }, callOptions?.signal);
-        },
-        callers: (input, callOptions) => {
-            const scoped = coerceHostArgs("callers", { ...input });
-            return call("callers", {
-                symbol: scoped.symbol,
-                limit: clampLimit(input.limit),
-                excerpt_lines: clampExcerpt(input.excerptLines),
-            }, callOptions?.signal);
-        },
-        imports: (input, callOptions) => call("imports", defined({ module: input.module, limit: clampLimit(input.limit), excerpt_lines: clampExcerpt(input.excerptLines) }), callOptions?.signal),
+        defs: (input, callOptions) => symbolCall("defs", input, callOptions?.signal),
+        callers: (input, callOptions) => symbolCall("callers", input, callOptions?.signal),
+        imports: (input, callOptions) => symbolCall("imports", input, callOptions?.signal),
         indexStatus: (callOptions) => call("index_status", {}, callOptions?.signal),
         indexRepo: (input = {}, callOptions) => call("index_repo", { force: input.force === true }, callOptions?.signal),
         catalogSearch: (input, callOptions) => call("catalog_search", { query: input.query }, callOptions?.signal),
         catalogDescribe: (input, callOptions) => call("catalog_describe", { name: input.name }, callOptions?.signal),
-        doctor: (callOptions) => host.run(["doctor", ".", "--json"], context, callOptions),
+        doctor: async (perCall) => {
+            const opts = callOptions(perCall?.signal);
+            opts.signal?.throwIfAborted();
+            return host.run(["doctor", ".", "--json"], context, opts);
+        },
     };
     return {
         asgrep,

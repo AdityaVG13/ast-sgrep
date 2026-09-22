@@ -1,4 +1,3 @@
-import { realpath } from "node:fs/promises";
 import { constants, accessSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -35,6 +34,7 @@ import {
   indexQuarantines,
   inspectIndexFile,
   pathContained,
+  realpathUtf8 as realpath,
   record,
   throwIndexRebuildFailed,
   type IndexHealth,

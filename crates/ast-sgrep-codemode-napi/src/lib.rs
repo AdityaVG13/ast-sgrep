@@ -25,7 +25,7 @@ use ast_sgrep_codemode::{
     MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_TOOL_BYTES, MAX_BATCH_VALUE_BYTES,
 };
 use napi::bindgen_prelude::*;
-use napi::{ScopedTask, Task};
+use napi::{JsValue, ScopedTask, Task};
 use napi_derive::napi;
 use serde::Serialize;
 use serde_json::Value;
@@ -140,12 +140,26 @@ impl Drop for SessionCancelGuard<'_> {
     }
 }
 
-fn watch_cancel(signal: Option<&AbortSignal>, cancelled: &Arc<AtomicBool>) {
+fn watch_cancel(
+    signal: Option<Object<'_>>,
+    cancelled: &Arc<AtomicBool>,
+) -> Result<Option<AbortSignal>> {
     let Some(signal) = signal else {
-        return;
+        return Ok(None);
     };
+    // napi's AbortSignal conversion subscribes to future events only. An
+    // already-aborted signal will never emit another event, so reject it in
+    // the task before any session lock or catalog call is attempted.
+    if signal.get::<bool>("aborted")? == Some(true) {
+        cancelled.store(true, Ordering::Release);
+        return Ok(None);
+    }
+    // Use napi's safe value conversion; no extra Env parameter or temporary
+    // JS object is needed, and Rust callers without a signal need no Node env.
+    let signal = AbortSignal::from_unknown(signal.to_unknown())?;
     let cancelled = Arc::clone(cancelled);
     signal.on_abort(move || cancelled.store(true, Ordering::Release));
+    Ok(Some(signal))
 }
 
 /// Abortable mutex acquire. A blocking `lock()` would keep cancelled waiters
@@ -372,10 +386,10 @@ impl Session {
         &self,
         tool: String,
         args: Option<Value>,
-        signal: Option<AbortSignal>,
+        signal: Option<Object<'_>>,
     ) -> Result<AsyncTask<SessionCallTask>> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        watch_cancel(signal.as_ref(), &cancelled);
+        let signal = watch_cancel(signal, &cancelled)?;
         Ok(AsyncTask::with_optional_signal(
             SessionCallTask {
                 inner: Arc::clone(&self.inner),
@@ -436,11 +450,11 @@ impl Session {
     pub fn batch(
         &self,
         calls: Vec<JsBatchCall>,
-        signal: Option<AbortSignal>,
+        signal: Option<Object<'_>>,
     ) -> Result<AsyncTask<SessionBatchTask>> {
         validate_session_batch(&calls)?;
         let cancelled = Arc::new(AtomicBool::new(false));
-        watch_cancel(signal.as_ref(), &cancelled);
+        let signal = watch_cancel(signal, &cancelled)?;
         Ok(AsyncTask::with_optional_signal(
             SessionBatchTask {
                 inner: Arc::clone(&self.inner),
