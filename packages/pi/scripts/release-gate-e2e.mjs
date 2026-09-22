@@ -220,7 +220,10 @@ try {
   await stage('tool-prompt-auto-register', async () => {
     assert.ok(codemodeTool.promptSnippet, 'asgrep must contribute a system-prompt snippet');
     assert.ok(Array.isArray(codemodeTool.promptGuidelines) && codemodeTool.promptGuidelines.length >= 2);
-    assert.match(codemodeTool.promptSnippet, /asgrep/i);
+    // Pi associates the snippet with the registered tool name; assert the
+    // capability and automatic-use guidance, not redundant branding.
+    assert.match(codemodeTool.promptSnippet, /code search/i);
+    assert.match(codemodeTool.promptSnippet, /use without being asked/i);
     assert.match(codemodeTool.description, /instead of grep/i);
     assert.match(searchTool.description, /asgrep/i);
   });
