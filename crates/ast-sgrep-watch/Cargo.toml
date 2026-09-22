@@ -15,6 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ast-sgrep-cli = { path = "../ast-sgrep-cli", version = "2.5.2" }
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.2" }
+ast-sgrep-cli = { path = "../ast-sgrep-cli", version = "2.5.4" }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.4" }
 notify.workspace = true

@@ -9,6 +9,13 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-09-22
+
+Native-inclusive release: all five platform packages, the launcher, and the Pi
+extension ship together. Pi now requires launcher `>=2.5.4 <3` so updates cannot
+retain native packages that predate these fixes. Reindex affected projects to
+restore any terminal carriage returns discarded by an older indexer.
+
 ### Fixed
 
 - Preserve explicitly returned Code Mode arrays, read windows, and nested data in model-visible output, with an 8,000-character bound and an explicit truncation notice. Arbitrary `hits` arrays and caller-owned `nodes` no longer crash rendering; custom hit fields, excerpts, and deliberate fields such as `refs` and `ok` remain visible.
@@ -28,6 +35,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 - Keep checkout-relative refs stable in anchored sessions, scope symbol lookups on every transport, propagate connector cancellation to doctor, and preserve stale-index qualifications within output budgets.
 - Preserve complete explicitly returned hit objects instead of inferring redundant fields; keep lossy summaries on the TUI/one-shot search surfaces only.
 - Probe the actual workspace release directory for development addons, and align the Pi edit schema with the native 16-replacement limit.
+- Prepare lockstep family releases after an independently versioned Pi patch without failing halfway through the version bump.
 
 ## [pi-ast-sgrep 2.5.3] - 2026-09-22
 

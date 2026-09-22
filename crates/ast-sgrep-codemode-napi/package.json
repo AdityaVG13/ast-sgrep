@@ -1,6 +1,6 @@
 {
   "name": "ast-sgrep-codemode-napi",
-  "version": "2.5.2",
+  "version": "2.5.4",
   "private": true,
   "description": "Build helper for the in-process Code Mode Node addon",
   "napi": {

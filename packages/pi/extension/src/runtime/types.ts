@@ -3,7 +3,7 @@
  * Imports nothing from sibling modules — any file may depend on it.
  */
 
-export const RUNTIME_VERSION = "2.5.2";
+export const RUNTIME_VERSION = "2.5.4";
 export const MACHINE_SCHEMA_VERSION = "1.0.0";
 export const CONFIG_SCHEMA_VERSION = 1 as const;
 /** Index format this release ships. Must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core (check-contract gates it). */

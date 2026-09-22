@@ -1,26 +1,26 @@
 {
   "schemaVersion": 2,
   "canonicalVersion": {
-    "version": "2.5.2",
+    "version": "2.5.4",
     "source": "package.json#version",
     "npmWorkspaceSource": "package.json#version",
-    "tag": "v2.5.2",
+    "tag": "v2.5.4",
     "coupledComponents": [
       "npm-launcher",
       "native-platform-packages"
     ],
     "driftPolicy": "The npm launcher, native platform packages, and release metadata MUST equal the canonical npm version; the embedded native CLI MUST equal nativeCliVersion. The pi-extension package is deliberately decoupled: it versions independently under packages.extension and may be published ahead of the canonical family via its own signed pi-v<version> tag lane. Its launcher floor (layers.extension.minLauncherVersion) may lag the canonical version; the extension MUST install and function against any launcher satisfying launcherRange. Mixed launcher/platform versions or unexpected CLI versions are still rejected.",
-    "nativeCliVersion": "2.5.2",
+    "nativeCliVersion": "2.5.4",
     "nativeCliSource": "Cargo.toml#workspace.package.version"
   },
   "packages": {
     "extension": {
       "name": "pi-ast-sgrep",
       "directory": "packages/pi/extension",
-      "version": "2.5.3",
+      "version": "2.5.4",
       "independent": true,
       "tagPrefix": "pi-v",
-      "launcherRange": ">=2.5.2 <3",
+      "launcherRange": ">=2.5.4 <3",
       "policy": "The extension is the dogfooding surface and releases independently of the canonical family. Each release MUST (a) equal packages.extension.version, (b) declare dependencies.ast-sgrep exactly equal to launcherRange, (c) be built from the committed dist of its signed pi-v<version> tag, and (d) degrade gracefully when the resolved launcher predates a feature's native fields."
     },
     "launcher": {
@@ -45,7 +45,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.2"
+        "optionalDependencyVersion": "2.5.4"
       },
       {
         "name": "@ast-sgrep/darwin-x64",
@@ -59,7 +59,7 @@
         ],
         "libc": [],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.2"
+        "optionalDependencyVersion": "2.5.4"
       },
       {
         "name": "@ast-sgrep/linux-arm64-gnu",
@@ -75,7 +75,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.2"
+        "optionalDependencyVersion": "2.5.4"
       },
       {
         "name": "@ast-sgrep/linux-x64-gnu",
@@ -91,7 +91,7 @@
           "glibc"
         ],
         "executable": "asgrep",
-        "optionalDependencyVersion": "2.5.2"
+        "optionalDependencyVersion": "2.5.4"
       },
       {
         "name": "@ast-sgrep/win32-x64-msvc",
@@ -105,7 +105,7 @@
         ],
         "libc": [],
         "executable": "asgrep.exe",
-        "optionalDependencyVersion": "2.5.2"
+        "optionalDependencyVersion": "2.5.4"
       }
     ],
     "unsupportedTargets": [
@@ -130,16 +130,16 @@
     "layers": {
       "extension": {
         "compatibility": "range",
-        "launcherRange": ">=2.5.2 <3",
-        "minLauncherVersion": "2.5.2",
+        "launcherRange": ">=2.5.4 <3",
+        "minLauncherVersion": "2.5.4",
         "policy": "Extension accepts any launcher satisfying launcherRange, including official releases behind the canonical version; machine-schema assertions fail closed on incompatible envelopes. Binary identity accepts the same major; the in-process NAPI binding requires an exact native generation while CLI lanes cover older ones. Features requiring newer native fields gate on envelope content, not version; tools the launcher predates fall back to extension-side implementations with native-identical shapes."
       },
       "launcher": {
-        "version": "2.5.2",
+        "version": "2.5.4",
         "compatibility": "exact"
       },
       "binary": {
-        "version": "2.5.2",
+        "version": "2.5.4",
         "compatibility": "exact-native-cli"
       },
       "machineSchema": {
@@ -283,7 +283,7 @@
         ],
         "reservationGuaranteed": false,
         "policy": "Availability is an observation only; re-verify every name and publisher ownership immediately before first publication.",
-        "version": "2.5.2"
+        "version": "2.5.4"
       },
       "policy": "npm publication is independently gated and does not wait for crates.io availability or ordering."
     },

@@ -43,14 +43,14 @@ The `pi-ast-sgrep` extension rides the lockstep family: `release:prepare` bumps 
 
 ## Pi extension lane (pi-ast-sgrep)
 
-`pi-ast-sgrep` is the primary dogfooding surface for the pi integration. It normally releases in lockstep with the family; the lane below covers out-of-band revs (extension-only fixes between family releases). The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.5.2 <3`). This floor prevents upgrades from retaining the obsolete 2.0.0 engine; compatible newer families remain schema-guarded at runtime.
+`pi-ast-sgrep` is the primary dogfooding surface for the pi integration. It normally releases in lockstep with the family; the lane below covers out-of-band revs (extension-only fixes between family releases). The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.5.4 <3`). This floor prevents upgrades from retaining engines that predate the 2.5.4 native boundary fixes; compatible newer families remain schema-guarded at runtime.
 
 Rules for the extension lane:
 
 - The extension version lives in two places that MUST agree: `packages/pi/extension/package.json` and `packages/pi/release-contract.json` at `packages.extension.version`. Bump both together.
-- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.2`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.2`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment. The npm trusted-publisher registration is shared with the family workflow file.
+- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.4`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.4`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment. The npm trusted-publisher registration is shared with the family workflow file.
 - Features that need newer native envelope fields must degrade gracefully on older launchers; when a feature genuinely requires a new native floor, raise `launcherRange` and `compatibility.layers.extension.minLauncherVersion` in the contract and ship a family release first.
-- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.5.2 --commit <sha> --ref-type tag` against a real signed tag.
+- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.5.4 --commit <sha> --ref-type tag` against a real signed tag.
 
 ### Dogfood publish (one command)
 
@@ -166,7 +166,7 @@ Only a human release operator may run this block. It is noninteractive and publi
 
 ```bash
 set -euo pipefail
-release_version='2.5.2'
+release_version='2.5.4'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
@@ -210,7 +210,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.2'
+   release_version='2.5.4'
    release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp ast-sgrep-watch)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
@@ -223,7 +223,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.2'
+   release_version='2.5.4'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    cargo install ast-sgrep-watch --version "=${release_version}" --locked --root "$install_root"
@@ -236,14 +236,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$watch_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.2`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.4`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
 The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="2.5.2"
+version="2.5.4"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

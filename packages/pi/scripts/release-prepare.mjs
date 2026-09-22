@@ -41,25 +41,28 @@ if (!process.argv.includes('--allow-dirty') && runCapture('git', ['status', '--p
 
 const contractPath = path.join(root, 'packages/pi/release-contract.json');
 const contractText = readFileSync(contractPath, 'utf8');
-const current = JSON.parse(contractText).canonicalVersion.version;
+const contract = JSON.parse(contractText);
+const current = contract.canonicalVersion.version;
+const extensionCurrent = contract.packages.extension.version;
 if (next === current) fail('ASGREP_PREPARE_USAGE', `${next} is already the canonical version`);
 
 // Exact-count line replacement: every bump asserts how many lines it must
 // hit, so contract/manifest drift fails loudly instead of half-bumping.
-const swap = (relativePath, predicate, expected, label) => {
+const swap = (relativePath, predicate, expected, label, from = current) => {
   const file = path.join(root, relativePath);
   const lines = readFileSync(file, 'utf8').split('\n');
   let hits = 0;
   const updated = lines.map((line) => {
     if (!predicate(line)) return line;
     hits += 1;
-    return line.split(current).join(next);
+    return line.split(from).join(next);
   });
   if (hits !== expected) fail('ASGREP_PREPARE_DRIFT', `${relativePath}: ${label} hit ${hits} lines, expected ${expected}`);
   writeFileSync(file, updated.join('\n'));
   console.log(`[prepare] ${relativePath}: ${label} (${hits})`);
 };
 const versionLine = (line) => line.includes(`"version": "${current}"`);
+const extensionVersionLine = (line) => line.includes(`"version": "${extensionCurrent}"`);
 
 // 1. Cargo workspace version + inter-crate path deps (ast-sgrep path lines only).
 swap('Cargo.toml', (line) => /^\s*version\s*=\s*"[^"]+"\s*$/.test(line) && line.includes(`"${current}"`), 1, 'workspace version');
@@ -86,11 +89,17 @@ const manifests = [
   'editors/vscode/package.json',
   'crates/ast-sgrep-codemode-napi/package.json',
 ];
-for (const manifest of manifests) swap(manifest, versionLine, 1, 'manifest version');
+for (const manifest of manifests) {
+  const extension = manifest === 'packages/pi/extension/package.json';
+  swap(manifest, extension ? extensionVersionLine : versionLine, 1, 'manifest version', extension ? extensionCurrent : current);
+}
 swap('packages/pi/launcher/package.json', (line) => line.includes('"@ast-sgrep/') && line.includes(`"${current}"`), 5, 'platform optionalDependencies');
 
 // 3. Release contract canonical fields (launcherRange untouched).
-swap('packages/pi/release-contract.json', versionLine, 5, 'canonical versions');
+swap('packages/pi/release-contract.json', versionLine, extensionCurrent === current ? 5 : 4, 'canonical versions');
+if (extensionCurrent !== current) {
+  swap('packages/pi/release-contract.json', extensionVersionLine, 1, 'extension version', extensionCurrent);
+}
 swap('packages/pi/release-contract.json', (line) => line.includes(`"tag": "v${current}"`), 1, 'official tag');
 swap('packages/pi/release-contract.json', (line) => line.includes(`"nativeCliVersion": "${current}"`), 1, 'native CLI version');
 swap('packages/pi/release-contract.json', (line) => line.includes(`"optionalDependencyVersion": "${current}"`), 5, 'platform pins');

@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the current contract (extension `2.5.3`, native family `2.5.2`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the current contract (extension `2.5.4`, native family `2.5.4`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 ## Pi packages.md compliance
 
@@ -25,7 +25,7 @@ This package follows [Pi packages](https://github.com/earendil-works/pi/blob/mai
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.5.2 <3`), which selects one of five host-constrained native packages. Launcher and native packages move in lockstep at the canonical version. The extension may ship an independent patch, as in extension 2.5.3 with native family 2.5.2; it supports launchers in its declared range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
+The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.5.4 <3`), which selects one of five host-constrained native packages. Launcher and native packages move in lockstep at the canonical version. The extension may ship an independent patch, as in extension 2.5.3 with native family 2.5.2; it supports launchers in its declared range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
@@ -145,7 +145,7 @@ pi update npm:pi-ast-sgrep
 `pi update --extensions` updates all installed packages. An extension update can
 retain an older launcher that still satisfies its supported range; the extension
 version alone is not the native engine version. The current minimum launcher is
-2.5.2, so npm cannot retain the obsolete 2.0.0 engine on upgrade. Check
+2.5.4, so npm cannot retain engines that predate the native boundary fixes. Check
 `/asgrep-doctor`. To update
 the launcher and its matching native package in a default global Pi install, run
 `npm update ast-sgrep --prefix ~/.pi/agent/npm` (use `.pi/npm` for a project-local

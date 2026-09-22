@@ -23,12 +23,12 @@ plugins = ["dep:ast-sgrep-plugins"]
 codemode = ["dep:ast-sgrep-codemode", "plugins"]
 
 [dependencies]
-ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.5.2", optional = true }
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.2" }
-ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "2.5.2" }
-ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "2.5.2" }
-ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "2.5.2", optional = true }
-ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "2.5.2", optional = true }
+ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.5.4", optional = true }
+ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.5.4" }
+ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "2.5.4" }
+ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "2.5.4" }
+ast-sgrep-lsp = { path = "../ast-sgrep-lsp", version = "2.5.4", optional = true }
+ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "2.5.4", optional = true }
 regex.workspace = true
 rusqlite.workspace = true
 serde = { workspace = true, features = ["derive"] }

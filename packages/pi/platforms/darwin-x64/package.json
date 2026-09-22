@@ -1,6 +1,6 @@
 {
   "name": "@ast-sgrep/darwin-x64",
-  "version": "2.5.2",
+  "version": "2.5.4",
   "description": "ast-sgrep native binary for macOS x64",
   "license": "MIT",
   "repository": {

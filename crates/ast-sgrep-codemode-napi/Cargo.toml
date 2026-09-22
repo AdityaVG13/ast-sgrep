@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 name = "ast_sgrep_codemode_napi"
 
 [dependencies]
-ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.5.2" }
+ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.5.4" }
 napi = { version = "3", default-features = false, features = ["napi9", "serde-json", "anyhow"] }
 napi-derive = "3"
 serde = { workspace = true }
