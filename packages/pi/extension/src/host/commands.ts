@@ -21,16 +21,23 @@ async function runCommand(runtime: RuntimeLike, command: string, ctx: ToolContex
       error: { code: "INVALID_ARGUMENTS", message: `/${command} does not accept arguments`, details: { args } },
     };
   }
+  let diagnostics: Record<string, unknown> | undefined;
   try {
+    if (command === "asgrep-doctor") diagnostics = await runtime.diagnostics?.({ cwd: ctx.cwd });
     const response = await runtime.run([command.slice("asgrep-".length), ".", "--json"], { cwd: ctx.cwd });
-    return { ok: true, command, response };
+    return { ok: true, command, response, ...(diagnostics ? { diagnostics } : {}) };
   } catch (cause) {
-    return { ok: false, command, error: errorDetails(cause) };
+    return { ok: false, command, error: errorDetails(cause), ...(diagnostics ? { diagnostics } : {}) };
   }
 }
 
 function compactCommandResult(result: CommandResult): string {
-  if (!result.ok) return `${result.command} failed [${result.error.code}]: ${result.error.message}`;
+  const diagnostics = result.diagnostics;
+  const versions = diagnostics
+    ? `extension=${diagnostics.extension ?? "unknown"} launcher=${diagnostics.launcher ?? "unknown"} native=${diagnostics.native ?? "unavailable"}`
+    : "";
+  const warning = typeof diagnostics?.warning === "string" ? diagnostics.warning : "";
+  if (!result.ok) return bounded([`${result.command} failed [${result.error.code}]: ${result.error.message}`, versions, warning].filter(Boolean).join(" · "));
   const response = result.response;
   const counts = response.counts && typeof response.counts === "object"
     ? Object.entries(response.counts).map(([key, value]) => `${key}=${String(value)}`).join(" ")
@@ -38,7 +45,7 @@ function compactCommandResult(result: CommandResult): string {
   const state = typeof response.status === "string" ? response.status
     : typeof response.index_status === "string" ? response.index_status
     : response.ok ? "healthy" : "failed";
-  return bounded([`${result.command}: ${state}`, counts].filter(Boolean).join(" · "));
+  return bounded([`${result.command}: ${state}`, counts, versions, warning].filter(Boolean).join(" · "));
 }
 
 export function registerAstSgrepCommands(
@@ -52,7 +59,7 @@ export function registerAstSgrepCommands(
         const ctx = context as CommandContext;
         const result = await runCommand(runtime, name, ctx, args);
         const output = ctx.hasUI ? compactCommandResult(result) : JSON.stringify(result);
-        ctx.ui.notify(output, result.ok ? "info" : "error");
+        ctx.ui.notify(output, result.ok ? result.diagnostics?.warning ? "warning" : "info" : "error");
       },
     });
   }

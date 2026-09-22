@@ -80,6 +80,8 @@ export function createAsgrepConnector(host, context, options = {}) {
     };
     const call = async (tool, args, signal) => {
         const opts = callOptions(signal);
+        if (tool === "read" && options.localReads)
+            return fallbackCall(tool, args, opts.signal);
         if (NATIVE_FALLBACK_TOOLS.has(tool) && nativeMissing.has(tool))
             return fallbackCall(tool, args, opts.signal);
         try {

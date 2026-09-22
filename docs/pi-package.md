@@ -6,7 +6,7 @@
 pi install npm:pi-ast-sgrep
 ```
 
-This is the canonical package-user guide for the current contract (`2.5.2`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
+This is the canonical package-user guide for the current contract (extension `2.5.3`, native family `2.5.2`; live versions in `packages/pi/release-contract.json`). npm availability is established only by an authorized release, not by this repository documentation. For a project-local Pi installation, add `-l` to Pi package-management commands.
 
 ## Pi packages.md compliance
 
@@ -25,7 +25,7 @@ This package follows [Pi packages](https://github.com/earendil-works/pi/blob/mai
 
 Alpine/musl Linux, Windows arm64, and other hosts are unsupported. On an unsupported host, or when npm omitted the matching optional native package, `/asgrep-doctor` reports a binary-resolution error; the package does not compile Rust, search `PATH`, contact MCP, or download a fallback executable. Install on a supported host rather than bypassing this check.
 
-The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.0.0 <3`), which selects one of five host-constrained native packages. Launcher, native packages, and extension move in lockstep at the canonical version; the extension keeps working against older launchers in its range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
+The `pi-ast-sgrep` extension depends on `ast-sgrep` through the contract `launcherRange` (currently `>=2.5.2 <3`), which selects one of five host-constrained native packages. Launcher and native packages move in lockstep at the canonical version. The extension may ship an independent patch, as in extension 2.5.3 with native family 2.5.2; it supports launchers in its declared range. The embedded executable reports the native CLI version recorded in the contract; the runtime verifies that identity separately from the npm package version.
 
 ## What is available immediately
 
@@ -61,6 +61,9 @@ For a single lookup, `asgrep_search` still works:
 Use `natural` when you know the intent but not the spelling, `pattern` for a structural pattern, and `chain` to trace relationships. Limits are 1 to 100 (default 8). Result excerpts are off by default; request `excerptLines` only after narrowing the result set.
 
 `asgrep_index` accepts `{"force":false}`; set `force` to `true` only when a full rebuild is needed. `asgrep_read` takes a file window or hit ref; `asgrep_edit` takes exact-string replacements. Runtime status has no tool: use `/asgrep-status` or read it in Code Mode. The slash commands provide the same operational paths for interactive use.
+`asgrep_read` reads bounded windows directly from disk, with the same path
+confinement and cancellation rules, even when the native backend or index is
+unavailable. It does not build or refresh the index.
 
 ## Project data and freshness
 
@@ -92,6 +95,12 @@ The current schema is `schemaVersion: 1`. Schema 0 names (`timeout`, `maxOutput`
 
 Supported environment settings are `ASGREP_BIN` (canonical binary override; `AST_SGREP_BINARY` is an accepted alias in both the extension runtime and the npm launcher), `ASGREP_ROOT`, `ASGREP_TIMEOUT_MS`, `ASGREP_MAX_OUTPUT_BYTES`, `ASGREP_REFRESH_INTERVAL_MS`, and `ASGREP_INDEX_THREADS` (Code Mode indexing thread cap; defaults to host parallelism). `binaryPath`/`ASGREP_BIN` are developer overrides, not normal installation steps.
 
+If an environment override points to a missing file, Pi retries the installed,
+checksum-verified bundled binary and reports the recovery at startup and in
+`/asgrep-doctor`. Remove the stale export from your shell configuration. Explicit
+`binaryPath` settings remain strict; permission, empty-file, and checksum errors
+never trigger this recovery. No PATH lookup or download is attempted.
+
 The default root is Pi's current working directory. Requested roots are canonicalized and confined to it. Only explicit project configuration can set `allowOutsideProject: true`; project/global settings and environment cannot relax that policy.
 
 ## Offline, privacy, and security
@@ -106,7 +115,7 @@ Pi packages are trusted code, not a sandbox. Installing grants the JavaScript ex
 
 Run these in order:
 
-1. `/asgrep-doctor`: checks the extension/runtime version, machine protocol, native binary, index, and project configuration.
+1. `/asgrep-doctor`: reports extension, launcher, and selected native binary versions separately, plus any override recovery, even when index health fails. It checks the native binary, index, and project configuration.
 2. `/asgrep-status`: shows the selected root and current index/backend state.
 3. `/asgrep-index`: creates or incrementally refreshes a missing/stale index.
 4. `/asgrep-reindex`: performs a full rebuild when doctor reports incompatible or corrupt data.
@@ -133,7 +142,17 @@ Update this package alone with:
 pi update npm:pi-ast-sgrep
 ```
 
-`pi update --extensions` updates all installed packages. Compatible releases validate and reuse `.asgrep`. For an incompatible index format, the extension quiesces its warm session and performs a strict in-place rebuild: preparation and repository-walk failures abort before writes, and rewrites plus stale-row pruning commit together. A failed rebuild reports an actionable error and leaves prior rows recoverable. A newer, unreadable format is rejected and preserved rather than silently modified.
+`pi update --extensions` updates all installed packages. An extension update can
+retain an older launcher that still satisfies its supported range; the extension
+version alone is not the native engine version. The current minimum launcher is
+2.5.2, so npm cannot retain the obsolete 2.0.0 engine on upgrade. Check
+`/asgrep-doctor`. To update
+the launcher and its matching native package in a default global Pi install, run
+`npm update ast-sgrep --prefix ~/.pi/agent/npm` (use `.pi/npm` for a project-local
+install). Review unrelated npm peer conflicts rather than changing sibling
+extensions as part of this repair.
+
+Compatible releases validate and reuse `.asgrep`. For an incompatible index format, the extension quiesces its warm session and performs a strict in-place rebuild: preparation and repository-walk failures abort before writes, and rewrites plus stale-row pruning commit together. A failed rebuild reports an actionable error and leaves prior rows recoverable. A newer, unreadable format is rejected and preserved rather than silently modified.
 
 To roll back, install an exact previously published package version as one matched unit:
 
@@ -173,6 +192,10 @@ Pi release validation does not run automatically on pull requests, pushes to `ma
 Before the first external publication, a human must verify package-name ownership and approve the protected publishing environment. A partial npm publication is recovered by releasing a new immutable version, never by overwriting a published version.
 
 Maintainers: see [RELEASING.md](RELEASING.md) and the machine-readable [release contract](../packages/pi/release-contract.json).
+The files under `packages/pi/platforms/` are artifact-staging paths, not installed
+binaries: a checkout may contain empty placeholders until artifacts are staged.
+Do not execute them as a fallback. Each platform package prepack hook rejects
+missing, empty, non-executable, or checksum-mismatched staged artifacts.
 
 ### Optional workspace change events
 

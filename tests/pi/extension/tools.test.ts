@@ -245,6 +245,34 @@ test("missing CLI backend surfaces BACKEND_UNAVAILABLE from search", async () =>
   assert.equal(out.details.error.details.cli, false);
   assert.match(String(out.details.error.details.hint), /@ast-sgrep\//);
   assert.match(out.content[0].text, /BACKEND_UNAVAILABLE/);
+  assert.match(out.content[0].text, /Unable to resolve an ast-sgrep binary for this platform/);
+  assert.match(out.content[0].text, /asgrep-doctor/);
+});
+
+test("asgrep_read works without a backend or index and preserves confinement", async () => {
+  const tools: Tool[] = [];
+  const pi = { registerTool(tool: Tool) { tools.push(tool); }, on() {} } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    resolveBinaryPath() { throw new Error("binary must not be needed for reads"); },
+    async run() { assert.fail("read must not invoke a native backend"); },
+  };
+  const freshness = { async ensureFresh() { assert.fail("read must not refresh the index"); }, markAffectedPath() {} };
+  registerAstSgrepTools(pi, runtime, freshness);
+  const read = tools.find(tool => tool.name === "asgrep_read")!;
+  const { fileURLToPath } = await import("node:url");
+  const cwd = fileURLToPath(new URL("../../../", import.meta.url));
+  for (const params of [{ path: "Cargo.toml", start: 1, end: 1 }, { ref: "Cargo.toml#L1-L1" }, { refs: ["Cargo.toml#L1-L1"] }]) {
+    const result = await read.execute("read", params, new AbortController().signal, () => {}, { cwd });
+    assert.equal(result.details.ok, true, result.content[0]?.text);
+    assert.equal((result.details.response as { windows: Array<{ text: string }> }).windows[0]!.text, "[workspace]");
+  }
+  const escaped = await read.execute("read", { path: "../AGENTS.md" }, new AbortController().signal, () => {}, { cwd });
+  assert.equal(escaped.details.ok, false);
+  assert.match(escaped.content[0]!.text, /must not contain/);
+  const controller = new AbortController(); controller.abort();
+  const cancelled = await read.execute("read", { path: "Cargo.toml" }, controller.signal, () => {}, { cwd });
+  assert.equal((cancelled.details.error as { code: string }).code, "CANCELLED");
 });
 
 test("missing backend surfaces BACKEND_UNAVAILABLE from asgrep ensureFresh path", async () => {

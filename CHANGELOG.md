@@ -7,6 +7,17 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
+## [pi-ast-sgrep 2.5.3] - 2026-09-22
+
+Extension-only patch; the CLI, launcher, and native packages remain at 2.5.2.
+
+### Fixed
+
+- Recover missing environment-only developer binary overrides through the checksum-verified bundled binary, with a visible warning. Explicit binary settings, permissions, empty artifacts, and checksum errors still fail closed.
+- Preserve the binary-resolution cause in backend errors and report extension, launcher, and native versions in `/asgrep-doctor`, even when index health fails.
+- Keep `asgrep_read` available without a native backend or index, preserving bounded windows, cancellation, and path confinement.
+- Require launcher `>=2.5.2 <3` so an extension update cannot retain the obsolete 2.0.0 native engine.
+
 ## [2.5.2] - 2026-09-21
 
 2.5.1 was tagged but never published (release-automation defects below); 2.5.2 supersedes it with identical product content plus the fixes.

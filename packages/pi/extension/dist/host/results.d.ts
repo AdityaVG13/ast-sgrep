@@ -14,6 +14,10 @@ export type RuntimeLike = {
     nativeEnv?(options?: {
         env?: NodeJS.ProcessEnv;
     }): NodeJS.ProcessEnv;
+    binaryWarning?(): string | undefined;
+    diagnostics?(context: {
+        cwd: string;
+    }): Promise<Record<string, unknown>>;
     config?: {
         timeoutMs?: number;
         maxOutputBytes?: number;
@@ -42,6 +46,8 @@ export type CommandContext = ToolContext & {
     };
 };
 export type CommandResult = {
+    diagnostics?: Record<string, unknown>;
+} & ({
     ok: true;
     command: string;
     response: MachineEnvelope;
@@ -53,7 +59,7 @@ export type CommandResult = {
         message: string;
         details: Readonly<Record<string, unknown>>;
     };
-};
+});
 export type Update = (result: {
     content: Array<{
         type: "text";

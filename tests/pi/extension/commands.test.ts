@@ -9,10 +9,10 @@ type Command = {
   handler(args: string, ctx: { cwd: string; hasUI: boolean; ui: { notify(message: string, type?: string): void } }): Promise<void>;
 };
 
-function fixture(run: (args: readonly string[], context: { cwd: string }) => Promise<MachineEnvelope>) {
+function fixture(run: (args: readonly string[], context: { cwd: string }) => Promise<MachineEnvelope>, diagnostics?: () => Promise<Record<string, unknown>>) {
   const commands = new Map<string, Command>();
   const pi = { registerCommand(name: string, command: Command) { commands.set(name, command); } } as unknown as ExtensionAPI;
-  registerAstSgrepCommands(pi, { run, async resolveRoot(context) { return context.cwd; } });
+  registerAstSgrepCommands(pi, { run, ...(diagnostics ? { diagnostics } : {}), async resolveRoot(context) { return context.cwd; } });
   return commands;
 }
 
@@ -57,6 +57,17 @@ test("headless doctor emits the complete machine envelope as JSON", async () => 
   const [notification] = await invoke(command);
   assert.equal(notification?.type, "info");
   assert.deepEqual(JSON.parse(notification!.message), { ok: true, command: "asgrep-doctor", response });
+});
+
+test("doctor reports component versions and recovery even when index health fails", async () => {
+  const diagnostics = { extension: "2.5.2", launcher: "2.0.0", native: "2.0.0", binaryPath: "/bundled/asgrep", warning: "Ignored missing ASGREP_BIN=/old/asgrep" };
+  const commands = fixture(async () => { throw new RuntimeError("OPERATIONAL_ERROR", "failed to open index"); }, async () => diagnostics);
+  const [headless] = await invoke(commands.get("asgrep-doctor")!);
+  assert.deepEqual(JSON.parse(headless!.message).diagnostics, diagnostics);
+  const [interactive] = await invoke(commands.get("asgrep-doctor")!, "", true);
+  assert.match(interactive!.message, /extension=2.5.2.*launcher=2.0.0.*native=2.0.0/);
+  assert.match(interactive!.message, /Ignored missing ASGREP_BIN/);
+  assert.equal(interactive!.type, "error");
 });
 
 test("interactive status renders a compact summary rather than machine JSON", async () => {

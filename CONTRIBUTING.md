@@ -28,7 +28,18 @@ cargo build --release -p ast-sgrep-cli -j1
 
 # Pi search/index behavior when touching packages/pi
 npm test --workspace pi-ast-sgrep
+
+# Focused Pi runtime/tool regressions (tsx is installed in this workspace)
+(cd packages/pi/extension && ASGREP_CODEMODE_BACKEND=cli node --import tsx --test \
+  ../../../tests/pi/extension/runtime.test.ts \
+  ../../../tests/pi/extension/tools.test.ts \
+  ../../../tests/pi/extension/commands.test.ts)
 ```
+
+Pi tests require host-native optional dependencies, including esbuild. Do not
+copy `node_modules` between OS/CPU targets or install with optional dependencies
+omitted; a missing `@esbuild/<platform>` is an installation failure, not a test
+failure.
 
 New workspace members **must** set `[lints] workspace = true` so they inherit
 `unsafe_code = "forbid"`. Sealed exceptions are exactly two (see

@@ -43,7 +43,7 @@ The `pi-ast-sgrep` extension rides the lockstep family: `release:prepare` bumps 
 
 ## Pi extension lane (pi-ast-sgrep)
 
-`pi-ast-sgrep` is the primary dogfooding surface for the pi integration. It normally releases in lockstep with the family; the lane below covers out-of-band revs (extension-only fixes between family releases). The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.0.0 <3`), so installs automatically pick up newer native families once they ship while remaining schema-guarded at runtime.
+`pi-ast-sgrep` is the primary dogfooding surface for the pi integration. It normally releases in lockstep with the family; the lane below covers out-of-band revs (extension-only fixes between family releases). The launcher, the five platform packages, and the embedded CLI remain lockstep; the extension does not carry binaries and resolves its launcher through the declared `packages.extension.launcherRange` (currently `>=2.5.2 <3`). This floor prevents upgrades from retaining the obsolete 2.0.0 engine; compatible newer families remain schema-guarded at runtime.
 
 Rules for the extension lane:
 
@@ -73,7 +73,7 @@ npm run check:pi-release
 
 `check:pi-contract` remains the release-metadata/version skew gate (including a few src↔dist constant checks). `check:pi-dist` rebuilds the committed `packages/pi/extension/dist` via `tsc` and fails if `git status --porcelain` is non-empty under that tree (tracked drift or untracked emit; `npm files` ships `dist`; do not un-commit it).
 
-The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed; do not run `npm publish` locally. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. Both pin Rust `1.97.1`; the official matrix packs, clean-installs, and executes each native artifact on its matching host before upload.
+The release-gate and E2E commands exercise packed artifacts and the official Pi loader without publishing. Package-level `npm pack --dry-run`/`npm pack` preparation is allowed. Local publishing is permitted only for the explicitly human-approved extension-only dogfood command above; canonical family publication uses the protected tag workflow. The manual **Pi native artifacts** workflow (`.github/workflows/pi-native-artifacts.yml`) is dry-run only. The tag-only **Pi npm official release** workflow (`.github/workflows/pi-npm-release.yml`) is the canonical publisher. Both pin Rust `1.97.1`; the official matrix packs, clean-installs, and executes each native artifact on its matching host before upload.
 
 External npm publication requires explicit human approval of its protected `npm-production` environment, the `NPM_OWNERSHIP_APPROVED=true` secret in that environment, and trusted-publishing OIDC/provenance. Before first publication, re-verify every npm name and publisher ownership; a prior 404 is not a reservation. Publish native packages before the launcher and the launcher before the extension. GitHub Release assets are immutable: reruns download and byte-compare existing assets and never clobber them.
 

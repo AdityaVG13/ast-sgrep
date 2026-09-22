@@ -100,6 +100,57 @@ describe("configuration and resolver", () => {
     await subject.run(["status", "--json"], { cwd: project });
     assert.equal((seen as { binaryPath: string }).binaryPath, process.execPath); assert.equal((seen as { env: NodeJS.ProcessEnv }).env.TOKEN, "env");
   });
+  it("recovers a missing environment override through the packaged resolver", async () => {
+    const { project } = await fixture();
+    const missing = join(project, "missing-asgrep");
+    for (const variable of ["ASGREP_BIN", "AST_SGREP_BINARY"]) {
+      const seen: Array<{ binaryPath?: string; env?: NodeJS.ProcessEnv }> = [];
+      const subject = new AstSgrepRuntime(new FakePi(), { environment: { [variable]: missing } }, {
+        resolveBinary: ((options: { binaryPath?: string; env?: NodeJS.ProcessEnv }) => {
+          seen.push(options);
+          if (options.binaryPath || options.env?.[variable]) {
+            throw Object.assign(new Error("missing override"), { code: "ASGREP_EXECUTABLE_MISSING", cause: { code: "ENOENT" } });
+          }
+          return process.execPath;
+        }) as never,
+      });
+      assert.equal(subject.resolveBinaryPath(), process.execPath);
+      assert.equal(seen.length, 2);
+      assert.equal(seen[1]?.binaryPath, undefined);
+      assert.equal(seen[1]?.env?.ASGREP_BIN, undefined);
+      assert.equal(seen[1]?.env?.AST_SGREP_BINARY, undefined);
+      assert.match(subject.binaryWarning() ?? "", new RegExp(variable));
+      assert.ok(subject.binaryWarning()?.includes(missing));
+    }
+  });
+  it("does not retry a missing package as an environment override", () => {
+    let calls = 0;
+    const subject = new AstSgrepRuntime(new FakePi(), { environment: {} }, {
+      resolveBinary: (() => { calls++; throw Object.assign(new Error("missing packaged binary"), { code: "ASGREP_EXECUTABLE_MISSING", cause: { code: "ENOENT" } }); }) as never,
+    });
+    assert.throws(() => subject.resolveBinaryPath(), { code: "BINARY_RESOLUTION_FAILED" });
+    assert.equal(calls, 1);
+  });
+  it("never recovers explicit or invalid environment overrides", async () => {
+    const { project } = await fixture();
+    const missing = join(project, "missing-asgrep");
+    for (const source of ["explicitProjectConfig", "projectSettings", "globalSettings", "defaults"]) {
+      let calls = 0;
+      const subject = new AstSgrepRuntime(new FakePi(), { environment: { ASGREP_BIN: missing }, [source]: { binaryPath: missing } }, {
+        resolveBinary: (() => { calls++; throw Object.assign(new Error("missing"), { code: "ASGREP_EXECUTABLE_MISSING", cause: { code: "ENOENT" } }); }) as never,
+      });
+      assert.throws(() => subject.resolveBinaryPath(), { code: "BINARY_NOT_FOUND" });
+      assert.equal(calls, 1);
+    }
+    for (const [code, cause] of [["ASGREP_EXECUTABLE_EMPTY", "ENOENT"], ["ASGREP_EXECUTABLE_MISSING", "EACCES"], ["ASGREP_CHECKSUM_MISMATCH", "ENOENT"]]) {
+      let calls = 0;
+      const subject = new AstSgrepRuntime(new FakePi(), { environment: { ASGREP_BIN: missing } }, {
+        resolveBinary: (() => { calls++; throw Object.assign(new Error("invalid override"), { code, cause: { code: cause } }); }) as never,
+      });
+      assert.throws(() => subject.resolveBinaryPath(), { code: "BINARY_NOT_FOUND" });
+      assert.equal(calls, 1);
+    }
+  });
   it("reports a configured missing binary path", async () => {
     const { project } = await fixture(); const missing = join(project, "missing-asgrep");
     const subject = new AstSgrepRuntime(new FakePi(), { environment: {}, explicitProjectConfig: { root: project, binaryPath: missing } }, { resolveBinary: (() => { throw new Error("not found"); }) as never });

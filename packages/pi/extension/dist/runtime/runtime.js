@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
-import { constants, accessSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { constants, accessSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { resolveBinary } from "ast-sgrep";
 import { CONFIG_SCHEMA_VERSION, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_REFRESH_INTERVAL_MS, DEFAULT_TIMEOUT_MS, INDEX_FORMAT_VERSION, MACHINE_SCHEMA_VERSION, RUNTIME_VERSION, RuntimeError, RESOLVED_ROOT, } from "./types.js";
 import { finitePositive, migrateConfig, resolveConfig, rollbackConfig, } from "./config.js";
@@ -25,18 +26,37 @@ export async function resolveRuntimeRoot(projectCwd, requestedRoot, allowOutside
     }
     return candidate;
 }
-function getBinary(config, env, resolver) {
+function getBinary(config, env, resolver, onRecovery) {
     let binary;
+    let warning;
     try {
         const options = config.binaryPath ? { binaryPath: config.binaryPath, env } : { env };
         binary = resolver(options);
     }
     catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        if (config.binaryPath) {
-            throw new RuntimeError("BINARY_NOT_FOUND", `Configured ast-sgrep binary is unavailable: ${config.binaryPath}`, { binaryPath: config.binaryPath, cause: message });
+        const failure = cause;
+        // Missing environment-only dev builds may recover, never explicit settings,
+        // permissions, empty artifacts, checksum failures, PATH, or downloads.
+        if (onRecovery && (env.ASGREP_BIN || env.AST_SGREP_BINARY) && failure?.code === "ASGREP_EXECUTABLE_MISSING" &&
+            (failure.cause?.code === "ENOENT" || failure.cause?.code === "ENOTDIR")) {
+            const variable = env.ASGREP_BIN ? "ASGREP_BIN" : "AST_SGREP_BINARY";
+            try {
+                binary = resolver({ env: { ...env, ASGREP_BIN: undefined, AST_SGREP_BINARY: undefined } });
+            }
+            catch (fallbackCause) {
+                const fallback = fallbackCause instanceof Error ? fallbackCause.message : String(fallbackCause);
+                throw new RuntimeError("BINARY_RESOLUTION_FAILED", `Missing ${variable} override (${config.binaryPath ?? env[variable]}); bundled binary unavailable: ${fallback}. Run /asgrep-doctor and reinstall pi-ast-sgrep with optional dependencies enabled.`, { cause: message, fallbackCause: fallback });
+            }
+            warning = `Ignored missing ${variable}=${config.binaryPath ?? env[variable]}; using bundled binary ${binary}. Remove the stale export from your shell configuration.`;
         }
-        throw new RuntimeError("BINARY_RESOLUTION_FAILED", "Unable to resolve an ast-sgrep binary for this platform", { cause: message });
+        else {
+            const hint = "Correct binaryPath or unset ASGREP_BIN/AST_SGREP_BINARY; run /asgrep-doctor.";
+            if (config.binaryPath) {
+                throw new RuntimeError("BINARY_NOT_FOUND", `Configured ast-sgrep binary is unavailable: ${config.binaryPath}. ${message}. ${hint}`, { binaryPath: config.binaryPath, cause: message, hint });
+            }
+            throw new RuntimeError("BINARY_RESOLUTION_FAILED", `Unable to resolve an ast-sgrep binary for this platform: ${message}. Run /asgrep-doctor.`, { cause: message });
+        }
     }
     try {
         accessSync(binary, constants.X_OK);
@@ -44,6 +64,8 @@ function getBinary(config, env, resolver) {
     catch (cause) {
         throw new RuntimeError("BINARY_NOT_EXECUTABLE", `ast-sgrep binary is not executable: ${binary}`, { binaryPath: binary, cause: cause instanceof Error ? cause.message : String(cause) });
     }
+    if (warning)
+        onRecovery?.(warning);
     return binary;
 }
 function byteLength(value) { return Buffer.byteLength(value, "utf8"); }
@@ -153,11 +175,15 @@ export class AstSgrepRuntime {
     config;
     #resolver;
     #environment;
+    #recoverMissingOverride;
+    #binaryWarning;
     constructor(pi, sources = {}, dependencies = {}) {
         this.pi = pi;
         this.#environment = sources.environment ?? process.env;
         this.config = resolveConfig({ ...sources, environment: this.#environment });
         this.#resolver = dependencies.resolveBinary ?? resolveBinary;
+        this.#recoverMissingOverride = ![sources.explicitProjectConfig, sources.projectSettings, sources.globalSettings, sources.defaults]
+            .some(source => source?.binaryPath !== undefined);
     }
     async resolveRoot(context) {
         return context[RESOLVED_ROOT]
@@ -249,7 +275,7 @@ export class AstSgrepRuntime {
         const root = await this.resolveRoot(context);
         const timeout = finitePositive(options.timeoutMs, this.config.timeoutMs, "timeoutMs");
         const env = this.#mergedEnv(options.env);
-        const binary = getBinary(this.config, env, this.#resolver);
+        const binary = this.resolveBinaryPath({ env });
         try {
             const execOptions = { cwd: root, env, timeout };
             if (options.signal)
@@ -267,7 +293,35 @@ export class AstSgrepRuntime {
     }
     /** Absolute path to the native binary (for sticky serve / stdin batch spawn). */
     resolveBinaryPath(options = {}) {
-        return getBinary(this.config, this.#mergedEnv(options.env), this.#resolver);
+        this.#binaryWarning = undefined;
+        return getBinary(this.config, this.#mergedEnv(options.env), this.#resolver, this.#recoverMissingOverride ? warning => { this.#binaryWarning = warning; } : undefined);
+    }
+    binaryWarning() { return this.#binaryWarning; }
+    /** Report installed layers even if the project's index cannot be opened. */
+    async diagnostics(context) {
+        const versionAt = (path) => {
+            try {
+                return JSON.parse(readFileSync(path, "utf8")).version ?? "unknown";
+            }
+            catch {
+                return "unknown";
+            }
+        };
+        const result = {
+            extension: versionAt(new URL("../../package.json", import.meta.url)),
+        };
+        try {
+            const launcher = createRequire(import.meta.url).resolve("ast-sgrep");
+            result.launcher = versionAt(join(dirname(launcher), "..", "package.json"));
+            result.binaryPath = this.resolveBinaryPath();
+            result.native = (await this.checkCompatibility(context)).version;
+        }
+        catch (cause) {
+            result.error = cause instanceof Error ? cause.message : String(cause);
+        }
+        if (this.#binaryWarning)
+            result.warning = this.#binaryWarning;
+        return result;
     }
     /** Merged process env for native Code Mode workers. */
     nativeEnv(options = {}) {

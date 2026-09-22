@@ -281,7 +281,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     const requireBackend = (availability, context) => {
         if (availability.kind !== "unavailable")
             return;
-        throw new RuntimeError("BACKEND_UNAVAILABLE", "ast-sgrep backend unavailable (no NAPI session and no CLI binary)", {
+        throw new RuntimeError("BACKEND_UNAVAILABLE", `ast-sgrep backend unavailable (no NAPI session and no CLI binary)${availability.cause ? `: ${availability.cause}` : ""}. Run /asgrep-doctor for recovery details.`, {
             backend: "unavailable",
             // Agent-facing mirrors of the closed unavailable variant (not an open product).
             napi: false,
@@ -502,6 +502,11 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
             catch {
                 // Doctor reports backend errors; a failed warmup must not block the session.
             }
+            finally {
+                const warning = runtime.binaryWarning?.();
+                if (warning && ctx.hasUI)
+                    ctx.ui.notify(warning, "warning");
+            }
         })();
     });
     pi.on("session_shutdown", () => {
@@ -716,14 +721,13 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             report(onUpdate, "read", "started");
             try {
-                ensurePool();
+                // Reading source must remain available when the binary or index is broken.
                 const options = signal ? { signal } : {};
-                const { root, scope, freshness: fresh } = await freshRoot(ctx.cwd, signal);
-                const sticky = await pool.acquire(root);
-                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), sticky }, rootedAt(root), { ...options, ...(scope ? { scope } : {}) });
+                const { root, scope } = await anchorRoot(ctx.cwd);
+                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o) }, rootedAt(root), { ...options, localReads: true, ...(scope ? { scope } : {}) });
                 const response = await bundle.asgrep.read(params);
                 report(onUpdate, "read", "completed");
-                return success("read", response, { backend: pool.backend(), ...(fresh ? { freshness: fresh } : {}) });
+                return success("read", response, { backend: "filesystem" });
             }
             catch (cause) {
                 return failure("read", cause, signal);

@@ -14,6 +14,8 @@ export type RuntimeLike = {
   resolveRoot?(context: { cwd: string }): Promise<string>;
   resolveBinaryPath?(options?: { env?: NodeJS.ProcessEnv }): string;
   nativeEnv?(options?: { env?: NodeJS.ProcessEnv }): NodeJS.ProcessEnv;
+  binaryWarning?(): string | undefined;
+  diagnostics?(context: { cwd: string }): Promise<Record<string, unknown>>;
   config?: { timeoutMs?: number; maxOutputBytes?: number; refreshIntervalMs?: number };
   inspectIndexCompatibility?(context: { cwd: string }): Promise<"ready" | "missing" | "incompatible">;
   rebuildIncompatibleIndex?(context: { cwd: string }, options?: RunOptions): Promise<MachineEnvelope>;
@@ -29,9 +31,9 @@ export type CommandContext = ToolContext & {
   hasUI: boolean;
   ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
 };
-export type CommandResult =
+export type CommandResult = { diagnostics?: Record<string, unknown> } & (
   | { ok: true; command: string; response: MachineEnvelope }
-  | { ok: false; command: string; error: { code: string; message: string; details: Readonly<Record<string, unknown>> } };
+  | { ok: false; command: string; error: { code: string; message: string; details: Readonly<Record<string, unknown>> } });
 export type Update = (result: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }) => void;
 
 export function bounded(text: string): string {

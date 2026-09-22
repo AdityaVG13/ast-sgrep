@@ -46,6 +46,12 @@ test("guard rejects the 2026-09-19 incident shape: floor above every published l
   );
 });
 
+test("Pi updates cannot retain the obsolete 2.0.0 native dependency", () => {
+  const extension = JSON.parse(readFileSync(join(root, "packages/pi/extension/package.json"), "utf8"));
+  assert.equal(launcherRangeSatisfies(extension.dependencies["ast-sgrep"], "2.0.0"), false);
+  assert.equal(launcherRangeSatisfies(extension.dependencies["ast-sgrep"], "2.5.2"), true);
+});
+
 test("guard CLI rejects an unpublished launcher family against the live contract range", () => {
   const result = runGuard([]);
   assert.equal(result.status, 1);

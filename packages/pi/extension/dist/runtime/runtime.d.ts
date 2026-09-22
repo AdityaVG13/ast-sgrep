@@ -40,6 +40,9 @@ export declare class AstSgrepRuntime {
     resolveBinaryPath(options?: {
         env?: NodeJS.ProcessEnv;
     }): string;
+    binaryWarning(): string | undefined;
+    /** Report installed layers even if the project's index cannot be opened. */
+    diagnostics(context: RuntimeContext): Promise<Record<string, unknown>>;
     /** Merged process env for native Code Mode workers. */
     nativeEnv(options?: {
         env?: NodeJS.ProcessEnv;

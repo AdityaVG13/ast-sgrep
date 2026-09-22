@@ -93,7 +93,7 @@ function clampExcerpt(excerptLines: number | undefined): number {
 export function createAsgrepConnector(
   host: BatchCapableHost,
   context: { cwd: string },
-  options: { signal?: AbortSignal; scope?: string } = {},
+  options: { signal?: AbortSignal; scope?: string; localReads?: boolean } = {},
 ): ConnectorBundle {
   const dispatcher = createCodemodeDispatcher(host);
   // One index per checkout: when the caller's cwd is a subdirectory of the
@@ -144,6 +144,7 @@ export function createAsgrepConnector(
   };
   const call = async (tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<MachineEnvelope> => {
     const opts = callOptions(signal);
+    if (tool === "read" && options.localReads) return fallbackCall(tool, args, opts.signal);
     if (NATIVE_FALLBACK_TOOLS.has(tool) && nativeMissing.has(tool)) return fallbackCall(tool, args, opts.signal);
     try {
       return await dispatcher.host.call(tool, args, context, opts);

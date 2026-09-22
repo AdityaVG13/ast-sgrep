@@ -17,10 +17,10 @@
     "extension": {
       "name": "pi-ast-sgrep",
       "directory": "packages/pi/extension",
-      "version": "2.5.2",
+      "version": "2.5.3",
       "independent": true,
       "tagPrefix": "pi-v",
-      "launcherRange": ">=2.0.0 <3",
+      "launcherRange": ">=2.5.2 <3",
       "policy": "The extension is the dogfooding surface and releases independently of the canonical family. Each release MUST (a) equal packages.extension.version, (b) declare dependencies.ast-sgrep exactly equal to launcherRange, (c) be built from the committed dist of its signed pi-v<version> tag, and (d) degrade gracefully when the resolved launcher predates a feature's native fields."
     },
     "launcher": {
@@ -130,8 +130,8 @@
     "layers": {
       "extension": {
         "compatibility": "range",
-        "launcherRange": ">=2.0.0 <3",
-        "minLauncherVersion": "2.0.0",
+        "launcherRange": ">=2.5.2 <3",
+        "minLauncherVersion": "2.5.2",
         "policy": "Extension accepts any launcher satisfying launcherRange, including official releases behind the canonical version; machine-schema assertions fail closed on incompatible envelopes. Binary identity accepts the same major; the in-process NAPI binding requires an exact native generation while CLI lanes cover older ones. Features requiring newer native fields gate on envelope content, not version; tools the launcher predates fall back to extension-side implementations with native-identical shapes."
       },
       "launcher": {
