@@ -409,13 +409,13 @@ function compactValue(value: unknown): string {
   if (value === null || value === undefined) return String(value);
   if (typeof value !== "object") return sanitizeContent(String(value));
   if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
-  const json = JSON.stringify(value);
+  const json = JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item);
   return json.length <= 80 ? json : `${json.slice(0, 79)}…`;
 }
 
 /** Model output is data, not the TUI's lossy summary. Keep a visible size bound. */
 function codemodePayload(value: unknown): string {
-  return sanitizeContent(typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
+  return sanitizeContent(typeof value === "string" ? value : JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item, 2) ?? String(value));
 }
 
 export function boundedText(text: string, maxChars = MAX_RESULT_CHARS, notice = "\n… (truncated)"): string {

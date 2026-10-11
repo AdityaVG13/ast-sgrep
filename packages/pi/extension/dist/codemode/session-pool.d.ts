@@ -24,6 +24,9 @@ export type SessionPoolOptions = {
 export type StickyStarter = (options: StickyWorkerOptions) => Promise<StickyWorker>;
 /** Unique search must not run on the JS thread; cache hits may. */
 export declare function isUncachedSearchError(cause: unknown): boolean;
+/** NAPI can surface SQLite u64 counters as BigInt. Preserve exact values
+ * above the safe-integer range in JSON-shaped tool results. */
+export declare function normalizeNativeValue(value: unknown): unknown;
 export declare function isClosedWorkerError(cause: unknown): boolean;
 export declare class NativeSessionPool {
     #private;

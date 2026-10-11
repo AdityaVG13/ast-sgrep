@@ -72,6 +72,13 @@ test("empty search results include a recovery hint", () => {
   assert.equal(withoutNext, "search: 0 hits");
 });
 
+test("Code Mode displays nested BigInts without losing integer identity", () => {
+  const value = 9007199254740993n;
+  const text = formatCodemodeResult({ nested: { generation: value } });
+  assert.match(text, /9007199254740993/);
+  assert.doesNotMatch(text, /9007199254740992/);
+});
+
 test("undefined Code Mode result tells the model to return", () => {
   const text = formatCodemodeResult(undefined, { wallMs: 1, backend: "napi" });
   assert.match(text, /no return statement/);
