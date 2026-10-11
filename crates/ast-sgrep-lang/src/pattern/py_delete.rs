@@ -99,6 +99,16 @@ pub(crate) fn py_delete_meta_pattern(pattern: &str) -> bool {
     py_delete_template(pattern).is_some()
 }
 
+/// The semicolon-terminated delete family is accepted-empty, not a binding
+/// template. Callers pass their already-trimmed pattern so census and
+/// execution share the same admission without changing their route order.
+pub(crate) fn py_delete_semi_pattern(pattern: &str) -> bool {
+    pattern.starts_with("del")
+        && pattern
+            .strip_suffix(';')
+            .is_some_and(|stripped| py_delete_template(stripped.trim()).is_some())
+}
+
 /// Parse the delete-lane pattern shapes (see the lane doc). Every element
 /// must be a listed spelling; anything else (trailing commas, meta indexes,
 /// deep chains) keeps its registered route (fail-closed). `$$$`-prefixed
@@ -311,28 +321,16 @@ pub(crate) fn parse_py_del_postfix(text: &str) -> Option<(PyDelAtom, Vec<PyDelPo
     if text.is_empty() {
         return None;
     }
-    let atom_at = |segment: &str| -> Option<PyDelAtom> {
-        if let Some(name) = capture_name(segment) {
-            if segment.starts_with("$$$") {
-                Some(PyDelAtom::MetaMulti(name.to_string()))
-            } else {
-                Some(PyDelAtom::Meta(name.to_string()))
-            }
-        } else if is_pattern_ident(segment) {
-            Some(PyDelAtom::Literal(segment.to_string()))
-        } else {
-            None
-        }
-    };
+
     // Head: the identifier/meta run before the first `[` or `.`.
     let head_end = text.find(['[', '.']).unwrap_or(text.len());
-    let head = atom_at(text[..head_end].trim())?;
+    let head = py_del_call_atom(text[..head_end].trim())?;
     let mut ops = Vec::new();
     let mut rest = &text[head_end..];
     while !rest.is_empty() {
         if let Some(after) = rest.strip_prefix('.') {
             let end = after.find(['[', '.']).unwrap_or(after.len());
-            let atom = atom_at(after[..end].trim())?;
+            let atom = py_del_call_atom(after[..end].trim())?;
             ops.push(PyDelPostfix::Attr(atom));
             rest = &after[end..];
         } else {
@@ -354,19 +352,10 @@ pub(crate) fn parse_py_del_postfix(text: &str) -> Option<(PyDelAtom, Vec<PyDelPo
                 }
                 let slot = |segment: &str| -> Option<PyDelAtom> {
                     let segment = segment.trim();
-                    if let Some(name) = capture_name(segment) {
-                        if segment.starts_with("$$$") {
-                            Some(PyDelAtom::MetaMulti(name.to_string()))
-                        } else {
-                            Some(PyDelAtom::Meta(name.to_string()))
-                        }
-                    } else if is_pattern_ident(segment)
-                        || !segment.is_empty() && segment.chars().all(|c| c.is_ascii_digit())
-                    {
-                        Some(PyDelAtom::Literal(segment.to_string()))
-                    } else {
-                        None
-                    }
+                    py_del_call_atom(segment).or_else(|| {
+                        (!segment.is_empty() && segment.chars().all(|c| c.is_ascii_digit()))
+                            .then(|| PyDelAtom::Literal(segment.to_string()))
+                    })
                 };
                 let (lo, hi, step) = match parts.len() {
                     2 => (slot(parts[0])?, slot(parts[1])?, None),
@@ -377,7 +366,7 @@ pub(crate) fn parse_py_del_postfix(text: &str) -> Option<(PyDelAtom, Vec<PyDelPo
                 rest = &after[close + 1..];
                 continue;
             }
-            let atom = atom_at(inner)?;
+            let atom = py_del_call_atom(inner)?;
             ops.push(PyDelPostfix::Index(atom));
             rest = &after[close + 1..];
         }
@@ -407,9 +396,6 @@ pub(crate) fn split_top_level_commas(text: &str) -> Vec<&str> {
 }
 
 pub(crate) fn match_py_delete_meta(source: &str, pattern: &str) -> Option<Vec<PatternMatch>> {
-    if !py_delete_meta_pattern(pattern) {
-        return None;
-    }
     let template = py_delete_template(pattern)?;
     let tree = parse_source(Language::Python, source).ok()?;
     let mut out = Vec::new();

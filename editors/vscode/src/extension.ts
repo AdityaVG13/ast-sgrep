@@ -58,6 +58,24 @@ const DOCUMENT_SELECTOR: LanguageClientOptions['documentSelector'] = [
 ];
 
 const clients = new Map<string, LanguageClient>();
+let active = false;
+let lifecycle: Promise<void> = Promise.resolve();
+
+function serializeClients(operation: () => Promise<void>): Promise<void> {
+  const next = lifecycle.then(operation);
+  // A failed operation must reject its caller without poisoning later retries.
+  lifecycle = next.catch(() => {});
+  return next;
+}
+
+function reportClientError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  void vscode.window.showErrorMessage(`ast-sgrep language server failed: ${message}`);
+}
+
+function folderIsLive(key: string): boolean {
+  return active && (vscode.workspace.workspaceFolders ?? []).some((folder) => folderKey(folder) === key);
+}
 
 function folderKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
@@ -75,10 +93,10 @@ async function startClientForFolder(
   folder: vscode.WorkspaceFolder,
   serverPath: string,
   indexPath: string,
-): Promise<LanguageClient> {
+): Promise<void> {
   const key = folderKey(folder);
   const existing = clients.get(key);
-  if (existing) return existing;
+  if (existing) return;
   const executable: Executable = {
     command: serverPath,
     args: ['--stdio'],
@@ -91,9 +109,18 @@ async function startClientForFolder(
     serverOptions,
     clientOptionsFor(folder, indexPath),
   );
+  try {
+    await client.start();
+  } catch (error) {
+    try { await client.dispose(); } catch (cleanupError) { reportClientError(cleanupError); }
+    throw error;
+  }
+  // Startup can outlive removal or shutdown; only publish a ready, wanted client.
+  if (!folderIsLive(key)) {
+    await client.dispose();
+    return;
+  }
   clients.set(key, client);
-  await client.start();
-  return client;
 }
 
 async function stopClient(key: string): Promise<void> {
@@ -103,35 +130,42 @@ async function stopClient(key: string): Promise<void> {
   await client.stop();
 }
 
-async function reconcileClients(): Promise<void> {
-  const configuration = vscode.workspace.getConfiguration('asgrep');
-  const serverPath = configuration.get<string>('serverPath', 'asgrep-lsp').trim() || 'asgrep-lsp';
-  const indexPath = configuration.get<string>('indexPath', '').trim();
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  const live = new Set(folders.map(folderKey));
-  for (const key of [...clients.keys()]) {
-    if (!live.has(key)) await stopClient(key);
-  }
-  for (const folder of folders) {
-    await startClientForFolder(folder, serverPath, indexPath);
-  }
+function reconcileClients(): Promise<void> {
+  return serializeClients(async () => {
+    const configuration = vscode.workspace.getConfiguration('asgrep');
+    const serverPath = configuration.get<string>('serverPath', 'asgrep-lsp').trim() || 'asgrep-lsp';
+    const indexPath = configuration.get<string>('indexPath', '').trim();
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    for (const key of [...clients.keys()]) {
+      if (!folderIsLive(key)) await stopClient(key);
+    }
+    for (const folder of folders) {
+      // Recheck after each await, not against the reconcile's obsolete snapshot.
+      if (folderIsLive(folderKey(folder))) await startClientForFolder(folder, serverPath, indexPath);
+    }
+  });
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  active = true;
   context.subscriptions.push(
     vscode.commands.registerCommand('asgrep.search', searchWorkspace),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      void reconcileClients();
+      void reconcileClients().catch(reportClientError);
     }),
     new vscode.Disposable(() => {
-      void Promise.all([...clients.keys()].map((key) => stopClient(key)));
+      void deactivate().catch(reportClientError);
     }),
   );
   await reconcileClients();
 }
 
 export async function deactivate(): Promise<void> {
-  await Promise.all([...clients.keys()].map((key) => stopClient(key)));
+  active = false;
+  // Drain in-flight startup/cleanup before shutdown resolves. Late events are fenced.
+  await serializeClients(async () => {
+    await Promise.all([...clients.keys()].map((key) => stopClient(key)));
+  });
 }
 
 async function clientForSearch(): Promise<{ client: LanguageClient; folder: vscode.WorkspaceFolder } | undefined> {

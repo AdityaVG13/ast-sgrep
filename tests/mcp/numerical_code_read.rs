@@ -32,6 +32,27 @@ fn node_content(body: &Value, index: usize) -> &str {
     body["nodes"][index]["content"].as_str().unwrap()
 }
 
+/// INTENT: CRLF is framing, but a final CR without LF is source content.
+/// KILLS: unconditional CR stripping at the end of every scanned line.
+#[test]
+fn code_read_preserves_unpaired_final_carriage_return() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("mixed.rs"), "first\r\nlast\r").unwrap();
+    let responses = rpc_session(
+        vec![tool_call(
+            1,
+            "code_read",
+            json!({"ids": ["mixed.rs#L1-L2"]}),
+        )],
+        Some(temp.path()),
+    );
+    assert_tool_success_shape(&responses[0]);
+    let body = tool_body(&responses[0]);
+    assert_eq!(node_content(&body, 0), "first\nlast\r", "{body:#}");
+    assert_eq!(window(&body, 0), (1, 2));
+    assert_eq!(body["nodes"][0]["truncated"], false);
+}
+
 /// INTENT=`max_chars / n` remainder-to-FIRST deal, conservation
 /// (saturated spend == cap, unsaturated == fs total), multi-ref monotonicity,
 /// and exact split chains 7/3→8/3 and 11/4→14/4.

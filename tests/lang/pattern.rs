@@ -4,6 +4,88 @@ use ast_sgrep_lang::{
 };
 use ast_sgrep_testkit::sample_file;
 #[test]
+fn review_grammar_kotlin_chain_captures_bind_and_unify() {
+    for (pattern, source, expected) in [
+        (
+            "a?.b($X)?.c($Y)",
+            "a?.b(1)?.c(2)",
+            vec![("X", "1"), ("Y", "2")],
+        ),
+        ("a.b($X).c($Y)", "a.b(1).c(2)", vec![("X", "1"), ("Y", "2")]),
+        (
+            "a?.b($X)?.c($$$A)",
+            "a?.b(1)?.c(2, 3)",
+            vec![("X", "1"), ("$$$A", "2, 3")],
+        ),
+    ] {
+        let hits = match_pattern(Language::Kotlin, source, pattern).unwrap();
+        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
+        for (name, text) in expected {
+            assert_eq!(
+                hits[0].captures.get(name).map(String::as_str),
+                Some(text),
+                "fieldless Kotlin capture {name}: {pattern}"
+            );
+        }
+    }
+    let hits = match_pattern(
+        Language::Kotlin,
+        "a?.b(1)?.c(2)\na?.b(1)?.c(1)\n",
+        "a?.b($X)?.c($X)",
+    )
+    .unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "Kotlin repeated-name equality: {hits:?}"
+    );
+}
+
+#[test]
+fn review_grammar_ruby_parenthesized_call_chain_contracts() {
+    let source = "a.b(1).c(2)\na.b(1, 2).c(3)\na&.b(1).c(2)\na.b(1).c 2\n";
+    let hits = match_pattern(Language::Ruby, source, "a.b($X).c($Y)").unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![1],
+        "Ruby receiver hop and arity: {hits:?}"
+    );
+    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("1"));
+    assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("2"));
+    assert!(
+        match_pattern(Language::Ruby, "a.b.c(1)\n", "a.b().c($Y)")
+            .unwrap()
+            .is_empty(),
+        "a bare receiver link is not a parenthesized call segment"
+    );
+}
+
+#[test]
+fn review_grammar_php_statement_nullsafe_receiver_captures() {
+    let source = "<?php\n$x?->m(1);\n$x?->m($x);\n$x->m($x);\n";
+    let hits = match_pattern(Language::Php, source, "$O?->$M($X);").unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2, 3],
+        "nullsafe statement connector: {hits:?}"
+    );
+    for (hit, argument) in hits.iter().zip(["1", "$x"]) {
+        assert_eq!(
+            hit.captures.get("O").map(String::as_str),
+            Some("$x"),
+            "nullsafe statement receiver must bind"
+        );
+        assert_eq!(hit.captures.get("M").map(String::as_str), Some("m"));
+        assert_eq!(hit.captures.get("X").map(String::as_str), Some(argument));
+    }
+    let hits = match_pattern(Language::Php, "<?php\n$x?->m(1);\n", "$O?->m($O);").unwrap();
+    assert!(
+        hits.is_empty(),
+        "unequal receiver/argument names must not unify: {hits:?}"
+    );
+}
+
+#[test]
 fn literal_pattern_matches_rust_symbol() {
     let source = sample_file("src/main.rs");
     let hits = match_pattern(Language::Rust, &source, "process_request").unwrap();
@@ -144,7 +226,8 @@ fn ts_and_swift_fn_templates_require_return_type_agreement() {
         hits[0].excerpt
     );
 
-    let swift = "func greet(name: String) -> String {\n    return name\n}\n\nfunc run() {\n    let _ = greet(name: \"x\")\n}\n";
+    let swift =
+        "func greet() -> String {\n    return \"x\"\n}\n\nfunc run() {\n    let _ = greet()\n}\n";
     let hits = match_pattern(Language::Swift, swift, "func $A() { $$$B }").unwrap();
     assert_eq!(
         hits.len(),
@@ -1450,16 +1533,18 @@ fn f62_1_rust_attribute_templates_match() {
 }
 
 #[test]
-fn f62_1_raw_string_metavar_is_literal_text_like_sg() {
-    // sg probes: `tag(r#"$A"#)` = exit 1 ran-empty — accepted pattern,
-    // zero hits (the metavariable bytes are literal text inside the raw
-    // string). The pre-fix tree refused the pattern outright.
-    let src = "fn f() {\n    tag(r#\"hi\")\n    tag(r#\"bye\")\n}\n";
+fn f62_1_raw_string_metavar_binds_content() {
+    // ast-grep 0.45.3 binds the content of valid raw strings. The old
+    // candidates omitted their closing # and only tested error recovery.
+    let src = "fn f() {\n    tag(r#\"hi\"#);\n    tag(r#\"bye\"#);\n    tag(r#\"$A\"#);\n}\n";
     assert!(!needs_ast_grep_fallback("tag(r#\"$A\"#)"));
     let hits = match_pattern(Language::Rust, src, "tag(r#\"$A\"#)").unwrap();
-    assert!(
-        hits.is_empty(),
-        "raw-string metavar must bind nothing: {hits:?}"
+    assert_eq!(lines_of(&hits), vec![2, 3, 4], "{hits:?}");
+    assert_eq!(
+        hits.iter()
+            .map(|h| h.captures.get("A").map(String::as_str))
+            .collect::<Vec<_>>(),
+        vec![Some("hi"), Some("bye"), Some("$A")]
     );
 }
 
@@ -4999,15 +5084,16 @@ fn f85a_php_flat_and_chain_rest_slot_arity_sg_exact() {
 /// literal. Mutant cells: drop the arguments-node rest arm (every cell
 /// flips []); allow zero-length trailing shared rests (line 6 over-answers
 /// in the first two cells); bind the whole-list rest only non-empty (line
-/// 6 drops out of the `$$$A` cell).
+/// 10 drops out of the `$$$A` cell; requiring a nonempty leading rest drops
+/// line 11 from the `$$$A, 3` cell).
 #[test]
 fn f85a_php_plain_call_rest_slots_bind_sg_exact() {
-    let plain = "<?php\n$b = f($v, 1);\n$b = f(1, $v);\n$b = f($v, 1, 2);\n$b = f($v, $u);\n$b = f($v);\n$b = f(1, 2);\n$b = f($v, 1, 2, 3);\n$b = g($v, 1);\n";
+    let plain = "<?php\n$b = f($v, 1);\n$b = f(1, $v);\n$b = f($v, 1, 2);\n$b = f($v, $u);\n$b = f($v);\n$b = f(1, 2);\n$b = f($v, 1, 2, 3);\n$b = g($v, 1);\n$b = f();\n$b = f(3);\n";
     for (pattern, want) in [
         ("$b = f($v, $$$A);", vec![2u32, 4, 5, 8]),
         ("$b = f($A, $$$B);", vec![2u32, 3, 4, 5, 7, 8]),
-        ("$b = f($$$A);", vec![2u32, 3, 4, 5, 6, 7, 8]),
-        ("$b = f($$$A, 3);", vec![8u32]),
+        ("$b = f($$$A);", vec![2u32, 3, 4, 5, 6, 7, 8, 10, 11]),
+        ("$b = f($$$A, 3);", vec![8u32, 11]),
         // LHS mismatch stays out (sg [] — the g line answers only its own
         // callee, probed).
         ("$c = f($A, $$$B);", vec![]),
@@ -5029,6 +5115,11 @@ fn f85a_php_plain_call_rest_slots_bind_sg_exact() {
     let whole = match_pattern(Language::Php, plain, "$b = f($$$A);").unwrap();
     let six = whole.iter().find(|h| h.line_start == 6).expect("line 6");
     assert_eq!(six.captures.get("$$$A").map(String::as_str), Some("$v"));
+    let empty = whole.iter().find(|h| h.line_start == 10).expect("f()");
+    assert_eq!(empty.captures.get("$$$A").map(String::as_str), Some(""));
+    let leading = match_pattern(Language::Php, plain, "$b = f($$$A, 3);").unwrap();
+    let empty = leading.iter().find(|h| h.line_start == 11).expect("f(3)");
+    assert_eq!(empty.captures.get("$$$A").map(String::as_str), Some(""));
 }
 
 /// FB-82a-03 (MED, silent FALSE-POSITIVE): a `;`-terminated assignment or
@@ -9410,7 +9501,6 @@ fn f118a_callee_position_link_trivia_is_transparent() {
     for (lang, lang_name, src) in [
         (Language::Kotlin, "kotlin", "a /*c*/ ?.b?.c(1);\n"),
         (Language::Kotlin, "kotlin", "a?.b /*c*/ ?.c(1);\n"),
-        (Language::Kotlin, "kotlin", "a?.b(1) /*c*/ ?.c(2);\n"),
         (Language::Kotlin, "kotlin", "a. /*c*/ ?.b?.c(1);\n"),
         (Language::Swift, "swift", "a /*c*/ ?.b?.c(1);\n"),
         (Language::Swift, "swift", "a?.b /*c*/ ?.c(1);\n"),
@@ -9424,6 +9514,13 @@ fn f118a_callee_position_link_trivia_is_transparent() {
         );
     }
     // Clean controls keep answering through the gated arm.
+    let call_chain = "a?.b(1) /*c*/ ?.c(2);\n";
+    let pattern = "a?.b($Y)?.c($X)";
+    let clean = match_pattern(Language::Kotlin, &call_chain.replace("/*c*/", ""), pattern).unwrap();
+    assert_eq!(klass_lines(&clean), vec![1]);
+    assert!(match_pattern(Language::Kotlin, call_chain, pattern)
+        .unwrap()
+        .is_empty());
     for (lang, lang_name) in [(Language::Kotlin, "kotlin"), (Language::Swift, "swift")] {
         let hits = match_pattern(lang, "a?.b?.c(1);\n", "a?.b?.c($X)").unwrap();
         assert_eq!(
@@ -10030,15 +10127,18 @@ fn f122a_bodyless_if_template_answers_named_if_nodes_only() {
 #[test]
 fn f122b_swift_link_structural_trivia_refuses_and_transparent_keeps() {
     // Fail-open cells closed (were subject HITS where sg refuses).
-    for src in [
-        "let r = a /*c*/ .b(1)\n",
-        "let r = a /*c*/ /*d*/ .b(1)\n",
-        "let r = a.b /*c*/ .c(2)\n",
+    for (src, literal, meta_pattern) in [
+        ("let r = a /*c*/ .b(1)\n", "a.b($X)", "$A.b($X)"),
+        ("let r = a /*c*/ /*d*/ .b(1)\n", "a.b($X)", "$A.b($X)"),
+        ("let r = a.b /*c*/ .c(2)\n", "a.b.c($X)", "$A.c($X)"),
     ] {
-        let hits = match_pattern(Language::Swift, src, "a.b($X)").unwrap();
-        assert!(hits.is_empty(), "swift {src:?} must refuse a.b($X)");
-        let meta = match_pattern(Language::Swift, src, "$A.b($X)").unwrap();
-        assert!(meta.is_empty(), "swift {src:?} must refuse $A.b($X)");
+        for pattern in [literal, meta_pattern] {
+            let clean = src.replace("/*c*/", "").replace("/*d*/", "");
+            let hits = match_pattern(Language::Swift, &clean, pattern).unwrap();
+            assert_eq!(lines_of(&hits), vec![1], "clean {pattern}: {hits:?}");
+            let hits = match_pattern(Language::Swift, src, pattern).unwrap();
+            assert!(hits.is_empty(), "swift {src:?} must refuse {pattern}");
+        }
     }
     // PASS 122 live-grid CORRECTION (oracle /tmp/phase122/f2 sw_mid3 +
     // sw_mid3meta): sg 0.45.2 ANSWERS the trivia-free INNER link of a
@@ -10507,16 +10607,35 @@ fn f124c_swift_py_if_trivia_transparent_structural_elsewhere() {
         match_pattern(Language::Python, "if x:\n    # c\n    b()\n", "if $X: $B").unwrap();
     assert_eq!(lines_of(&py_body), vec![1], "py body-start comment");
     // Structural grammars keep the refusal (f122a + f3 controls).
-    for (lang, src) in [
-        (Language::JavaScript, "if (a) /*c*/ { b(); }\n"),
-        (Language::JavaScript, "if /*c*/ (a) { b(); }\n"),
-        (Language::Kotlin, "fun m() {\n    if (c) /*c*/ { d() }\n}\n"),
+    for (lang, src, pattern, line) in [
+        (
+            Language::JavaScript,
+            "if (a) /*c*/ { b(); }\n",
+            "if ($X) { $B }",
+            1,
+        ),
+        (
+            Language::JavaScript,
+            "if /*c*/ (a) { b(); }\n",
+            "if ($X) { $B }",
+            1,
+        ),
+        (
+            Language::Kotlin,
+            "fun m() {\n    if (c) /*c*/ { d() }\n}\n",
+            "if ($X) { $B }",
+            2,
+        ),
         (
             Language::Go,
             "package main\nfunc main() {\n\tif a /*c*/ { b() }\n}\n",
+            "if $X { $B }",
+            3,
         ),
     ] {
-        let hits = match_pattern(lang, src, "if ($X) { $B }").unwrap();
+        let clean = match_pattern(lang, &src.replace("/*c*/", ""), pattern).unwrap();
+        assert_eq!(lines_of(&clean), vec![line], "clean {lang}: {clean:?}");
+        let hits = match_pattern(lang, src, pattern).unwrap();
         assert!(
             hits.is_empty(),
             "{lang} {src:?} must stay structural-refused"
@@ -14520,7 +14639,7 @@ fn f140h_semi_keyword_accepted_empty_siblings() {
 /// binds `$$NAME` in the SINGLE namespace (PASS 75a) and `$$$NAME` in the
 /// MULTI namespace. Gridded receipts: ja resource `$$$X` (n1, multi),
 /// ja body `$$$B` (n1), php name `$$$N` (n1, multi), php BODY `$$B`/`$$$B`
-/// (sg rc1 `[]` — the accepted-empty posture), java class heads `$$N`
+/// (global-name mismatch controls), java class heads `$$N`
 /// (single) and `$$$N` (multi), py del atom `d[$$$K]` (multi), `del $$$X`
 /// (multi).
 #[test]
@@ -14546,7 +14665,8 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
         "grid I_ja_dollarres held: {hits:?}"
     );
     assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("lock"));
-    // php: name multi-binds; the BODY double/multi-prefix is accepted-empty.
+    // PHP: name multi-binds. Global namespace templates below refuse this
+    // named namespace, not the body prefix; matching bodies bind in f141c.
     let php = "<?php\nnamespace App {\n    function f() {}\n}\n";
     let hits = match_pattern(Language::Php, php, "namespace $$$N { $B }").unwrap();
     assert_eq!(
@@ -14561,7 +14681,7 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
     let hits = match_pattern(Language::Php, php, "namespace { $$B }").unwrap();
     assert!(
         hits.is_empty(),
-        "grid I_php_dollarbody: body double-prefix accepted-empty: {hits:?}"
+        "global namespace pattern must not match namespace App: {hits:?}"
     );
     let hits = match_pattern(Language::Php, php, "namespace { $$$B }").unwrap();
     assert!(hits.is_empty(), "grid I_php_dollarbody3: {hits:?}");
@@ -14597,8 +14717,8 @@ fn f140i_multi_prefix_atoms_follow_sg_namespaces() {
         "grid R3_py_del_whole_d3: {hits:?}"
     );
     assert_eq!(hits[0].captures.get("$$$X").map(String::as_str), Some("x"));
-    // The LIST-level paren wrap over a multi-meta slot binds NOTHING —
-    // sg ACCEPTED-empty (R3_py_del_paren_d3 rc1 `[]`).
+    // Parenthesized deletion must not match an unparenthesized candidate.
+    // Matching parenthesized multi-meta binding is covered by f141j.
     let hits = match_pattern(Language::Python, pyw, "del ($$$X)").unwrap();
     assert!(hits.is_empty(), "grid R3_py_del_paren_d3: {hits:?}");
 }
@@ -14896,7 +15016,7 @@ fn f141d_cs_seam_trivia_class() {
     let tpl = "fixed ($D) { checked { $B } }";
     let seam_case = |seam: &str| {
         format!(
-            "class C {{\n    void M() {{\n        fixed (int* p = arr) {{{seam} checked {{ x = 1; }}\n    }}\n}}\n"
+            "class C {{\n    void M() {{\n        fixed (int* p = arr) {{{seam} checked {{ x = 1; }}\n        }}\n    }}\n}}\n"
         )
     };
     // Admitted seam trivia.
@@ -16044,7 +16164,7 @@ fn f142j_cs_record_struct_lane() {
     );
     let hits = match_pattern(
         Language::CSharp,
-        "public record Point(int X, int Y);\n",
+        "public record Point(int X);\n",
         "record $N($P);",
     )
     .unwrap();
@@ -16107,11 +16227,11 @@ fn f142j_cs_record_struct_lane() {
 }
 
 /// f142k (142A-F5 cs using dotted-meta patterns — grids G1/G2/G8/G9/I6):
-/// a plain-face cs using pattern whose target is a dotted/qualified META
-/// path is sg ACCEPTED-EMPTY (binds NOTHING on any candidate — census
-/// answerable, walk empty, never loud).
+/// Dotted-meta using directives require literal suffix agreement. The old
+/// negative-only fixture could not distinguish that from unconditional
+/// refusal. Matching-suffix captures below were observed with ast-grep 0.45.3.
 #[test]
-fn f142k_using_dotted_meta_accepted_empty() {
+fn f142k_using_dotted_meta_requires_matching_suffix() {
     for (pattern, cand, tag) in [
         ("using $A.B;", "using System.Console;\n", "G1"),
         ("using static $N.M;", "using static System.Math;\n", "G2"),
@@ -16125,14 +16245,28 @@ fn f142k_using_dotted_meta_accepted_empty() {
     ] {
         assert!(
             native_pattern_answerable(Language::CSharp, pattern),
-            "census {tag}: {pattern} must be accepted-empty-answerable"
+            "census {tag}: {pattern} must be answerable"
         );
         let hits = match_pattern(Language::CSharp, cand, pattern).unwrap();
         assert!(hits.is_empty(), "{tag} walk empty: {hits:?}");
     }
-    // Negative control: the SINGLE-segment meta path is an ordinary
-    // BINDING face, not accepted-empty — the >=2-segment minimum of the
-    // dotted/qualified family is load-bearing (G1's base case).
+    for (pattern, candidate, key) in [
+        ("using $A.B;", "using System.B;\n", "A"),
+        ("using static $N.M;", "using static System.M;\n", "N"),
+        ("global using $A.B;", "global using System.B;\n", "A"),
+    ] {
+        let hits = match_pattern(Language::CSharp, candidate, pattern).unwrap();
+        assert_eq!(
+            lines_of(&hits),
+            vec![1],
+            "matching suffix: {pattern}: {hits:?}"
+        );
+        assert_eq!(
+            hits[0].captures.get(key).map(String::as_str),
+            Some("System")
+        );
+    }
+    // Single-segment binding remains supported too.
     let hits = match_pattern(Language::CSharp, "using System;\n", "using $N;").unwrap();
     assert_eq!(
         lines_of(&hits),
@@ -16143,6 +16277,48 @@ fn f142k_using_dotted_meta_accepted_empty() {
         hits[0].captures.get("N").map(String::as_str),
         Some("System")
     );
+    // The leading meta owns the entire qualifier, not only its first
+    // identifier; literal suffixes still constrain every trailing segment.
+    for (pattern, candidate, qualifier) in [
+        ("using $A.B;", "using Outer.System.B;\n", "Outer.System"),
+        ("using $A.B.C;", "using Outer.System.B.C;\n", "Outer.System"),
+        ("using $A.B;", "global using System.B;\n", "System"),
+        (
+            "using $A.B;",
+            "using Outer . System . B;\n",
+            "Outer . System",
+        ),
+    ] {
+        assert!(!needs_ast_grep_fallback(pattern), "ingress: {pattern}");
+        assert!(native_pattern_answerable(Language::CSharp, pattern));
+        let hits = match_pattern(Language::CSharp, candidate, pattern).unwrap();
+        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
+        assert_eq!(lines_of(&hits), vec![1]);
+        assert_eq!(
+            hits[0].captures.get("A").map(String::as_str),
+            Some(qualifier)
+        );
+        assert_eq!(
+            &candidate[hits[0].byte_start..hits[0].byte_end],
+            candidate.trim_end(),
+            "the hit spans the directive, not its qualifier"
+        );
+        assert_eq!(
+            hits[0].captures.get("MATCH").map(String::as_str),
+            Some(candidate.trim_end())
+        );
+    }
+    for (pattern, candidate) in [
+        ("using $A.B.C;", "using System.X.C;\n"),
+        ("using $A.B;", "using System.B.C;\n"),
+        ("using $A.B;", "using static System.B;\n"),
+        ("using static $A.B;", "using System.B;\n"),
+        ("global using $A.B;", "using System.B;\n"),
+        ("using $A.B;", "using Alias = System.B;\n"),
+    ] {
+        let hits = match_pattern(Language::CSharp, candidate, pattern).unwrap();
+        assert!(hits.is_empty(), "suffix/decorations: {pattern}: {hits:?}");
+    }
 }
 
 /// f142l (142A-F4 cs alias rhs faces — grids F1/F4/F7/F8-F10/H4-H5/I7/B9):
@@ -17748,5 +17924,241 @@ fn f147c_statement_head_newline_seam_law() {
     assert_eq!(
         ast_sgrep_lang::required_pattern_literal("return \n$A"),
         None
+    );
+}
+
+// br-mcm: the mixed-body splitter must use UTF-8 boundaries and PHP's
+// grammar-specific trivia, not one byte past arbitrary Rust whitespace.
+#[test]
+fn review_php_mixed_body_unicode_boundary() {
+    let source = "<?php namespace App { const A = 1; function f() {} }";
+    let hits = match_pattern(
+        Language::Php,
+        source,
+        "namespace App { const A = 1;\u{00a0}$$B }",
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 1, "NBSP is PHP gap trivia: {hits:?}");
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("function f() {}")
+    );
+    assert!(
+        match_pattern(
+            Language::Php,
+            source,
+            "namespace App { const A = 1;\u{3000}$$B }",
+        )
+        .unwrap()
+        .is_empty(),
+        "U+3000 is not PHP gap trivia"
+    );
+}
+
+// br-mcm: formatting between tokens is transparent, but whitespace and
+// comment-looking bytes inside a literal are significant.
+#[test]
+fn review_php_mixed_prefix_preserves_literal_contents() {
+    for (kind, tail) in [
+        ("namespace", "function f() {}"),
+        ("class", "public function f() {}"),
+        ("trait", "public function f() {}"),
+        ("interface", "public function f();"),
+    ] {
+        for (wanted, other) in [
+            ("a b", "ab"),
+            ("a/*x*/b", "ab"),
+            ("https://one", "https://two"),
+        ] {
+            let pattern = format!("{kind} $N {{ const A = \"{wanted}\"; $$B }}");
+            let source = format!(
+                "<?php\n{kind} Good {{ const A=\"{wanted}\"; {tail} }}\n{kind} Bad {{ const A = \"{other}\"; {tail} }}\n"
+            );
+            let hits = match_pattern(Language::Php, &source, &pattern).unwrap();
+            assert_eq!(lines_of(&hits), vec![2], "{pattern}: {hits:?}");
+            assert_eq!(hits[0].captures.get("N").map(String::as_str), Some("Good"));
+            assert_eq!(hits[0].captures.get("B").map(String::as_str), Some(tail));
+        }
+    }
+}
+
+#[test]
+fn review_java_synchronized_method_return_type_is_significant() {
+    let source = "class C {\n synchronized void v() { work(); }\n synchronized int i() { return 1; }\n synchronized String s() { return \"x\"; }\n}";
+    for (ret, name, line) in [("void", "v", 2), ("int", "i", 3), ("String", "s", 4)] {
+        let pattern = format!("synchronized {ret} $M() {{ $B }}");
+        let hits = match_pattern(Language::Java, source, &pattern).unwrap();
+        assert_eq!(lines_of(&hits), vec![line], "{pattern}: {hits:?}");
+        assert_eq!(hits[0].captures.get("M").map(String::as_str), Some(name));
+    }
+    let source = "class C {\n void v() { synchronized (a) { work(); } }\n int i() { synchronized (a) { work(); } }\n}";
+    let hits = match_pattern(
+        Language::Java,
+        source,
+        "void $M() { synchronized ($X) { $B } }",
+    )
+    .unwrap();
+    assert_eq!(lines_of(&hits), vec![2], "method-body route: {hits:?}");
+    assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("v"));
+    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("a"));
+}
+
+#[test]
+fn review_java_synchronized_comments_are_not_parameters() {
+    let source = "class C {\n synchronized void empty(/* comment */) { work(); }\n synchronized void nonempty(/* comment */ int x) { work(); }\n}";
+    let hits = match_pattern(Language::Java, source, "synchronized void $M() { $B }").unwrap();
+    assert_eq!(
+        lines_of(&hits),
+        vec![2],
+        "comments must not change arity: {hits:?}"
+    );
+    assert_eq!(hits[0].captures.get("M").map(String::as_str), Some("empty"));
+    assert_eq!(
+        hits[0].captures.get("B").map(String::as_str),
+        Some("work();")
+    );
+}
+
+#[test]
+fn review_java_synchronized_resource_skips_comment_extras() {
+    let source = "class C { void f() { synchronized (/* comment */ lock) { work(); } } }";
+    for pattern in [
+        "synchronized ($X) { $B }",
+        "void $M() { synchronized ($X) { $B } }",
+    ] {
+        let hits = match_pattern(Language::Java, source, pattern).unwrap();
+        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
+        assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("lock"));
+        assert_eq!(
+            hits[0].captures.get("B").map(String::as_str),
+            Some("work();")
+        );
+    }
+    let source = "class C { void f() { synchronized (/* outer */ a) { synchronized (/* inner */ b) { work(); } } } }";
+    let hits = match_pattern(
+        Language::Java,
+        source,
+        "synchronized ($X) { synchronized ($Y) { $B } }",
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 1, "nested resource extras: {hits:?}");
+    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("a"));
+    assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("b"));
+}
+
+#[test]
+fn review_optional_chain_positional_arguments_bind_and_unify() {
+    for (pattern, source) in [
+        ("a?.b($X, $Y).c()", "a?.b(1, 2).c();"),
+        ("a($X, $Y)?.b()", "a(1, 2)?.b();"),
+        ("a?.b().c($X, $Y)", "a?.b().c(1, 2);"),
+    ] {
+        let hits = match_pattern(Language::JavaScript, source, pattern).unwrap();
+        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
+        assert_eq!(
+            hits[0].captures.get("X").map(String::as_str),
+            Some("1"),
+            "{pattern}"
+        );
+        assert_eq!(
+            hits[0].captures.get("Y").map(String::as_str),
+            Some("2"),
+            "{pattern}"
+        );
+    }
+    for (pattern, source) in [
+        ("a?.b($X, $X).c()", "a?.b(1, 1).c();\na?.b(1, 2).c();"),
+        (
+            "a($X, $Y)?.b($X, $Y)",
+            "a(1, 2)?.b(1, 2);\na(1, 2)?.b(2, 1);",
+        ),
+    ] {
+        let hits = match_pattern(Language::JavaScript, source, pattern).unwrap();
+        assert_eq!(
+            lines_of(&hits),
+            vec![1],
+            "same-name equality: {pattern}: {hits:?}"
+        );
+        assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("1"));
+    }
+}
+
+// LE-004: an explicit $MATCH is a user capture, not permission to skip
+// equality when that same metavariable occurs again.
+#[test]
+fn match_named_capture_requires_repeated_value_equality() {
+    let hits = match_pattern(
+        Language::JavaScript,
+        "q(one, two);\nq(one, one);\n",
+        "q($MATCH, $MATCH)",
+    )
+    .unwrap();
+    assert_eq!(lines_of(&hits), vec![2], "repeated $MATCH: {hits:?}");
+    assert_eq!(
+        hits[0].captures.get("MATCH").map(String::as_str),
+        Some("one")
+    );
+    // Exercise unseeded/general, optional-call, staged-if, and directive
+    // capture maps as well as the preseeded flat-call path above.
+    for (lang, source, pattern, captured) in [
+        (
+            Language::JavaScript,
+            "one + one;\none + two;\n",
+            "$MATCH + $MATCH",
+            "one",
+        ),
+        (
+            Language::JavaScript,
+            "a?.b(1, 1).c();\na?.b(1, 2).c();\n",
+            "a?.b($MATCH, $MATCH).c()",
+            "1",
+        ),
+        (
+            Language::JavaScript,
+            "if (a) { f(); } else { f(); }\nif (a) { f(); } else { g(); }\n",
+            "if (a) { $MATCH } else { $MATCH }",
+            "f();",
+        ),
+        (
+            Language::CSharp,
+            "using A = A;\nusing A = B;\n",
+            "using $MATCH = $MATCH;",
+            "A",
+        ),
+    ] {
+        let hits = match_pattern(lang, source, pattern).unwrap();
+        assert_eq!(lines_of(&hits), vec![1], "{pattern}: {hits:?}");
+        assert_eq!(
+            hits[0].captures,
+            std::collections::BTreeMap::from([("MATCH".to_string(), captured.to_string())]),
+            "only the explicit binding is public: {pattern}"
+        );
+    }
+    // A rest capture named MATCH must not collide with the implicit
+    // whole-node capture, nor with a same-named single capture.
+    for (source, pattern, single, multi) in [
+        ("q();", "q($$$MATCH)", "q()", ""),
+        ("q(one, two);", "q($$$MATCH)", "q(one, two)", "one, two"),
+        ("one(two, three);", "$MATCH($$$MATCH)", "one", "two, three"),
+    ] {
+        let hits = match_pattern(Language::JavaScript, source, pattern).unwrap();
+        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
+        assert_eq!(
+            hits[0].captures,
+            std::collections::BTreeMap::from([
+                ("MATCH".to_string(), single.to_string()),
+                ("$$$MATCH".to_string(), multi.to_string()),
+            ]),
+            "single and multi namespaces: {pattern}"
+        );
+    }
+    let hits =
+        ast_sgrep_lang::match_literal_pattern(Language::JavaScript, "q($MATCH);", "q($MATCH)")
+            .unwrap();
+    assert_eq!(hits.len(), 1, "direct literal entry: {hits:?}");
+    assert_eq!(
+        hits[0].captures,
+        std::collections::BTreeMap::from([("MATCH".to_string(), "$MATCH".to_string())]),
+        "the direct public entry must not expose internal capture keys"
     );
 }

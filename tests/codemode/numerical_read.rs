@@ -8,6 +8,33 @@ use ast_sgrep_codemode::CallError;
 use ast_sgrep_testkit::indexed_session_at;
 use serde_json::json;
 
+/// JSON line bounds larger than u32 must saturate, not wrap onto earlier source.
+#[test]
+fn read_large_json_bounds_do_not_wrap() {
+    let root = tempfile::tempdir().expect("root");
+    std::fs::write(root.path().join("bounds.txt"), "first\nsecond\nthird\n").unwrap();
+    let (_index, mut session) = indexed_session_at(root.path());
+    let beyond = u64::from(u32::MAX) + 2;
+    for args in [
+        json!({"path": "bounds.txt", "start": beyond, "end": beyond}),
+        json!({"refs": [{"path": "bounds.txt", "start": beyond, "end": beyond}]}),
+    ] {
+        let value = session.call("read", args).expect("saturated start");
+        assert_eq!(value["windows"][0]["text"], "");
+        assert_eq!(value["windows"][0]["start"], u32::MAX);
+    }
+    let through_eof = u64::from(u32::MAX) + 1;
+    for args in [
+        json!({"path": "bounds.txt", "start": 1, "end": through_eof}),
+        json!({"refs": [{"path": "bounds.txt", "start": 1, "end": through_eof}]}),
+    ] {
+        let value = session.call("read", args).expect("saturated end");
+        assert_eq!(value["windows"][0]["text"], "first\nsecond\nthird");
+        assert_eq!(value["windows"][0]["end"], 3);
+        assert_eq!(value["windows"][0]["truncated"], false);
+    }
+}
+
 /// INTENT=read numeric surface: start `.max(1)` / end `.max(start)` clamps, symmetric context widening with saturation, max_chars clamp [1,100000] with truncated flag, degenerate-bound defaults, beyond-EOF/EOF-saturation totality, empty-refs fail-closed, and exact 3-ref fanout windows.
 /// KILLS=clamp-bound (`max` floor, EOF-saturation, char clamp, truncated-flag), off-by-one-widen / missing-saturation, type-coercion (`as_u64` None → unwrap_or), error-discriminant (Other-vs-Ok), fanout-ordering (window-reorder/drop).
 /// ABSORBS=read_start_end_clamp_to_valid_range, read_context_lines_widens_symmetrically, read_char_budgets_truncate_with_flag, read_negative_start_end_default_to_one, read_beyond_eof_and_huge_end_are_total, read_empty_refs_rejects_without_panic, read_fanout_exact_window_counts

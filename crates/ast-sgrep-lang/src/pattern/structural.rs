@@ -80,6 +80,9 @@ pub(crate) fn match_structural(
             )?;
         }
         NativeKind::Call { path, arg_slots } => {
+            // This lane owns a fresh output; index exact admitted ranges
+            // without changing traversal order or the first captured winner.
+            let mut seen = std::collections::HashSet::new();
             walk_calls(
                 tree.root_node(),
                 source,
@@ -89,6 +92,7 @@ pub(crate) fn match_structural(
                 arg_slots.as_deref(),
                 lang,
                 &mut out,
+                &mut seen,
             );
         }
         NativeKind::MemberCall {
@@ -97,6 +101,9 @@ pub(crate) fn match_structural(
             require_continuation,
             nullsafe,
         } => {
+            // The slots option is fixed for this entire fresh-output walk;
+            // only the slots emitter uses the range index. None stays unchanged.
+            let mut seen = std::collections::HashSet::new();
             walk_member_calls(
                 tree.root_node(),
                 source,
@@ -107,6 +114,7 @@ pub(crate) fn match_structural(
                 *require_continuation,
                 *nullsafe,
                 &mut out,
+                &mut seen,
             );
         }
         NativeKind::MemberCallChain {
@@ -767,6 +775,7 @@ pub(crate) fn walk_calls(
     arg_slots: Option<&[ArgSlot]>,
     lang: Language,
     out: &mut Vec<PatternMatch>,
+    seen: &mut std::collections::HashSet<(usize, usize)>,
 ) {
     // The php member-call kinds are the dedicated MemberCall/OptionalCall
     // lanes' candidates — a plain path (dot- or name-spelled) never
@@ -823,10 +832,18 @@ pub(crate) fn walk_calls(
     };
     if let Some(callee) = callee {
         match arg_slots {
-            None => push_match(&node, source, pattern, Some(&callee.join(".")), out),
+            None => {
+                if let Some(captures) =
+                    captures_for_node(&node, source, pattern, Some(&callee.join(".")))
+                {
+                    if seen.insert((node.start_byte(), node.end_byte())) {
+                        out.push(hit_for_node(&node, source, pattern, captures));
+                    }
+                }
+            }
             Some(slots) => {
-                // The slots arm answers through `push_match_with_captures`
-                // DIRECTLY — `capture_call_path` (and the junction gate
+                // The slots arm constructs captures directly —
+                // `capture_call_path` (and the junction gate
                 // inside it) never runs, so consult the same rule here
                 // before answering. Mixed rest-slot patterns classify native
                 // and the arity admits junction-extra candidates
@@ -841,8 +858,10 @@ pub(crate) fn walk_calls(
                     if let Some(text) = node_text(&node, source) {
                         captures.insert("MATCH".to_string(), text.to_string());
                     }
-                    if call_arg_slots_match(slots, &nodes, source, &mut captures).is_some() {
-                        push_match_with_captures(&node, source, pattern, captures, out);
+                    if call_arg_slots_match(slots, &nodes, source, &mut captures).is_some()
+                        && seen.insert((node.start_byte(), node.end_byte()))
+                    {
+                        out.push(hit_for_node(&node, source, pattern, captures));
                     }
                 }
             }
@@ -851,7 +870,7 @@ pub(crate) fn walk_calls(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         walk_calls(
-            child, source, pattern, path, arguments, arg_slots, lang, out,
+            child, source, pattern, path, arguments, arg_slots, lang, out, seen,
         );
     }
 }
@@ -901,6 +920,7 @@ pub(crate) fn walk_member_calls(
     require_continuation: bool,
     nullsafe: bool,
     out: &mut Vec<PatternMatch>,
+    seen: &mut std::collections::HashSet<(usize, usize)>,
 ) {
     // When a rest slot owns the argument list, the slots decide the
     // arity — the text-derived Exactly(n) vetoed rest-expanded
@@ -966,8 +986,9 @@ pub(crate) fn walk_member_calls(
                         if bind_slot_face_callee_metas(&node, source, pattern, &mut captures)
                             .is_some()
                             && arg_slots_match(slots, &nodes, source, &mut captures).is_some()
+                            && seen.insert((node.start_byte(), node.end_byte()))
                         {
-                            push_match_with_captures(&node, source, pattern, captures, out);
+                            out.push(hit_for_node(&node, source, pattern, captures));
                         }
                     }
                 }
@@ -986,6 +1007,7 @@ pub(crate) fn walk_member_calls(
             require_continuation,
             nullsafe,
             out,
+            seen,
         );
     }
 }
@@ -1008,13 +1030,13 @@ pub(crate) fn bind_slot_face_callee_metas(
 ) -> Option<()> {
     let open = pattern.find('(')?;
     let callee = pattern[..open].trim();
-    // Normalization: `::` and `->` both spell one dotted segment chain,
-    // mirroring `parse_call_path`'s decomposition. The nullsafe `?->` is
-    // deliberately NOT normalized (both cross directions refuse — the
-    // token-exact doctrine); a `?` here would glue onto the receiver
-    // segment and refuse, which IS the reference's behavior for the cross
-    // spellings.
-    let normalized = callee.replace("::", ".").replace("->", ".");
+    // Connector kind has already been admitted by walk_member_calls.
+    // Normalize nullsafe before plain arrows so `$O?` cannot lose its
+    // capture name and bypass receiver/argument equality.
+    let normalized = callee
+        .replace("?->", ".")
+        .replace("::", ".")
+        .replace("->", ".");
     if normalized.is_empty() {
         return Some(());
     }

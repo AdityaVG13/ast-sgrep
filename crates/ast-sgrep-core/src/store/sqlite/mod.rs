@@ -313,27 +313,7 @@ impl IndexStore {
         let conn = Connection::open_in_memory()?;
         let durability = crate::store::Durability::from_env();
         configure_connection_with(&conn, durability)?;
-        let store = Self {
-            conn,
-            root: root.to_path_buf(),
-            db_path: std::path::PathBuf::from(":memory:"),
-            file_tx_depth: std::cell::Cell::new(0),
-            file_tx_owns: std::cell::Cell::new(false),
-            file_tx_poisoned: std::cell::Cell::new(false),
-            bulk_tx_active: std::cell::Cell::new(false),
-            bulk_tx_owns: std::cell::Cell::new(false),
-            cache_seq: std::cell::Cell::new(0),
-            durability,
-            trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
-            line_count_at_least: std::cell::Cell::new(None),
-            index_data_version_memo: std::cell::Cell::new((0, None)),
-            line_corpus: std::cell::RefCell::new(None),
-            line_corpus_disabled: std::cell::Cell::new(false),
-            read_only: false,
-        };
-        store.init_schema()?;
-        init_cache_seq(&store.conn, &store.cache_seq)?;
-        Ok(store)
+        Self::from_configured_connection(conn, root, PathBuf::from(":memory:"), durability, false)
     }
 
     /// Peek `PRAGMA user_version` without creating or migrating the database.
@@ -406,6 +386,18 @@ impl IndexStore {
         } else {
             configure_connection_with(&conn, durability)?;
         }
+        Self::from_configured_connection(conn, root, db_path, durability, read_only)
+    }
+
+    /// Disk and in-memory stores start with identical transaction/cache state.
+    /// Their callers retain ownership of connection configuration and path policy.
+    fn from_configured_connection(
+        conn: Connection,
+        root: &Path,
+        db_path: PathBuf,
+        durability: crate::store::Durability,
+        read_only: bool,
+    ) -> Result<Self> {
         let store = Self {
             conn,
             root: root.to_path_buf(),
@@ -878,15 +870,15 @@ impl IndexStore {
         )?)
     }
 
-    /// Count exact-name definitions by file in one query. The total count is
-    /// returned alongside the map so caller resolution avoids per-hit SQL.
+    /// Count definitions with the same case folding as `symbols_named`.
+    /// The total count accompanies the map so caller resolution avoids per-hit SQL.
     pub(crate) fn symbol_name_candidate_counts(
         &self,
         name: &str,
     ) -> Result<(HashMap<String, usize>, usize)> {
         let mut statement = self.conn.prepare_cached(
             "SELECT f.path, COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id
-             WHERE s.name = ?1 GROUP BY f.path",
+             WHERE lower(s.name)=lower(?1) GROUP BY f.path",
         )?;
         let rows = statement.query_map(params![name], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
@@ -1062,37 +1054,13 @@ impl IndexStore {
             .copied()
             .chain(unique.iter().copied())
             .collect();
-        let rows = stmt.query_map(rusqlite::params_from_iter(binds.iter()), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-            ))
-        })?;
         // One truncated per-term list per query term; fetched rows beyond the
         // per-term truncation bound only cost a reallocation, never correctness.
-        let mut out = Vec::with_capacity(unique.len().saturating_mul(crate::lexicon::MAX_PER_TERM));
-        for row in rows {
-            let (term, related, ppmi, support, term_chars, related_chars) = row?;
-            out.push(Self::decode_lexicon_row(
-                term,
-                related,
-                ppmi,
-                support,
-                term_chars,
-                related_chars,
-            )?);
-        }
-        if out.len() > crate::lexicon::MAX_PAIRS {
-            return Err(crate::StoreError::Other(format!(
-                "stored lexicon exceeds maximum of {} associations",
-                crate::lexicon::MAX_PAIRS
-            )));
-        }
-        Ok(out)
+        Self::collect_lexicon_rows(
+            &mut stmt,
+            rusqlite::params_from_iter(binds.iter()),
+            unique.len().saturating_mul(crate::lexicon::MAX_PER_TERM),
+        )
     }
 
     /// Read a bounded lexicon (ufk7). Ordered so loads are deterministic.
@@ -1104,23 +1072,34 @@ impl IndexStore {
              ORDER BY term, related
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(
+        Self::collect_lexicon_rows(
+            &mut stmt,
             params![
                 crate::lexicon::MAX_TERM_CHARS as i64,
                 crate::lexicon::MAX_PAIRS as i64 + 1
             ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            },
-        )?;
-        let mut out = Vec::with_capacity(crate::lexicon::MAX_PAIRS.min(1024));
+            crate::lexicon::MAX_PAIRS.min(1024),
+        )
+    }
+
+    /// Decode and enforce the row cap identically for full and targeted reads.
+    /// SQL selection, ordering and initial allocation remain caller-specific.
+    fn collect_lexicon_rows(
+        stmt: &mut rusqlite::Statement<'_>,
+        bind: impl rusqlite::Params,
+        capacity: usize,
+    ) -> Result<Vec<crate::lexicon::Association>> {
+        let rows = stmt.query_map(bind, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
+        let mut out = Vec::with_capacity(capacity);
         for row in rows {
             let (term, related, ppmi, support, term_chars, related_chars) = row?;
             out.push(Self::decode_lexicon_row(

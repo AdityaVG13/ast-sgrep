@@ -56,10 +56,21 @@ fn pairs_below_the_support_floor_are_rejected() {
             prose_terms: vec!["coincidence".into()],
         });
     }
+    // Contrast gives both pairs positive PPMI; only support may reject lonely.
+    for _ in 0..MIN_SUPPORT {
+        builder.observe(&Observation {
+            identifier_terms: vec!["steady".into()],
+            prose_terms: vec!["context".into()],
+        });
+    }
     let associations = builder.finish();
-    assert!(
-        !associations.iter().any(|a| a.term == "lonely"),
-        "a pair under the support floor must not enter the lexicon"
+    assert_eq!(
+        associations
+            .iter()
+            .map(|a| (a.term.as_str(), a.related.as_str(), a.support))
+            .collect::<Vec<_>>(),
+        vec![("steady", "context", MIN_SUPPORT)],
+        "reject the below-floor pair while retaining the supported control"
     );
 }
 
@@ -72,19 +83,34 @@ fn learning_is_deterministic() {
                 identifier_terms: vec!["rotate".into(), "session".into()],
                 prose_terms: vec!["refresh".into(), "credentials".into()],
             });
+            builder.observe(&Observation {
+                identifier_terms: vec!["archive".into()],
+                prose_terms: vec!["storage".into()],
+            });
         }
         builder.finish()
     };
     let first = build();
+    assert_eq!(
+        first
+            .iter()
+            .map(|a| (a.term.as_str(), a.related.as_str(), a.support))
+            .collect::<Vec<_>>(),
+        vec![
+            ("archive", "storage", 5),
+            ("rotate", "credentials", 5),
+            ("rotate", "refresh", 5),
+            ("rotate", "session", 5),
+            ("session", "credentials", 5),
+            ("session", "refresh", 5),
+            ("session", "rotate", 5),
+        ]
+    );
+    for association in &first {
+        assert!((association.ppmi - 2.0f64.ln()).abs() < 1e-12);
+    }
     for _ in 0..5 {
-        let again = build();
-        assert_eq!(first.len(), again.len());
-        for (a, b) in first.iter().zip(again.iter()) {
-            assert_eq!(
-                (&a.term, &a.related, a.support),
-                (&b.term, &b.related, b.support)
-            );
-        }
+        assert_eq!(first, build());
     }
 }
 

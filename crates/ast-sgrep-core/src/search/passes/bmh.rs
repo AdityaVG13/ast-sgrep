@@ -1,22 +1,40 @@
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 pub(crate) const BMH_LINE_THRESHOLD: usize = 1000;
 /// SQL line projection: path, language, line_no, content.
-pub(crate) type LineSqlRow = (String, Option<String>, u32, String);
+pub(crate) type LineSqlRow<T = String> = (T, Option<T>, u32, T);
 pub(crate) fn needs_context(options: &SearchOptions) -> bool {
     options.context_before > 0 || options.context_after > 0
 }
-pub(crate) fn retained_limit(options: &SearchOptions) -> usize {
-    if options.use_rerank {
-        options.limit.max(options.rerank_top_k)
-    } else {
-        options.limit
-    }
-}
 pub(crate) fn map_line_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LineSqlRow> {
     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+}
+/// Decode the same projection/order without owning rejected rows' text.
+pub(crate) fn map_borrowed_line_row<'row>(
+    row: &'row rusqlite::Row<'_>,
+) -> rusqlite::Result<LineSqlRow<Cow<'row, str>>> {
+    let path = borrowed_row_text(row, 0)?;
+    let language = match row.get_ref(1)? {
+        rusqlite::types::ValueRef::Null => None,
+        _ => Some(borrowed_row_text(row, 1)?),
+    };
+    let line_no = row.get(2)?;
+    let content = borrowed_row_text(row, 3)?;
+    Ok((path, language, line_no, content))
+}
+fn borrowed_row_text<'row>(
+    row: &'row rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Cow<'row, str>> {
+    match row.get_ref(column)?.as_str() {
+        Ok(text) => Ok(Cow::Borrowed(text)),
+        // Retain Row::get's column/type/UTF-8 error mapping, not as_str's
+        // bare FromSqlError. This also preserves any owned conversion fallback.
+        Err(_) => row.get::<_, String>(column).map(Cow::Owned),
+    }
 }
 pub(crate) fn asgrep_line_hit(
     path: String,
@@ -81,7 +99,7 @@ pub(crate) fn attach_regex_context(
     }
     Ok(())
 }
-fn check_regex_deadline(deadline: Instant, budget: Duration) -> Result<()> {
+pub(super) fn check_regex_deadline(deadline: Instant, budget: Duration) -> Result<()> {
     if Instant::now() >= deadline {
         return Err(StoreError::Other(format!(
             "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",

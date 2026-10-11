@@ -327,6 +327,55 @@ fn sticky_serve_reuses_session_across_calls() {
     assert!(matches!(bye, ServeResponse::Bye));
 }
 
+/// A typed Rust client must be able to decode the batch envelope serve emits.
+#[test]
+fn sticky_serve_batch_response_deserializes_to_public_type() {
+    let root = TempDir::new().expect("root");
+    let request = ServeRequest::Batch {
+        id: "typed".into(),
+        calls: vec![BatchCall {
+            id: "one".into(),
+            tool: "select".into(),
+            args: json!({"value": {"answer": 42}, "fields": ["answer"]}),
+        }],
+        parallel_mode: None,
+    };
+    let input = format!("{}\n", serde_json::to_string(&request).unwrap());
+    let mut output = Vec::new();
+    run_serve(
+        ast_sgrep_testkit::config_at(root.path()),
+        Cursor::new(input),
+        &mut output,
+    )
+    .unwrap();
+    let response: ServeResponse = serde_json::from_slice(&output).expect("typed batch response");
+    match response {
+        ServeResponse::BatchResult {
+            id,
+            all_ok,
+            results,
+            wall_ms,
+            mode,
+        } => {
+            assert_eq!(id, "typed");
+            assert!(all_ok);
+            assert_eq!(results[0].value, Some(json!({"answer": 42})));
+            assert_eq!(mode, "serial");
+            let raw: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(raw["wall_ms"], json!(wall_ms));
+        }
+        other => panic!("expected batch response, got {other:?}"),
+    }
+    for wall_ms in [0, u64::MAX] {
+        let wire = json!({
+            "type": "batch_result", "id": "boundary", "all_ok": true,
+            "results": [], "wall_ms": wall_ms, "mode": "serial",
+        });
+        let typed: ServeResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), wire);
+    }
+}
+
 #[test]
 fn sticky_serve_preserves_valid_id_on_schema_errors() {
     let (_tmp, config) = indexed_config();
@@ -386,18 +435,37 @@ fn searcher_cache_survives_limit_changes() {
 }
 
 #[test]
-fn chain_default_top_n_matches_core_default() {
+fn chain_depth_clamps_before_narrowing() {
     let (_tmp, config) = indexed_config();
     let mut session = CodeModeSession::new(config);
     let value = session
         .call("chain", json!({"query": "auth_refresh", "limit": 20}))
         .expect("chain");
-    // Smoke: chain returns graph-shaped JSON (nodes/edges or node_count).
-    assert!(
-        value.get("nodes").is_some()
-            || value.get("node_count").is_some()
-            || value.get("query").is_some()
-    );
+    assert_eq!(value["max_depth"], 2);
+    assert!(!value["seeds"].as_array().unwrap().is_empty());
+
+    for (requested, expected) in [
+        (0, 1),
+        (1, 1),
+        (2, 2),
+        (8, 8),
+        (9, 8),
+        (u64::from(u32::MAX), 8),
+        (u64::from(u32::MAX) + 1, 8),
+        (u64::from(u32::MAX) + 3, 8),
+        (u64::MAX, 8),
+    ] {
+        let args = json!({"query": "auth_refresh", "limit": 20, "max_depth": requested});
+        let actual = session.call("chain", args).expect("bounded chain");
+        assert_eq!(actual["max_depth"], expected, "requested depth {requested}");
+        let explicit = session
+            .call(
+                "chain",
+                json!({"query": "auth_refresh", "limit": 20, "max_depth": expected}),
+            )
+            .expect("explicit bounded chain");
+        assert_eq!(actual, explicit, "graph at requested depth {requested}");
+    }
 }
 
 /// Regression for br-r49: after the sticky session exhausts its call budget,

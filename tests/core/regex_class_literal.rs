@@ -56,3 +56,65 @@ fn regex_escaped_bracket_class_does_not_harvest_required_literal() {
         resp.hits
     );
 }
+
+#[test]
+fn regex_counted_repetition_digits_are_not_required_source_text() {
+    let session = isolated_index_session();
+    session.write(
+        "r.rs",
+        &format!("{}\nabbb\n100\na{{100}}\n", "a".repeat(100)),
+    );
+    session.index_all(IndexOptions {
+        force_reindex: true,
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let searcher = searcher(&session);
+    for (pattern, line) in [("^a{100}$", 1), ("^ab{1,100}$", 2), (r"^a\{100\}$", 4)] {
+        let response = searcher.search_regex(pattern).unwrap();
+        let locations: Vec<_> = response
+            .hits
+            .iter()
+            .map(|hit| (hit.file.as_str(), hit.line_start))
+            .collect();
+        assert_eq!(locations, vec![("r.rs", line)], "pattern {pattern}");
+    }
+}
+
+/// Candidate admission must preserve the requested rerank pool before the
+/// final output gate. Exercise the real indexed pass without a neural model.
+#[test]
+fn regex_admission_preserves_rerank_pool_above_the_ordinary_floor() {
+    let session = isolated_index_session();
+    for file in 0..5 {
+        let body: String = (0..30)
+            .map(|line| format!("// needle {file} {line}\n"))
+            .collect();
+        session.write(format!("r{file}.rs"), body);
+    }
+    session.index_all(IndexOptions {
+        force_reindex: true,
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let store = session.open_store();
+    let mut options = SearchOptions {
+        limit: 1,
+        use_embed: false,
+        use_rerank: false,
+        rerank_top_k: 150,
+        ..session.search_options()
+    };
+    let parsed = ast_sgrep_core::ParsedQuery::parse("regex:needle");
+    let ordinary =
+        ast_sgrep_core::search::passes::regex::regex_pass(&store, &options, &parsed).unwrap();
+    assert_eq!(ordinary.len(), 1, "rerank-off output budget is unchanged");
+    options.use_rerank = true;
+    let pool =
+        ast_sgrep_core::search::passes::regex::regex_pass(&store, &options, &parsed).unwrap();
+    assert_eq!(
+        pool.len(),
+        150,
+        "regex admission must not starve rerank top-k"
+    );
+}

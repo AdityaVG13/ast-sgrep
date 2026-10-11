@@ -41,6 +41,6 @@ export const CODEMODE_HOST_METHODS = [
  */
 export const CODEMODE_TYPES_FOR_MODEL = `
 asgrep.search(query|{query,in,lang,limit,excerptLines}) | find(q) | semantic(q) | defs(sym) | callers(sym)
- | imports(mod) | chain(q) | read({path|ref|refs,start,end}) | edit({path,oldText,newText}|{edits}) | indexStatus()
+ | imports(mod) | chain(q|{query,max_work}) | read({path|ref|refs,start,end}) | edit({path,oldText,newText}|{edits}) | indexStatus()
 hits[{file,ref,symbol,kind,preview}] | windows[{path,start,end,text}] | catalogDescribe("name") for schemas
 `.trim();

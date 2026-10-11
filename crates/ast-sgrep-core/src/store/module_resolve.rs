@@ -99,11 +99,9 @@ fn extras_go(cands: &mut BTreeSet<String>, n: &str, base: &Path) {
         base.file_name().and_then(|s| s.to_str()).unwrap_or("pkg")
     ));
 }
-fn extras_default_rustish(cands: &mut BTreeSet<String>, n: &str, _base: &Path) {
+fn extras_default_rustish(cands: &mut BTreeSet<String>, n: &str, base: &Path) {
     cands.insert(format!("{n}/mod.rs"));
-    for e in JS_INDEX_EXTS {
-        cands.insert(format!("{n}/index.{e}"));
-    }
+    extras_js_ts(cands, n, base);
 }
 
 fn module_resolve_rules(lang: Option<&str>) -> ModuleResolveRules {
@@ -160,13 +158,7 @@ fn resolve_bases_python(_from_file: &str, parent: &Path, module: &str) -> Vec<Pa
     } else {
         let slash = module.replace('.', "/");
         bases.push(PathBuf::from(&slash));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..6 {
-            bases.push(cur.join(&slash));
-            if !cur.pop() {
-                break;
-            }
-        }
+        bases.extend(parent.ancestors().take(6).map(|base| base.join(&slash)));
     }
     bases
 }
@@ -178,13 +170,12 @@ fn resolve_bases_js(_from_file: &str, parent: &Path, module: &str) -> Vec<PathBu
     } else {
         // Bare specifier: walk up for node_modules/<name>, plus same-dir fallback.
         bases.push(parent.join(module));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..8 {
-            bases.push(cur.join("node_modules").join(module));
-            if !cur.pop() {
-                break;
-            }
-        }
+        bases.extend(
+            parent
+                .ancestors()
+                .take(8)
+                .map(|base| base.join("node_modules").join(module)),
+        );
     }
     bases
 }
@@ -203,13 +194,7 @@ fn resolve_bases_go(from_file: &str, parent: &Path, module: &str) -> Vec<PathBuf
     for n in 1..=parts.len().min(4) {
         let suffix = parts[parts.len() - n..].join("/");
         bases.push(PathBuf::from(&suffix));
-        let mut cur = parent.to_path_buf();
-        for _ in 0..6 {
-            bases.push(cur.join(&suffix));
-            if !cur.pop() {
-                break;
-            }
-        }
+        bases.extend(parent.ancestors().take(6).map(|base| base.join(&suffix)));
         // Also try beside the importing file's module root (first path segment).
         if let Some(root) = Path::new(from_file).components().next() {
             bases.push(PathBuf::from(root.as_os_str()).join(&suffix));

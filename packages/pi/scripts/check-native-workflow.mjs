@@ -43,10 +43,13 @@ const validate = (text) => {
   report(loadRuns.some((run) => run.includes('node packages/pi/scripts/check-contract.mjs') && run.includes('node packages/pi/scripts/check-native-workflow.mjs')), 'contract checker commands are missing');
   const steps = new Map((native?.steps ?? []).filter((step) => step.name).map((step) => [step.name, activeRun(step)]));
   report(steps.get('Build target-local release artifacts')?.includes('cargo build --locked --release') && steps.get('Build target-local release artifacts')?.includes('ast-sgrep-codemode-napi'), 'locked native CLI+NAPI build step is missing');
+  report(steps.get('Build target-local release artifacts')?.includes('cargo build --locked --release -p ast-sgrep-watch --bin asgrep-watch'), 'locked watch helper build step is missing');
   const metadata = steps.get('Prepare and verify deterministic artifact metadata') ?? '';
   report(metadata.includes('release-artifact.mjs prepare') && metadata.includes('--napi') && metadata.includes('release-artifact.mjs verify'), 'metadata prepare/verify step is missing');
+  report(metadata.includes('--watch "target/') && metadata.includes('matrix.watchHelper'), 'watch helper artifact staging is missing');
   const pack = steps.get('Pack native, launcher, and extension tarballs') ?? '';
   report(pack.includes('npm pack "$platform_dir"') && pack.includes('matrix.napiAddon') && pack.includes('npm pack packages/pi/launcher') && pack.includes('npm pack packages/pi/extension'), 'all npm pack commands are required');
+  report(pack.includes('cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"'), 'watch helper must be copied into the native npm package');
   const cleanInstall = steps.get('Clean-install local tarballs') ?? '';
   report(
     cleanInstall.includes('npm install --no-audit --no-fund --prefix "$clean"') ||
@@ -84,6 +87,10 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   const publish = workflow.jobs?.publish;
   report(build?.strategy?.matrix === '${{ fromJSON(needs.release-gate.outputs.matrix) }}' && build?.['runs-on'] === '${{ matrix.runner }}', 'official native build must use the authoritative native matrix once');
   report((build?.steps ?? []).find((step) => step.name === 'Build target-local release artifacts once')?.env?.RUSTFLAGS === deterministicRustflags, 'official win32 builds must set the deterministic /Brepro link flag (br-l46)');
+  const buildRuns = (build?.steps ?? []).map(activeRun).join('\n');
+  report(buildRuns.includes('cargo build --locked --release -p ast-sgrep-watch --bin asgrep-watch'), 'official watch helper build is missing');
+  report(buildRuns.includes('--watch "target/') && buildRuns.includes('matrix.watchHelper'), 'official watch helper artifact staging is missing');
+  report(buildRuns.includes('cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"'), 'official watch helper npm staging is missing');
   const gateRuns = (gate?.steps ?? []).map(activeRun);
   const sshSetup = 'git config --local gpg.format ssh\ngit config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"';
   const sshSetupIndex = gateRuns.indexOf(sshSetup);
@@ -137,7 +144,11 @@ const validateOfficial = (text, signersText = allowedSignersText) => {
   report(JSON.stringify(repin?.needs) === '["publish","publish-retry"]', 'lock re-pin must wait for the family publish jobs');
   report(repin?.environment === undefined, 'lock re-pin must not require a second approval');
   report(repin?.permissions?.contents === 'write', 'lock re-pin must be able to push the regenerated lockfile');
-  report((repin?.steps ?? []).map(activeRun).join('\n').includes('npm install --package-lock-only'), 'lock re-pin must regenerate the lockfile against the live release');
+  const repinRun = (repin?.steps ?? []).map(activeRun).join('\n');
+  const repinCommand = 'node packages/pi/scripts/repin-lock.mjs --version "$tag_version"';
+  report(repinRun.includes(repinCommand) && repinRun.indexOf(repinCommand) < repinRun.indexOf('git add package-lock.json'), 'lock re-pin must validate registry propagation and native metadata before staging a commit');
+  report(!repinRun.includes('npm install --package-lock-only'), 'lock re-pin must not bypass the validated staging helper');
+  report(repinRun.includes('if [ "$main_version" != "$tag_version" ]; then'), 'lock re-pin must retain the main-version guard');
 
   return errors;
 };
@@ -153,7 +164,10 @@ const mutations = [
   workflowText.replace('  workflow_dispatch:', '  push:'),
   workflowText.replace('          node packages/pi/scripts/ci-install-smoke.mjs', '          # node packages/pi/scripts/ci-install-smoke.mjs'),
   workflowText.replace('          node packages/pi/scripts/release-acceptance.mjs self-test', '          # node packages/pi/scripts/release-acceptance.mjs self-test'),
-  workflowText.replace("          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}", '          # RUSTFLAGS removed')
+  workflowText.replace("          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}", '          # RUSTFLAGS removed'),
+  workflowText.replace('cargo build --locked --release -p ast-sgrep-watch --bin asgrep-watch', '# watch build removed'),
+  workflowText.replace('--watch "target/', '--missing-watch "target/'),
+  workflowText.replace('cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"', '# cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"')
 ];
 for (const [index, mutation] of mutations.entries()) if (validate(mutation).length === 0) errors.push('negative dry-run mutation ' + (index + 1) + ' was not rejected');
 const officialMutations = [
@@ -167,12 +181,16 @@ const officialMutations = [
   officialText.replace('    env:\n      ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production', '    env:\n      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\n      ASGREP_NPM_PROTECTED_ENVIRONMENT: npm-production'),
   officialText.replace('run: npm install --global npm@11', 'run: echo ${{ secrets.NPM_TOKEN }}'),
   officialText.replace('  repin-lock:', '  repin-lock-removed:'),
+  officialText.replace('node packages/pi/scripts/repin-lock.mjs --version "$tag_version"', 'npm install --package-lock-only --ignore-scripts'),
   officialText.replace("      - name: Configure SSH tag verification\n        run: |\n          git config --local gpg.format ssh\n          git config --local gpg.ssh.allowedSignersFile \"$GITHUB_WORKSPACE/packages/pi/release/allowed-signers\"\n", ''),
   officialText.replace("          RUSTFLAGS: ${{ matrix.os == 'win32' && '-C link-arg=/Brepro' || '' }}", '          # RUSTFLAGS removed'),
   officialText.replace("        default: full", "        default: publish-only"),
   officialText.replace(" gate ${{ inputs.mode == 'publish-only' && '--tolerate-duplicate' || '' }}", ' gate'),
   officialText.replace("  publish-retry:\n    name: Publish-only retry without rebuild\n    if: ${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}\n    needs: release-gate", "  publish-retry:\n    name: Publish-only retry without rebuild\n    if: ${{ inputs.layer == 'family' && inputs.mode == 'publish-only' }}\n    needs: verify-release"),
-  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers')
+  officialText.replace('packages/pi/release/allowed-signers', 'packages/pi/release/wrong-signers'),
+  officialText.replace('cargo build --locked --release -p ast-sgrep-watch --bin asgrep-watch', '# watch build removed'),
+  officialText.replace('--watch "target/', '--missing-watch "target/'),
+  officialText.replace('cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"', '# cp "dist/${{ matrix.id }}/${{ matrix.watchHelper }}"')
 ];
 for (const [index, mutation] of officialMutations.entries()) if (validateOfficial(mutation).length === 0) errors.push('negative official mutation ' + (index + 1) + ' was not rejected');
 const signerMutations = [

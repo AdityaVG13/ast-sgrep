@@ -200,6 +200,9 @@ struct SearcherCache {
     entry: Option<(SearcherKey, Searcher)>,
 }
 
+/// Relative compact IDs are meaningful only within their canonical call root.
+type RootScopedId = (PathBuf, String);
+
 pub struct McpServer {
     /// Configured workspace root; all tool roots must stay under this path.
     root: PathBuf,
@@ -212,13 +215,13 @@ pub struct McpServer {
     searcher_cache: Mutex<SearcherCache>,
     /// Single-flight lock for index_repo (es7u).
     index_lock: Mutex<()>,
-    /// Compact path-id to project-relative path, learned from emitted search
-    /// envelopes (kxmc). Bounded; cleared when the index changes.
-    path_registry: Mutex<HashMap<String, String>>,
-    /// Hit id to hash of the snippet already sent this session (v972).
+    /// Root-scoped compact path-id to project-relative path, learned from emitted
+    /// search envelopes (kxmc). Bounded; cleared when the index changes.
+    path_registry: Mutex<HashMap<RootScopedId, String>>,
+    /// Root-scoped hit id to hash of the snippet already sent this session (v972).
     /// Bounded; cleared when the index changes, so an elision can never point
     /// at content from a previous index generation.
-    emitted_snippets: Mutex<HashMap<String, u64>>,
+    emitted_snippets: Mutex<HashMap<RootScopedId, u64>>,
 }
 
 impl McpServer {
@@ -748,9 +751,9 @@ impl McpServer {
         }
         // kxmc: compact key-free envelope, minified.
         let mut envelope = render_compact_envelope(&response, preview, budget_tokens);
-        self.remember_compact_paths(&envelope);
+        self.remember_compact_paths(&root, &envelope);
         if !resend_seen && preview != PreviewMode::None {
-            self.elide_seen_snippets(&mut envelope);
+            self.elide_seen_snippets(&root, &mut envelope);
         }
         Ok(serde_json::to_string(&envelope)?)
     }
@@ -762,7 +765,7 @@ impl McpServer {
     /// model pays again for bytes it already has. Keying on a content hash (not
     /// just the id) means an edited file re-sends in full, and the map is
     /// cleared on `index_repo` so an elision never spans index generations.
-    fn elide_seen_snippets(&self, envelope: &mut Value) {
+    fn elide_seen_snippets(&self, root: &Path, envelope: &mut Value) {
         let Some(hits) = envelope.get_mut("h").and_then(Value::as_array_mut) else {
             return;
         };
@@ -782,15 +785,16 @@ impl McpServer {
                 continue;
             }
             let digest = fnv1a64(snippet.as_bytes());
-            if seen.get(&id) == Some(&digest) {
+            let key = (root.to_path_buf(), id);
+            if seen.get(&key) == Some(&digest) {
                 row[4] = Value::String(ELIDED_SNIPPET.to_owned());
                 elided += 1;
                 continue;
             }
-            if seen.len() >= MAX_EMITTED_SNIPPETS && !seen.contains_key(&id) {
+            if seen.len() >= MAX_EMITTED_SNIPPETS && !seen.contains_key(&key) {
                 continue;
             }
-            seen.insert(id, digest);
+            seen.insert(key, digest);
         }
         if elided > 0 {
             // Volatile accounting, so it sorts with the `z*` tail (9q0l).
@@ -840,22 +844,23 @@ impl McpServer {
     ///
     /// Uses the shared resolver so root-folded tables (am4a) are understood
     /// exactly the way an agent would read them.
-    fn remember_compact_paths(&self, envelope: &Value) {
+    fn remember_compact_paths(&self, root: &Path, envelope: &Value) {
         let mut registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
         for (id, path) in ast_sgrep_plugins::resolve_compact_paths(envelope) {
-            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(&id) {
+            let key = (root.to_path_buf(), id);
+            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(&key) {
                 // Bounded: a hostile or very long session cannot grow this map
                 // without limit. Unknown ids simply fail to resolve and the
                 // agent falls back to the `path#Lstart-Lend` form.
                 break;
             }
-            registry.insert(id, path);
+            registry.insert(key, path);
         }
     }
 
     /// Expand a compact `<path_id>:<start>-<end>` id into the node id form that
     /// `read_node` understands. Non-compact ids pass through untouched.
-    fn resolve_compact_id(&self, id: &str) -> String {
+    fn resolve_compact_id(&self, root: &Path, id: &str) -> String {
         if id.contains("#L") {
             return id.to_owned();
         }
@@ -872,7 +877,7 @@ impl McpServer {
             return id.to_owned();
         }
         let registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
-        match registry.get(path_id) {
+        match registry.get(&(root.to_path_buf(), path_id.to_owned())) {
             Some(path) => format!("{path}#L{start}-L{end}"),
             None => id.to_owned(),
         }
@@ -892,7 +897,7 @@ impl McpServer {
         for (index, id) in ids.iter().enumerate() {
             let budget = per_ref_chars + usize::from(index < remainder);
             // kxmc: accept compact search ids as well as `path#Lstart-Lend`.
-            let resolved = self.resolve_compact_id(id);
+            let resolved = self.resolve_compact_id(&root, id);
             nodes.push(read_node(&root, &resolved, context_lines, budget)?);
         }
         Ok(serde_json::to_string(&json!({"nodes": nodes}))?)

@@ -17,6 +17,89 @@ const SOURCE: &str = "fn run() { legacy(alpha); }\n";
 const REWRITTEN: &str = "fn run() { modern(alpha); }\n";
 const CONCURRENT: &str = "fn concurrent_edit() {}\n";
 
+#[test]
+fn orphan_recovery_keeps_each_missing_files_own_bytes() {
+    use ast_sgrep_core::{IndexOptions, Indexer};
+    use std::time::{Duration, SystemTime};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let a = "fn a() { legacy(alpha); }\n";
+    let b = "fn b() { legacy(beta); }\n";
+    fs::write(root.join("a.rs"), a).unwrap();
+    fs::write(root.join("b.rs"), b).unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        embed_semantic: false,
+        ..Default::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    drop(indexer);
+
+    // Both source names were captured before a process died. The newer
+    // b.rs backup must never be restored as a.rs or swept as its leftover.
+    for (name, seconds) in [("a", 1), ("b", 2)] {
+        let backup = root.join(format!(".{name}.rs.asgrep-codemod-backup-1-{seconds}-0"));
+        fs::rename(root.join(format!("{name}.rs")), &backup).unwrap();
+        fs::File::open(backup)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            )
+            .unwrap();
+    }
+
+    let unrelated_backup = root.join(".unindexed.rs.asgrep-codemod-backup-1-3-0");
+    let unrelated_stage = root.join(".unindexed.rs.asgrep-codemod-stage-1-3-0");
+    fs::write(&unrelated_backup, CONCURRENT).unwrap();
+    fs::write(&unrelated_stage, REWRITTEN).unwrap();
+
+    let plan =
+        ast_sgrep_core::codemod::plan_codemod(root, None, None, "legacy($ARG)", "modern($ARG)");
+    assert_eq!(fs::read_to_string(root.join("a.rs")).unwrap(), a);
+    assert_eq!(fs::read_to_string(root.join("b.rs")).unwrap(), b);
+    assert_eq!(plan.unwrap().files_changed, 2);
+    assert_eq!(fs::read_to_string(unrelated_backup).unwrap(), CONCURRENT);
+    assert_eq!(fs::read_to_string(unrelated_stage).unwrap(), REWRITTEN);
+}
+
+#[test]
+#[cfg(unix)]
+fn orphan_recovery_must_not_follow_an_escaping_parent_symlink() {
+    use ast_sgrep_core::{IndexOptions, Indexer};
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(root.join("src/a.rs"), SOURCE).unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.clone(),
+        embed_semantic: false,
+        ..Default::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    drop(indexer);
+    fs::rename(root.join("src"), root.join("original-src")).unwrap();
+    symlink(&outside, root.join("src")).unwrap();
+    let backup = outside.join(".a.rs.asgrep-codemod-backup-1-2-0");
+    fs::write(&backup, CONCURRENT).unwrap();
+
+    let result =
+        ast_sgrep_core::codemod::plan_codemod(&root, None, None, "legacy($ARG)", "modern($ARG)");
+    assert!(result.is_err(), "planning must refuse an escaped source");
+    assert!(
+        !outside.join("a.rs").exists(),
+        "recovery wrote outside root"
+    );
+    assert_eq!(fs::read_to_string(backup).unwrap(), CONCURRENT);
+}
+
 /// Pre-condition: when a concurrent writer wins the capture->commit gap,
 /// the refusal must (1) keep the writer's content at the source path,
 /// (2) keep the capture sidecar — the ONLY copy of the pre-race content
@@ -300,6 +383,84 @@ fn two_file_swappable_state() -> (tempfile::TempDir, CodemodPlan, Vec<StagedFile
         "precondition: sources are plain writable files"
     );
     (temp, plan, staged)
+}
+
+/// A file enlarged after planning must be rejected before allocating/decoding
+/// its contents, both during staging and after an earlier file was committed.
+#[test]
+#[cfg(unix)]
+fn apply_and_swap_reject_oversized_sources_before_utf8_decode() {
+    use ast_sgrep_core::MAX_INDEX_FILE_BYTES;
+    use std::collections::BTreeSet;
+    use std::io::{Read, Write};
+    use std::os::unix::fs::MetadataExt;
+
+    let mut missing_cap = Vec::new();
+    for during_swap in [false, true] {
+        let (_temp, plan, mut staged) = two_file_swappable_state();
+        let src = plan.root.join("src");
+        let original_inode = fs::metadata(src.join("a.rs")).unwrap().ino();
+        let expected_sidecars: BTreeSet<_> = if during_swap {
+            BTreeSet::new()
+        } else {
+            // apply_codemod owns its new staging files, not these pre-existing ones.
+            staged
+                .iter()
+                .map(|file| plan.root.join(&file.staged))
+                .collect()
+        };
+        let mut enlarged = fs::File::create(src.join("b.rs")).unwrap();
+        enlarged.write_all(&[0xff]).unwrap();
+        enlarged.set_len(MAX_INDEX_FILE_BYTES + 1).unwrap();
+        drop(enlarged);
+
+        let result = if during_swap {
+            let dir = Dir::open_ambient_dir(&plan.root, ambient_authority()).unwrap();
+            swap_staged_files(&dir, &plan, &mut staged)
+        } else {
+            apply_codemod(&plan).map(|_| ())
+        };
+        let error = format!(
+            "{:#}",
+            result.expect_err("oversized changed source must refuse")
+        );
+        if !error.contains("byte index cap") || !error.contains("src/b.rs") {
+            missing_cap.push(format!("during_swap={during_swap}: {error}"));
+        }
+        assert_eq!(fs::read_to_string(src.join("a.rs")).unwrap(), SOURCE);
+        assert_eq!(
+            fs::metadata(src.join("a.rs")).unwrap().ino(),
+            original_inode
+        );
+        assert_eq!(
+            fs::metadata(src.join("b.rs")).unwrap().len(),
+            MAX_INDEX_FILE_BYTES + 1
+        );
+        let mut first_byte = [0];
+        fs::File::open(src.join("b.rs"))
+            .unwrap()
+            .read_exact(&mut first_byte)
+            .unwrap();
+        assert_eq!(first_byte, [0xff], "refusal must preserve the changed file");
+        let remaining_sidecars: BTreeSet<_> = fs::read_dir(&src)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".asgrep-codemod-")
+            })
+            .collect();
+        assert_eq!(
+            remaining_sidecars, expected_sidecars,
+            "refusal must clean only owned staging"
+        );
+    }
+    assert!(
+        missing_cap.is_empty(),
+        "size admission must precede UTF-8 decoding: {missing_cap:?}"
+    );
 }
 
 /// The swap-time mode re-check propagated a stat FAILURE with `?` —

@@ -78,6 +78,11 @@ export declare function createCodemodeDispatcher(host: BatchCapableHost): {
     trace: () => DispatchCall[];
     resetStats: () => void;
 };
+/** Client-side route refusal: no transport ran, so a local fallback is safe. */
+export declare class NoCliFallbackError extends Error {
+    readonly tool: string;
+    constructor(tool: string);
+}
 export declare function argvFor(tool: string, args: Record<string, unknown>): string[];
 export declare function asEnvelope(value: unknown, command?: string): MachineEnvelope;
 /** One-shot batch via stdin (no tempfile) when spawn-with-stdin is available. */

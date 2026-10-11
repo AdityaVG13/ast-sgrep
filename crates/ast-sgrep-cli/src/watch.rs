@@ -5,7 +5,7 @@
 //! ~1.5ms of dyld on EVERY one-shot invocation even though only `watch`
 //! uses it — so the main binary never links it and `watch` re-execs the
 //! helper with the identical argv (the helper re-parses via the same parser,
-//! `crate::parse_watch_launch`, so options cannot drift).
+//! `crate::run_watch_process`, so parsing and error contracts cannot drift).
 
 #[cfg(not(unix))]
 use anyhow::Context;

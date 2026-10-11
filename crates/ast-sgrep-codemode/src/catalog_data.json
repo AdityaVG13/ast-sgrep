@@ -255,7 +255,7 @@
  },
  {
   "capsule_default": false,
-  "description": "Expand a seed query into a callers/callees/imports neighborhood graph.",
+  "description": "Expand a file-granular callers/callees/imports graph. Work/definition cutoffs report truncated plus reasons; node_count counts discovered nodes before output trim and is a lower bound after a cutoff. No SQL/time bound.",
   "input_schema": {
    "additionalProperties": false,
    "properties": {
@@ -269,6 +269,13 @@
      "default": 2,
      "maximum": 8,
      "minimum": 1,
+     "type": "integer"
+    },
+    "max_work": {
+     "default": 8192,
+     "maximum": 1000000,
+     "minimum": 1,
+     "description": "Expansion, store-call and processed-row units after seeding; duplicates and unresolved attempts count. Independent of output limit; not elapsed-time or scanned-SQL-row accounting.",
      "type": "integer"
     },
     "query": {

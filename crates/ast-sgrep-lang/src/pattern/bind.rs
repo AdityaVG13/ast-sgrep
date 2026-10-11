@@ -180,22 +180,36 @@ pub(crate) fn captures_for_node(
     Some(captures)
 }
 
+// This cannot be a user capture name. Keep explicit single `$MATCH` apart
+// from the synthetic whole-node `MATCH` until all staged captures unify.
+const EXPLICIT_MATCH_KEY: &str = "$MATCH";
+
+/// Publish explicit `$MATCH` under its public name only at the matcher exit.
+/// Individual emitters are too early: the if lane merges tail captures into
+/// already-built hits. `$$$MATCH` remains in the separate multi namespace.
+pub(crate) fn finalize_match_captures(mut hits: Vec<PatternMatch>) -> Vec<PatternMatch> {
+    for hit in &mut hits {
+        if let Some(text) = hit.captures.remove(EXPLICIT_MATCH_KEY) {
+            hit.captures.insert("MATCH".to_string(), text);
+        }
+    }
+    hits
+}
+
 /// Unified metavariable binding. A repeated name is ONE variable bound
-/// once (reference semantics): binding an already-bound name to
-/// a different text returns `None` and rejects the whole candidate match;
-/// equal text re-affirms the binding. The reserved envelope key `MATCH`
-/// (full node text) keeps its historical overwrite behavior so a pattern
-/// that spells `$MATCH` as an ordinary metavariable keeps today's envelope
-/// bytes.
+/// once: different text rejects the candidate, equal text re-affirms the
+/// binding. Explicit `$MATCH` follows the same law without comparing to the
+/// implicit whole-node envelope value.
 pub(crate) fn bind_capture(
     captures: &mut BTreeMap<String, String>,
     name: &str,
     text: &str,
 ) -> Option<()> {
-    if name == "MATCH" {
-        captures.insert(name.to_string(), text.to_string());
-        return Some(());
-    }
+    let name = if name == "MATCH" {
+        EXPLICIT_MATCH_KEY
+    } else {
+        name
+    };
     match captures.get(name) {
         Some(existing) => (existing == text).then_some(()),
         None => {
@@ -216,7 +230,7 @@ pub(crate) fn bind_capture_kind(
     text: &str,
     multi: bool,
 ) -> Option<()> {
-    if !multi || name == "MATCH" {
+    if !multi {
         return bind_capture(captures, name, text);
     }
     let key = format!("$$${name}");

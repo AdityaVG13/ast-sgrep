@@ -191,7 +191,37 @@ pub fn read_bounded_line(
 
 /// Read a UTF-8 source file with an explicit size cap.
 pub fn read_text_capped(path: &Path, max_bytes: u64) -> Result<String> {
-    Ok(read_open_file_capped(File::open(path)?, path, max_bytes)?.text)
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Admission must also be reachable when the path is a FIFO.
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    Ok(read_open_file_capped(options.open(path)?, path, max_bytes)?.text)
+}
+
+/// Read through an existing capability directory without reopening its root.
+/// Preserve the directory's symlink policy; on Unix, nonblocking open lets the
+/// shared metadata admission reject a FIFO before any read can block.
+pub(crate) fn read_cap_dir_text_capped(
+    dir: &cap_std::fs::Dir,
+    relative: &Path,
+    max_bytes: u64,
+) -> Result<CappedText> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    read_open_file_capped(
+        dir.open_with(relative, &options)?.into_std(),
+        relative,
+        max_bytes,
+    )
 }
 
 fn read_open_file_capped(

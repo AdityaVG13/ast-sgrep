@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -134,6 +134,48 @@ test("pre-aborted native call and batch reject before executing any tools", asyn
   assert.equal(session.callCount, 0, "pre-aborted work must not reach the catalog");
   await session.call("catalog_search", { query: "search" });
   assert.equal(session.callCount, 1, "the same session must recover for later callers");
+});
+
+test("cancelled native batches publish the executed prefix call count", async (t) => {
+  const binding = requireNative();
+  if (!binding) { t.skip("native addon not built"); return; }
+  const root = await mkdtemp(join(tmpdir(), "asgrep-napi-batch-count-"));
+  const indexPath = join(root, "index.db");
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 1));
+  try {
+    await Promise.all(Array.from({ length: 300 }, (_, index) =>
+      writeFile(join(root, `file-${index}.rs`), `fn value_${index}() {}\n`.repeat(50))));
+    const session = new binding.Session({ root, indexPath, useEmbed: false });
+    const controller = new AbortController();
+    let settled = false;
+    const pending = session.batch([
+      { id: "prefix", tool: "select", args: { value: { a: 1 }, fields: ["a"] } },
+      { id: "index", tool: "index_repo", args: {} },
+      { id: "suffix", tool: "select", args: { value: { a: 3 }, fields: ["a"] } },
+    ], controller.signal).then(
+      () => "completed",
+      (error: unknown) => String(error),
+    ).finally(() => { settled = true; });
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(indexPath) && !settled && Date.now() < deadline) await pause();
+    assert.ok(existsSync(indexPath) && !settled, "observe index execution before aborting");
+    controller.abort();
+    assert.match(await pending, /cancel|abort/i);
+    // A cold cache peek waits for the native worker to drain without charging
+    // another call (which would otherwise hide a stale mirrored count).
+    for (;;) {
+      try {
+        assert.equal(session.callNow!("search", { query: "never-cached-count-probe" }), null);
+        break;
+      } catch (error) {
+        if (!String(error).includes("session is busy") || Date.now() >= deadline) throw error;
+        await pause();
+      }
+    }
+    assert.equal(session.callCount, 2, "publish the prefix and cancelled index, not the unstarted suffix");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("aborting an in-flight native call does not leave the session busy", async (t) => {

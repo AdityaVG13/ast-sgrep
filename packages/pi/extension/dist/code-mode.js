@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { realpathUtf8 as realpath } from "./runtime/index-health.js";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { pathContained, realpathUtf8 as realpath } from "./runtime/index-health.js";
+import { isAbsolute, resolve } from "node:path";
 import { RuntimeError } from "./runtime/runtime.js";
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -152,10 +152,6 @@ function parseRef(ref) {
     }
     return { file, start, end };
 }
-function inside(root, path) {
-    const rel = relative(root, path);
-    return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
 function checkAbort(signal) {
     if (signal?.aborted)
         throw new RuntimeError("CANCELLED", "ast-sgrep read was cancelled");
@@ -302,7 +298,7 @@ async function runSearch(runtime, context, command, query, options) {
 async function resolveReadableFile(root, ref, parsed) {
     const unresolved = resolve(root, parsed.file);
     assertSafeReadPath(unresolved);
-    if (!inside(root, unresolved))
+    if (!pathContained(root, unresolved))
         throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
     let filePath;
     let expectedStat;
@@ -316,7 +312,7 @@ async function resolveReadableFile(root, ref, parsed) {
             cause: cause instanceof Error ? cause.message : String(cause),
         });
     }
-    if (!inside(root, filePath))
+    if (!pathContained(root, filePath))
         throw new RuntimeError("PATH_OUTSIDE_ROOT", `Ref escapes the project root: ${ref}`);
     if (!expectedStat.isFile())
         throw new RuntimeError("READ_FAILED", `${parsed.file} is not a regular file`);
@@ -336,7 +332,7 @@ async function openStableHandle(root, ref, fileLabel, unresolved, filePath, expe
     }
     try {
         const [actualStat, openedPath] = await Promise.all([handle.stat(), realpath(unresolved)]);
-        if (!inside(root, openedPath) || openedPath !== filePath
+        if (!pathContained(root, openedPath) || openedPath !== filePath
             || actualStat.dev !== expectedStat.dev || actualStat.ino !== expectedStat.ino) {
             throw new RuntimeError("PATH_CHANGED", `Ref changed while opening: ${ref}`);
         }

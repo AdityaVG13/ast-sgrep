@@ -19,33 +19,6 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// First ASCII case-insensitive substring offset, allocation-free: skip to a
-/// first-byte candidate with `memchr2`, then verify with byte-wise folding
-/// (non-ASCII bytes compare opaquely, so UTF-8 content is safe).
-fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if needle.len() > haystack.len() {
-        return None;
-    }
-    let first_lo = needle[0].to_ascii_lowercase();
-    let first_up = needle[0].to_ascii_uppercase();
-    let mut from = 0;
-    while from + needle.len() <= haystack.len() {
-        let off = memchr::memchr2(first_lo, first_up, &haystack[from..])?;
-        let pos = from + off;
-        if pos + needle.len() > haystack.len() {
-            return None;
-        }
-        if haystack[pos..pos + needle.len()].eq_ignore_ascii_case(needle) {
-            return Some(pos);
-        }
-        from = pos + 1;
-    }
-    None
-}
-
 fn add_token_file(map: &mut HashMap<String, Vec<u32>>, token: String, fi: u32) {
     let entry = map.entry(token).or_default();
     if entry.last().copied() != Some(fi) {
@@ -70,6 +43,22 @@ pub fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u3
             continue;
         }
         let raw = &text[start..i];
+        // These spellings have exactly one split_ident component, identical
+        // to the full key. Reuse its posting directly; repeated occurrences
+        // in this file need neither another owned key nor another split.
+        if raw
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        {
+            if let Some(files) = map.get_mut(raw) {
+                if files.last().copied() != Some(fi) {
+                    files.push(fi);
+                }
+            } else {
+                map.insert(raw.to_owned(), vec![fi]);
+            }
+            continue;
+        }
         let token = raw.to_ascii_lowercase();
         for part in split_ident(raw) {
             if part.len() >= 3 {
@@ -92,7 +81,7 @@ pub fn file_first_lines(file_idx: &[u32], n_files: usize) -> Vec<u32> {
     first
 }
 
-fn cascade_prefers_file(path: &str) -> bool {
+pub(crate) fn cascade_prefers_file(path: &str) -> bool {
     // DB keys already normalize host separators; a Unix backslash is content.
     let normalized = path.to_ascii_lowercase();
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
@@ -115,26 +104,11 @@ fn cascade_prefers_file(path: &str) -> bool {
     true
 }
 
-pub fn file_byte_ends(
-    file_idx: &[u32],
-    starts: &[u32],
-    n_files: usize,
-    bytes_len: usize,
-) -> Vec<u32> {
-    let mut ends = vec![bytes_len as u32; n_files];
-    for (i, &fi) in file_idx.iter().enumerate() {
-        let end = starts.get(i + 1).copied().unwrap_or(bytes_len as u32);
-        if let Some(slot) = ends.get_mut(fi as usize) {
-            *slot = end;
-        }
-    }
-    ends
-}
-
 #[derive(Debug, Clone)]
 pub struct CorpusFile {
     pub path: String,
     pub language: Option<String>,
+    preferred: bool,
 }
 
 /// Packed `lines` table: path-sorted, one record per indexed line.
@@ -147,10 +121,6 @@ pub struct LineCorpus {
     line_nos: Vec<u32>,
     file_idx: Vec<u32>,
     files: Vec<CorpusFile>,
-    /// Exclusive packed-byte end of each file. Cascade discovery jumps here
-    /// after the first hit so a common needle does not memchr the rest of
-    /// that file.
-    file_byte_ends: Vec<u32>,
     /// First packed line of each file (cascade token lookup).
     file_first_line: Vec<u32>,
     /// Lowercased ASCII identifier -> file indexes. Unique-hybrid cascade
@@ -200,7 +170,12 @@ impl LineCorpus {
             }
             if current_path.as_deref() != Some(path.as_str()) {
                 current_path = Some(path.clone());
-                files.push(CorpusFile { path, language });
+                let preferred = cascade_prefers_file(&path);
+                files.push(CorpusFile {
+                    path,
+                    language,
+                    preferred,
+                });
             }
             let idx = (files.len() - 1) as u32;
             push_ascii_tokens(&mut token_files, &content, idx);
@@ -212,7 +187,6 @@ impl LineCorpus {
         }
 
         let n_files = files.len();
-        let file_byte_ends = file_byte_ends(&file_idx, &starts, n_files, bytes.len());
         let file_first_line = file_first_lines(&file_idx, n_files);
         Ok(Some(Arc::new(Self {
             index_data_version,
@@ -222,7 +196,6 @@ impl LineCorpus {
             line_nos,
             file_idx,
             files,
-            file_byte_ends,
             file_first_line,
             token_files,
         })))
@@ -241,16 +214,18 @@ impl LineCorpus {
         self.files.len()
     }
 
-    fn line_content(&self, i: usize) -> &str {
-        let start = self.starts[i] as usize;
-        let end = self
-            .starts
+    fn line_content_end(&self, i: usize) -> usize {
+        self.starts
             .get(i + 1)
             .copied()
             .map(|s| s as usize)
             .unwrap_or(self.bytes.len())
-            .saturating_sub(1);
-        std::str::from_utf8(&self.bytes[start..end]).unwrap_or("")
+            .saturating_sub(1)
+    }
+
+    fn line_content(&self, i: usize) -> &str {
+        let start = self.starts[i] as usize;
+        std::str::from_utf8(&self.bytes[start..self.line_content_end(i)]).unwrap_or("")
     }
 
     fn hit(&self, i: usize) -> LineHit<'_> {
@@ -263,7 +238,9 @@ impl LineCorpus {
         }
     }
 
-    fn line_index_at_byte(&self, abs: usize) -> Option<usize> {
+    /// Locate a match only when its whole byte span belongs to one stored line.
+    /// Packing separators are not evidence, even when the needle contains LF.
+    fn line_index_for_match(&self, abs: usize, match_len: usize) -> Option<usize> {
         if self.starts.is_empty() {
             return None;
         }
@@ -275,14 +252,8 @@ impl LineCorpus {
             Err(i) => i.saturating_sub(1),
         };
         let start = self.starts[i] as usize;
-        let content_end = self
-            .starts
-            .get(i + 1)
-            .copied()
-            .map(|s| s as usize)
-            .unwrap_or(self.bytes.len())
-            .saturating_sub(1);
-        if abs >= start && abs < content_end {
+        let content_end = self.line_content_end(i);
+        if abs >= start && abs < content_end && match_len <= content_end - abs {
             Some(i)
         } else {
             None
@@ -309,7 +280,7 @@ impl LineCorpus {
         while let Some(rel) = finder.find(&self.bytes[pos..]) {
             let abs = pos + rel;
             pos = abs + 1;
-            let Some(i) = self.line_index_at_byte(abs) else {
+            let Some(i) = self.line_index_for_match(abs, needle.len()) else {
                 continue;
             };
             if i == last_emitted {
@@ -362,120 +333,64 @@ impl LineCorpus {
         hits
     }
 
-    /// Cascade discovery: identifier needles use the warmed token→file map
-    /// (case-folded). Other needles fall back to memchr and jump to the next
-    /// file after a hit so a common substring does not walk every remaining
-    /// line of that file.
-    pub fn scan_distinct_files_cs<'a>(
+    /// Bounded distinct-file discovery. Token postings seed each preference
+    /// group, but unused slots must be filled by residual matches. The caller
+    /// supplies the same per-record verifier as cold search, so Unicode folds
+    /// and packed separators cannot change membership or representative lines.
+    pub fn scan_distinct_files<'a>(
         &'a self,
         needle: &str,
         file_cap: usize,
         already: &HashSet<String>,
+        lang_filter: Option<&str>,
+        lang_ok: impl Fn(Option<&str>, Option<&str>) -> bool,
+        matches: impl Fn(&str) -> bool,
     ) -> Vec<LineHit<'a>> {
         if needle.is_empty() || file_cap == 0 {
             return Vec::new();
         }
-        if needle.len() >= 3
-            && needle
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            let key = needle.to_ascii_lowercase();
-            if let Some(file_ids) = self.token_files.get(&key) {
-                return self.hits_from_file_ids(needle, file_ids, file_cap, already);
-            }
-        }
-        let finder = memchr::memmem::Finder::new(needle.as_bytes());
-        let mut hits = Vec::new();
+        let key = needle.to_ascii_lowercase();
+        let postings = self
+            .token_files
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut seen = HashSet::new();
-        let mut pos = 0usize;
-        while let Some(rel) = finder.find(&self.bytes[pos..]) {
-            let abs = pos + rel;
-            let Some(i) = self.line_index_at_byte(abs) else {
-                pos = abs + 1;
-                continue;
-            };
-            let fi = self.file_idx[i];
-            let end = self
-                .file_byte_ends
-                .get(fi as usize)
-                .copied()
-                .map(|e| e as usize)
-                .unwrap_or(self.bytes.len())
-                .max(abs + 1);
-            pos = end;
-            if !seen.insert(fi) {
-                continue;
-            }
-            let hit = self.hit(i);
-            if already.contains(hit.path) {
-                continue;
-            }
-            hits.push(hit);
-            if hits.len() >= file_cap {
-                break;
+        let mut hits = Vec::new();
+        for preferred in [true, false] {
+            for fi in postings
+                .iter()
+                .map(|&fi| fi as usize)
+                .chain(0..self.files.len())
+            {
+                let file = &self.files[fi];
+                if file.preferred != preferred
+                    || already.contains(&file.path)
+                    || !lang_ok(file.language.as_deref(), lang_filter)
+                    || seen.contains(&fi)
+                {
+                    continue;
+                }
+                let Some(line) = self.first_matching_line(fi, &matches) else {
+                    continue;
+                };
+                seen.insert(fi);
+                hits.push(self.hit(line));
+                if hits.len() >= file_cap {
+                    return hits;
+                }
             }
         }
         hits
     }
 
-    fn hits_from_file_ids<'a>(
-        &'a self,
-        needle: &str,
-        file_ids: &[u32],
-        file_cap: usize,
-        already: &HashSet<String>,
-    ) -> Vec<LineHit<'a>> {
-        let mut preferred = Vec::new();
-        let mut rest = Vec::new();
-        for &fi in file_ids {
-            let Some(file) = self.files.get(fi as usize) else {
-                continue;
-            };
-            if already.contains(&file.path) {
-                continue;
-            }
-            if cascade_prefers_file(&file.path) {
-                preferred.push(fi);
-            } else {
-                rest.push(fi);
-            }
-        }
-        // Representative is the actual first matching line, located by an
-        // ASCII case-insensitive memchr bounded to each admitted file's
-        // bytes (stops at the first hit; far cheaper than the whole-blob
-        // scan the token map exists to skip). A first-line stub would merge
-        // differently downstream than the cold fallback's matching line and
-        // surface non-matching excerpts as evidence. Case-insensitive (not
-        // the exact-case probe the memchr path uses) because prefilter terms
-        // are case-folded while file bytes keep their case, and the cold
-        // fallback this must agree with scans case-insensitively. A miss
-        // keeps the stub rather than dropping an admitted file.
-        let mut hits = Vec::new();
-        for &fi in preferred.iter().chain(rest.iter()) {
-            let Some(&line_i) = self.file_first_line.get(fi as usize) else {
-                continue;
-            };
-            if line_i == u32::MAX {
-                continue;
-            }
-            let stub = line_i as usize;
-            let start = self.starts.get(stub).copied().unwrap_or(0) as usize;
-            let end = self
-                .file_byte_ends
-                .get(fi as usize)
-                .copied()
-                .unwrap_or(self.bytes.len() as u32) as usize;
-            let lo = start.min(end).min(self.bytes.len());
-            let hi = end.min(self.bytes.len());
-            let line = find_ascii_ci(&self.bytes[lo..hi], needle.as_bytes())
-                .and_then(|rel| self.line_index_at_byte(lo + rel))
-                .unwrap_or(stub);
-            hits.push(self.hit(line));
-            if hits.len() >= file_cap {
-                break;
-            }
-        }
-        hits
+    fn first_matching_line(&self, fi: usize, matches: &impl Fn(&str) -> bool) -> Option<usize> {
+        let start = *self.file_first_line.get(fi)? as usize;
+        let end = self
+            .file_first_line
+            .get(fi + 1)
+            .copied()
+            .unwrap_or(self.len() as u32) as usize;
+        (start..end).find(|&line| matches(self.line_content(line)))
     }
 }

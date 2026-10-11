@@ -12,8 +12,9 @@ pub struct PatternMatch {
     pub byte_start: usize,
     pub byte_end: usize,
     pub excerpt: String,
-    /// Metavariable bindings without the leading `$`. `MATCH` is always the
-    /// complete matched node and is available to rewrite templates.
+    /// Single metavariables use bare names; rest captures use `$$$NAME`.
+    /// `MATCH` holds the complete node unless an explicit `$MATCH` binds it.
+    /// These public bindings are available to rewrite templates.
     pub captures: BTreeMap<String, String>,
 }
 

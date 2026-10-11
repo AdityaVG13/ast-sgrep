@@ -59,7 +59,7 @@ type RenderContext = {
     lastComponent?: unknown;
     args?: object;
 };
-/** Build the card model from the tool result's details payload. */
+/** Lifecycle precedence: partial without ok, then failure, then completed content. */
 export declare function cardModel(result: ResultLike, options: RenderOptions, callArgs?: Record<string, unknown>): CardModel;
 /** renderResult entrypoint: bind one card per result slot, feed it details. */
 export declare function renderAsgrepResult(result: ResultLike, options: RenderOptions, theme: PresentTheme, context?: RenderContext): AsgrepCard;

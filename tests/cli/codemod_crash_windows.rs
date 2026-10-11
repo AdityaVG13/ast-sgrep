@@ -480,7 +480,7 @@ fn codemod_bare_ident_matches_the_ident_node_not_the_enclosing_item() {
 /// `.{file}.asgrep-codemod-backup-{pid}-{clock}-{nonce}`: pid precedes clock,
 /// so lexicographic "newest" is temporal garbage across processes. Here the
 /// lexicographically-largest name carries the OLDER content; recovery must
-/// still restore the newer backup (and only then sweep leftovers).
+/// still restore the newer backup while preserving unselected captures.
 /// Pre-fix this restored the stale backup and DELETED the newest.
 #[test]
 fn recover_orphans_restores_newest_backup_by_mtime_not_name_order() {
@@ -526,10 +526,12 @@ fn recover_orphans_restores_newest_backup_by_mtime_not_name_order() {
         "recovery must restore the temporally NEWEST backup, not the \
          lexicographically-largest name"
     );
-    assert!(
-        !stale.exists() && !newest.exists(),
-        "both sidecars are swept after the restore"
+    assert_eq!(
+        fs::read_to_string(&stale).unwrap(),
+        stale_content,
+        "an unselected capture must survive recovery"
     );
+    assert!(!newest.exists(), "only the restored backup is consumed");
     let _ = plan.expect("planning continues over the healed tree");
     drop(temp);
 }

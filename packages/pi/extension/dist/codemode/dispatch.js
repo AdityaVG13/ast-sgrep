@@ -276,10 +276,19 @@ const ARGV_SPEC = {
 function argStr(args, key) {
     return String(args[key] ?? "");
 }
+/** Client-side route refusal: no transport ran, so a local fallback is safe. */
+export class NoCliFallbackError extends Error {
+    tool;
+    constructor(tool) {
+        super(`codemode tool has no direct CLI fallback: ${tool}`);
+        this.tool = tool;
+        this.name = "NoCliFallbackError";
+    }
+}
 export function argvFor(tool, args) {
     const spec = ARGV_SPEC[tool];
     if (!spec)
-        throw new Error(`codemode tool has no direct CLI fallback: ${tool}`);
+        throw new NoCliFallbackError(tool);
     if (spec.form === "status")
         return ["status", ".", "--json"];
     if (spec.form === "index_repo") {
@@ -294,7 +303,12 @@ export function argvFor(tool, args) {
     }
     const limit = num(args.limit, 8);
     if (spec.form === "chain") {
-        return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit)];
+        const maxWork = args.max_work;
+        if (maxWork != null && (typeof maxWork !== "number" || !Number.isSafeInteger(maxWork) || maxWork < 1 || maxWork > 1_000_000)) {
+            throw new Error("max_work must be an integer in 1..=1000000");
+        }
+        const work = maxWork == null ? [] : ["--max-work", String(maxWork)];
+        return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit), ...work];
     }
     const excerpt = num(args.excerpt_lines ?? args.excerptLines, 0);
     const capsule = withLang(["--json", "--format", "agent-capsule", "--limit", String(limit), "--excerpt-lines", String(excerpt)], args);

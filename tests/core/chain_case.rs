@@ -179,6 +179,296 @@ fn case_mismatched_callee_expands_to_definition_node() {
 }
 
 #[test]
+fn caller_chain_seeds_use_unique_definition_locations_and_dedup_resolved_files() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    for (path, caller) in [("a.rs", "alpha"), ("c.rs", "gamma")] {
+        let symbols = [SymbolRow {
+            name: caller.into(),
+            kind: "function".into(),
+            line_start: 1,
+            line_end: 4,
+            byte_start: 0,
+            byte_end: 0,
+        }];
+        let calls = [
+            CallerRow {
+                caller: caller.into(),
+                callee: "BETA".into(),
+                line_no: 2,
+                byte_start: 0,
+                byte_end: 0,
+            },
+            CallerRow {
+                caller: caller.into(),
+                callee: "external".into(),
+                line_no: 3,
+                byte_start: 0,
+                byte_end: 0,
+            },
+        ];
+        let lines = [
+            (1, format!("fn {caller}() {{")),
+            (2, "    BETA();".into()),
+            (3, "    external();".into()),
+            (4, "}".into()),
+        ];
+        store
+            .upsert_file(base(path, &lines, path, &symbols, &calls))
+            .unwrap();
+    }
+    let definition = [SymbolRow {
+        name: "beta".into(),
+        kind: "function".into(),
+        line_start: 4,
+        line_end: 6,
+        byte_start: 0,
+        byte_end: 0,
+    }];
+    let lines = [
+        (4, "fn beta() {".into()),
+        (5, "    let exact_definition = 1;".into()),
+        (6, "}".into()),
+    ];
+    store
+        .upsert_file(base("b.rs", &lines, "beta-definition", &definition, &[]))
+        .unwrap();
+    let config = ChainConfig {
+        max_depth: 0,
+        limit: 8,
+        top_n: 8,
+        ..ChainConfig::default()
+    };
+    let seeded = expand_chain(&store, "callers:BETA", &config).unwrap();
+    assert_eq!(
+        seeded.seeds.len(),
+        1,
+        "two reference files must resolve to one seed file"
+    );
+    let seed = &seeded.seeds[0];
+    assert_eq!(
+        (
+            &*seed.file,
+            seed.symbol.as_deref(),
+            seed.line_start,
+            seed.line_end,
+            seed.language.as_deref()
+        ),
+        ("b.rs", Some("beta"), 4, 6, Some("rust")),
+        "callee identity must keep its defining location"
+    );
+    assert_eq!(seed.depth, 0);
+    assert_eq!(seeded.node_count, 1);
+
+    let expanded = expand_chain(
+        &store,
+        "callers:BETA",
+        &ChainConfig {
+            max_depth: 1,
+            ..config.clone()
+        },
+    )
+    .unwrap();
+    for (file, symbol) in [("a.rs", "alpha"), ("c.rs", "gamma")] {
+        assert!(
+            expanded.nodes.iter().any(|node| node.file == file
+                && node.symbol.as_deref() == Some(symbol)
+                && node.depth == 1),
+            "correcting the callee seed must retain the actual caller {symbol}"
+        );
+        assert!(expanded
+            .edges
+            .iter()
+            .any(|edge| edge.label == EdgeLabel::CalledBy
+                && edge.from_file == file
+                && edge.from_symbol.as_deref() == Some(symbol)
+                && edge.to_file == "b.rs"
+                && edge.to_symbol.as_deref() == Some("beta")));
+    }
+
+    // With no unique definition, retain the existing reference-site evidence;
+    // never choose a path-first duplicate as if it established symbol identity.
+    let external = expand_chain(&store, "callers:external", &config).unwrap();
+    assert_eq!(external.seeds.len(), 2);
+    assert!(external
+        .seeds
+        .iter()
+        .all(|seed| ["a.rs", "c.rs"].contains(&seed.file.as_str())
+            && seed.symbol.as_deref() == Some("external")
+            && seed.line_start == 3
+            && seed.line_end == 3));
+    store
+        .upsert_file(base(
+            "duplicate.rs",
+            &lines,
+            "duplicate-beta",
+            &definition,
+            &[],
+        ))
+        .unwrap();
+    let ambiguous = expand_chain(&store, "callers:BETA", &config).unwrap();
+    assert_eq!(ambiguous.seeds.len(), 2);
+    assert!(ambiguous
+        .seeds
+        .iter()
+        .all(|seed| ["a.rs", "c.rs"].contains(&seed.file.as_str())
+            && seed.symbol.as_deref() == Some("BETA")
+            && seed.line_start == 2
+            && seed.line_end == 2));
+}
+
+#[test]
+fn chain_work_limit_counts_duplicate_case_variant_rows_before_deduplication() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let mut lines = vec![(1, "fn hub() {".into())];
+    let calls: Vec<_> = (2..=9001)
+        .map(|line_no| {
+            let callee = if line_no % 2 == 0 { "LEAF" } else { "leaf" };
+            lines.push((line_no, format!("    {callee}();")));
+            CallerRow {
+                caller: "hub".into(),
+                callee: callee.into(),
+                line_no,
+                byte_start: 0,
+                byte_end: 0,
+            }
+        })
+        .collect();
+    lines.push((9002, "}".into()));
+    let symbol = |name: &str, end| SymbolRow {
+        name: name.into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: end,
+        byte_start: 0,
+        byte_end: 0,
+    };
+    store
+        .upsert_file(base(
+            "hub.rs",
+            &lines,
+            "hub",
+            &[symbol("hub", 9002)],
+            &calls,
+        ))
+        .unwrap();
+    store
+        .upsert_file(base(
+            "leaf.rs",
+            &[(1, "fn leaf() {}".into())],
+            "leaf",
+            &[symbol("leaf", 1)],
+            &[],
+        ))
+        .unwrap();
+    let config = ChainConfig {
+        top_n: 1,
+        max_depth: 2,
+        ..ChainConfig::default()
+    };
+    let first = serde_json::to_value(expand_chain(&store, "defs:hub", &config).unwrap()).unwrap();
+    assert_eq!(
+        first["truncated"], true,
+        "duplicate-heavy expansion must stop work, not count two deduplicated files as cheap"
+    );
+    assert_eq!(
+        first["truncation_reasons"],
+        serde_json::json!(["work_limit"])
+    );
+    assert_eq!(first["work"]["limit"], 8192);
+    assert_eq!(first["work"]["used"], 8192);
+    assert!(first["work"]["call_rows"].as_u64().unwrap() > 1);
+    assert!(
+        first["work"]["peak_source_page_rows"].as_u64().unwrap() <= 8193,
+        "SQL admission must precede materialization"
+    );
+    assert_eq!(first["node_count"], 2);
+    assert_eq!(first["seeds"][0]["symbol"], "hub");
+    assert_eq!(
+        first["edges"].as_array().unwrap().len(),
+        1,
+        "later reverse-edge exploration was not completed"
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            serde_json::to_value(expand_chain(&store, "defs:hub", &config).unwrap()).unwrap(),
+            first
+        );
+    }
+}
+
+#[test]
+fn chain_reports_the_existing_definition_limit_without_changing_its_prefix() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    let symbol = |name: &str| SymbolRow {
+        name: name.into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        byte_start: 0,
+        byte_end: 0,
+    };
+    let calls = [CallerRow {
+        caller: "hub".into(),
+        callee: "LEAF".into(),
+        line_no: 1,
+        byte_start: 0,
+        byte_end: 0,
+    }];
+    store
+        .upsert_file(base(
+            "hub.rs",
+            &[(1, "fn hub() { LEAF(); }".into())],
+            "hub",
+            &[symbol("hub")],
+            &calls,
+        ))
+        .unwrap();
+    for i in (0..9).rev() {
+        let path = format!("leaf-{i}.rs");
+        store
+            .upsert_file(base(
+                &path,
+                &[(1, "fn leaf() {}".into())],
+                &path,
+                &[symbol("leaf")],
+                &[],
+            ))
+            .unwrap();
+    }
+    let response = expand_chain(
+        &store,
+        "defs:hub",
+        &ChainConfig {
+            top_n: 1,
+            max_depth: 1,
+            limit: 20,
+            ..ChainConfig::default()
+        },
+    )
+    .unwrap();
+    let value = serde_json::to_value(&response).unwrap();
+    assert_eq!(
+        value["truncated"], true,
+        "ninth definitions must not disappear without a signal"
+    );
+    assert_eq!(
+        value["truncation_reasons"],
+        serde_json::json!(["definition_limit"])
+    );
+    assert_eq!(response.node_count, 9);
+    for i in 0..8 {
+        assert!(response
+            .nodes
+            .iter()
+            .any(|n| n.file == format!("leaf-{i}.rs")));
+    }
+    assert!(!response.nodes.iter().any(|n| n.file == "leaf-8.rs"));
+}
+
+#[test]
 fn bounded_call_path_reports_scip_evidence_without_claiming_value_flow() {
     let temp = TempDir::new().unwrap();
     let store = IndexStore::open(temp.path(), None).unwrap();

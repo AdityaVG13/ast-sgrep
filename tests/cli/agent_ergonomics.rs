@@ -93,6 +93,36 @@ fn robot_next_aliases_robot_triage() {
     assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["command"], "doctor");
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("literal-root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("lib.rs"),
+        "fn literal_routing_target() { let flag = \"--robot-next\"; }\n",
+    )
+    .unwrap();
+    let indexed = Command::new(asgrep_bin())
+        .args(["--json", "--no-embed", "index"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(indexed.status.success());
+    let output = Command::new(asgrep_bin())
+        .args(["--json", "--no-embed", "--root"])
+        .arg(&root)
+        .args(["--", "--robot-next"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "literal data must not inject doctor: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let literal: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(literal["command"], "search");
+    assert!(!literal["hits"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -365,6 +395,84 @@ fn pins_common_agent_typos() {
     assert!(stderr.contains("`--robot-triage`"), "stderr={stderr}");
     let value: Value = serde_json::from_str(&stdout).expect("json");
     assert_eq!(value["command"], "doctor");
+}
+
+#[test]
+fn typo_recovery_preserves_option_values() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("statuz");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("lib.rs"), "fn needle_value_target() {}\n").unwrap();
+    let indexed = Command::new(asgrep_bin())
+        .current_dir(temp.path())
+        .args(["--json", "--no-embed", "index", "statuz"])
+        .output()
+        .unwrap();
+    assert!(
+        indexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+    for flag in ["--root", "--rooot"] {
+        let output = Command::new(asgrep_bin())
+            .current_dir(temp.path())
+            .args([
+                "--json",
+                "--no-embed",
+                flag,
+                "statuz",
+                "search",
+                "needle_value_target",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "option values must not retarget root: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(value["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["symbol"] == "needle_value_target"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("recovered `statuz`"));
+    }
+}
+
+#[test]
+fn typo_recovery_help_data_does_not_authorize_mutation() {
+    let temp = TempDir::new().unwrap();
+    for root in ["help", "--help"] {
+        let path = temp.path().join(root);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("lib.rs"), "fn untouched() {}\n").unwrap();
+        let args = if root == "help" {
+            vec!["--json", "--no-embed", "indx", "--root", root]
+        } else {
+            vec!["--json", "--no-embed", "indx", "--", root]
+        };
+        let output = Command::new(asgrep_bin())
+            .current_dir(temp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "root data is not help intent: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["kind"], "usage");
+        assert!(
+            !path.join(".asgrep").exists(),
+            "a guessed mutating command must not create an index"
+        );
+    }
 }
 
 /// H-PERF-001 option (b): duty-cycle supervision is opt-in. The default run

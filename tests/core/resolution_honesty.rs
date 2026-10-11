@@ -298,6 +298,95 @@ fn scip_upgrades_an_ambiguous_call_without_inventing_edges() {
 }
 
 #[test]
+fn case_folded_call_targets_have_consistent_resolution() {
+    use ast_sgrep_core::call_path::{find_call_path, CallPathConfig};
+    let mut observed = Vec::new();
+    for (local, collision) in [(true, false), (false, false), (true, true), (false, true)] {
+        let temp = tempfile::tempdir().unwrap();
+        let definitions = if collision {
+            "fn baz() {}\nfn Baz() {}\n"
+        } else {
+            "fn baz() {}\n"
+        };
+        let source = if local {
+            format!("fn source() {{ Baz(); }}\n{definitions}")
+        } else {
+            "fn source() { Baz(); }\n".into()
+        };
+        std::fs::write(temp.path().join("source.rs"), source).unwrap();
+        if !local {
+            std::fs::write(temp.path().join("target.rs"), definitions).unwrap();
+        }
+        let mut indexer = Indexer::new(IndexOptions {
+            root: temp.path().to_path_buf(),
+            embed_semantic: false,
+            ..IndexOptions::default()
+        })
+        .unwrap();
+        indexer.index_all().unwrap();
+        let path =
+            find_call_path(indexer.store(), "SOURCE", "baz", &CallPathConfig::default()).unwrap();
+        assert!(path.found && path.depth == Some(1), "{path:?}");
+        let hop = &path.path[0];
+        assert_eq!(
+            hop.callee, "Baz",
+            "authored evidence spelling must remain intact"
+        );
+        let candidate_count = match &hop.resolution {
+            Resolution::Ambiguous { candidates } => {
+                let mut names: Vec<_> = candidates.iter().map(|id| id.name.as_str()).collect();
+                names.sort();
+                assert_eq!(names, ["Baz", "baz"]);
+                candidates.len()
+            }
+            _ => 0,
+        };
+        let searcher = Searcher::new(SearchOptions {
+            root: temp.path().to_path_buf(),
+            use_embed: false,
+            ..SearchOptions::default()
+        })
+        .unwrap();
+        let response = searcher.search("callers:BAZ").unwrap();
+        let caller = response
+            .hits
+            .iter()
+            .find(|hit| hit.callee.as_deref() == Some("Baz"))
+            .unwrap();
+        let resolution = caller.resolution.as_ref().unwrap();
+        observed.push(serde_json::json!([
+            local,
+            collision,
+            [hop.resolution.as_str(), hop.precise],
+            [resolution.as_str(), resolution.is_precise()],
+            candidate_count
+        ]));
+    }
+    assert_eq!(
+        observed,
+        vec![
+            serde_json::json!([
+                true,
+                false,
+                ["file_local_unique", true],
+                ["file_local_unique", true],
+                0
+            ]),
+            serde_json::json!([
+                false,
+                false,
+                ["repository_unique", false],
+                ["repository_unique", false],
+                0
+            ]),
+            serde_json::json!([true, true, ["ambiguous", false], ["name_only", false], 2]),
+            serde_json::json!([false, true, ["ambiguous", false], ["name_only", false], 2]),
+        ],
+        "counts and candidates must share case-folding; collisions must never claim uniqueness"
+    );
+}
+
+#[test]
 fn scip_never_downgrades_a_stronger_tier() {
     assert_eq!(
         Resolution::CompilerExact.upgrade(Resolution::ScipOccurrence),

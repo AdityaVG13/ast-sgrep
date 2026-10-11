@@ -175,6 +175,16 @@ pub(crate) fn root142_trivia(text: &str) -> &str {
     text.trim()
 }
 
+/// Complete braced body after the opening `{`: preserve the balanced
+/// scanner's raw brace-counting rules and reject non-trivia trailing text.
+fn root142_brace_body(inner: &str) -> Option<&str> {
+    let close = balanced_brace_close(inner)?;
+    inner[close + 1..]
+        .trim()
+        .is_empty()
+        .then(|| inner[..close].trim())
+}
+
 pub(crate) fn statement_root_142_template(
     lang: Language,
     pattern: &str,
@@ -187,11 +197,7 @@ pub(crate) fn statement_root_142_template(
             if let Some(rest) = p.strip_prefix("mod ") {
                 let (name_tok, rest) = root142_split_token(rest)?;
                 let inner = rest.trim_start().strip_prefix('{')?;
-                let close = balanced_brace_close(inner)?;
-                if !inner[close + 1..].trim().is_empty() {
-                    return None;
-                }
-                let body = root142_meta_slot(inner[..close].trim())?;
+                let body = root142_meta_slot(root142_brace_body(inner)?)?;
                 return Some(Root142Template::RsMod {
                     name: root142_name_slot(name_tok)?,
                     body,
@@ -208,99 +214,88 @@ pub(crate) fn statement_root_142_template(
             })
         }
         Language::Go => {
-            // `type <name> <T>` — T is the WHOLE type tail (E6 struct blocks);
-            // the `=`-alias spelling keeps the kt/general routes (unprobed
-            // here on purpose), and the `;`-ful spelling is a reference RC8.
-            if let Some(rest) = p.strip_prefix("type ") {
-                let (name_tok, rest) = root142_split_token(rest)?;
-                let ty = rest.trim();
-                if ty.is_empty() || ty.starts_with('=') || ty.contains(';') {
-                    return None;
-                }
-                if ty.contains(char::is_whitespace) {
-                    // A multi-token tail never parses in go without a brace
-                    // group; the brace-group tail is unprobed and keeps its
-                    // loud route.
-                    return None;
-                }
-                return Some(Root142Template::GoType {
-                    name: root142_name_slot(name_tok)?,
-                    ty: root142_name_slot(ty)?,
-                });
-            }
-            // The go root siblings of the goto-bare face.
-            if let Some(rest) = p.strip_prefix("switch ") {
-                // `switch [<X>] { <B> }` — the global `{` form has no subject.
-                let (subject, brace_section) = if let Some(inner) = rest.strip_prefix('{') {
-                    (None, inner)
-                } else {
-                    let (subj_tok, after) = root142_split_token(rest)?;
-                    let brace_at = after.find('{')?;
-                    if !after[..brace_at].trim().is_empty() {
+            // These disjoint roots all require one literal ASCII space
+            // after the keyword. Keep the remainder intact: switch's
+            // subjectless face distinguishes an immediate opening brace.
+            let (head, rest) = p.split_once(' ')?;
+            match head {
+                // `type <name> <T>` — T is the WHOLE type tail (E6 struct blocks);
+                // the `=`-alias spelling keeps the kt/general routes (unprobed
+                // here on purpose), and the `;`-ful spelling is a reference RC8.
+                "type" => {
+                    let (name_tok, rest) = root142_split_token(rest)?;
+                    let ty = rest.trim();
+                    if ty.is_empty() || ty.starts_with('=') || ty.contains(';') {
                         return None;
                     }
-                    (Some(root142_name_slot(subj_tok)?), &after[brace_at + 1..])
-                };
-                let close = balanced_brace_close(brace_section)?;
-                if !brace_section[close + 1..].trim().is_empty() {
-                    return None;
+                    if ty.contains(char::is_whitespace) {
+                        // A multi-token tail never parses in go without a brace
+                        // group; the brace-group tail is unprobed and keeps its
+                        // loud route.
+                        return None;
+                    }
+                    Some(Root142Template::GoType {
+                        name: root142_name_slot(name_tok)?,
+                        ty: root142_name_slot(ty)?,
+                    })
                 }
-                // Body spelling: `$B` and `$$B` both bind the ONE clause's
-                // raw text; `$$$B` is unprobed and keeps its prior class.
-                let body_tok = brace_section[..close].trim();
-                if body_tok.starts_with("$$$") {
-                    return None;
+                // The go root siblings of the goto-bare face.
+                "switch" => {
+                    // `switch [<X>] { <B> }` — the global `{` form has no subject.
+                    let (subject, brace_section) = if let Some(inner) = rest.strip_prefix('{') {
+                        (None, inner)
+                    } else {
+                        let (subj_tok, after) = root142_split_token(rest)?;
+                        let brace_at = after.find('{')?;
+                        if !after[..brace_at].trim().is_empty() {
+                            return None;
+                        }
+                        (Some(root142_name_slot(subj_tok)?), &after[brace_at + 1..])
+                    };
+                    // Body spelling: `$B` and `$$B` both bind the ONE clause's
+                    // raw text; `$$$B` is unprobed and keeps its prior class.
+                    let body_tok = root142_brace_body(brace_section)?;
+                    if body_tok.starts_with("$$$") {
+                        return None;
+                    }
+                    let body = root142_meta_slot(body_tok)?;
+                    Some(Root142Template::GoSwitch { subject, body })
                 }
-                let body = root142_meta_slot(body_tok)?;
-                return Some(Root142Template::GoSwitch { subject, body });
+                "if" => {
+                    // `if <C> { <B> }` — C is one token slot (e13 `x` literal,
+                    // e10 `$C` meta); B binds the WHOLE body and demands `$$`.
+                    let brace_at = rest.find('{')?;
+                    let cond_tok = rest[..brace_at].trim();
+                    if cond_tok.contains(char::is_whitespace) {
+                        return None;
+                    }
+                    let cond = root142_name_slot(cond_tok)?;
+                    let body_tok = root142_brace_body(&rest[brace_at + 1..])?;
+                    if !body_tok.starts_with("$$") || body_tok.starts_with("$$$") {
+                        return None;
+                    }
+                    let body = root142_meta_slot(body_tok)?;
+                    Some(Root142Template::GoIf { cond, body })
+                }
+                "package" | "import" => {
+                    // Both roots take one non-multi meta without a semicolon.
+                    // The `;`-ful import face stays accepted-empty upstream.
+                    let tok = rest.trim();
+                    if tok.contains(char::is_whitespace) || tok.ends_with(';') {
+                        return None;
+                    }
+                    let name = lane_meta(tok)?;
+                    if name.multi {
+                        return None;
+                    }
+                    Some(if head == "package" {
+                        Root142Template::GoPackage { name }
+                    } else {
+                        Root142Template::GoImport { target: name }
+                    })
+                }
+                _ => None,
             }
-            if let Some(rest) = p.strip_prefix("if ") {
-                // `if <C> { <B> }` — C is one token slot (e13 `x` literal,
-                // e10 `$C` meta); B binds the WHOLE body and demands `$$`.
-                let brace_at = rest.find('{')?;
-                let cond_tok = rest[..brace_at].trim();
-                if cond_tok.contains(char::is_whitespace) {
-                    return None;
-                }
-                let cond = root142_name_slot(cond_tok)?;
-                let inner = &rest[brace_at + 1..];
-                let close = balanced_brace_close(inner)?;
-                if !inner[close + 1..].trim().is_empty() {
-                    return None;
-                }
-                let body_tok = inner[..close].trim();
-                if !body_tok.starts_with("$$") || body_tok.starts_with("$$$") {
-                    return None;
-                }
-                let body = root142_meta_slot(body_tok)?;
-                return Some(Root142Template::GoIf { cond, body });
-            }
-            if let Some(rest) = p.strip_prefix("package ") {
-                // `package <N>` — meta name, no semi (e5/e6).
-                let tok = rest.trim();
-                if tok.contains(char::is_whitespace) || tok.ends_with(';') {
-                    return None;
-                }
-                let name = lane_meta(tok)?;
-                if name.multi {
-                    return None;
-                }
-                return Some(Root142Template::GoPackage { name });
-            }
-            if let Some(rest) = p.strip_prefix("import ") {
-                // SEMI-LESS `import <X>` (e8/e9); the `;`-ful spelling keeps
-                // its registered accepted-empty envelope upstream.
-                let tok = rest.trim();
-                if tok.contains(char::is_whitespace) || tok.ends_with(';') {
-                    return None;
-                }
-                let target = lane_meta(tok)?;
-                if target.multi {
-                    return None;
-                }
-                return Some(Root142Template::GoImport { target });
-            }
-            None
         }
         Language::Ruby => {
             // `module <Name>\n  $B\nend` — the body slot is the whole
@@ -321,11 +316,7 @@ pub(crate) fn statement_root_142_template(
             if let Some(rest) = p.strip_prefix("declare module ") {
                 let (name_tok, rest) = root142_split_token(rest)?;
                 let inner = rest.trim_start().strip_prefix('{')?;
-                let close = balanced_brace_close(inner)?;
-                if !inner[close + 1..].trim().is_empty() {
-                    return None;
-                }
-                let body = root142_meta_slot(inner[..close].trim())?;
+                let body = root142_meta_slot(root142_brace_body(inner)?)?;
                 return Some(Root142Template::TsDeclareModule {
                     name: root142_name_slot(name_tok).or_else(|| {
                         // The quoted ambient name (`"m"`) is a literal slot.
@@ -987,15 +978,8 @@ pub(crate) fn root146_php_decl_match(
             if prefix_members.is_empty() || members.len() != prefix_members.len() + 1 {
                 return None;
             }
-            let normalize = |node: &Node, src: &str| -> Option<String> {
-                Some(
-                    strip_comment_spans(node_text(node, src)?)
-                        .split_whitespace()
-                        .collect(),
-                )
-            };
             for (p_stmt, c_stmt) in prefix_members.iter().zip(members.iter()) {
-                if normalize(p_stmt, &doc) != normalize(c_stmt, source) {
+                if !literal_structural_eq(*p_stmt, &doc, *c_stmt, source, false) {
                     return None;
                 }
             }
@@ -1640,8 +1624,9 @@ pub(crate) fn directive_pattern_sg_accepts_empty(lang: Language, pattern: &str) 
 }
 
 /// The plain-face cs using dotted/qualified-META path family — every
-/// segment a canonical meta or an identifier, >= 2 segments, >= 1 meta
-/// (the reference binds NOTHING on any candidate).
+/// segment a canonical meta or an identifier, >= 2 segments, >= 1 meta.
+/// The directive lane handles leading-meta/literal-suffix forms first;
+/// this predicate also admits the remaining fail-closed spellings.
 pub(crate) fn cs_using_plainface_meta_path(pattern: &str) -> bool {
     let p = pattern.trim();
     let mut rest = p;

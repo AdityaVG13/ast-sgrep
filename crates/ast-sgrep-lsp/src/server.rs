@@ -26,6 +26,33 @@ pub struct LspServer {
 
 type ReqH = fn(&mut LspServer, &Value) -> anyhow::Result<Value>;
 
+/// Keep wire classification independent of backend diagnostic wording.
+#[derive(Debug)]
+struct RequestError {
+    code: i64,
+    message: String,
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RequestError {}
+
+fn request_error(code: i64, message: impl Into<String>) -> anyhow::Error {
+    RequestError {
+        code,
+        message: message.into(),
+    }
+    .into()
+}
+
+fn parse_params<P: DeserializeOwned>(params: &Value) -> anyhow::Result<P> {
+    serde_json::from_value(params.clone()).map_err(|error| request_error(-32602, error.to_string()))
+}
+
 const HANDLERS: &[(&str, ReqH)] = &[
     ("initialize", LspServer::h_init),
     ("shutdown", LspServer::h_shutdown),
@@ -34,7 +61,7 @@ const HANDLERS: &[(&str, ReqH)] = &[
     ("textDocument/documentSymbol", LspServer::h_dsym),
     ("textDocument/definition", LspServer::h_def),
     ("textDocument/references", LspServer::h_refs),
-    ("callHierarchy/prepareCallHierarchy", LspServer::h_prep_ch),
+    ("textDocument/prepareCallHierarchy", LspServer::h_prep_ch),
     ("callHierarchy/incomingCalls", LspServer::h_in_calls),
     ("callHierarchy/outgoingCalls", LspServer::h_out_calls),
     ("workspace/executeCommand", LspServer::h_exec),
@@ -111,11 +138,9 @@ impl LspServer {
         match self.dispatch(&req.method, &req.params) {
             Ok(v) => send_response(stdout, &req.id, v)?,
             Err(e) => {
-                let code = if e.to_string().contains("not found") {
-                    -32601
-                } else {
-                    -32603
-                };
+                let code = e
+                    .downcast_ref::<RequestError>()
+                    .map_or(-32603, |error| error.code);
                 send_error(stdout, &req.id, code, &e.to_string())?;
             }
         }
@@ -203,7 +228,9 @@ impl LspServer {
         HANDLERS
             .iter()
             .find_map(|(n, h)| (*n == method).then_some(*h))
-            .ok_or_else(|| anyhow::anyhow!("Method not found: {method}"))?(self, params)
+            .ok_or_else(|| request_error(-32601, format!("Method not found: {method}")))?(
+            self, params,
+        )
     }
 
     fn with_parsed<P, F>(&self, params: &Value, f: F) -> anyhow::Result<Value>
@@ -211,11 +238,11 @@ impl LspServer {
         P: DeserializeOwned,
         F: FnOnce(&LspBackend, P) -> anyhow::Result<Value>,
     {
-        f(self.backend()?, serde_json::from_value(params.clone())?)
+        f(self.backend()?, parse_params(params)?)
     }
 
     fn h_init(&mut self, params: &Value) -> anyhow::Result<Value> {
-        let params: InitializeParams = serde_json::from_value(params.clone())?;
+        let params: InitializeParams = parse_params(params)?;
         let mut backend =
             LspBackend::new_cached(canonicalize_workspace_root(resolve_root(&params)))?;
         if let Some(ref opts) = params.initialization_options {
@@ -283,7 +310,7 @@ impl LspServer {
     fn backend(&self) -> anyhow::Result<&LspBackend> {
         self.backend
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("server not initialized"))
+            .ok_or_else(|| request_error(-32002, "server not initialized"))
     }
 }
 
@@ -311,14 +338,13 @@ fn clamp_lsp_search_limit(limit: usize) -> usize {
     base.clamp(1, MAX_OUTPUT_RESULTS)
 }
 
-/// If `body` is JSON with a non-null `id`, reply Invalid Request (-32600).
+/// Malformed JSON has no recoverable id, but still requires Parse Error.
+/// Valid JSON with a non-null `id` receives Invalid Request (-32600).
 /// Used when the frame is neither a Request nor a Notification (missing
 /// method, wrong types, …) so clients do not hang waiting forever.
 fn reply_invalid_request_if_id(stdout: &mut impl Write, body: &str) -> io::Result<()> {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
-        // Unparseable JSON with no recoverable id: LSP has nowhere to address
-        // a response; drop (same as most servers). Frame framing already ran.
-        return Ok(());
+        return send_error(stdout, &Value::Null, -32700, "Parse error");
     };
     match value.get("id") {
         Some(id) if !id.is_null() => send_error(stdout, id, -32600, "Invalid Request"),

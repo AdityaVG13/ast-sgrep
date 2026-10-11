@@ -5,7 +5,17 @@ use crate::Language;
 use std::borrow::Cow;
 
 /// Unified entry: literal identifier match, or native structural match for `$` patterns.
+/// Explicit `$MATCH` overrides the implicit whole-node capture only after
+/// every occurrence has unified; `$$$MATCH` is an independent rest capture.
 pub fn match_pattern(
+    lang: Language,
+    source: &str,
+    pattern: &str,
+) -> anyhow::Result<Vec<PatternMatch>> {
+    match_pattern_inner(lang, source, pattern).map(finalize_match_captures)
+}
+
+fn match_pattern_inner(
     lang: Language,
     source: &str,
     pattern: &str,
@@ -53,8 +63,8 @@ pub fn match_pattern(
     }
     // The statement/decl root lanes (rs mod/extern crate, go type, rb module,
     // ts declare module/const, py async def, ja enum, cs record/struct) and
-    // the directive-family accepted-empty faces — the empty walk IS the
-    // reference agreement.
+    // the directive-family accepted-empty faces. Supported dotted using
+    // templates have already returned through the directive lane above.
     if directive_pattern_sg_accepts_empty(lang, pattern)
         || (lang == Language::CSharp && cs_using_plainface_meta_path(pattern))
     {
@@ -215,7 +225,7 @@ pub fn match_pattern(
         // byte-refuses `del (y)`) where the literal route's leaf byte-match
         // answered silent 0. Only del-template spellings reroute; every
         // other `$`-less pattern keeps the literal lane.
-        if lang == Language::Python && py_delete_template(pattern).is_some() {
+        if lang == Language::Python {
             if let Some(hits) = match_py_delete_meta(source, pattern) {
                 return Ok(hits);
             }
@@ -278,13 +288,8 @@ pub fn match_pattern(
         // the honest empty, never the loud class. (Single-language runs
         // refuse the same spellings as a multi-node parse — a registered
         // mode divergence; the multi-language run is the CLI's parity mode.)
-        let del_trimmed = pattern.trim();
-        if del_trimmed.starts_with("del") && del_trimmed.ends_with(';') {
-            if let Some(stripped) = del_trimmed.strip_suffix(';') {
-                if py_delete_template(stripped.trim()).is_some() {
-                    return Ok(Vec::new());
-                }
-            }
+        if py_delete_semi_pattern(pattern.trim()) {
+            return Ok(Vec::new());
         }
     }
     // `return ($X)` / `return($X)` are NOT call faces — the reference
@@ -378,7 +383,7 @@ pub fn match_literal_pattern(
     // swift member faces) — apply the same per-candidate link-trivia
     // doctrine the general lane consults.
     retain_member_link_trivia_free(lang, &tree, &mut matches);
-    Ok(matches)
+    Ok(finalize_match_captures(matches))
 }
 
 /// The swift/kt per-candidate member-link trivia retain shared by the

@@ -250,6 +250,8 @@ pub(crate) enum DirectiveTemplate {
         global_prefix: bool,
         keyword_run: Vec<CsUsingKeyword>,
         target: LaneName,
+        /// A leading meta captures the qualifier before this literal suffix.
+        target_suffix: Option<String>,
         alias_type: Option<AliasRhs>,
     },
     /// The php `use function|const $X;` kind faces — the literal kind keyword
@@ -487,6 +489,7 @@ pub(crate) fn directive_template(pattern: &str) -> Option<DirectiveTemplate> {
                 alias_type: Some(alias_type),
                 keyword_run,
                 target: lane_slot(lhs)?,
+                target_suffix: None,
             });
         }
         // The plain face: the name is ONE token (whitespace is never a
@@ -506,11 +509,23 @@ pub(crate) fn directive_template(pattern: &str) -> Option<DirectiveTemplate> {
         if inner.is_empty() || inner.chars().any(is_sg_cs_trivia) {
             return None;
         }
-        let target = lane_slot(&inner)?;
+        let (target, target_suffix) = if let Some(target) = lane_slot(&inner) {
+            (target, None)
+        } else {
+            // `$A.B.C` is a qualified name, not an accepted-empty face.
+            // Its leading meta owns the whole qualifier before `.B.C`.
+            // Alias-qualified/meta-tail spellings keep their existing route.
+            let (head, suffix) = inner.split_once('.')?;
+            if !suffix.split('.').all(is_pattern_ident) {
+                return None;
+            }
+            (LaneName::Meta(lane_meta(head)?), Some(suffix.to_string()))
+        };
         return Some(DirectiveTemplate::CsUsing {
             global_prefix,
             keyword_run,
             target,
+            target_suffix,
             alias_type: None,
         });
     }
@@ -538,10 +553,11 @@ pub(crate) fn top_level_equals(text: &str) -> Option<usize> {
 
 /// The (template, language) pairing the walk dispatches — the census arm
 /// and the dispatch share this exact admission.
-pub(crate) fn directive_lane_serves(lang: Language, pattern: &str) -> bool {
-    let Some(template) = directive_template(pattern) else {
-        return false;
-    };
+pub(crate) fn admitted_directive_template(
+    lang: Language,
+    pattern: &str,
+) -> Option<DirectiveTemplate> {
+    let template = directive_template(pattern)?;
     matches!(
         (&template, lang),
         (
@@ -557,6 +573,7 @@ pub(crate) fn directive_lane_serves(lang: Language, pattern: &str) -> bool {
                 Language::Python,
             )
     )
+    .then_some(template)
 }
 
 pub(crate) fn match_directive_root(
@@ -564,10 +581,7 @@ pub(crate) fn match_directive_root(
     source: &str,
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
-    if !directive_lane_serves(lang, pattern) {
-        return None;
-    }
-    let template = directive_template(pattern)?;
+    let template = admitted_directive_template(lang, pattern)?;
     let tree = parse_source(lang, source).ok()?;
     let mut out = Vec::new();
     match &template {
@@ -906,6 +920,7 @@ pub(crate) fn cs_using_match(
         global_prefix,
         keyword_run,
         target,
+        target_suffix,
         alias_type,
     } = template
     else {
@@ -1005,11 +1020,22 @@ pub(crate) fn cs_using_match(
             // — the reference skips boundary junk and comment gaps on the
             // literal face too, while glue INSIDE one segment refuses. Meta
             // targets keep the junk-retained capture.
-            match target {
-                LaneName::Meta(_) => {
+            match (target, target_suffix) {
+                (LaneName::Meta(meta), Some(suffix)) => {
+                    let mut qualifier = inner;
+                    for literal in suffix.rsplit('.') {
+                        let (head, tail) = qualifier.rsplit_once('.')?;
+                        if tail.trim_matches(is_sg_cs_gap_junk) != literal {
+                            return None;
+                        }
+                        qualifier = head.trim_end_matches(is_sg_cs_gap_junk);
+                    }
+                    meta.bind(&mut captures, qualifier)?;
+                }
+                (LaneName::Meta(_), None) => {
                     target.bind_or_match(&mut captures, inner)?;
                 }
-                LaneName::Literal(literal) => {
+                (LaneName::Literal(literal), _) => {
                     let lit_segs: Vec<&str> = literal.split('.').collect();
                     if lit_segs.len() != cand_segs.len() {
                         return None;

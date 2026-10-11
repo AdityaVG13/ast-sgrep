@@ -52,6 +52,7 @@ impl Default for SessionConfig {
 struct SearcherKey {
     root: PathBuf,
     index_path: Option<PathBuf>,
+    lang_filter: Option<String>,
     /// Opened Searcher limit; reused for any call whose limit is ≤ this.
     open_limit: usize,
     use_embed: bool,
@@ -59,12 +60,47 @@ struct SearcherKey {
     writer_generation: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearcherPreparation {
+    Fresh,
+    Read,
+    Search,
+}
+
+struct CachedSearcher {
+    key: SearcherKey,
+    searcher: Searcher,
+    preparation: SearcherPreparation,
+}
+
+impl CachedSearcher {
+    fn for_read(&mut self) -> &Searcher {
+        if self.preparation == SearcherPreparation::Fresh {
+            // Anchor the deferred snapshot at open, as warming did before,
+            // without materializing search-only caches for a read window.
+            let _ = self.searcher.store().index_data_version();
+            self.preparation = SearcherPreparation::Read;
+        }
+        &self.searcher
+    }
+
+    fn for_search(&mut self) -> &Searcher {
+        if self.preparation != SearcherPreparation::Search {
+            // Keep the existing best-effort, once-per-open policy, including
+            // failed warm attempts. Retrieval-first opens take the old path.
+            let _ = self.searcher.warm_search_path();
+            self.preparation = SearcherPreparation::Search;
+        }
+        &self.searcher
+    }
+}
+
 /// Stateful façade: warm `Searcher`, budgets, and tool dispatch.
 const RENDER_CACHE_CAP: usize = 64;
 
 pub struct CodeModeSession {
     config: SessionConfig,
-    searcher_cache: Mutex<Option<(SearcherKey, Searcher)>>,
+    searcher_cache: Mutex<Option<CachedSearcher>>,
     /// Formatted capsule/agent JSON for identical search args on a warm Searcher.
     /// Cleared whenever the Searcher is dropped (index write or writer stamp).
     render_cache: Mutex<HashMap<String, Value>>,
@@ -137,14 +173,7 @@ impl CodeModeSession {
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, CallError> {
         self.bump_call()?;
         let value = call_tool(self, name, args)?;
-        if json_size_bound(&value) > MAX_CALL_RESPONSE_BYTES {
-            let bytes = encoded_json_len(&value)?;
-            if bytes > MAX_CALL_RESPONSE_BYTES {
-                return Err(CallError::Other(anyhow!(
-                    "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
-                )));
-            }
-        }
+        admit_response(&value)?;
         Ok(value)
     }
 
@@ -224,8 +253,11 @@ impl CodeModeSession {
     where
         F: FnOnce(&Searcher) -> anyhow::Result<T>,
     {
-        let guard = self.searcher_for(root, needed_limit, None)?;
-        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        let mut guard = self.searcher_for(root, needed_limit, None, None)?;
+        let searcher = guard
+            .as_mut()
+            .expect("searcher_for populates cache")
+            .for_read();
         f(searcher)
     }
 
@@ -233,8 +265,9 @@ impl CodeModeSession {
         &self,
         root: PathBuf,
         needed_limit: usize,
+        lang_filter: Option<&str>,
         writer_generation: Option<u64>,
-    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<(SearcherKey, Searcher)>>> {
+    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<CachedSearcher>>> {
         let needed = needed_limit.clamp(1, 500);
         let writer_generation = writer_generation.unwrap_or_else(|| {
             ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref())
@@ -245,16 +278,17 @@ impl CodeModeSession {
             .map_err(|_| anyhow!("searcher cache lock poisoned"))?;
         let reuse = matches!(
             guard.as_ref(),
-            Some((key, _))
+            Some(CachedSearcher { key, .. })
                 if key.root == root
                     && key.index_path == self.config.index_path
+                    && key.lang_filter.as_deref() == lang_filter
                     && key.use_embed == self.config.use_embed
                     && key.open_limit >= needed
                     && key.writer_generation == writer_generation
         );
         if !reuse {
-            if let Some((_, old)) = guard.take() {
-                old.release_read_snapshot();
+            if let Some(old) = guard.take() {
+                old.searcher.release_read_snapshot();
             }
             self.clear_render_cache();
             // Open at least as wide as config + this call so later smaller calls reuse.
@@ -264,23 +298,25 @@ impl CodeModeSession {
             let searcher = Searcher::new(SearchOptions {
                 root: root.clone(),
                 index_path: self.config.index_path.clone(),
+                lang_filter: lang_filter.map(str::to_owned),
                 limit: open_limit,
                 use_embed: self.config.use_embed,
                 ..SearchOptions::default()
             })?
             .with_response_stamp(false);
             let _ = searcher.hold_read_snapshot();
-            let _ = searcher.warm_search_path();
-            *guard = Some((
-                SearcherKey {
+            *guard = Some(CachedSearcher {
+                key: SearcherKey {
                     root,
                     index_path: self.config.index_path.clone(),
+                    lang_filter: lang_filter.map(str::to_owned),
                     open_limit,
                     use_embed: self.config.use_embed,
                     writer_generation,
                 },
                 searcher,
-            ));
+                preparation: SearcherPreparation::Fresh,
+            });
         }
         Ok(guard)
     }
@@ -312,7 +348,7 @@ impl CodeModeSession {
         let root = self.root_arg(args)?;
         let writer_generation =
             ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
-        self.drop_searcher_if_writer_changed(writer_generation);
+        self.drop_searcher_if_stale(&root, lang_filter.as_deref(), writer_generation);
         let render_key = search_render_key(
             &query,
             limit,
@@ -324,18 +360,17 @@ impl CodeModeSession {
         if let Some(cached) = self.cached_render(&render_key) {
             return Ok(cached);
         }
-        let guard = self.searcher_for(root, limit, Some(writer_generation))?;
-        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        let mut guard =
+            self.searcher_for(root, limit, lang_filter.as_deref(), Some(writer_generation))?;
+        let searcher = guard
+            .as_mut()
+            .expect("searcher_for populates cache")
+            .for_search();
         let mut response = if semantic_only {
             searcher.search_semantic(&query)?
         } else {
             searcher.search(&query)?
         };
-        if let Some(lang) = lang_filter.as_deref() {
-            response
-                .hits
-                .retain(|hit| hit.language.as_deref() == Some(lang));
-        }
         // Searcher may be wider than this call's limit (warm-cache reuse).
         if response.hits.len() > limit {
             response.hits.truncate(limit);
@@ -344,6 +379,8 @@ impl CodeModeSession {
         ensure_render_input_bounded(&response, format, excerpt_lines)?;
         let value = format_response_with(&response, format, excerpt_lines);
         drop(guard);
+        // Cached takes bypass call(), so only admitted wire values may be stored.
+        admit_response(&value)?;
         self.store_render(render_key, value.clone());
         Ok(value)
     }
@@ -357,9 +394,8 @@ impl CodeModeSession {
         let max_depth = args
             .get("max_depth")
             .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
             .unwrap_or(2)
-            .clamp(1, 8);
+            .clamp(1, 8) as u32;
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -372,14 +408,29 @@ impl CodeModeSession {
             .map(|n| n as usize)
             .unwrap_or(20)
             .clamp(1, 50);
+        let max_work = match args.get("max_work").filter(|value| !value.is_null()) {
+            None => ast_sgrep_core::chain::DEFAULT_CHAIN_WORK,
+            Some(value) => {
+                let limit = ast_sgrep_core::chain::MAX_CHAIN_WORK as u64;
+                let n = value
+                    .as_u64()
+                    .filter(|n| (1..=limit).contains(n))
+                    .with_context(|| format!("max_work must be an integer in 1..={limit}"))?;
+                usize::try_from(n).expect("bounded chain work fits usize")
+            }
+        };
         let root = self.root_arg(args)?;
-        let guard = self.searcher_for(root, self.config.limit, None)?;
-        let searcher = &guard.as_ref().expect("searcher_for populates cache").1;
+        let mut guard = self.searcher_for(root, self.config.limit, None, None)?;
+        let searcher = guard
+            .as_mut()
+            .expect("searcher_for populates cache")
+            .for_search();
         let config = ChainConfig {
             max_depth,
             decay_factor: 0.5,
             limit,
             top_n,
+            max_work,
         };
         let response = expand_chain(searcher.store(), query, &config)?;
         Ok(serde_json::to_value(response)?)
@@ -392,17 +443,19 @@ impl CodeModeSession {
             .and_then(|guard| guard.get(key).cloned())
     }
 
-    fn drop_searcher_if_writer_changed(&self, current: u64) {
+    fn drop_searcher_if_stale(&self, root: &Path, lang_filter: Option<&str>, current: u64) {
         let Ok(mut guard) = self.searcher_cache.lock() else {
             return;
         };
         let stale = matches!(
             guard.as_ref(),
-            Some((key, _)) if key.writer_generation != current
+            Some(CachedSearcher { key, .. }) if key.root.as_path() != root
+                || key.lang_filter.as_deref() != lang_filter
+                || key.writer_generation != current
         );
         if stale {
-            if let Some((_, old)) = guard.take() {
-                old.release_read_snapshot();
+            if let Some(old) = guard.take() {
+                old.searcher.release_read_snapshot();
             }
             drop(guard);
             self.clear_render_cache();
@@ -441,7 +494,10 @@ impl CodeModeSession {
         {
             let guard = self.searcher_cache.lock().ok()?;
             match guard.as_ref() {
-                Some((key, _)) if key.writer_generation == current => {}
+                Some(CachedSearcher { key, .. })
+                    if key.root == root
+                        && key.lang_filter == lang_filter
+                        && key.writer_generation == current => {}
                 _ => return None,
             }
         }
@@ -562,7 +618,9 @@ impl Write for CountingWriter {
     }
 }
 
-pub(crate) fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_json::Error> {
+/// Count JSON wire bytes without allocating a serialized buffer.
+/// Adapters keep their own envelope accounting and serialization-error policy.
+pub fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_json::Error> {
     let mut writer = CountingWriter::default();
     serde_json::to_writer(&mut writer, value)?;
     Ok(writer.0)
@@ -570,6 +628,18 @@ pub(crate) fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_
 
 pub(crate) fn encoded_json_len(value: &Value) -> Result<usize, serde_json::Error> {
     encoded_len(value)
+}
+
+/// Admit the final wire value before publishing it or committing an edit.
+pub(crate) fn admit_response(value: &Value) -> Result<(), CallError> {
+    if json_size_bound(value) > MAX_CALL_RESPONSE_BYTES
+        && encoded_json_len(value)? > MAX_CALL_RESPONSE_BYTES
+    {
+        return Err(CallError::Other(anyhow!(
+            "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 /// Conservative JSON wire-size upper bound (every string byte as `\u00XX`).

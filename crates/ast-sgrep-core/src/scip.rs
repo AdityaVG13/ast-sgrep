@@ -5,10 +5,9 @@
 //! documents/occurrences. Protobuf wire files degrade until a later parser
 //! lands. Graph mutation only upgrades existing symbols/callers.
 
-use crate::MAX_INDEX_FILE_BYTES;
+use crate::io_bounds::read_text_capped;
+use crate::{StoreError, MAX_INDEX_FILE_BYTES};
 use serde::Deserialize;
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 /// Channel name recorded on `DegradedChannel` when SCIP cannot be used.
@@ -100,12 +99,12 @@ pub fn scip_symbol_ident(symbol: &str) -> Option<String> {
     (!ident.is_empty()).then(|| ident.to_string())
 }
 
-/// Load a SCIP index from `path`. Missing, unreadable, oversized, binary, or
-/// malformed input returns [`ScipLoad::Degraded`] rather than `Err`.
+/// Load a SCIP index from `path`. Missing, unreadable, nonregular, oversized,
+/// binary, or malformed input returns [`ScipLoad::Degraded`] rather than `Err`.
 pub fn load_scip_index(path: &Path) -> ScipLoad {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    let bytes = match read_text_capped(path, MAX_INDEX_FILE_BYTES) {
+        Ok(text) => text.into_bytes(),
+        Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             return degrade(format!("scip index not found: {}", path.display()));
         }
         Err(error) => {
@@ -116,23 +115,6 @@ pub fn load_scip_index(path: &Path) -> ScipLoad {
             ));
         }
     };
-    let mut bytes = Vec::new();
-    if let Err(error) = file
-        .take(MAX_INDEX_FILE_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)
-    {
-        return degrade(format!(
-            "scip index read failed ({}): {}",
-            error,
-            path.display()
-        ));
-    }
-    if bytes.len() as u64 > MAX_INDEX_FILE_BYTES {
-        return degrade(format!(
-            "scip index exceeds {MAX_INDEX_FILE_BYTES} byte cap: {}",
-            path.display()
-        ));
-    }
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return degrade(format!("scip index is empty: {}", path.display()));
     }

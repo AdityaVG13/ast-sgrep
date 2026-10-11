@@ -124,34 +124,131 @@ fn hkdi_empty_lexical_sidecar_not_ready() {
         .is_none());
 }
 
-/// s7jw.2 — auto/sidecar empty path falls back to SQL FTS when FTS has hits.
+/// s7jw.2 — absent/empty sidecars fall back without creating search artifacts.
 #[test]
 fn s7jw2_empty_sidecar_falls_back_to_sql_lexical() {
+    for schema_only in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let store = IndexStore::open(root, None).unwrap();
+        let lines = [(1u32, "unique_sidecar_fallback_token appears here".into())];
+        store
+            .upsert_file(base("src/a.rs", Some("rust"), &lines, "h1"))
+            .unwrap();
+        let path = ast_sgrep_core::tantivy_index::sidecar_path(root, Some(store.db_path()));
+        if schema_only {
+            let _ = TantivySidecar::open_for_index(root, Some(store.db_path())).unwrap();
+        }
+        assert!(
+            TantivySidecar::open_existing_for_search(root, Some(store.db_path()))
+                .unwrap()
+                .is_none()
+        );
+        let readonly = IndexStore::open_readonly(root, Some(store.db_path())).unwrap();
+        let options = SearchOptions {
+            root: root.to_path_buf(),
+            index_path: Some(store.db_path().to_path_buf()),
+            use_tantivy: true,
+            use_embed: false,
+            limit: 16,
+            ..SearchOptions::default()
+        };
+        let parsed = ParsedQuery::parse("unique_sidecar_fallback_token");
+        let hits = lexical_pass(&readonly, &options, &parsed).unwrap();
+        assert!(
+            !hits.is_empty(),
+            "missing/empty sidecar must preserve primary FTS hits"
+        );
+        assert_eq!(
+            path.exists(),
+            schema_only,
+            "search must not create a missing lexical sidecar"
+        );
+    }
+}
+
+#[test]
+fn fresh_sidecar_filters_language_before_its_candidate_limit() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let store = IndexStore::open(root, None).unwrap();
-    let lines = [(1u32, "unique_sidecar_fallback_token appears here".into())];
-    store
-        .upsert_file(base("src/a.rs", Some("rust"), &lines, "h1"))
+    let mut rows: Vec<ast_sgrep_core::store::IndexedLineRow> = Vec::new();
+    for (language, count, prefix, extension) in [("python", 99, "a", "py"), ("rust", 2, "r", "rs")]
+    {
+        for file in 0..count {
+            let path = format!("{prefix}{file:03}.{extension}");
+            let lines = [(1, "qzz payload".to_owned())];
+            store
+                .upsert_file(base(&path, Some(language), &lines, &path))
+                .unwrap();
+            rows.push((path.into(), 1, lines[0].1.clone(), Some(language.into())));
+        }
+    }
+    let sidecar = TantivySidecar::open_for_index(root, Some(store.db_path())).unwrap();
+    sidecar
+        .rebuild_from_lines_with_generation(&rows, store.index_data_version().unwrap())
         .unwrap();
-    // Schema-only sidecar exists and would previously short-circuit to empty.
-    let _ = TantivySidecar::open_for_index(root, None).unwrap();
-    assert!(TantivySidecar::open_existing_for_search(root, None)
+    drop(sidecar);
+    for filter in [Some("rust"), Some("python"), Some("java"), None] {
+        let mut expected = None;
+        for use_tantivy in [false, true] {
+            let readonly = IndexStore::open_readonly(root, Some(store.db_path())).unwrap();
+            let searcher = Searcher::with_store(
+                readonly,
+                SearchOptions {
+                    root: root.to_path_buf(),
+                    index_path: Some(store.db_path().to_path_buf()),
+                    lang_filter: filter.map(str::to_owned),
+                    use_tantivy,
+                    use_embed: false,
+                    limit: 2,
+                    ..SearchOptions::default()
+                },
+            );
+            let response = searcher.search_lexical("qzz").unwrap();
+            let files: std::collections::BTreeSet<_> =
+                response.hits.iter().map(|hit| hit.file.clone()).collect();
+            if let Some(wanted) = &expected {
+                assert_eq!(
+                    &files, wanted,
+                    "sidecar language page must match primary FTS: {filter:?}"
+                );
+            } else {
+                if filter == Some("rust") {
+                    assert_eq!(files.len(), 2);
+                }
+                expected = Some(files);
+            }
+        }
+    }
+}
+
+#[test]
+fn existing_sidecar_search_handle_cannot_write_its_database() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let writer = TantivySidecar::open_for_index(root, None).unwrap();
+    writer
+        .rebuild_from_lines(&[(
+            "src/a.rs".into(),
+            1,
+            "qzz payload".into(),
+            Some("rust".into()),
+        )])
+        .unwrap();
+    drop(writer);
+    let reader = TantivySidecar::open_existing_for_search(root, None)
         .unwrap()
-        .is_none());
-    let options = SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(store.db_path().to_path_buf()),
-        use_tantivy: true,
-        use_embed: false,
-        limit: 16,
-        ..SearchOptions::default()
-    };
-    let parsed = ParsedQuery::parse("unique_sidecar_fallback_token");
-    let hits = lexical_pass(&store, &options, &parsed).unwrap();
+        .unwrap();
+    assert_eq!(reader.search(&["qzz".into()], 8, None).unwrap().len(), 1);
     assert!(
-        !hits.is_empty(),
-        "must fall back to SQL FTS when empty sidecar is not ready; got {hits:#?}"
+        reader.rebuild_from_lines(&[]).is_err(),
+        "a search handle must fail closed on a main-database write"
+    );
+    assert_eq!(
+        reader.search(&["qzz".into()], 8, None).unwrap().len(),
+        1,
+        "refused write must preserve indexed evidence"
     );
 }
 
@@ -555,6 +652,7 @@ fn iva9_8_chain_edges_subset_and_callee_seed() {
             decay_factor: 0.5,
             limit: 2,
             top_n: 8,
+            ..ChainConfig::default()
         },
     )
     .unwrap();

@@ -2073,14 +2073,10 @@ fn f92_rust_container_slot_comment_faces_return_sg_exact_sets() {
 /// subject's slot alignment pre-91a also answers the line-comment twin for
 /// a block-comment pattern where sg does not — a pre-existing over-match
 /// genus the registered corpus never exercises, left byte-untouched).
-/// NOTE on the line-twin cells: the pattern contains a literal newline, and
-/// the registered user-WIP ingress newline-collapse (91E F-r41-2 fold
-/// class) rewrites `calc(1, // line\n 2)` to `calc(1, // line 2)` BEFORE
-/// routing — the comment becomes TRAILING, so those faces keep the sg-rc8-
-/// class loud posture under the line arm (the embedded-line placement sg
-/// accepts is unreachable through the query layer; the collapse is
-/// owner=user and byte-untouched here). A mutant that drops the line arm
-/// flips these silent.
+/// The line-comment cells below are a native coverage boundary, not a
+/// reference-parser refusal oracle. Ingress preserves their interior newlines
+/// (f147a); the native comment gate still refuses these forms. Do not restore
+/// newline collapse or claim reference parity from those refusal assertions.
 #[test]
 fn f92_template_route_embedded_comment_faces_answer_sg_sets() {
     let rust_block_twin_body = "fn area(r: i32) -> i32 {\n    r * r\n}\n\nfn vol(w: i32, h: i32) -> i32 {\n    w * h\n}\n\nfn main() {\n    let y = a + b;\n    let d = area( /* mid */ 9);\n    let e = calc(1, /* n */ 2);\n}\n";
@@ -2131,11 +2127,8 @@ fn f92_template_route_embedded_comment_faces_answer_sg_sets() {
             response.hits
         );
     }
-    // Line-twin spellings (literal newline in the raw pattern): the ingress
-    // newline-collapse makes the comment TRAILING before routing, so the
-    // sg-rc8-class loud posture holds (sg side of the collapsed spelling is
-    // n/a — the collapse is the registered user-WIP class). A mutant that
-    // accepts every line placement flips these silent.
+    // Preserve loud refusal at the current native coverage boundary. These
+    // are the original multiline patterns, not their newline-collapsed twins.
     let rust_line_twin_body =
         "fn main() {\n    let y = a + b;\n    let f = calc(1, // line\n        2);\n}\n";
     for pattern in ["calc(1, // line\n 2)", "a + // c\n b"] {
@@ -2152,8 +2145,8 @@ fn f92_template_route_embedded_comment_faces_answer_sg_sets() {
         });
         match searcher.search(&format!("pattern:{pattern}")) {
             Ok(response) => panic!(
-                "rust {pattern:?}: newline-collapsed to a TRAILING line comment — \
-                 the loud posture must hold, answered {:?}",
+                "rust {pattern:?}: unsupported native multiline-comment form \
+                 must refuse rather than silently answer {:?}",
                 response.hits
             ),
             Err(err) => assert!(

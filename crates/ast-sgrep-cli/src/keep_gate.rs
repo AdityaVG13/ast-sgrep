@@ -135,9 +135,12 @@ pub fn history_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".bench-history"))
 }
 
+/// Bounded readable stem plus a stable FNV-1a fingerprint of the exact label.
+/// The fingerprint is a file key, not identity proof; loaders check the label.
 pub fn sanitize_label(label: &str) -> String {
-    label
+    let stem: String = label
         .chars()
+        .take(64)
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
                 c
@@ -145,7 +148,14 @@ pub fn sanitize_label(label: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+    let fingerprint = label
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+    format!("{stem}-{fingerprint:016x}")
 }
 
 pub fn committed_latest_path(label: &str) -> PathBuf {
@@ -158,7 +168,15 @@ pub fn run_snapshot_path(label: &str) -> PathBuf {
 
 pub fn load_committed_prior(label: &str) -> KeepPrior {
     let path = committed_latest_path(label);
-    load_prior_file(&path)
+    let prior = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(|v| v["label"].as_str() == Some(label));
+    prior.map(|v| prior_from_json(&v)).unwrap_or(KeepPrior {
+        avg_ms: None,
+        geomean_ms: None,
+        placeholder: true,
+    })
 }
 
 pub fn load_prior_file(path: &Path) -> KeepPrior {

@@ -41,6 +41,8 @@ export type EditArgs = {
 export type ChainArgs = {
   query: string;
   limit?: number;
+  /** Post-seeding traversal attempt budget, independent of output limit. */
+  max_work?: number;
   excerptLines?: number;
 };
 
@@ -81,6 +83,6 @@ export type CodemodeHostMethod = (typeof CODEMODE_HOST_METHODS)[number];
  */
 export const CODEMODE_TYPES_FOR_MODEL = `
 asgrep.search(query|{query,in,lang,limit,excerptLines}) | find(q) | semantic(q) | defs(sym) | callers(sym)
- | imports(mod) | chain(q) | read({path|ref|refs,start,end}) | edit({path,oldText,newText}|{edits}) | indexStatus()
+ | imports(mod) | chain(q|{query,max_work}) | read({path|ref|refs,start,end}) | edit({path,oldText,newText}|{edits}) | indexStatus()
 hits[{file,ref,symbol,kind,preview}] | windows[{path,start,end,text}] | catalogDescribe("name") for schemas
 `.trim();

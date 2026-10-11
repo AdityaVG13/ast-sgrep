@@ -307,8 +307,8 @@ fn e2_serve_batch_mixed_propagates_percall() {
     let (result, lines) = serve_lines(input, temp.path());
     assert!(result.is_ok(), "serve survives mixed batch");
     assert_eq!(lines.len(), 2);
-    // BatchResult carries wall_ms: u128, which serde_json cannot deserialize;
-    // pin the envelope via its `type` tag discriminant plus field shapes.
+    // Pin the raw envelope's tag and field shapes. Typed BatchResult decoding
+    // is independently covered in batch.rs.
     let first: Value = serde_json::from_str(&lines[0]).expect("batch line");
     assert_eq!(
         first.get("type").and_then(Value::as_str),

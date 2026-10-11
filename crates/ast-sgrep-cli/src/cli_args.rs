@@ -40,6 +40,16 @@ pub(crate) struct QueryRootArg {
 }
 
 #[derive(Args, Clone, Debug)]
+pub(crate) struct ChainArgs {
+    #[command(flatten)]
+    pub(crate) query: QueryRootArg,
+    #[arg(long, default_value_t = ast_sgrep_core::chain::DEFAULT_CHAIN_WORK as u64,
+          value_parser = clap::value_parser!(u64).range(1..=ast_sgrep_core::chain::MAX_CHAIN_WORK as u64),
+          help = "Traversal attempt budget, independent of --limit (not a SQL/time bound)")]
+    pub(crate) max_work: u64,
+}
+
+#[derive(Args, Clone, Debug)]
 pub(crate) struct CallPathArgs {
     #[arg(help = "Starting caller symbol")]
     pub(crate) source: String,
@@ -432,7 +442,7 @@ pub(crate) enum Commands {
         tuning: SearchTuning,
         #[arg(long, default_value = "process_request")]
         query: String,
-        #[arg(long, default_value = "100")]
+        #[arg(long, default_value = "100", value_parser = clap::value_parser!(u32).range(1..))]
         iterations: u32,
         #[arg(long)]
         suite: Option<String>,
@@ -463,7 +473,7 @@ pub(crate) enum Commands {
     Semantic(LexicalQueryCmd),
     /// Expand a bounded symbol/caller/import graph
     #[command(about = "Expand a bounded symbol/caller/import graph")]
-    Chain(QueryRootArg),
+    Chain(ChainArgs),
     /// Find a bounded directed call path; this does not track values
     #[command(about = "Find a bounded call path (call graph only, not value flow)")]
     CallPath(CallPathArgs),
@@ -493,10 +503,19 @@ pub(crate) enum Commands {
         /// Path to a JSON BatchRequest file, or `-` for stdin.
         #[arg(long)]
         requests: PathBuf,
+        #[arg(long, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            help = "Disable semantic embeddings")]
+        no_embed: bool,
     },
     /// Sticky NDJSON Code Mode worker (one warm Searcher for a whole program).
     #[command(about = "Sticky NDJSON Code Mode worker")]
-    CodemodeServe,
+    CodemodeServe {
+        #[arg(long, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            help = "Disable semantic embeddings")]
+        no_embed: bool,
+    },
     /// Write stdio MCP config for supported agents (no daemon).
     #[command(about = "Write stdio MCP config for supported agents (no daemon)")]
     Install(crate::install::InstallArgs),
@@ -602,8 +621,8 @@ fn parse_output_format(raw: &str) -> Result<String, String> {
         _ => FORMATS
             .iter()
             .copied()
-            .filter(|cand| edit_distance(&lower, cand) <= 2)
-            .min_by_key(|cand| edit_distance(&lower, cand)),
+            .filter(|cand| crate::agent::edit_distance(&lower, cand) <= 2)
+            .min_by_key(|cand| crate::agent::edit_distance(&lower, cand)),
     };
     let list = FORMATS.join(", ");
     Err(match suggestion {
@@ -614,21 +633,6 @@ fn parse_output_format(raw: &str) -> Result<String, String> {
             "invalid --format '{raw}'. Try: asgrep --json --format compact \"query\" .\nAllowed: {list}"
         ),
     })
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0; b.len() + 1];
-    for (i, &ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 fn parse_snippet_tokens(raw: &str) -> Result<usize, String> {
@@ -645,7 +649,7 @@ fn parse_response_snippet_tokens(raw: &str) -> Result<usize, String> {
 
 impl Cli {
     pub(crate) fn search_machine_output(&self) -> bool {
-        self.json || self.tuning.format.is_some()
+        self.json || self.active_tuning().format.is_some()
     }
 
     /// Merge parent (pre-subcommand) tuning with subcommand-scoped tuning (vdqo).
@@ -711,6 +715,13 @@ impl Cli {
             }
             t.files_with_matches |= o.files_with_matches;
         }
+        t.no_embed |= matches!(
+            self.command.as_ref(),
+            Some(
+                Commands::CodemodeBatch { no_embed: true, .. }
+                    | Commands::CodemodeServe { no_embed: true }
+            )
+        );
         t
     }
 
@@ -746,7 +757,7 @@ impl Cli {
             Some(Commands::Eval(_)) => "eval",
             Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
             Some(Commands::Install(_)) => "install",
-            Some(Commands::CodemodeServe) => "codemode-serve",
+            Some(Commands::CodemodeServe { .. }) => "codemode-serve",
         }
     }
 }

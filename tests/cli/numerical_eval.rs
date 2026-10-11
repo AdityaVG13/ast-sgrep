@@ -25,6 +25,236 @@ use ast_sgrep_testkit::{
 use common::rank_key;
 use tempfile::TempDir;
 
+#[test]
+fn eval_boundary_relevance_uses_complete_path_components() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    write_fixture(&root, "src/target.rs", "fn intended_target() {}\n");
+    write_fixture(&root, "src/not_target.rs", "fn filename_decoy() {}\n");
+    write_fixture(&root, "prefixsrc/target.rs", "fn directory_decoy() {}\n");
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({
+            "corpus":"path-identity", "queries":[
+                {"name":"filename", "query":"defs:filename_decoy", "k":5, "relevant":[{"file":"target.rs"}]},
+                {"name":"directory", "query":"defs:directory_decoy", "k":5, "relevant":[{"file":"src/target.rs"}]},
+                {"name":"basename", "query":"defs:intended_target", "k":5, "relevant":[{"file":"target.rs"}]},
+                {"name":"nested", "query":"defs:intended_target", "k":5, "relevant":[{"file":"src/target.rs"}]},
+                {"name":"symbol", "query":"defs:intended_target", "k":5, "relevant":[{"file":"target.rs","symbol":"not_the_target"}]}
+            ]
+        }),
+    );
+    let report = run_eval_ok(&gold, &root);
+    let found: Vec<_> = report["queries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|query| query["found"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        found,
+        [0, 0, 1, 1, 0],
+        "only whole path suffixes and matching symbols are relevant: {report}"
+    );
+}
+
+#[test]
+fn eval_boundary_invalid_ab_refuses_before_index_effects() {
+    let (temp, root) = eval_project("admission_target");
+    let index = temp.path().join("explicit-index.db");
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({
+            "corpus":"admission", "queries":[{"name":"one", "query":"admission_target", "k":1, "relevant":[{"file":"a.rs"}]}]
+        }),
+    );
+    let output = run(
+        &asgrep_bin(),
+        &[
+            "--json",
+            "--index-path",
+            index.to_str().unwrap(),
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            root.to_str().unwrap(),
+            "--ab",
+            "not-a-mode",
+        ],
+    );
+    let report = assert_operational_envelope(&output);
+    assert!(report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--ab"));
+    assert!(
+        !index.exists(),
+        "invalid evaluation options must not create or populate the explicit index"
+    );
+}
+
+#[test]
+fn eval_boundary_ambiguous_roots_refuse_before_index_effects() {
+    let (temp, root) = eval_project("one_root_target");
+    let (_other, positional) = eval_project("different_root_target");
+    let index = temp.path().join("explicit-index.db");
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({
+            "corpus":"one-root", "queries":[{"name":"one", "query":"one_root_target", "k":1, "relevant":[{"file":"a.rs"}]}]
+        }),
+    );
+    let output = run(
+        &asgrep_bin(),
+        &[
+            "--json",
+            "--no-embed",
+            "--root",
+            root.to_str().unwrap(),
+            "--index-path",
+            index.to_str().unwrap(),
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            positional.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "two roots must not silently select one"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["kind"], "usage");
+    assert!(!index.exists(), "ambiguous roots must not create an index");
+}
+
+#[cfg(unix)]
+#[test]
+fn eval_nonregular_gold_refuses_without_blocking_or_index_effects() {
+    let (temp, root) = eval_project("gold_ingress_target");
+    let index = temp.path().join("explicit-index.db");
+    let gold = temp.path().join("gold.json");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&gold)
+        .status()
+        .unwrap()
+        .success());
+    let output = ast_sgrep_testkit::run_drain_timeout(
+        &asgrep_bin(),
+        &[
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index.to_str().unwrap(),
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ],
+        &[],
+        std::time::Duration::from_secs(5),
+    );
+    assert_operational_envelope(&output);
+    assert!(
+        !index.exists(),
+        "refused gold input must not create an index"
+    );
+}
+
+#[test]
+fn eval_overlapping_gold_is_order_independent_and_one_to_one() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    write_fixture(
+        &root,
+        "left/a.rs",
+        "fn overlap_alpha() {}\nfn overlap_beta() {}\n",
+    );
+    write_fixture(&root, "right/a.rs", "fn overlap_alpha() {}\n");
+    let cases = [
+        (
+            "symbol-alpha",
+            "overlap",
+            serde_json::json!([
+                {"file":"left/a.rs"}, {"file":"left/a.rs","symbol":"overlap_alpha"}
+            ]),
+            2,
+        ),
+        (
+            "symbol-beta",
+            "overlap",
+            serde_json::json!([
+                {"file":"left/a.rs"}, {"file":"left/a.rs","symbol":"overlap_beta"}
+            ]),
+            2,
+        ),
+        (
+            "path",
+            "defs:overlap_alpha",
+            serde_json::json!([
+                {"file":"a.rs"}, {"file":"left/a.rs"}
+            ]),
+            2,
+        ),
+        // These match sets cross: neither criterion contains the other.
+        (
+            "crossing",
+            "defs:overlap_alpha",
+            serde_json::json!([
+                {"file":"left/a.rs"}, {"file":"a.rs","symbol":"overlap_alpha"}
+            ]),
+            2,
+        ),
+        (
+            "single-hit",
+            "defs:overlap_beta",
+            serde_json::json!([
+                {"file":"left/a.rs"}, {"file":"left/a.rs","symbol":"overlap_beta"}
+            ]),
+            1,
+        ),
+    ];
+    let mut queries = Vec::new();
+    let mut expected_found = Vec::new();
+    for (name, query, relevant, complete_found) in cases {
+        for k in [1, 5] {
+            for reverse in [false, true] {
+                let mut rows = relevant.as_array().unwrap().clone();
+                if reverse {
+                    rows.reverse();
+                }
+                queries.push(serde_json::json!({"name":name,"query":query,"k":k,"relevant":rows}));
+            }
+            expected_found.push(if k == 1 { 1 } else { complete_found });
+        }
+    }
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({"corpus":"overlapping-evidence","queries":queries}),
+    );
+    let report = run_eval_ok(&gold, &root);
+    for (pair, found) in report["queries"]
+        .as_array()
+        .unwrap()
+        .chunks_exact(2)
+        .zip(expected_found)
+    {
+        assert_eq!(
+            pair[0], pair[1],
+            "gold order cannot change retrieval metrics: {report}"
+        );
+        assert_eq!(
+            pair[0]["found"], found,
+            "maximize distinct evidence without counting a hit twice"
+        );
+    }
+}
+
 /// INTENT: Hit+miss+2-of-4 corpus pins hand-computed fractional aggregates
 /// (MRR=nDCG=0.667, recall@k=0.5, recall@1=0.417).
 /// KILLS: aggregation-mean-error / wrong-denominator.
@@ -35,11 +265,11 @@ fn eval_three_query_fractional_aggregates() {
     // q_miss: gibberish matches nothing -> rank null, RR=0, nDCG=0, recall=0.
     // q_part: term in 4 files, k=2 -> found=2 however ordered (both scanned
     //   hits relevant), RR=1, DCG=IDCG(min(4,2)=2) so nDCG=1,
-    //   recall@1=1/4=0.25, recall@5/20 (cutoff min(n,2)=2)=2/4=0.5.
+    //   recall@1=1/4=0.25, fixed recall@5/20=4/4=1 despite k=2.
     // Aggregates over n=3 (means of unrounded values, then round3):
     //   MRR=(1+0+1)/3=0.6666..->0.667; nDCG likewise 0.667;
     //   recall@k=(1+0+0.5)/3=0.5; recall@1=(1+0+0.25)/3=0.4166..->0.417;
-    //   recall@5=recall@20=(1+0+0.5)/3=0.5.
+    //   recall@5=recall@20=(1+0+1)/3=0.667.
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
@@ -67,14 +297,14 @@ fn eval_three_query_fractional_aggregates() {
     assert_eq!(value["queries"][2]["first_rank"], 1);
     assert_eq!(value["queries"][2]["found"], 2);
     assert_eq!(f64_at(&value, "/queries/2/recall_at/1"), 0.25);
-    assert_eq!(f64_at(&value, "/queries/2/recall_at/5"), 0.5);
-    assert_eq!(f64_at(&value, "/queries/2/recall_at/20"), 0.5);
+    assert_eq!(f64_at(&value, "/queries/2/recall_at/5"), 1.0);
+    assert_eq!(f64_at(&value, "/queries/2/recall_at/20"), 1.0);
     assert_eq!(f64_at(&value, "/aggregate/mrr"), 0.667);
     assert_eq!(f64_at(&value, "/aggregate/ndcg"), 0.667);
     assert_eq!(f64_at(&value, "/aggregate/recall_at_k"), 0.5);
     assert_eq!(f64_at(&value, "/aggregate/recall_at_1"), 0.417);
-    assert_eq!(f64_at(&value, "/aggregate/recall_at_5"), 0.5);
-    assert_eq!(f64_at(&value, "/aggregate/recall_at_20"), 0.5);
+    assert_eq!(f64_at(&value, "/aggregate/recall_at_5"), 0.667);
+    assert_eq!(f64_at(&value, "/aggregate/recall_at_20"), 0.667);
     assert_eq!(value["aggregate"]["n_queries"], 3);
 }
 
@@ -119,6 +349,211 @@ fn eval_k_sweep_found_and_recall_match_hand_values() {
             expected_recall,
             "k={k}"
         );
+    }
+}
+
+/// Fixed cutoffs must retrieve enough results even with --limit=1 and k=1.
+/// A/B and single-run rendering must use the same cutoff semantics.
+#[test]
+fn eval_fixed_cutoffs_ignore_primary_k_and_cli_limit() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    let relevant: Vec<_> = (0..25)
+        .map(|n| {
+            let file = format!("item{n:02}.rs");
+            write_fixture(&root, &file, "fn cutoff_probe() {}\n");
+            serde_json::json!({"file": file})
+        })
+        .collect();
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({"corpus": "cutoffs", "queries": [
+            {"name": "fixed", "query": "defs:cutoff_probe", "k": 1, "relevant": relevant}
+        ]}),
+    );
+    let bin = asgrep_bin();
+    for ab in [false, true] {
+        let mut args = vec![
+            "--json",
+            "--limit",
+            "1",
+            "eval",
+            "--gold",
+            gold.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ];
+        if ab {
+            args.extend(["--ab", "no-embed"]);
+        }
+        let output = run(&bin, &args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let reports = if ab {
+            vec![&value["a"], &value["b"]]
+        } else {
+            vec![&value]
+        };
+        for report in reports {
+            assert_eq!(report["queries"][0]["found"], 1);
+            assert_eq!(f64_at(report, "/aggregate/recall_at_k"), 0.04);
+            assert_eq!(f64_at(report, "/aggregate/recall_at_1"), 0.04);
+            assert_eq!(f64_at(report, "/aggregate/recall_at_5"), 0.2);
+            assert_eq!(f64_at(report, "/aggregate/recall_at_20"), 0.8);
+        }
+    }
+}
+
+/// Run the evaluation pack's payload-measurement block against real Unicode
+/// output. This catches character-count and whitespace-stripping regressions
+/// in every format, including the budgeted arm, without building a fake CLI.
+#[test]
+fn eval_pack_counts_complete_stdout_bytes() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    write_fixture(
+        &root,
+        "café.rs",
+        "fn payload_probe() { let _ = \"你好 🦀\"; }\n",
+    );
+    let gold = write_gold(
+        temp.path(),
+        "gold.json",
+        &serde_json::json!({
+            "queries": [{"name": "unicode", "query": "defs:payload_probe"}]
+        }),
+    );
+    let bin = asgrep_bin();
+    let index = temp.path().join("index.db");
+    let indexed = run(
+        &bin,
+        &[
+            "--index-path",
+            index.to_str().unwrap(),
+            "index",
+            root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        indexed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&indexed.stderr)
+    );
+    let pack = include_str!("../../benchmarks/run_eval.sh");
+    let marker = "python3 - \"$bin\" \"$gold\" \"$out\" \"$token_index\" <<'PY'\n";
+    let block = pack
+        .split_once(marker)
+        .unwrap()
+        .1
+        .split_once("\nPY\n")
+        .unwrap()
+        .0;
+    let output = std::process::Command::new("python3")
+        .args(["-c", block])
+        .arg(&bin)
+        .arg(&gold)
+        .arg(temp.path())
+        .arg(&index)
+        .current_dir(&root)
+        .env("NO_COLOR", "1")
+        .env("HF_HUB_OFFLINE", "1")
+        .output()
+        .expect("run measurement block");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join("self-token-efficiency.json")).unwrap(),
+    )
+    .unwrap();
+    for fmt in [
+        "native",
+        "agent",
+        "agent-capsule",
+        "compact",
+        "compact-budget300",
+    ] {
+        let mut args = vec![
+            "--index-path",
+            index.to_str().unwrap(),
+            "--json",
+            "--format",
+        ];
+        if fmt == "compact-budget300" {
+            args.extend(["compact", "--budget-tokens", "300"]);
+        } else {
+            args.push(fmt);
+        }
+        args.extend(["--limit", "10", "defs:payload_probe", "."]);
+        let actual = std::process::Command::new(&bin)
+            .args(args)
+            .current_dir(&root)
+            .env("NO_COLOR", "1")
+            .env("HF_HUB_OFFLINE", "1")
+            .output()
+            .unwrap();
+        assert!(actual.status.success());
+        assert_eq!(
+            report["per_query"][0][fmt].as_u64().unwrap(),
+            actual.stdout.len() as u64,
+            "{fmt}"
+        );
+    }
+}
+
+/// Repetition in one noise file must not consume a distinct-file discovery
+/// budget and hide another file's implementation. Exercise both sides of the
+/// literal scan's small/large-corpus threshold without changing the gold.
+#[test]
+fn eval_repeated_lines_do_not_hide_implementation_files() {
+    let temp = TempDir::new().unwrap();
+    let bin = asgrep_bin();
+    for repetitions in [1, 150, 1100] {
+        let root = temp.path().join(repetitions.to_string());
+        std::fs::create_dir_all(&root).unwrap();
+        write_fixture(&root, "a_noise.md", &"quartz notes\n".repeat(repetitions));
+        write_fixture(&root, "z_impl.rs", "pub fn quartz_resolve() {}\n");
+        let gold = write_gold(
+            temp.path(),
+            &format!("gold-{repetitions}.json"),
+            &serde_json::json!({
+                "corpus": "file-admission", "queries": [{"name": "implementation",
+                    "query": "quartz resolution", "k": 20, "relevant": [{"file": "z_impl.rs"}]}]
+            }),
+        );
+        let output = run(
+            &bin,
+            &[
+                "--json",
+                "eval",
+                "--gold",
+                gold.to_str().unwrap(),
+                root.to_str().unwrap(),
+                "--ab",
+                "no-embed",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        for arm in ["a", "b"] {
+            assert_eq!(
+                f64_at(&report[arm], "/aggregate/recall_at_20"),
+                1.0,
+                "{repetitions} repeated lines, arm {arm}"
+            );
+        }
     }
 }
 
@@ -256,7 +691,7 @@ fn eval_human_table_rounds_to_three_decimals() {
     assert!(
         stdout.contains(
             "MRR=1.000  Recall@k=0.667  nDCG@k=1.000  \
-             Recall@1=0.333  Recall@5=0.667  Recall@20=0.667  n=1"
+             Recall@1=0.333  Recall@5=1.000  Recall@20=1.000  n=1"
         ),
         "summary line must show {{:.3}} aggregates: {stdout}"
     );
@@ -393,8 +828,8 @@ fn eval_recall_cutoffs_are_monotone() {
     );
 }
 
-/// INTENT: eval k=0 succeeds with exact zeros; all floats JSON numbers (a
-/// NaN leak would render as null).
+/// INTENT: k=0 zeroes primary metrics, not independent fixed cutoffs;
+/// all floats remain JSON numbers (a NaN leak would render as null).
 /// KILLS: NaN-leak (0/0 renders null).
 /// ABSORBS: none (KEEP anchor).
 #[test]
@@ -418,9 +853,9 @@ fn eval_k_zero_yields_exact_zeros() {
     assert_eq!(q["relevant"], 1, "{value}");
     assert_eq!(assert_finite_unit(&value, "/queries/0/rr"), 0.0);
     assert_eq!(assert_finite_unit(&value, "/queries/0/ndcg"), 0.0);
-    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/1"), 0.0);
-    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/5"), 0.0);
-    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/20"), 0.0);
+    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/1"), 1.0);
+    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/5"), 1.0);
+    assert_eq!(assert_finite_unit(&value, "/queries/0/recall_at/20"), 1.0);
     assert_eq!(assert_finite_unit(&value, "/aggregate/mrr"), 0.0);
     assert_eq!(assert_finite_unit(&value, "/aggregate/ndcg"), 0.0);
     assert_eq!(assert_finite_unit(&value, "/aggregate/recall_at_k"), 0.0);
@@ -531,7 +966,7 @@ fn eval_arithmetic_contract() {
     // relevant however ordered: found=2, RR=1.
     // DCG = 1/log2(2)+1/log2(3) = 1.63092975... = IDCG(min(3,2)=2),
     // so nDCG is exactly 1. recall@1 = 1/3 -> round3 -> 0.333;
-    // recall@5/20 (cutoff min(n,2)=2) = 2/3 -> round3 -> 0.667.
+    // recall@k = 2/3 -> 0.667, while fixed recall@5/20 = 3/3 = 1.
     {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("proj");
@@ -555,8 +990,8 @@ fn eval_arithmetic_contract() {
         assert_eq!(q["relevant"], 3);
         assert_eq!(f64_at(&value, "/queries/0/ndcg"), 1.0);
         assert_eq!(f64_at(&value, "/queries/0/recall_at/1"), 0.333);
-        assert_eq!(f64_at(&value, "/queries/0/recall_at/5"), 0.667);
-        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 0.667);
+        assert_eq!(f64_at(&value, "/queries/0/recall_at/5"), 1.0);
+        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/mrr"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/ndcg"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/recall_at_k"), 0.667);
@@ -639,8 +1074,8 @@ fn eval_arithmetic_contract() {
     // Arm 6 (absorbed: eval_five_of_six_rounds_recall_to_833_and_167). Six
     // relevant files share the term; k=5 scans ranks 1-5, all relevant
     // however ordered: found=5, RR=1, DCG(ranks 1-5) = IDCG(min(6,5)=5) so
-    // nDCG=1. recall@1 = 1/6 = 0.1666.. -> 0.167; recall@5/20 (cutoff
-    // min(n,5)=5) = 5/6 = 0.8333.. -> 0.833.
+    // nDCG=1. recall@1 = 1/6 -> 0.167; recall@5 = 5/6 -> 0.833;
+    // fixed recall@20 includes the sixth result and equals 1.
     {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("proj");
@@ -667,7 +1102,7 @@ fn eval_arithmetic_contract() {
         assert_eq!(f64_at(&value, "/queries/0/ndcg"), 1.0);
         assert_eq!(f64_at(&value, "/queries/0/recall_at/1"), 0.167);
         assert_eq!(f64_at(&value, "/queries/0/recall_at/5"), 0.833);
-        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 0.833);
+        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/recall_at_k"), 0.833);
     }
 }
@@ -682,8 +1117,8 @@ fn eval_arithmetic_contract() {
 fn eval_k_sweep_contract() {
     // Arm 1 (absorbed: eval_k1_truncation_halves_recall_keeps_ndcg_one). Two
     // relevant files share the term; k=1 scans only the rank-1 hit. found=1
-    // regardless of which file ranks first: recall=1/2=0.5 at every cutoff
-    // (all cutoffs clamp to min(n,1)=1), while DCG=1/log2(2)=1 and
+    // regardless of which file ranks first: recall@k=recall@1=1/2=0.5,
+    // fixed recall@5/20=1, while DCG=1/log2(2)=1 and
     // IDCG(min(2,1)=1)=1 give nDCG=1.
     {
         let temp = TempDir::new().unwrap();
@@ -706,8 +1141,8 @@ fn eval_k_sweep_contract() {
         assert_eq!(q["found"], 1);
         assert_eq!(f64_at(&value, "/queries/0/ndcg"), 1.0);
         assert_eq!(f64_at(&value, "/queries/0/recall_at/1"), 0.5);
-        assert_eq!(f64_at(&value, "/queries/0/recall_at/5"), 0.5);
-        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 0.5);
+        assert_eq!(f64_at(&value, "/queries/0/recall_at/5"), 1.0);
+        assert_eq!(f64_at(&value, "/queries/0/recall_at/20"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/mrr"), 1.0);
         assert_eq!(f64_at(&value, "/aggregate/recall_at_k"), 0.5);
         assert_eq!(f64_at(&value, "/aggregate/recall_at_1"), 0.5);

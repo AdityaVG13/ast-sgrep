@@ -103,6 +103,43 @@ Session. Hosts must set Session root intentionally; this is policy confinement,
 not an OS security boundary. `ASGREP_INDEX_PATH` remains a privileged sink
 (see `docs/env-trust.md`).
 
+### Chain traversal bounds
+
+`asgrep.chain({ query, max_work })` and CLI `chain --max-work N` use the same
+post-seeding traversal budget (default 8,192; host range 1..=1,000,000).
+This is independent of output `limit`, depth and seed `top_n`. Core Rust also
+accepts zero for seeds-only. Existing seed selection/provenance, file-granular
+identity, score decay and definition prefix (eight candidates) remain.
+
+One unit is an expanded frontier entry, an explicit store-method call, or a
+processed call/import/definition row or resolved module path. Duplicate,
+unresolved, self-target and already-seen attempts consume units. A module
+resolver call contains the existing finite language-rule candidate probes; its
+internal SQL statements are not individually priced. Initial retrieval, seed
+resolution and Code Mode cache warming are **outside** this budget.
+
+Call/import pages have cursor admission before row decoding, at most remaining work
+plus one lookahead row. Prefetched tails can be unprocessed when dependent
+resolution spends the budget; `work.fetched_source_rows` and
+`work.peak_source_page_rows` distinguish that materialization from processed
+work. Definitions probe one extra row to disclose the existing eight-target cap.
+SQLite may still scan/sort all matches. These units are not SQL-instruction,
+elapsed-time, byte-size or absolute peak-RAM limits, nor cancellation deadlines.
+
+On a cutoff, replies include `truncated: true`, `truncation_reasons`
+(`work_limit`, `definition_limit`) and the work counters. With no cutoff those
+additions are omitted, preserving complete legacy replies. `node_count` remains
+discovered files before output trimming, a lower bound after a cutoff;
+`edge_count` remains returned edges after endpoint-subset trimming. Output-only
+trimming is separate: `node_count > nodes.length` does not set the traversal flag.
+
+Admission is deterministic, **not unbiased**: depth/frontier score and canonical
+file order, then outgoing calls, incoming calls, imports; source rows retain
+path/line (imports line/module) order. A saturated hub can starve later relations
+or seeds. Partial results keep the admitted prefix, finish file arbitration and
+edge-subset trimming, and never imply unexplored branches were searched. Raise
+an explicit budget for more evidence; no unlimited host setting is provided.
+
 ### Amdahl note
 
 Wall time ≈ serial + parallel_work / N.

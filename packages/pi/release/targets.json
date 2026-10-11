@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "artifactSchemaVersion": 2,
+  "artifactSchemaVersion": 3,
   "napiAddon": "ast-sgrep-codemode.node",
   "targets": [
     {
@@ -11,7 +11,8 @@
       "os": "darwin",
       "cpu": "arm64",
       "libc": null,
-      "executable": "asgrep"
+      "executable": "asgrep",
+      "watchHelper": "asgrep-watch"
     },
     {
       "id": "darwin-x64",
@@ -21,7 +22,8 @@
       "os": "darwin",
       "cpu": "x64",
       "libc": null,
-      "executable": "asgrep"
+      "executable": "asgrep",
+      "watchHelper": "asgrep-watch"
     },
     {
       "id": "linux-arm64-gnu",
@@ -31,7 +33,8 @@
       "os": "linux",
       "cpu": "arm64",
       "libc": "glibc",
-      "executable": "asgrep"
+      "executable": "asgrep",
+      "watchHelper": "asgrep-watch"
     },
     {
       "id": "linux-x64-gnu",
@@ -41,7 +44,8 @@
       "os": "linux",
       "cpu": "x64",
       "libc": "glibc",
-      "executable": "asgrep"
+      "executable": "asgrep",
+      "watchHelper": "asgrep-watch"
     },
     {
       "id": "win32-x64-msvc",
@@ -51,7 +55,8 @@
       "os": "win32",
       "cpu": "x64",
       "libc": null,
-      "executable": "asgrep.exe"
+      "executable": "asgrep.exe",
+      "watchHelper": "asgrep-watch.exe"
     }
   ]
 }

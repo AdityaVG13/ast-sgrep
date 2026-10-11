@@ -116,26 +116,29 @@ function existingDirectory(path) {
         return false;
     }
 }
+/** Pending and initialized roots share admission, not generation ownership. */
+function markPathDirty(state, path) {
+    if (state.fullScanRequired)
+        return;
+    if (changesIgnoreRules(path)
+        || (!state.dirtyPaths.has(path) && state.dirtyPaths.size >= MAX_TARGETED_INDEX_PATHS)) {
+        requireFullScan(state);
+    }
+    else {
+        state.dirtyPaths.add(path);
+    }
+}
+function requireFullScan(state) {
+    state.dirtyPaths.clear();
+    state.fullScanRequired = true;
+}
 function markStatePathDirty(state, path) {
     state.dirtyGeneration += 1;
-    if (changesIgnoreRules(path)) {
-        state.dirtyPaths.clear();
-        state.fullScanRequired = true;
-    }
-    else if (!state.fullScanRequired) {
-        if (!state.dirtyPaths.has(path) && state.dirtyPaths.size >= MAX_TARGETED_INDEX_PATHS) {
-            state.dirtyPaths.clear();
-            state.fullScanRequired = true;
-        }
-        else {
-            state.dirtyPaths.add(path);
-        }
-    }
+    markPathDirty(state, path);
 }
 function markStateFullScan(state) {
     state.dirtyGeneration += 1;
-    state.dirtyPaths.clear();
-    state.fullScanRequired = true;
+    requireFullScan(state);
 }
 function cancelledRefreshWait() {
     return new RuntimeError("CANCELLED", "ast-sgrep freshness wait was cancelled");
@@ -241,22 +244,10 @@ export class FreshnessCoordinator {
                 return;
             let pending = this.#pending.get(pendingRoot);
             if (!pending) {
-                pending = { paths: new Set(), fullScanRequired: false, consumedFullScanRoots: new Set() };
+                pending = { dirtyPaths: new Set(), fullScanRequired: false, consumedFullScanRoots: new Set() };
                 this.#pending.set(pendingRoot, pending);
             }
-            if (changesIgnoreRules(affected)) {
-                pending.paths.clear();
-                pending.fullScanRequired = true;
-            }
-            else if (!pending.fullScanRequired) {
-                if (!pending.paths.has(affected) && pending.paths.size >= MAX_TARGETED_INDEX_PATHS) {
-                    pending.paths.clear();
-                    pending.fullScanRequired = true;
-                }
-                else {
-                    pending.paths.add(affected);
-                }
-            }
+            markPathDirty(pending, affected);
         }
     }
     markRootDirty(root) {
@@ -267,7 +258,7 @@ export class FreshnessCoordinator {
         }
         else {
             this.#pending.set(canonical, {
-                paths: new Set(),
+                dirtyPaths: new Set(),
                 fullScanRequired: true,
                 consumedFullScanRoots: new Set(),
             });
@@ -306,13 +297,13 @@ export class FreshnessCoordinator {
                 }
                 continue;
             }
-            for (const path of pending.paths) {
+            for (const path of pending.dirtyPaths) {
                 if (!pathContained(root, path))
                     continue;
                 markStatePathDirty(state, path);
-                pending.paths.delete(path);
+                pending.dirtyPaths.delete(path);
             }
-            if (pending.paths.size === 0)
+            if (pending.dirtyPaths.size === 0)
                 this.#pending.delete(pendingRoot);
         }
         if (state.inFlight) {

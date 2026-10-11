@@ -84,7 +84,10 @@ fn dart_nested_names_emit_decl_function_rows() {
     has_sig(&got, "call:name.trim");
     assert_eq!(
         cached_pattern_signatures("function makeWidget"),
-        Some(vec!["decl:function:makeWidget".into()])
+        Some(vec![
+            "decl:function:makeWidget".into(),
+            "decl:def:makeWidget".into()
+        ])
     );
 }
 

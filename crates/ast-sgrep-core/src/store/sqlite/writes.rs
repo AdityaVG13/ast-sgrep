@@ -360,40 +360,35 @@ impl IndexStore {
                 e.tests_examples.clone(),
             ])?;
         }
-        self.persist_embed_metadata(Some(first.dim), Some(first.backend), preference)
+        self.persist_embed_metadata(first.dim, first.backend, preference)
     }
     fn persist_embed_metadata(
         &self,
-        dim: Option<usize>,
-        kind: Option<ast_sgrep_embed::EmbedBackendKind>,
+        dim: usize,
+        kind: ast_sgrep_embed::EmbedBackendKind,
         preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
-        if let Some(k) = kind {
-            // embed_backend always stores the RESOLVED kind (search loads
-            // vectors by it). The build-time preference lives separately so
-            // identity checks can distinguish an Auto build (reopen no-ops
-            // under Auto) from an explicit one (28vo exactness) — parity.
-            // e2hc.13: a partial (single-file) update must not promote a
-            // legacy v1 store (meta == "semantic") to v2 while sibling chunks
-            // remain v1 — only a full index_all rewrite may.
-            if self.get_meta("embed_backend")?.as_deref() != Some("semantic") {
-                self.set_meta("embed_backend", k.as_meta_str())?;
-                if preference == ast_sgrep_embed::EmbedPreference::Auto {
-                    self.set_meta("embed_backend_pref", "auto")?;
-                } else {
-                    self.delete_meta("embed_backend_pref")?;
-                }
-            }
-            let model = dim.and_then(|dim| ast_sgrep_embed::configured_backend_model_id(k, dim));
-            if let Some(model) = model {
-                self.set_meta("embed_model", &model)?;
+        // embed_backend always stores the RESOLVED kind (search loads
+        // vectors by it). The build-time preference lives separately so
+        // identity checks can distinguish an Auto build (reopen no-ops
+        // under Auto) from an explicit one (28vo exactness) — parity.
+        // e2hc.13: a partial (single-file) update must not promote a
+        // legacy v1 store (meta == "semantic") to v2 while sibling chunks
+        // remain v1 — only a full index_all rewrite may.
+        if self.get_meta("embed_backend")?.as_deref() != Some("semantic") {
+            self.set_meta("embed_backend", kind.as_meta_str())?;
+            if preference == ast_sgrep_embed::EmbedPreference::Auto {
+                self.set_meta("embed_backend_pref", "auto")?;
             } else {
-                self.delete_meta("embed_model")?;
+                self.delete_meta("embed_backend_pref")?;
             }
         }
-        if let Some(d) = dim {
-            self.set_meta("embed_dim", &d.to_string())?;
+        if let Some(model) = ast_sgrep_embed::configured_backend_model_id(kind, dim) {
+            self.set_meta("embed_model", &model)?;
+        } else {
+            self.delete_meta("embed_model")?;
         }
+        self.set_meta("embed_dim", &dim.to_string())?;
         // Bump semantic_data_version on every chunk insertion so SemanticCache and
         // the IVF fingerprint detect delete+re-add collisions.
         self.bump_semantic_data_version()?;

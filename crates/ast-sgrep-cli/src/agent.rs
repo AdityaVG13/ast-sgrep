@@ -225,6 +225,24 @@ fn doctor_fast_unsafe_issue(
     }))
 }
 
+fn doctor_index_open_issue(message: String, root: &Path, next: &mut Vec<String>) -> Value {
+    if let Some((on_disk, supported)) = StoreError::parse_schema_mismatch(&message) {
+        if on_disk > supported {
+            next.push("asgrep version --json".to_string());
+        } else {
+            next.push(format!("asgrep reindex {} --json", root.display()));
+        }
+        json!({
+            "kind": "schema_mismatch",
+            "on_disk": on_disk,
+            "supported": supported,
+            "message": message
+        })
+    } else {
+        json!({"kind": "index_open", "message": message})
+    }
+}
+
 fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
     crate::ensure_unambiguous_root(root, cli)?;
     let root = crate::effective_root(cli, root);
@@ -284,42 +302,12 @@ fn doctor_triage_json(cli: &Cli, root: &Path) -> anyhow::Result<Value> {
                     }
                 },
                 Err(e) => {
-                    let msg = format!("{e:#}");
-                    if let Some((on_disk, supported)) = StoreError::parse_schema_mismatch(&msg) {
-                        issues.push(json!({
-                            "kind": "schema_mismatch",
-                            "on_disk": on_disk,
-                            "supported": supported,
-                            "message": msg
-                        }));
-                        if on_disk > supported {
-                            next.push("asgrep version --json".to_string());
-                        } else {
-                            next.push(format!("asgrep reindex {} --json", root.display()));
-                        }
-                    } else {
-                        issues.push(json!({"kind": "index_open", "message": msg}));
-                    }
+                    issues.push(doctor_index_open_issue(format!("{e:#}"), &root, &mut next));
                     None
                 }
             },
             Err(e) => {
-                let msg = e.to_string();
-                if let Some((on_disk, supported)) = StoreError::parse_schema_mismatch(&msg) {
-                    issues.push(json!({
-                        "kind": "schema_mismatch",
-                        "on_disk": on_disk,
-                        "supported": supported,
-                        "message": msg
-                    }));
-                    if on_disk > supported {
-                        next.push("asgrep version --json".to_string());
-                    } else {
-                        next.push(format!("asgrep reindex {} --json", root.display()));
-                    }
-                } else {
-                    issues.push(json!({"kind": "index_open", "message": msg}));
-                }
+                issues.push(doctor_index_open_issue(e.to_string(), &root, &mut next));
                 None
             }
         }
@@ -478,6 +466,7 @@ const KNOWN_LONG_FLAGS: &[&str] = &[
     "max-depth",
     "max-nodes",
     "max-edges",
+    "max-work",
     "query",
     "iterations",
     "suite",
@@ -518,10 +507,21 @@ fn inject_robot_triage(
     raw: Vec<std::ffi::OsString>,
     warnings: &mut Vec<String>,
 ) -> Vec<std::ffi::OsString> {
-    let has_doctor = raw.iter().any(|arg| arg == "doctor");
+    let has_doctor = raw
+        .iter()
+        .take_while(|arg| arg.as_os_str() != "--")
+        .any(|arg| arg == "doctor");
     let mut has_triage = false;
+    let mut passthrough = false;
     let mut rewritten = Vec::with_capacity(raw.len() + 1);
     for arg in raw {
+        if arg == "--" {
+            passthrough = true;
+        }
+        if passthrough {
+            rewritten.push(arg);
+            continue;
+        }
         let text = arg.to_str().unwrap_or("");
         if matches!(text, "--robot-next" | "--robot-diagnose") {
             warnings.push(
@@ -585,12 +585,21 @@ pub(crate) fn rewrite_typos(
     let raw = inject_robot_triage(raw, &mut warnings);
     let help_intent = raw
         .iter()
-        .any(|arg| matches!(arg.to_str(), Some("-h") | Some("--help") | Some("help")));
+        .skip(1)
+        .take_while(|arg| arg.as_os_str() != "--")
+        .any(|arg| matches!(arg.to_str(), Some("-h") | Some("--help")));
+    let parser = Cli::command();
     let mut out = Vec::with_capacity(raw.len());
     let mut passthrough = false;
     let mut saw_positional = false;
+    let mut value_pending = false;
     for (index, arg) in raw.into_iter().enumerate() {
         if index == 0 || passthrough {
+            out.push(arg);
+            continue;
+        }
+        if value_pending {
+            value_pending = false;
             out.push(arg);
             continue;
         }
@@ -625,7 +634,13 @@ pub(crate) fn rewrite_typos(
                 out.push(std::ffi::OsString::from("--json"));
                 continue;
             }
-            if let Some(canonical) = closest_long_flag(&folded) {
+            let canonical = closest_long_flag(&folded);
+            let option_name = canonical.map_or(folded.as_str(), |name| name);
+            value_pending = value.is_none()
+                && parser.get_arguments().any(|spec| {
+                    spec.get_long() == Some(option_name) && spec.get_action().takes_values()
+                });
+            if let Some(canonical) = canonical {
                 if canonical != folded {
                     let rewritten = match value {
                         Some(value) => format!("--{canonical}={value}"),
@@ -752,7 +767,8 @@ fn is_adjacent_transposition(left: &str, right: &str) -> bool {
     )
 }
 
-fn edit_distance(left: &str, right: &str) -> usize {
+/// Byte Levenshtein distance shared by flag, command, and format suggestions.
+pub(crate) fn edit_distance(left: &str, right: &str) -> usize {
     let mut previous = (0..=right.len()).collect::<Vec<_>>();
     let mut current = vec![0; right.len() + 1];
     for (left_index, left_byte) in left.bytes().enumerate() {

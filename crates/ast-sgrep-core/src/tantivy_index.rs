@@ -1,5 +1,5 @@
-use crate::store::sql::configure_connection;
-use crate::store::{index_db_path, INDEX_DIR};
+use crate::store::sql::{configure_connection, configure_connection_readonly};
+use crate::store::{index_db_path, INDEX_DB, INDEX_DIR};
 use crate::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
@@ -8,6 +8,7 @@ pub const LEXICAL_DB: &str = "lexical.db";
 pub const TANTIVY_AUTO_THRESHOLD: usize = 1000;
 pub struct TantivySidecar {
     db_path: PathBuf,
+    source_identity: String,
     conn: Connection,
 }
 impl TantivySidecar {
@@ -21,7 +22,11 @@ impl TantivySidecar {
         }
         let conn = Connection::open(&db_path)?;
         configure_connection(&conn)?;
-        let sidecar = Self { db_path, conn };
+        let sidecar = Self {
+            db_path,
+            source_identity: source_identity(root, index_path),
+            conn,
+        };
         sidecar.init_schema()?;
         Ok(sidecar)
     }
@@ -32,11 +37,7 @@ impl TantivySidecar {
         root: &Path,
         index_path: Option<&Path>,
     ) -> Result<Option<Self>> {
-        let dir = index_db_path(root, index_path)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| root.join(INDEX_DIR));
-        let db_path = dir.join(LEXICAL_DB);
+        let db_path = sidecar_path(root, index_path);
         if !db_path.exists() {
             return Ok(None);
         }
@@ -45,9 +46,14 @@ impl TantivySidecar {
         if metadata.len() == 0 {
             return Ok(None);
         }
-        let conn = Connection::open(&db_path)?;
-        configure_connection(&conn)?;
-        let sidecar = Self { db_path, conn };
+        let conn =
+            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection_readonly(&conn)?;
+        let sidecar = Self {
+            db_path,
+            source_identity: source_identity(root, index_path),
+            conn,
+        };
         if !sidecar.is_search_ready()? {
             return Ok(None);
         }
@@ -122,9 +128,26 @@ impl TantivySidecar {
             "INSERT INTO meta(key, value) VALUES('source_generation', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![source_generation.to_string()],
         )?;
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('source_identity', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![self.source_identity],
+        )?;
         Ok(())
     }
     pub fn is_fresh(&self, source_generation: i64) -> Result<bool> {
+        let owner = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'source_identity'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        // Local generation counters can coincide across databases. Legacy or
+        // copied sidecars without this exact owner binding must be rebuilt.
+        if owner.as_deref() != Some(self.source_identity.as_str()) {
+            return Ok(false);
+        }
         let stored = self
             .conn
             .query_row(
@@ -135,16 +158,24 @@ impl TantivySidecar {
             .optional()?;
         Ok(stored.and_then(|value| value.parse::<i64>().ok()) == Some(source_generation))
     }
-    pub fn search(&self, terms: &[String], limit: usize) -> Result<Vec<TantivySearchRow>> {
+    /// Language is canonical (`Language::as_str`) and admitted before the
+    /// candidate limit, matching primary lexical FTS rather than filtering a page.
+    pub fn search(
+        &self,
+        terms: &[String],
+        limit: usize,
+        lang_filter: Option<&str>,
+    ) -> Result<Vec<TantivySearchRow>> {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
         let fts_query = crate::fts::escape_fts_query(terms);
         let mut stmt = self.conn.prepare_cached(
             "SELECT file, line_no, content, language FROM lines_fts
-             WHERE lines_fts MATCH ?1 ORDER BY bm25(lines_fts) LIMIT ?2",
+             WHERE lines_fts MATCH ?1 AND (?3 IS NULL OR language = ?3)
+             ORDER BY bm25(lines_fts) LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+        let rows = stmt.query_map(params![fts_query, limit as i64, lang_filter], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, u32>(1)?,
@@ -168,10 +199,32 @@ impl TantivySidecar {
     }
 }
 pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    index_db_path(root, index_path)
-        .parent()
-        .map(|parent| parent.join(LEXICAL_DB))
-        .unwrap_or_else(|| root.join(INDEX_DIR).join(LEXICAL_DB))
+    let db = index_db_path(root, index_path);
+    let parent = db.parent().unwrap_or(root);
+    match db.file_name() {
+        // Keep the established default/generation layout. Custom database
+        // basenames never share its lexical sidecar or one another's.
+        Some(name) if name == INDEX_DB => parent.join(LEXICAL_DB),
+        Some(name) => {
+            let mut name = name.to_os_string();
+            name.push(".lexical.db");
+            parent.join(name)
+        }
+        None => root.join(INDEX_DIR).join(LEXICAL_DB),
+    }
+}
+
+fn source_identity(root: &Path, index_path: Option<&Path>) -> String {
+    let db = index_db_path(root, index_path);
+    let db = db.canonicalize().unwrap_or(db);
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut hasher = blake3::Hasher::new();
+    for path in [&db, &root] {
+        let bytes = path.as_os_str().as_encoded_bytes();
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 pub fn should_use_tantivy(file_count: usize, force: bool) -> bool {

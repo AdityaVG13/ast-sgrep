@@ -40,7 +40,7 @@ pub fn fold_rank_scored(order: &[(usize, f32)]) -> Vec<(usize, f32)> {
 
 /// INTENT: deterministic LCG vector fixture — `len` lanes uniform in
 /// `[-scale, scale]` from a caller-owned seed (Knuth MMIX constants,
-/// upper-33-bits projection). Fixed seeds make every vector reproducible
+/// upper-32-bits projection). Fixed seeds make every vector reproducible
 /// without a prod RNG dependency. Pure constructor (seed advances).
 pub fn lcg_vec(seed: &mut u64, len: usize, scale: f32) -> Vec<f32> {
     (0..len)
@@ -48,7 +48,7 @@ pub fn lcg_vec(seed: &mut u64, len: usize, scale: f32) -> Vec<f32> {
             *seed = seed
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((*seed >> 33) as f32 / u32::MAX as f32 * 2.0 - 1.0) * scale
+            ((*seed >> 32) as f32 / u32::MAX as f32 * 2.0 - 1.0) * scale
         })
         .collect()
 }

@@ -27,6 +27,11 @@ authors = ["ast-sgrep contributors"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Native release runners use this profile. Discard non-runtime symbols without
+# changing code generation; release-perf explicitly retains profiling symbols.
+[profile.release]
+strip = "symbols"
+
 [profile.release-perf]
 inherits = "release"
 opt-level = 3
@@ -35,9 +40,9 @@ codegen-units = 1
 debug = "line-tables-only"
 strip = false
 
-# Shipped artifacts: release-perf codegen, symbols stripped. Kept as a
-# separate profile (not strip=true on release-perf) so profiling keeps
-# line tables. DSR/release builds must use this profile.
+# Alternative size/codegen profile; release runners select the target profile.
+# Keep it separate from release-perf so profiling retains line tables. Thin LTO
+# is not assumed to improve one-shot search latency on every target.
 [profile.release-ship]
 inherits = "release-perf"
 strip = true

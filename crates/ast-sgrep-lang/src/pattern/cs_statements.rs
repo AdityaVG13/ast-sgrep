@@ -370,19 +370,7 @@ pub(crate) fn csharp_statement_bind(
             // refuse (any comment byte is outside the class); CRLF/formfeed
             // controls keep binding.
             let seam = &source[body.start_byte() + 1..only.start_byte()];
-            if seam.chars().any(|c| {
-                !(matches!(
-                    c,
-                    '\t' | '\n'
-                        | '\u{000B}'
-                        | '\u{000C}'
-                        | '\r'
-                        | ' '
-                        | '\u{00A0}'
-                        | '\u{FEFF}'
-                        | '\u{3000}'
-                ))
-            }) {
+            if !seam.chars().all(is_sg_cs_trivia) {
                 return None;
             }
             if only.kind() != nested.head.root_kind()

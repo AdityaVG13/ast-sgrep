@@ -332,6 +332,29 @@ pub struct WatchUpdateStats {
     pub files_failed: usize,
 }
 
+impl WatchUpdateStats {
+    fn record_file(&mut self, outcome: IndexFileOutcome) {
+        if outcome.removed {
+            self.files_removed += 1;
+        } else if outcome.stats.skipped {
+            self.files_skipped += 1;
+        } else {
+            self.files_indexed += 1;
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.files_indexed += other.files_indexed;
+        self.files_skipped += other.files_skipped;
+        self.files_removed += other.files_removed;
+        self.files_failed += other.files_failed;
+    }
+
+    fn mutated(&self) -> bool {
+        self.files_indexed > 0 || self.files_removed > 0
+    }
+}
+
 pub(crate) fn open_index_store(options: &IndexOptions) -> Result<IndexStore> {
     IndexStore::open_with_durability(
         &options.root,
@@ -373,7 +396,6 @@ impl Indexer {
             }
             Err(error) => return Err(error),
         };
-        store.set_meta("root", &options.root.display().to_string())?;
         let ignore = crate::gitignore::IgnoreMatcher::new(&options.root);
         Ok(Self {
             store,
@@ -424,10 +446,21 @@ impl Indexer {
         // gate is re-committed inside the bulk tx below, atomically with
         // the row updates it certifies.
         let current_root_key = self.options.root.display().to_string();
-        let mtime_identity_ok = self
-            .store
-            .get_meta(INDEX_MTIME_IDENTITY_ROOT)?
-            .is_some_and(|stored| stored == current_root_key);
+        let previous_root = self.store.get_meta("root")?;
+        let replacing_root = match previous_root.as_deref() {
+            Some(bound) => bound != current_root_key,
+            None => self.store.status()?.file_count != 0,
+        };
+        if replacing_root && self.options.lang_filter.is_some() {
+            return Err(crate::StoreError::Other(
+                "changing index root requires a complete index without a language filter".into(),
+            ));
+        }
+        let mtime_identity_ok = !replacing_root
+            && self
+                .store
+                .get_meta(INDEX_MTIME_IDENTITY_ROOT)?
+                .is_some_and(|stored| stored == current_root_key);
         let (candidates, mut stats, prepared, semantic_rewrite_required) = {
             let _span = crate::perf_profile::Span::start(
                 "index_walk_parse",
@@ -473,6 +506,20 @@ impl Indexer {
             (candidates, stats, prepared, semantic_rewrite_required)
         };
         self.check_cancel()?;
+        if replacing_root
+            && (stats.walk_errors
+                || prepared.iter().any(|outcome| {
+                    matches!(
+                        outcome,
+                        PrepareOutcome::Failed(_) | PrepareOutcome::Filtered
+                    )
+                }))
+        {
+            return Err(crate::StoreError::Other(
+                "changing index root aborted because the repository could not be completely prepared"
+                    .into(),
+            ));
+        }
         if self.options.force_reindex && stats.walk_errors {
             return Err(crate::StoreError::Other(
                 "strict reindex aborted because the repository walk was incomplete".into(),
@@ -503,6 +550,13 @@ impl Indexer {
             );
             self.store.begin_bulk_tx()?;
             let write_result = (|| {
+                // A different writer may have rebound this database while we
+                // prepared files. Never commit against that foreign snapshot.
+                if self.store.get_meta("root")? != previous_root {
+                    return Err(crate::StoreError::Other(
+                        "index root changed while preparing files; retry indexing".into(),
+                    ));
+                }
                 if complete_semantic_rewrite {
                     self.store.reset_semantic_index_for_rewrite()?;
                 }
@@ -512,10 +566,10 @@ impl Indexer {
                     &mut stats,
                     &mut semantic_ivf_dirty,
                 )?;
-                // Certify the mtime fast path for THIS root only after the
-                // row updates it describes committed. Rolling back the tx
-                // keeps the old gate, so the next run re-hashes (safe
-                // direction: extra work, never a wrong skip).
+                self.check_cancel()?;
+                // Root ownership and the mtime gate become visible with the
+                // rows they certify, never from merely opening an Indexer.
+                self.store.set_meta("root", &current_root_key)?;
                 self.store
                     .set_meta(INDEX_MTIME_IDENTITY_ROOT, &current_root_key)
             })();
@@ -776,14 +830,12 @@ impl Indexer {
     /// equality fails (any mutation, a crashed mid-rebuild, a deleted or
     /// empty sidecar file), the unconditional rebuild runs exactly as before.
     fn rebuild_tantivy_sidecar_if_fresh_skipping(&self) -> Result<()> {
-        let sidecar_path = crate::tantivy_index::sidecar_path(
-            &self.options.root,
-            self.options.index_path.as_deref(),
-        );
+        let sidecar_path =
+            crate::tantivy_index::sidecar_path(&self.options.root, Some(self.store.db_path()));
         if sidecar_path.exists() {
             let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
                 &self.options.root,
-                self.options.index_path.as_deref(),
+                Some(self.store.db_path()),
             )?;
             if sidecar.is_fresh(self.store.index_data_version()?)? {
                 return Ok(());
@@ -820,7 +872,7 @@ impl Indexer {
         }
         crate::tantivy_index::TantivySidecar::open_for_index(
             &self.options.root,
-            self.options.index_path.as_deref(),
+            Some(self.store.db_path()),
         )?
         .rebuild_from_lines_with_generation(&lines, after)
     }
@@ -845,7 +897,6 @@ impl Indexer {
             self.ignore.clear();
         }
         let mut stats = WatchUpdateStats::default();
-        let mut changed = false;
         // Isolate `?` so a later path error cannot skip the writer stamp after
         // earlier paths already committed (watch batches / multi-path CLI).
         let result = (|| -> Result<()> {
@@ -861,106 +912,11 @@ impl Indexer {
                 if rel.as_os_str().is_empty() || abs.is_dir() {
                     continue;
                 }
-                let rel_str = indexed_rel_path(rel)?;
-                let mut path_stats = WatchUpdateStats::default();
-                let mut path_changed = false;
-                let mut index_failure = false;
-                let descendant_prefix = format!("{rel_str}/");
-                let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
-                if transactional_replace {
-                    self.store.begin_file_tx()?;
-                }
-                let update_result = (|| -> Result<()> {
-                    // Filesystem paths cannot simultaneously be files and directories.
-                    // Delete stale descendants in the same transaction as a replacement
-                    // file upsert, so an unreadable replacement preserves the last usable
-                    // directory-shaped index state.
-                    let descendants = if transactional_replace {
-                        self.store.remove_files_with_prefix(&descendant_prefix)?
-                    } else {
-                        0
-                    };
-                    path_stats.files_removed += descendants;
-                    path_changed |= descendants > 0;
-                    if !abs.exists() {
-                        if self.store.file_hash(&rel_str)?.is_some() {
-                            self.store.remove_file(&rel_str)?;
-                            path_stats.files_removed += 1;
-                            path_changed = true;
-                        }
-                        return Ok(());
-                    }
-                    if should_skip_watch_path(
-                        &abs,
-                        rel,
-                        self.options.respect_gitignore,
-                        &self.ignore,
-                    ) {
-                        if self.store.file_hash(&rel_str)?.is_some() {
-                            self.store.remove_file(&rel_str)?;
-                            path_stats.files_removed += 1;
-                            path_changed = true;
-                        } else {
-                            path_stats.files_skipped += 1;
-                        }
-                        return Ok(());
-                    }
-                    let leaf_is_symlink = fs::symlink_metadata(&abs)
-                        .is_ok_and(|metadata| metadata.file_type().is_symlink());
-                    if leaf_is_symlink {
-                        if self.store.file_hash(&rel_str)?.is_some() {
-                            self.store.remove_file(&rel_str)?;
-                            path_stats.files_removed += 1;
-                            path_changed = true;
-                        }
-                    } else if abs.is_file() {
-                        match self.index_file_outcome(&abs, &rel_str) {
-                            Ok(outcome) if outcome.removed => {
-                                path_stats.files_removed += 1;
-                                path_changed = true;
-                            }
-                            Ok(outcome) if outcome.stats.skipped => path_stats.files_skipped += 1,
-                            Ok(_) => {
-                                path_stats.files_indexed += 1;
-                                path_changed = true;
-                            }
-                            Err(error) => {
-                                index_failure = true;
-                                return Err(error);
-                            }
-                        }
-                    } else if self.store.file_hash(&rel_str)?.is_some() {
-                        self.store.remove_file(&rel_str)?;
-                        path_stats.files_removed += 1;
-                        path_changed = true;
-                    }
-                    Ok(())
-                })();
-                match update_result {
-                    Ok(()) => {
-                        if transactional_replace {
-                            self.store.commit_file_tx()?;
-                        }
-                        stats.files_indexed += path_stats.files_indexed;
-                        stats.files_skipped += path_stats.files_skipped;
-                        stats.files_removed += path_stats.files_removed;
-                        changed |= path_changed;
-                    }
-                    Err(error) => {
-                        if transactional_replace {
-                            self.store.rollback_file_tx()?;
-                        }
-                        if !index_failure {
-                            return Err(error);
-                        }
-                        eprintln!("[asgrep] failed to index {rel_str}: {error}");
-                        stats.files_failed += 1;
-                    }
-                }
+                stats.merge(self.update_path(&abs, rel)?);
             }
             Ok(())
         })();
-        if changed {
+        if stats.mutated() {
             // Advertise even when `result` is Err: earlier paths may already be
             // durable. Prefer peer reopen over silencing the stamp on mark failure.
             let mark = self.mark_sidecars_dirty();
@@ -970,6 +926,100 @@ impl Indexer {
         result?;
         Ok(stats)
     }
+    /// Publish a path's statistics only after its replacement transaction commits.
+    /// Indexing failures are counted; store/transaction failures abort the batch.
+    fn update_path(&mut self, abs: &Path, rel: &Path) -> Result<WatchUpdateStats> {
+        let rel_str = indexed_rel_path(rel)?;
+        let mut stats = WatchUpdateStats::default();
+        let mut index_failure = false;
+        let descendant_prefix = format!("{rel_str}/");
+        let transactional_replace = self.store.has_file_with_prefix(&descendant_prefix)?;
+        self.store.begin_file_tx()?;
+        let update_result = (|| -> Result<()> {
+            self.bind_root_for_partial_write()?;
+            // Delete descendants atomically with their replacement. An unreadable
+            // replacement must preserve the last usable directory-shaped index.
+            if transactional_replace {
+                stats.files_removed += self.store.remove_files_with_prefix(&descendant_prefix)?;
+            }
+            if !abs.exists() {
+                stats.files_removed += usize::from(self.remove_if_indexed(&rel_str)?.removed);
+                return Ok(());
+            }
+            if should_skip_watch_path(abs, rel, self.options.respect_gitignore, &self.ignore) {
+                stats.record_file(self.remove_if_indexed(&rel_str)?);
+                return Ok(());
+            }
+            let leaf_is_symlink =
+                fs::symlink_metadata(abs).is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if leaf_is_symlink || !abs.is_file() {
+                // Unlike an ignored file, an absent/unindexable filesystem object
+                // is not a skipped file when it had no indexed row.
+                stats.files_removed += usize::from(self.remove_if_indexed(&rel_str)?.removed);
+            } else {
+                match self.index_file_outcome(abs, &rel_str) {
+                    Ok(outcome) => stats.record_file(outcome),
+                    Err(error) => {
+                        index_failure = true;
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        })();
+        match update_result {
+            Ok(()) => {
+                self.store.commit_file_tx()?;
+                Ok(stats)
+            }
+            Err(error) => {
+                self.store.rollback_file_tx()?;
+                if !index_failure {
+                    return Err(error);
+                }
+                eprintln!("[asgrep] failed to index {rel_str}: {error}");
+                Ok(WatchUpdateStats {
+                    files_failed: 1,
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    /// Reuse removal mechanics and its indexed/skipped outcome without deciding
+    /// whether a watch event for an absent row should count as a skipped file.
+    fn remove_if_indexed(&self, rel_path: &str) -> Result<IndexFileOutcome> {
+        self.store.with_file_tx(|| {
+            self.bind_root_for_partial_write()?;
+            let removed = self.store.file_hash(rel_path)?.is_some();
+            if removed {
+                self.store.remove_file(rel_path)?;
+            }
+            Ok(IndexFileOutcome {
+                stats: FileIndexStats {
+                    skipped: !removed,
+                    ..Default::default()
+                },
+                removed,
+            })
+        })
+    }
+
+    /// Must run inside the same write transaction as a partial update. Only a
+    /// full, unfiltered walk may replace a foreign (or unknown populated) root.
+    fn bind_root_for_partial_write(&self) -> Result<()> {
+        self.check_cancel()?;
+        let root = self.options.root.display().to_string();
+        match self.store.get_meta("root")? {
+            Some(bound) if bound == root => Ok(()),
+            None if self.store.status()?.file_count == 0 => self.store.set_meta("root", &root),
+            _ => Err(crate::StoreError::Other(
+                "partial indexing cannot change the index root; run a complete index without a language filter"
+                    .into(),
+            )),
+        }
+    }
+
     pub fn flush_deferred_rebuilds(&mut self) -> Result<()> {
         let pending = self.deferred_rebuilds_pending();
         if self.sidecars_dirty.tantivy {
@@ -994,14 +1044,11 @@ impl Indexer {
     /// the command would report error after durable rows are already visible.
     /// See `docs/index-consistency.md` (writer-generation fail-open).
     fn advertise_writer_generation(&self) {
-        let stamp = crate::store::writer_generation_path(
-            &self.options.root,
-            self.options.index_path.as_deref(),
-        );
-        if let Err(error) = crate::store::bump_writer_generation(
-            &self.options.root,
-            self.options.index_path.as_deref(),
-        ) {
+        let stamp =
+            crate::store::writer_generation_path(&self.options.root, Some(self.store.db_path()));
+        if let Err(error) =
+            crate::store::bump_writer_generation(&self.options.root, Some(self.store.db_path()))
+        {
             eprintln!(
                 "asgrep: writer_generation stamp skipped (index commit already durable; path {}): {error}",
                 stamp.display()
@@ -1014,11 +1061,9 @@ impl Indexer {
             || self.store.lexicon_is_dirty().unwrap_or(true)
     }
     fn mark_sidecars_dirty(&mut self) -> Result<()> {
-        let lexical_exists = crate::tantivy_index::sidecar_path(
-            &self.options.root,
-            self.options.index_path.as_deref(),
-        )
-        .exists();
+        let lexical_exists =
+            crate::tantivy_index::sidecar_path(&self.options.root, Some(self.store.db_path()))
+                .exists();
         let file_count = self.store.status()?.file_count;
         self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy
             || lexical_exists
@@ -1039,17 +1084,7 @@ impl Indexer {
         {
             Ok(source) => source,
             Err(error) if error.is_binary_file() && detect_language(abs_path, None).is_none() => {
-                let removed = self.store.file_hash(&rel_path)?.is_some();
-                if removed {
-                    self.store.remove_file(&rel_path)?;
-                }
-                return Ok(IndexFileOutcome {
-                    stats: FileIndexStats {
-                        skipped: !removed,
-                        ..Default::default()
-                    },
-                    removed,
-                });
+                return self.remove_if_indexed(&rel_path);
             }
             Err(error) => return Err(error),
         };
@@ -1078,104 +1113,97 @@ impl Indexer {
         mtime_secs: i64,
         mtime_nanos: u32,
     ) -> Result<IndexFileOutcome> {
-        // Callers (`index_file` / `index_content` / walk) already validated; re-check
-        // so internal paths cannot skip the fence.
-        let rel_path = indexed_rel_path(Path::new(rel_path))?;
-        let rel_path = rel_path.as_str();
-        let hash = hash_content(content);
-        let language = detect_language(lang_path, Some(content));
-        if !self.language_filter_allows(language) {
-            let removed = self.store.file_hash(rel_path)?.is_some();
-            if removed {
-                self.store.remove_file(rel_path)?;
+        self.store.with_file_tx(|| {
+            self.bind_root_for_partial_write()?;
+            // Callers (`index_file` / `index_content` / walk) already validated; re-check
+            // so internal paths cannot skip the fence.
+            let rel_path = indexed_rel_path(Path::new(rel_path))?;
+            let rel_path = rel_path.as_str();
+            let hash = hash_content(content);
+            let language = detect_language(lang_path, Some(content));
+            if !self.language_filter_allows(language) {
+                return self.remove_if_indexed(rel_path);
             }
-            return Ok(IndexFileOutcome {
-                stats: FileIndexStats {
-                    skipped: !removed,
-                    ..Default::default()
-                },
-                removed,
-            });
-        }
-        if self.is_unchanged(rel_path, &hash)? {
-            return Ok(IndexFileOutcome {
-                stats: FileIndexStats {
-                    skipped: true,
-                    ..Default::default()
-                },
-                removed: false,
-            });
-        }
-        let body_hash = body_structure_hash(content, language);
-        let body_key = format!("body:{rel_path}");
-        // Structure-skip fast path: when embeddings are disabled and the body
-        // fingerprint is unchanged, refresh lines without reparsing graph rows.
-        if !self.options.embed_semantic {
-            if let Some(file_id) = self.store.file_id(rel_path)? {
-                if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
-                    let split = split_content_lines(content);
-                    self.store.with_file_tx(|| {
-                        self.store.refresh_lines_only(RefreshLinesInput {
-                            file_id,
-                            language: language.map(|l| l.as_str()),
-                            mtime_secs,
-                            mtime_nanos,
-                            content_hash: &hash,
-                            lines: &split.lines,
-                            eol: split.eol,
-                            rel_path,
-                        })
-                    })?;
-                    return Ok(IndexFileOutcome {
-                        stats: FileIndexStats::default(),
-                        removed: false,
-                    });
+            if self.is_unchanged(rel_path, &hash)? {
+                return Ok(IndexFileOutcome {
+                    stats: FileIndexStats {
+                        skipped: true,
+                        ..Default::default()
+                    },
+                    removed: false,
+                });
+            }
+            let body_hash = body_structure_hash(content, language);
+            let body_key = format!("body:{rel_path}");
+            // Structure-skip fast path: when embeddings are disabled and the body
+            // fingerprint is unchanged, refresh lines without reparsing graph rows.
+            if !self.options.embed_semantic {
+                if let Some(file_id) = self.store.file_id(rel_path)? {
+                    if self.store.get_meta(&body_key)?.as_deref() == Some(body_hash.as_str()) {
+                        let split = split_content_lines(content);
+                        self.store.with_file_tx(|| {
+                            self.store.refresh_lines_only(RefreshLinesInput {
+                                file_id,
+                                language: language.map(|l| l.as_str()),
+                                mtime_secs,
+                                mtime_nanos,
+                                content_hash: &hash,
+                                lines: &split.lines,
+                                eol: split.eol,
+                                rel_path,
+                            })
+                        })?;
+                        return Ok(IndexFileOutcome {
+                            stats: FileIndexStats::default(),
+                            removed: false,
+                        });
+                    }
                 }
             }
-        }
-        let (symbols, callers, imports, pattern_nodes, depth_truncated) =
-            self.extract_rows(rel_path, content, language)?;
-        let material = materialize_upsert(
-            content,
-            language,
-            &symbols,
-            &callers,
-            &pattern_nodes,
-            self.options.embed_semantic,
-            body_hash,
-        );
-        // Nest under with_file_tx so body meta and upsert commit or roll back together.
-        // Without this, a post-upsert set_meta failure leaves content_hash advanced and
-        // body: meta stale → next structure-skip can keep wrong graph rows.
-        self.store.with_file_tx(|| {
-            self.store.upsert_file(UpsertFileInput {
-                rel_path,
-                language: language.map(|l| l.as_str()),
-                mtime_secs,
-                mtime_nanos,
-                content_hash: &hash,
-                lines: &material.split.lines,
-                eol: material.split.eol,
-                symbols: &symbols,
-                callers: &callers,
-                imports: &imports,
-                pattern_nodes: &pattern_nodes,
-                depth_truncated,
-                semantic_chunks: &material.semantic_chunks,
-                embed_semantic: self.options.embed_semantic,
-                embed_backend: self.options.embed_backend.to_preference(),
+            let (symbols, callers, imports, pattern_nodes, depth_truncated) =
+                self.extract_rows(rel_path, content, language)?;
+            let material = materialize_upsert(
+                content,
+                language,
+                &symbols,
+                &callers,
+                &pattern_nodes,
+                self.options.embed_semantic,
+                body_hash,
+            );
+            // Nest under with_file_tx so body meta and upsert commit or roll back together.
+            // Without this, a post-upsert set_meta failure leaves content_hash advanced and
+            // body: meta stale → next structure-skip can keep wrong graph rows.
+            self.store.with_file_tx(|| {
+                self.store.upsert_file(UpsertFileInput {
+                    rel_path,
+                    language: language.map(|l| l.as_str()),
+                    mtime_secs,
+                    mtime_nanos,
+                    content_hash: &hash,
+                    lines: &material.split.lines,
+                    eol: material.split.eol,
+                    symbols: &symbols,
+                    callers: &callers,
+                    imports: &imports,
+                    pattern_nodes: &pattern_nodes,
+                    depth_truncated,
+                    semantic_chunks: &material.semantic_chunks,
+                    embed_semantic: self.options.embed_semantic,
+                    embed_backend: self.options.embed_backend.to_preference(),
+                })?;
+                self.store.set_meta(&body_key, &material.body_hash)?;
+                Ok(())
             })?;
-            self.store.set_meta(&body_key, &material.body_hash)?;
-            Ok(())
-        })?;
-        Ok(IndexFileOutcome {
-            stats: FileIndexStats {
-                symbols: symbols.len(),
-                callers: callers.len(),
-                imports: imports.len(),
-                skipped: false,
-            },
-            removed: false,
+            Ok(IndexFileOutcome {
+                stats: FileIndexStats {
+                    symbols: symbols.len(),
+                    callers: callers.len(),
+                    imports: imports.len(),
+                    skipped: false,
+                },
+                removed: false,
+            })
         })
     }
     fn is_unchanged(&self, rel_path: &str, hash: &str) -> Result<bool> {

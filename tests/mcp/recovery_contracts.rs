@@ -22,6 +22,53 @@ use std::time::Duration;
 // Total budget for post-fault stdout drains (`drain_until_eof`).
 const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[cfg(target_os = "linux")]
+#[test]
+fn live_session_drop_reaps_abandoned_and_unwound_children() {
+    // Linux exposes children of this test's own thread, so parallel tests do
+    // not need process-global PID discovery or a new session accessor.
+    let children = || {
+        std::fs::read_to_string("/proc/thread-self/children")
+            .expect("read owned children")
+            .split_whitespace()
+            .map(|pid| pid.parse::<u32>().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert!(children().is_empty());
+    let temp = tempfile::tempdir().unwrap();
+    let binary = ast_sgrep_testkit::mcp_bin().canonicalize().unwrap();
+    for mode in ["abandon", "unwind", "finish"] {
+        let mut session = LiveSession::spawn(Some(temp.path()));
+        session.handshake();
+        let owned = children();
+        assert_eq!(owned.len(), 1, "{mode}: expected exactly one owned server");
+        let pid = owned[0];
+        assert_eq!(
+            std::fs::read_link(format!("/proc/{pid}/exe")).unwrap(),
+            binary
+        );
+        match mode {
+            "unwind" => {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _session = session;
+                    panic!("intentional session-owner unwind");
+                }));
+                assert!(result.is_err());
+            }
+            "finish" => {
+                session.close_stdin();
+                assert!(session.wait_clean().success());
+                drop(session);
+            }
+            _ => drop(session),
+        }
+        assert!(
+            !children().contains(&pid),
+            "{mode}: MCP child {pid} was killed but not reaped"
+        );
+    }
+}
+
 fn index_db_len(root: &Path) -> u64 {
     let db = root.join(".asgrep").join("index.db");
     assert!(db.is_file(), "expected an index db at {}", db.display());

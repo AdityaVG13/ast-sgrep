@@ -32,6 +32,27 @@ fn clap_rejection_is_exit_1_with_usage_envelope() {
     let machine = kit::run(&["--json", "--no-such-flag-xyz"]);
     kit::assert_failure_envelope(&machine, "search", 1, "usage");
 
+    let catalog = kit::parse_stdout(&kit::run(&["capabilities", "--json"]));
+    for command in catalog["commands"].as_array().unwrap() {
+        let name = command["name"].as_str().unwrap();
+        let output = kit::run(&["--json", name, "--no-such-flag-xyz"]);
+        kit::assert_failure_envelope(&output, name, 1, "usage");
+    }
+
+    // Command-shaped values are not subcommands, including before clap fails.
+    for root in ["search", "index", "doctor"] {
+        let output = kit::run(&["--json", "--root", root, "bench", "--iterations", "bad"]);
+        kit::assert_failure_envelope(&output, "bench", 1, "usage");
+    }
+    let default_search = kit::run(&["--json", "--", "needle", "index", "excess"]);
+    kit::assert_failure_envelope(&default_search, "search", 1, "usage");
+    let human_root = kit::run(&["--root", "doctor", "bench", "--iterations", "bad"]);
+    kit::assert_human_error(&human_root, 1);
+    assert!(
+        human_root.stdout.is_empty(),
+        "a root named doctor must not opt into JSON"
+    );
+
     // Leg 2 (was missing_query_is_usage_exit_1): bare invocation.
     let output = kit::run(&[]);
     kit::assert_human_error(&output, 1);

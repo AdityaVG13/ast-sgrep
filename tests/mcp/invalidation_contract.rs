@@ -17,6 +17,83 @@ use serde_json::json;
 // `search_call`, the hit/miss envelope discriminants, and `CallSession`
 // aliased to the file's `Session` vocabulary) with no file-local surface.
 
+/// INTENT: a compact ID learned under a subroot must not alias a workspace file.
+/// KILLS: root-free session path registry applied relative to another call root.
+#[test]
+fn compact_read_rejects_id_learned_only_under_another_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let subroot = temp.path().join("nested");
+    std::fs::create_dir(&subroot).unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "fn wrong_workspace_file() {}\n").unwrap();
+    std::fs::write(subroot.join("lib.rs"), "fn nested_target() {}\n").unwrap();
+    index_tree(&subroot);
+    let mut session = Session::spawn(temp.path());
+    let found = session.call(
+        "keyword_search",
+        json!({"root":subroot, "query":"nested_target", "resend_seen":true}),
+    );
+    assert_tool_success(&found);
+    let envelope = tool_body(&found);
+    let id = envelope["h"][0][0].as_str().expect("nested hit ID");
+    let wrong_root = session.call("code_read", json!({"ids":[id]}));
+    assert_tool_error_shape(&wrong_root);
+    let right_root = session.call("code_read", json!({"root":subroot, "ids":[id]}));
+    assert_tool_success(&right_root);
+    assert_eq!(
+        tool_body(&right_root)["nodes"][0]["content"],
+        "fn nested_target() {}"
+    );
+    session.finish();
+}
+
+/// INTENT: equal relative IDs in distinct roots have separate elision histories.
+#[test]
+fn compact_snippet_elision_is_scoped_to_canonical_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let roots = [temp.path().join("a"), temp.path().join("b")];
+    for root in &roots {
+        std::fs::create_dir(root).unwrap();
+        std::fs::write(root.join("lib.rs"), "fn shared_target() {}\n").unwrap();
+        index_tree(root);
+    }
+    let mut session = Session::spawn(temp.path());
+    let mut first_id = None;
+    for root in &roots {
+        let first = session.call(
+            "keyword_search",
+            json!({"root":root, "query":"shared_target", "limit":1}),
+        );
+        assert_tool_success(&first);
+        let envelope = tool_body(&first);
+        let id = envelope["h"][0][0].as_str().expect("hit ID");
+        if let Some(previous) = first_id.as_deref() {
+            assert_eq!(
+                id, previous,
+                "fixture must reuse the same relative compact ID"
+            );
+        } else {
+            first_id = Some(id.to_owned());
+        }
+        let snippet = envelope["h"][0][4].as_str().expect("snippet");
+        assert!(
+            snippet.contains("shared_target"),
+            "first search in this root: {envelope:#}"
+        );
+        let repeated = session.call(
+            "keyword_search",
+            json!({"root":root.join("."), "query":"shared_target", "limit":1}),
+        );
+        assert_tool_success(&repeated);
+        let repeated = tool_body(&repeated);
+        assert_eq!(
+            repeated["h"][0][4], "~",
+            "same canonical root: {repeated:#}"
+        );
+        assert_eq!(repeated["ze"], 1);
+    }
+    session.finish();
+}
+
 /// INTENT: index_status three-way discriminant: missing-root tool error,
 /// unindexed zeros, fresh counts+nonzero epoch.
 /// KILLS: status-discriminant mutant (missing→success, unindexed-nonzero,

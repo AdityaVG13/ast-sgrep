@@ -372,9 +372,17 @@ function argStr(args: Record<string, unknown>, key: string): string {
   return String(args[key] ?? "");
 }
 
+/** Client-side route refusal: no transport ran, so a local fallback is safe. */
+export class NoCliFallbackError extends Error {
+  constructor(readonly tool: string) {
+    super(`codemode tool has no direct CLI fallback: ${tool}`);
+    this.name = "NoCliFallbackError";
+  }
+}
+
 export function argvFor(tool: string, args: Record<string, unknown>): string[] {
   const spec = ARGV_SPEC[tool];
-  if (!spec) throw new Error(`codemode tool has no direct CLI fallback: ${tool}`);
+  if (!spec) throw new NoCliFallbackError(tool);
   if (spec.form === "status") return ["status", ".", "--json"];
   if (spec.form === "index_repo") {
     const command = args.force === true ? "reindex" : "index";
@@ -389,7 +397,12 @@ export function argvFor(tool: string, args: Record<string, unknown>): string[] {
 
   const limit = num(args.limit, 8);
   if (spec.form === "chain") {
-    return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit)];
+    const maxWork = args.max_work;
+    if (maxWork != null && (typeof maxWork !== "number" || !Number.isSafeInteger(maxWork) || maxWork < 1 || maxWork > 1_000_000)) {
+      throw new Error("max_work must be an integer in 1..=1000000");
+    }
+    const work = maxWork == null ? [] : ["--max-work", String(maxWork)];
+    return ["chain", argStr(args, "query"), ".", "--json", "--limit", String(limit), ...work];
   }
 
   const excerpt = num(args.excerpt_lines ?? args.excerptLines, 0);

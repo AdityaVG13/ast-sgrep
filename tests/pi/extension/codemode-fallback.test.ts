@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -73,6 +73,49 @@ test("read falls back to a native-shaped window when the launcher lacks the tool
   assert.deepEqual(old.calls, ["read"]);
 });
 
+test("CLI-only read and edit use the confined fallback without replaying host failures", async () => {
+  const root = await project();
+  await write(root, "a.ts", "one\ntwo\nthree\nfour\n");
+  const argv: string[][] = [];
+  const host = {
+    async run(args: readonly string[]): Promise<MachineEnvelope> {
+      argv.push([...args]);
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [] };
+    },
+  };
+  const bundle = createAsgrepConnector(host, { cwd: root });
+  const expected = (start: number, text: string) => [{ path: "a.ts", ref: `a.ts#L${start}-L${start}`, start, end: start, truncated: false, text }];
+  const singles = await bundle.asgrep.read({ path: "a.ts", start: 2, end: 2 });
+  assert.deepEqual(singles.windows, expected(2, "two"));
+  const batched = createAsgrepConnector(host, { cwd: root });
+  const [first, second] = await Promise.all([
+    batched.asgrep.read({ path: "a.ts", start: 1, end: 1 }),
+    batched.asgrep.read({ ref: "a.ts#L3-L3" }),
+  ]);
+  assert.deepEqual(first.windows, expected(1, "one"));
+  assert.deepEqual(second.windows, expected(3, "three"));
+  const edited = await bundle.asgrep.edit({ path: "a.ts", oldText: "two", newText: "TWO" });
+  assert.equal(edited.changed, 1);
+  assert.equal(await readFile(join(root, "a.ts"), "utf8"), "one\nTWO\nthree\nfour\n");
+  assert.deepEqual(argv, [], "local file tools must not invent a CLI command");
+  await assert.rejects(bundle.asgrep.catalogSearch({ query: "read" }), /no direct CLI fallback/);
+  await assert.rejects(bundle.asgrep.read({ path: "../outside.ts" }), /path must not contain/);
+
+  // A backend's similarly worded operational error is not an unsupported
+  // client route and must not authorize replay of an ambiguous edit.
+  const cause = new Error("codemode tool has no direct CLI fallback: edit");
+  const failing = oldLauncher(() => cause);
+  const failed = createAsgrepConnector(failing.host, { cwd: root });
+  await assert.rejects(failed.asgrep.edit({ path: "a.ts", oldText: "TWO", newText: "wrong" }), error => error === cause);
+  assert.equal(await readFile(join(root, "a.ts"), "utf8"), "one\nTWO\nthree\nfour\n");
+  assert.deepEqual(failing.calls, ["edit"]);
+
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(bundle.asgrep.edit({ path: "a.ts", oldText: "TWO", newText: "wrong" }, { signal: controller.signal }), /abort/i);
+  assert.equal(await readFile(join(root, "a.ts"), "utf8"), "one\nTWO\nthree\nfour\n");
+});
+
 test("local reads preserve leading blank lines and report budget truncation", async () => {
   const root = await project();
   await write(root, "blank.ts", "\n\nconst visible = 1;\n\n");
@@ -108,13 +151,23 @@ test("read fallback mirrors native ref forms, defaults, and char budget", async 
   assert.equal((budgeted.windows as Array<Record<string, unknown>>)[0]?.truncated, true);
 });
 
-test("local reads clamp zero ranges consistently for paths and object refs", async () => {
+test("local reads clamp zero and oversized ranges consistently for paths and object refs", async () => {
   const root = await project();
   await write(root, "a.ts", "one\ntwo\n");
   const bundle = createAsgrepConnector(oldLauncher().host, { cwd: root }, { localReads: true });
   for (const input of [{ path: "a.ts", start: 0, end: 0 }, { refs: [{ path: "a.ts", start: 0, end: 0 }] }]) {
     const response = await bundle.asgrep.read(input as never);
     assert.deepEqual(response.windows, [{ path: "a.ts", ref: "a.ts#L1-L1", start: 1, end: 1, text: "one", truncated: false }]);
+  }
+  for (const value of [2 ** 32 - 1, 2 ** 32, 2 ** 32 + 1, Number.MAX_SAFE_INTEGER]) {
+    for (const input of [{ path: "a.ts", start: value, end: value }, { refs: [{ path: "a.ts", start: value, end: value }] }]) {
+      const response = await bundle.asgrep.read(input as never);
+      assert.deepEqual(response.windows, [{ path: "a.ts", ref: "a.ts#L4294967295-L4294967295", start: 4294967295, end: 4294967295, text: "", truncated: false }]);
+    }
+    for (const input of [{ path: "a.ts", start: 1, end: value }, { refs: [{ file: "a.ts", line_start: 1, line_end: value }] }]) {
+      const response = await bundle.asgrep.read(input as never);
+      assert.deepEqual(response.windows, [{ path: "a.ts", ref: "a.ts#L1-L2", start: 1, end: 2, text: "one\ntwo", truncated: false }]);
+    }
   }
 });
 
@@ -131,6 +184,32 @@ test("POSIX read refs preserve literal backslashes instead of aliasing a directo
     assert.equal(window.ref, `${path}#L1-L1`);
     assert.equal(window.text, "intended file");
     assert.deepEqual((await bundle.asgrep.read({ ref: window.ref })).windows, response.windows);
+  }
+});
+
+test("fallback read and edit reject oversized metadata before loading source bytes", async () => {
+  const root = await project();
+  const path = join(root, "oversized.ts");
+  const handle = await open(path, "w");
+  try {
+    // A sparse file above Node's own readFile allocation limit safely exposes
+    // the wrong admission order without allocating gigabytes in the RED run.
+    await handle.write(Buffer.from([0xff]));
+    await handle.truncate(2 ** 31);
+  } finally {
+    await handle.close();
+  }
+  const bundle = createAsgrepConnector(oldLauncher().host, { cwd: root }, { localReads: true });
+  await assert.rejects(bundle.asgrep.read({ path: "oversized.ts" }), /oversized\.ts exceeds max 67108864 bytes/);
+  await assert.rejects(bundle.asgrep.edit({ path: "oversized.ts", oldText: "old", newText: "new" }), /oversized\.ts exceeds max 67108864 bytes/);
+  assert.equal((await stat(path)).size, 2 ** 31);
+  const original = await open(path, "r");
+  try {
+    const byte = Buffer.alloc(1);
+    await original.read(byte, 0, 1, 0);
+    assert.equal(byte[0], 0xff, "refused edits must preserve the original byte");
+  } finally {
+    await original.close();
   }
 });
 

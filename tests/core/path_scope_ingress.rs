@@ -113,6 +113,48 @@ fn exact_file_scope_matches_only_that_file() {
 }
 
 #[test]
+fn relative_scope_spellings_preserve_canonical_membership() {
+    let (_t, searcher) = indexed_scope_corpus();
+    let pattern = "pattern:fn $F() { $$$B }";
+    for (canonical, aliases) in [
+        ("src", vec!["./src", "src/.", "src//", "./src/./"]),
+        ("calc.rs", vec!["./calc.rs", "././calc.rs"]),
+        ("src/other.rs", vec!["src//other.rs", "src/./other.rs"]),
+        ("src/*.rs", vec!["./src/*.rs", "src//*.rs", "src/./*.rs"]),
+        ("**", vec![".", "./", "././"]),
+    ] {
+        let reference = searcher
+            .search(&format!("{pattern} in:{canonical}"))
+            .unwrap();
+        assert!(!reference.hits.is_empty());
+        for alias in aliases {
+            let response = searcher.search(&format!("{pattern} in:{alias}")).unwrap();
+            assert_eq!(
+                serde_json::to_value(&response.hits).unwrap(),
+                serde_json::to_value(&reference.hits).unwrap(),
+                "scope {alias} must select the same evidence as {canonical}"
+            );
+        }
+    }
+    // Scope admission is shared by ordinary channels and both conjunction sides.
+    for query in [
+        "defs:other_one in:./src",
+        "defs:other_one in:src//other.rs",
+        "defs:other_one in:./src AND literal:other_one in:src/./other.rs",
+        "defs:other_one in:src AND literal:other_one in:./src/*.rs",
+    ] {
+        let response = searcher.search(query).unwrap();
+        assert!(!response.hits.is_empty(), "{query}");
+        assert!(
+            response.hits.iter().all(|hit| hit.file == "src/other.rs"),
+            "{query}: {response:?}"
+        );
+    }
+    // Normalization cannot turn a file plus trailing slash into a valid file scope.
+    assert!(searcher.search("defs:calc_one in:calc.rs/").is_err());
+}
+
+#[test]
 fn dir_scope_still_filters() {
     let (_t, searcher) = indexed_scope_corpus();
     let response = searcher

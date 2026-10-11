@@ -15,17 +15,28 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn run_outline(cli: &Cli, root: &Path, path: &PathBuf) -> anyhow::Result<()> {
     let root = crate::index_cmd::ensure_existing_root(root, cli)?;
-    let rel = if path.is_absolute() {
-        path.strip_prefix(&root).map_err(|_| {
-            crate::cli_args::usage_error(format!(
-                "outline path '{}' is outside root '{}'",
-                path.display(),
-                root.display()
-            ))
-        })?
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve project root: {}", root.display()))?;
+    let candidate = if path.is_absolute() {
+        path.clone()
     } else {
-        path
+        // Validate before ancestor resolution so relative parent traversal
+        // retains its refusal rather than being normalized into a valid key.
+        ast_sgrep_core::index::indexed_rel_path(path)?;
+        root.join(path)
     };
+    // Resolve ancestors, not the leaf: outline can read deleted indexed files.
+    // Both relative and absolute spellings must select the same indexed key.
+    let absolute = ast_sgrep_core::canonicalize_affected_path(&candidate)
+        .with_context(|| format!("failed to resolve outline path: {}", path.display()))?;
+    let rel = absolute.strip_prefix(&root).map_err(|_| {
+        crate::cli_args::usage_error(format!(
+            "outline path '{}' is outside root '{}'",
+            path.display(),
+            root.display()
+        ))
+    })?;
     let rel_str = ast_sgrep_core::index::indexed_rel_path(rel)?;
     let symbols = crate::index_cmd::open_readonly_store(&root, cli)?
         .symbols_in_file(&rel_str)

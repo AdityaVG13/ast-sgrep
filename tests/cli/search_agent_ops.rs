@@ -132,6 +132,117 @@ fn search_accepts_path_as_file_filter_alias() {
 }
 
 #[test]
+fn subcommand_format_alone_selects_machine_success_and_failure() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("src");
+    let index = temp.path().join("index.db");
+    index_fixture(&root, &index);
+    let missing = temp.path().join("missing");
+    for command in ["search", "keyword", "semantic"] {
+        for (target, expected_code) in [(&root, 0), (&missing, 2)] {
+            let (code, value, stderr) = run_json(&[
+                "--no-embed",
+                "--index-path",
+                index.to_str().unwrap(),
+                command,
+                "refresh_token",
+                target.to_str().unwrap(),
+                "--format",
+                "compact",
+            ]);
+            assert_eq!(code, expected_code, "{command}: {value} {stderr}");
+            assert_eq!(value["command"], command);
+            assert_eq!(value["ok"], expected_code == 0);
+            assert!(
+                stderr.is_empty(),
+                "machine diagnostics belong on stdout: {stderr}"
+            );
+            if expected_code == 0 {
+                assert!(value["h"].is_array(), "compact output required: {value}");
+                if command != "semantic" {
+                    assert!(!value["h"].as_array().unwrap().is_empty(), "{value}");
+                }
+            } else {
+                assert_eq!(value["error"]["kind"], "operational");
+            }
+        }
+    }
+}
+
+#[test]
+fn root_alias_survives_graph_reader_and_auto_index_boundaries() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("src");
+    let index = temp.path().join("index.db");
+    index_fixture(&root, &index);
+    for tail in [
+        vec!["chain", "refresh_token"],
+        vec!["call-path", "process_request", "refresh_token"],
+        vec!["--auto-index", "search", "refresh_token"],
+    ] {
+        let mut args = vec![
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+        ];
+        args.extend(tail.iter().copied());
+        let (code, value, stderr) = run_json(&args);
+        assert_eq!(
+            code, 0,
+            "one --root is not ambiguous: {args:?} {value} {stderr}"
+        );
+        match value["command"].as_str().unwrap() {
+            "chain" => assert!(value["node_count"].as_u64().unwrap() > 0, "{value}"),
+            "call-path" => assert_eq!(value["found"], true, "{value}"),
+            "search" => assert!(!value["hits"].as_array().unwrap().is_empty(), "{value}"),
+            other => panic!("unexpected command {other}"),
+        }
+        args.push(root.to_str().unwrap());
+        let (code, value, _) = run_json(&args);
+        assert_eq!(
+            code, 1,
+            "an actual positional ROOT conflict must still fail: {value}"
+        );
+        assert_eq!(value["error"]["kind"], "usage");
+    }
+}
+
+#[test]
+fn index_path_alias_is_not_changed_by_a_root_named_search() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("search");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("lib.rs"), "fn rooted_search() {}\n").unwrap();
+    let output = Command::new(asgrep_bin())
+        .current_dir(temp.path())
+        .args([
+            "--json",
+            "--no-embed",
+            "index",
+            "search",
+            "--path",
+            "lib.rs",
+        ])
+        .output()
+        .unwrap();
+    let value = ast_sgrep_testkit::assert_success(&output, "index");
+    assert_eq!(value["targeted"], true, "{value}");
+    assert_eq!(value["stats"]["files_indexed"], 1, "{value}");
+}
+
+#[test]
+fn short_json_flag_applies_to_usage_errors() {
+    let (code, value, stderr) = run_json(&["search", "needle", "-j", "--limit", "not-a-number"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["command"], "search");
+    assert_eq!(value["error"]["kind"], "usage");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
 fn concurrent_searches_all_succeed() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("src");

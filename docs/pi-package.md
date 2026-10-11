@@ -99,9 +99,31 @@ If an environment override points to a missing file, Pi retries the installed,
 checksum-verified bundled binary and reports the recovery at startup and in
 `/asgrep-doctor`. Remove the stale export from your shell configuration. Explicit
 `binaryPath` settings remain strict; permission, empty-file, and checksum errors
-never trigger this recovery. No PATH lookup or download is attempted.
+never trigger this recovery. No PATH lookup or download is attempted. The standalone
+CLI remains strict about overrides: unset both `ASGREP_BIN` and `AST_SGREP_BINARY`
+in a shell that still inherited the old values, or correct the override path.
+Changing shell startup files does not change an already-running process.
 
 The default root is Pi's current working directory. Requested roots are canonicalized and confined to it. Only explicit project configuration can set `allowOutsideProject: true`; project/global settings and environment cannot relax that policy.
+
+### Search another repository
+
+`in:` (including the tools' `in` parameter) filters paths **relative to the index
+root**; it does not select another workspace. Use one nonempty relative scope,
+such as `in:packages/pi-supernova/tests`. Absolute paths and `..` segments are
+rejected, even when the absolute path points inside the current project.
+
+For another repository you are authorized to inspect, start Pi there or pass
+that repository as the CLI's **positional root**. For example, with the CLI
+installed through Pi:
+
+```bash
+node ~/.pi/agent/npm/node_modules/ast-sgrep/bin/asgrep.js \
+  --json --limit 6 'in:src defs:Name' /absolute/path/to/authorized-repo
+```
+
+This invokes a separate CLI search; it does not broaden the running Pi session's
+root confinement. Use `/asgrep-doctor` to check the session's selected root.
 
 ## Offline, privacy, and security
 
@@ -129,6 +151,7 @@ Common actionable failures:
 | Extension/native version mismatch | Update or reinstall the whole Pi package; never mix npm layer versions. |
 | Protocol mismatch | Install one exact package release rather than overriding the binary. |
 | Root outside project | Return Pi to the intended project or use reviewed explicit project configuration. |
+| Invalid `in:` scope | Use one nonempty project-relative scope; select another repository with the CLI positional root or a Pi session started there. |
 | Timeout/output limit | Adjust the corresponding setting only after confirming the project and query are expected. |
 | Missing/stale index | Run `/asgrep-index`; use reindex only if incremental recovery fails. |
 

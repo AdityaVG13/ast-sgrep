@@ -112,7 +112,8 @@ pub fn cancelled_notif(request_id: u32) -> Value {
 }
 
 /// A live stdio session with timeout-bounded reads: a regressed server fails
-/// the test instead of hanging the suite. Dropping the session kills the child.
+/// the test instead of hanging the suite. Dropping kills and reaps the child,
+/// including on assertion unwind; explicit waits may already have reaped it.
 pub struct LiveSession {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -301,6 +302,7 @@ impl LiveSession {
 impl Drop for LiveSession {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

@@ -306,3 +306,69 @@ fn single_channel_quoted_and_is_not_a_conjunction() {
         "literal channel must stay byte-exact: other.rs has no such bytes"
     );
 }
+
+#[test]
+fn conjunction_applies_each_channel_scope_before_joining() {
+    let temp = sample_root();
+    let searcher = indexed_searcher(temp.path());
+    for (query, expected_file) in [
+        (
+            "callers:helper AND literal:helper in:src/app.rs",
+            "src/app.rs",
+        ),
+        (
+            "callers:helper AND NOT literal:helper in:src/app.rs",
+            "src/other.rs",
+        ),
+        (
+            "callers:helper in:src/app.rs AND literal:helper",
+            "src/app.rs",
+        ),
+        (
+            "callers:helper in:src AND literal:helper in:src/app.*",
+            "src/app.rs",
+        ),
+        (
+            "callers:helper in:src/app.rs AND NOT literal:helper in:src/missing*.rs",
+            "src/app.rs",
+        ),
+    ] {
+        let response = searcher.search(query).unwrap();
+        let files: std::collections::BTreeSet<_> =
+            response.hits.iter().map(|hit| hit.file.as_str()).collect();
+        assert_eq!(files, [expected_file].into_iter().collect(), "{query}");
+    }
+
+    let filtered = Searcher::new(SearchOptions {
+        file_filter: Some("src/other.rs".into()),
+        ..searcher.options().clone()
+    })
+    .unwrap();
+    let response = filtered
+        .search("callers:helper in:src/app.rs AND literal:helper in:src/app.rs")
+        .unwrap();
+    let files: std::collections::BTreeSet<_> =
+        response.hits.iter().map(|hit| hit.file.as_str()).collect();
+    assert_eq!(
+        files,
+        ["src/other.rs"].into_iter().collect(),
+        "explicit file_filter must retain its precedence over each in: scope"
+    );
+}
+
+#[test]
+fn conjunction_rejects_invalid_scopes_on_either_channel() {
+    let temp = sample_root();
+    let searcher = indexed_searcher(temp.path());
+    for query in [
+        "callers:helper in: AND literal:helper",
+        "callers:helper AND literal:helper in:",
+        "callers:helper AND literal:helper in:../outside",
+        "callers:helper AND literal:helper in:missing-directory",
+        "semantic:helper in: AND literal:helper",
+        "callers:helper AND semantic:helper in:../outside",
+    ] {
+        let error = searcher.search(query).expect_err(query);
+        assert!(error.to_string().contains("in:"), "{query}: {error}");
+    }
+}

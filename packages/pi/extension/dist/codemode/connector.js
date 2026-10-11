@@ -1,13 +1,17 @@
 import { isAbsolute } from "node:path";
-import { argvFor, asEnvelope, createCodemodeDispatcher, } from "./dispatch.js";
+import { argvFor, asEnvelope, createCodemodeDispatcher, NoCliFallbackError, } from "./dispatch.js";
 import { editFilesFallback, readWindowsFallback } from "./fallback.js";
 import { coerceHostArgs } from "./guest-api.js";
 import { defined } from "./types.js";
 const DEFAULT_LIMIT = 8;
 /** Native tools the extension serves itself when the launcher predates them. */
 const NATIVE_FALLBACK_TOOLS = new Set(["read", "edit", "find"]);
-/** Stable unknown-tool prefix, byte-identical in every native generation. */
-function isUnknownToolError(cause) {
+/** Fallback authority is either native unknown-tool or a pre-transport refusal. */
+function isFallbackEligible(tool, cause) {
+    if (!NATIVE_FALLBACK_TOOLS.has(tool))
+        return false;
+    if (cause instanceof NoCliFallbackError)
+        return cause.tool === tool;
     const message = cause instanceof Error ? cause.message : String(cause);
     return message.includes("unknown tool:");
 }
@@ -102,7 +106,7 @@ export function createAsgrepConnector(host, context, options = {}) {
         catch (cause) {
             // No memo check here: concurrent same-tool misses must all fall back —
             // the memo only skips future native attempts, never a fresh miss.
-            if (NATIVE_FALLBACK_TOOLS.has(tool) && isUnknownToolError(cause)) {
+            if (isFallbackEligible(tool, cause)) {
                 nativeMissing.add(tool);
                 return fallbackCall(tool, args, opts.signal);
             }
@@ -159,7 +163,7 @@ export function createAsgrepConnector(host, context, options = {}) {
             }), callOptions?.signal);
         },
         semantic: (input, callOptions) => call("semantic", searchPayload("semantic", input), callOptions?.signal),
-        chain: (input, callOptions) => call("chain", { query: input.query, limit: clampLimit(input.limit), top_n: 20 }, callOptions?.signal),
+        chain: (input, callOptions) => call("chain", defined({ query: input.query, limit: clampLimit(input.limit), top_n: 20, max_work: input.max_work }), callOptions?.signal),
         defs: (input, callOptions) => symbolCall("defs", input, callOptions?.signal),
         callers: (input, callOptions) => symbolCall("callers", input, callOptions?.signal),
         imports: (input, callOptions) => symbolCall("imports", input, callOptions?.signal),

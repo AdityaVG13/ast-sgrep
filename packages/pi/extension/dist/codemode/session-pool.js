@@ -136,6 +136,8 @@ export class NativeSessionPool {
     #startFn;
     #backend = "none";
     #shutdownPromise = null;
+    #lifecycle = 0;
+    #retiring = new Set();
     /** Real start failure per root — surfaced instead of a stale "closed" error. */
     #startFailures = new Map();
     /** Crash-loop guard: a failing backend gets this long before respawn retries. */
@@ -160,12 +162,16 @@ export class NativeSessionPool {
     async acquire(root) {
         if (this.#shutdownPromise)
             return null;
+        const lifecycle = this.#lifecycle;
         const existing = this.#entries.get(root);
         if (existing) {
             if (!workerIsClosed(existing.worker))
                 return existing.worker;
             await this.invalidate(root);
         }
+        // Closing the old worker can span shutdown and even a completed restart.
+        if (this.#shutdownPromise || lifecycle !== this.#lifecycle)
+            return null;
         // A backend that just failed is crash-looping: skip the respawn for a
         // bounded window so callers fall back instead of paying a doomed spawn
         // per call. The window expires and recovery still happens automatically.
@@ -189,8 +195,10 @@ export class NativeSessionPool {
     async call(root, tool, args = {}, options) {
         if (options?.signal?.aborted)
             throw abortError();
+        const lifecycle = this.#lifecycle;
+        let worker = null;
         try {
-            const worker = await this.acquire(root);
+            worker = await this.acquire(root);
             if (!worker) {
                 const startError = this.lastStartError(root);
                 throw new Error(startError
@@ -200,9 +208,13 @@ export class NativeSessionPool {
             return await worker.call(tool, args, options);
         }
         catch (cause) {
-            if (options?.signal?.aborted || MUTATING_TOOLS.has(tool) || !isClosedWorkerError(cause))
+            if (this.#shutdownPromise || lifecycle !== this.#lifecycle || options?.signal?.aborted
+                || MUTATING_TOOLS.has(tool) || !isClosedWorkerError(cause))
                 throw cause;
-            await this.invalidate(root);
+            // A delayed failure belongs to the worker that served this call, not
+            // whichever replacement is currently attached to the same root.
+            if (this.#entries.get(root)?.worker === worker)
+                await this.invalidate(root);
             const retry = await this.acquire(root);
             if (!retry) {
                 // Surface the real restart failure (spawn error / schema refusal), not
@@ -222,17 +234,30 @@ export class NativeSessionPool {
         const entry = this.#entries.get(root);
         this.#entries.delete(root);
         this.#startFailures.delete(root);
-        if (entry)
-            await entry.worker.end().catch(() => undefined);
-        if (starting)
-            await starting.catch(() => null);
-        if (this.#entries.size === 0)
-            this.#backend = "none";
+        // Removal revokes access immediately; ownership lasts until end/start
+        // cleanup settles, so shutdown must still join this detached retirement.
+        let complete;
+        const retirement = new Promise((resolve) => { complete = resolve; });
+        this.#retiring.add(retirement);
+        try {
+            if (entry)
+                await entry.worker.end().catch(() => undefined);
+            if (starting)
+                await starting.catch(() => null);
+        }
+        finally {
+            this.#retiring.delete(retirement);
+            complete();
+            if (this.#entries.size === 0)
+                this.#backend = "none";
+        }
     }
     async shutdown() {
         if (this.#shutdownPromise)
             return this.#shutdownPromise;
-        const shutdown = this.#shutdownAll();
+        this.#lifecycle += 1;
+        // Publish the admission barrier before end() can run host callbacks.
+        const shutdown = Promise.resolve().then(() => this.#shutdownAll());
         this.#shutdownPromise = shutdown;
         try {
             await shutdown;
@@ -254,6 +279,7 @@ export class NativeSessionPool {
         await Promise.all([
             ...entries.map((e) => e.worker.end().catch(() => undefined)),
             ...starting.map((start) => start.catch(() => null)),
+            ...this.#retiring,
         ]);
     }
     #generationFor(root) {
@@ -263,6 +289,10 @@ export class NativeSessionPool {
         const gen = this.#generationFor(root);
         const opts = this.#options ?? {};
         const fail = (error) => {
+            // Invalidation retires failures as well as successful workers. A late
+            // rejection must not impose backoff on the replacement generation.
+            if (gen !== this.#generationFor(root))
+                return null;
             this.#startFailures.set(root, {
                 at: Date.now(),
                 error: error instanceof Error ? error.message : String(error),

@@ -293,15 +293,16 @@ fn pick_static(trigrams: &[&str]) -> TrigramShortcut {
     TrigramShortcut::Match(terms)
 }
 
-/// Distinct lowercased trigrams, or None when the needle is too short for a
-/// trigram or has too many for the df probe budget.
+/// Distinct lowercased ASCII trigrams, or None for non-ASCII input, short
+/// needles, or needles exceeding the df probe budget. Byte windows require
+/// ASCII; unsupported Unicode must take the conservative full-query path.
 pub fn distinct_trigrams(needle_lower: &str) -> Option<Vec<&str>> {
     let bytes = needle_lower.as_bytes();
     if bytes.len() < TRIGRAM_LEN {
         return None;
     }
     let count = bytes.len() - TRIGRAM_LEN + 1;
-    if count > MAX_DF_LOOKUPS {
+    if count > MAX_DF_LOOKUPS || !needle_lower.is_ascii() {
         return None;
     }
     let mut seen = std::collections::HashSet::with_capacity(count);

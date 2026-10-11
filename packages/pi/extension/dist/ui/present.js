@@ -68,6 +68,7 @@ export function formatReadResult(response, theme, maxChars = MAX_RESULT_CHARS) {
     if (windows.length === 0)
         return "read: 0 windows";
     const out = [];
+    let outChars = 0;
     let displayed = 0;
     const moreWindows = (count) => count > 0 ? [`… ${count} more windows`] : [];
     for (const w of windows.slice(0, 8)) {
@@ -75,21 +76,30 @@ export function formatReadResult(response, theme, maxChars = MAX_RESULT_CHARS) {
         const text = sanitizeContent(typeof w.text === "string" ? w.text : "");
         const lines = text.split("\n");
         const start = w.start ?? 1;
-        const render = (count) => {
+        const header = (count) => {
             const end = count < lines.length && typeof start === "number" ? start + Math.max(0, count - 1) : (w.end ?? "");
-            return [path + "#L" + start + "-L" + end, ...lines.slice(0, count),
-                ...(count < lines.length || w.truncated === true ? ["… (truncated; read a smaller window)"] : [])].join("\n");
+            return path + "#L" + start + "-L" + end;
         };
+        const footer = (count) => count < lines.length || w.truncated === true
+            ? "\n… (truncated; read a smaller window)" : "";
         // Reserve the omission notice and fit whole lines before finalizing refs;
         // a later character clip would otherwise overstate the displayed range.
         const suffix = moreWindows(windows.length - displayed - 1);
         let count = Math.min(lines.length, 80);
-        const fits = () => [...out, render(count), ...suffix].join("\n").length <= maxChars;
-        while (count > 0 && !fits())
+        const suffixChars = suffix.length > 0 ? suffix[0].length + 1 : 0;
+        // Each retained line owns its preceding newline. Shrinking now adjusts
+        // lengths instead of rebuilding the window and every preceding window.
+        let bodyChars = lines.slice(0, count).reduce((sum, line) => sum + line.length + 1, 0);
+        const fits = () => outChars + header(count).length + bodyChars + footer(count).length + suffixChars <= maxChars;
+        while (count > 0 && !fits()) {
             count--;
+            bodyChars -= lines[count].length + 1;
+        }
         if (!fits())
             break;
-        out.push(render(count));
+        const rendered = [header(count), ...lines.slice(0, count)].join("\n") + footer(count);
+        out.push(rendered);
+        outChars += rendered.length + 1;
         displayed++;
         if (count < Math.min(lines.length, 80))
             break;
@@ -256,6 +266,10 @@ const ONE_CELL_CHROME = /^[\u00b7\u00d7\u2022\u2026\u2192\u23f5\u23f8\u2500-\u25
  * kills the process for ("Rendered line N exceeds terminal width").
  */
 export function displayWidth(text) {
+    return scanDisplayWidth(text, Infinity);
+}
+/** Width is monotone: crossing the crop limit proves the rest cannot fit. */
+function scanDisplayWidth(text, stopAfter) {
     let width = 0;
     for (let index = 0; index < text.length;) {
         const ansi = ansiLengthAt(text, index);
@@ -265,6 +279,8 @@ export function displayWidth(text) {
         }
         const cell = cellWidthAt(text, index);
         width += cell.width;
+        if (width > stopAfter)
+            return width;
         index += cell.length;
     }
     return width;
@@ -277,8 +293,10 @@ function cellWidthAt(text, index) {
         return { width: 0, length: 1 };
     if (code <= 0x7e)
         return { width: 1, length: 1 };
-    if (code >= 0xd800 && code <= 0xdbff)
-        return { width: 2, length: 2 };
+    if (code >= 0xd800 && code <= 0xdbff) {
+        const low = text.charCodeAt(index + 1);
+        return { width: 2, length: low >= 0xdc00 && low <= 0xdfff ? 2 : 1 };
+    }
     if (ONE_CELL_CHROME.test(text[index] ?? ""))
         return { width: 1, length: 1 };
     return { width: 2, length: 1 };
@@ -291,11 +309,11 @@ export function truncateToWidth(text, maxWidth, ellipsis = "...") {
     const limit = Math.max(0, maxWidth);
     if (limit <= 0)
         return "";
-    if (visibleWidth(text) <= limit)
+    if (scanDisplayWidth(text, limit) <= limit)
         return text;
     const ellipsisWidth = visibleWidth(ellipsis);
     if (ellipsisWidth >= limit)
-        return ellipsis.slice(0, limit);
+        return truncateToWidth(ellipsis, limit, "");
     const budget = limit - ellipsisWidth;
     let kept = "";
     let width = 0;

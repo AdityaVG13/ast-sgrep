@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproducible evaluation pack.
 #
-# Regenerates candidate retrieval and token-efficiency measurements for the
+# Regenerates candidate retrieval and output-byte measurements for the
 # `self` corpus. It does not fetch external corpora; Rust dependencies must
 # already be available or downloadable by Cargo.
 #
@@ -53,9 +53,9 @@ echo "== graph-edge precision (fixed corpus + SCIP overlay) =="
 "$bin" --no-embed eval --gold "$graph_gold" --scip "$graph_scip" "$graph_root" --json \
   > "$out/graph-resolution-precision.json"
 
-# 3. Token efficiency: bytes a model would actually receive, per format,
-#    over the same gold queries. Compact is the agent-facing envelope.
-echo "== token efficiency (self corpus) =="
+# 3. Complete CLI stdout bytes, including whitespace and the final newline.
+#    This measures serialized payload size, not model tokenizer tokens.
+echo "== output bytes (self corpus) =="
 # A dedicated, freshly built index keeps the measurement deterministic: the
 # native/agent envelopes embed the snapshot generation, so reusing a repo index
 # whose generation keeps incrementing would change the byte totals run to run.
@@ -74,16 +74,16 @@ for query in gold["queries"]:
         proc = subprocess.run(
             [binary, "--index-path", index_path, "--json", "--format", fmt,
              "--limit", "10", query["query"], "."],
-            capture_output=True, text=True, check=True,
+            capture_output=True, check=True,
         )
-        row[fmt] = len(proc.stdout.strip())
+        row[fmt] = len(proc.stdout)
     # m38g: budgeted compact picks per-result detail under one ceiling.
     proc = subprocess.run(
         [binary, "--index-path", index_path, "--json", "--format", "compact",
          "--budget-tokens", "300", "--limit", "10", query["query"], "."],
-        capture_output=True, text=True, check=True,
+        capture_output=True, check=True,
     )
-    row["compact-budget300"] = len(proc.stdout.strip())
+    row["compact-budget300"] = len(proc.stdout)
     rows.append(row)
 formats = ("native", "agent", "agent-capsule", "compact", "compact-budget300")
 totals = {fmt: sum(row[fmt] for row in rows) for fmt in formats}
@@ -96,7 +96,7 @@ totals["compact_vs_agent_capsule_pct"] = round(
 totals["compact_vs_native_pct"] = round(
     100 - (totals["compact"] * 100 / totals["native"]), 1
 )
-json.dump({"per_query": rows, "totals": totals}, open(f"{out_dir}/self-token-efficiency.json", "w"), indent=2)
+json.dump({"unit": "bytes", "scope": "complete CLI stdout", "per_query": rows, "totals": totals}, open(f"{out_dir}/self-token-efficiency.json", "w"), indent=2)
 print(json.dumps(totals, indent=2))
 PY
 
@@ -159,7 +159,7 @@ summary = {
     "gold_queries": quality["aggregate"]["n_queries"],
     "retrieval": quality["aggregate"],
     "hybrid_minus_no_embed": ab["diff"]["aggregate"],
-    "token_efficiency": tokens["totals"],
+    "output_bytes": tokens["totals"],
     "graph_edge_precision": graph["graph_edge_precision"],
 }
 json.dump(summary, open(f"{out_dir}/summary.json", "w"), indent=2)

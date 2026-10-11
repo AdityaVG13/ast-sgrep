@@ -1,5 +1,8 @@
+//! File-granular graph evidence with deterministic, attempt-based work admission.
+//! Output trimming is independent of traversal. Work caps bound decoded/admitted
+//! evidence and store calls, not SQLite scans/sorts, elapsed time or byte sizes.
 use crate::search::{SearchHit, SearchOptions, Searcher};
-use crate::store::IndexStore;
+use crate::store::{IndexStore, SymbolLocationRow};
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -33,6 +36,37 @@ pub struct ChainEdge {
     pub label: EdgeLabel,
     pub depth: u32,
 }
+pub const DEFAULT_CHAIN_WORK: usize = 8192;
+pub const MAX_CHAIN_WORK: usize = 1_000_000;
+const MAX_CALLEE_DEFINITIONS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainTruncation {
+    WorkLimit,
+    DefinitionLimit,
+}
+
+/// Attempted work includes duplicate, unresolved and already-seen evidence.
+/// Source pages include one lookahead row and can contain unprocessed tails.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChainWork {
+    pub limit: usize,
+    pub used: usize,
+    pub expansions: usize,
+    pub store_calls: usize,
+    pub call_rows: usize,
+    pub import_rows: usize,
+    pub definition_rows: usize,
+    pub module_paths: usize,
+    pub fetched_source_rows: usize,
+    pub peak_source_page_rows: usize,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainResponse {
     pub query: String,
@@ -43,6 +77,14 @@ pub struct ChainResponse {
     pub decay_factor: f64,
     pub node_count: usize,
     pub edge_count: usize,
+    /// Work or definition admission omitted exploration. Output-only trimming
+    /// remains visible through node_count > nodes.len(), not this flag.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truncation_reasons: Vec<ChainTruncation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<ChainWork>,
 }
 #[derive(Debug, Clone)]
 pub struct ChainConfig {
@@ -50,6 +92,9 @@ pub struct ChainConfig {
     pub decay_factor: f64,
     pub limit: usize,
     pub top_n: usize,
+    /// Expansion + store-call + processed-row units, after seed selection.
+    /// Zero is seeds-only; public host knobs accept 1..=MAX_CHAIN_WORK.
+    pub max_work: usize,
 }
 impl Default for ChainConfig {
     fn default() -> Self {
@@ -58,9 +103,76 @@ impl Default for ChainConfig {
             decay_factor: 0.5,
             limit: 100,
             top_n: 20,
+            max_work: DEFAULT_CHAIN_WORK,
         }
     }
 }
+enum WorkKind {
+    Expansion,
+    StoreCall,
+    CallRow,
+    ImportRow,
+    DefinitionRow,
+    ModulePath,
+}
+
+struct WorkBudget {
+    report: ChainWork,
+    exhausted: bool,
+    definition_limited: bool,
+}
+impl WorkBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            report: ChainWork {
+                limit,
+                ..ChainWork::default()
+            },
+            exhausted: false,
+            definition_limited: false,
+        }
+    }
+    fn remaining(&self) -> usize {
+        self.report.limit - self.report.used
+    }
+    fn take(&mut self, kind: WorkKind) -> bool {
+        if self.remaining() == 0 {
+            self.exhausted = true;
+            return false;
+        }
+        self.report.used += 1;
+        let counter = match kind {
+            WorkKind::Expansion => &mut self.report.expansions,
+            WorkKind::StoreCall => &mut self.report.store_calls,
+            WorkKind::CallRow => &mut self.report.call_rows,
+            WorkKind::ImportRow => &mut self.report.import_rows,
+            WorkKind::DefinitionRow => &mut self.report.definition_rows,
+            WorkKind::ModulePath => &mut self.report.module_paths,
+        };
+        *counter += 1;
+        true
+    }
+    fn source_rows<T>(&mut self, fetch: impl FnOnce(usize) -> Result<Vec<T>>) -> Result<Vec<T>> {
+        if !self.take(WorkKind::StoreCall) {
+            return Ok(Vec::new());
+        }
+        let rows = fetch(self.remaining() + 1)?;
+        self.report.fetched_source_rows += rows.len();
+        self.report.peak_source_page_rows = self.report.peak_source_page_rows.max(rows.len());
+        Ok(rows)
+    }
+    fn reasons(&self) -> Vec<ChainTruncation> {
+        let mut reasons = Vec::new();
+        if self.exhausted {
+            reasons.push(ChainTruncation::WorkLimit);
+        }
+        if self.definition_limited {
+            reasons.push(ChainTruncation::DefinitionLimit);
+        }
+        reasons
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ChainEntry {
     file: String,
@@ -71,30 +183,40 @@ struct ChainEntry {
     score: f64,
     depth: u32,
 }
-fn hit_symbol(store: &IndexStore, hit: &SearchHit) -> Option<(String, u32, u32)> {
-    if let Some(ref sym) = hit.symbol {
-        return Some((sym.clone(), hit.line_start, hit.line_end));
+fn seed_location(store: &IndexStore, hit: &SearchHit) -> Result<Option<SymbolLocationRow>> {
+    let at_hit = |name: String, line_start: u32, line_end: u32| SymbolLocationRow {
+        path: hit.file.clone(),
+        name,
+        language: hit.language.clone(),
+        line_start,
+        line_end,
+    };
+    if let Some(ref symbol) = hit.symbol {
+        return Ok(Some(at_hit(symbol.clone(), hit.line_start, hit.line_end)));
     }
-    // Caller/Graph hits carry callee/caller — prefer those over a
-    // file-scanned first symbol that may invent the wrong seed.
-    if let Some(ref callee) = hit.callee {
-        if !callee.is_empty() {
-            return Some((callee.clone(), hit.line_start, hit.line_end));
+    // Preserve callee-name preference, but do not attribute its definition to
+    // the reference site. Resolve only an unambiguous indexed definition;
+    // external/duplicate names retain the existing reference-site evidence.
+    let name = hit
+        .callee
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| hit.caller.as_deref().filter(|name| !name.is_empty()));
+    if let Some(name) = name {
+        let mut definitions = store.symbols_named(name, 2)?;
+        if definitions.len() == 1 {
+            return Ok(definitions.pop());
         }
+        return Ok(Some(at_hit(name.to_owned(), hit.line_start, hit.line_end)));
     }
-    if let Some(ref caller) = hit.caller {
-        if !caller.is_empty() {
-            return Some((caller.clone(), hit.line_start, hit.line_end));
-        }
-    }
-    if let Ok(Some(row)) = store.symbol_at_line(&hit.file, hit.line_start) {
-        return Some((row.name, row.line_start, row.line_end));
-    }
-    // Never invent a seed via first_symbol_in_file — that picks an unrelated
-    // top-of-file symbol and poisons chain expansion.
-    None
+    // Never invent a seed via first_symbol_in_file: unrelated top-of-file
+    // declarations are not evidence for an unlabelled search hit.
+    Ok(store
+        .symbol_at_line(&hit.file, hit.line_start)
+        .ok()
+        .flatten())
 }
-fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Vec<ChainEntry> {
+fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Result<Vec<ChainEntry>> {
     let mut best_per_file: HashMap<&str, (&SearchHit, usize)> = HashMap::new();
     for (idx, hit) in hits.iter().enumerate() {
         let key = hit.file.as_str();
@@ -118,32 +240,46 @@ fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Vec<Chai
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.0.cmp(b.0))
     });
-    sorted
-        .into_iter()
-        .filter_map(|(_, hit)| {
-            hit_symbol(store, hit).map(|(sym, ls, le)| ChainEntry {
-                file: hit.file.clone(),
-                symbol: sym,
-                language: hit.language.clone(),
-                line_start: ls,
-                line_end: le,
+    let mut seeds = Vec::new();
+    for (_, hit) in sorted {
+        if let Some(location) = seed_location(store, hit)? {
+            seeds.push(ChainEntry {
+                file: location.path,
+                symbol: location.name,
+                language: location.language,
+                line_start: location.line_start,
+                line_end: location.line_end,
                 score: hit.score,
                 depth: 0,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    // Different reference files can resolve to the same definition file.
+    // Reuse the walk's file-granular score/depth policy after resolution.
+    Ok(dedup_by_file(&seeds))
 }
 fn expand_one(
     store: &IndexStore,
     entry: &ChainEntry,
     depth: u32,
     decay: f64,
+    work: &mut WorkBudget,
 ) -> Result<(Vec<ChainEntry>, Vec<ChainEdge>)> {
     let hop_score = entry.score * decay;
     let mut entries = Vec::new();
     let mut edges = Vec::new();
-    for (_call_file, _call_line, _caller, callee) in store.outgoing_calls(&entry.symbol)? {
-        for def in store.symbols_named(&callee, 8)? {
+    'outgoing: for (_call_file, _call_line, _caller, callee) in
+        work.source_rows(|limit| store.outgoing_calls_capped(&entry.symbol, limit))?
+    {
+        if !work.take(WorkKind::CallRow) || !work.take(WorkKind::StoreCall) {
+            break;
+        }
+        let definitions = store.symbols_named(&callee, MAX_CALLEE_DEFINITIONS + 1)?;
+        work.definition_limited |= definitions.len() > MAX_CALLEE_DEFINITIONS;
+        for def in definitions.into_iter().take(MAX_CALLEE_DEFINITIONS) {
+            if !work.take(WorkKind::DefinitionRow) {
+                break 'outgoing;
+            }
             entries.push(ChainEntry {
                 file: def.path.clone(),
                 symbol: def.name.clone(),
@@ -163,7 +299,12 @@ fn expand_one(
             });
         }
     }
-    for (call_file, call_line, caller, _callee) in store.incoming_calls(&entry.symbol)? {
+    for (call_file, call_line, caller, _callee) in
+        work.source_rows(|limit| store.incoming_calls_capped(&entry.symbol, limit))?
+    {
+        if !work.take(WorkKind::CallRow) {
+            break;
+        }
         entries.push(ChainEntry {
             file: call_file.clone(),
             symbol: caller.clone(),
@@ -182,12 +323,28 @@ fn expand_one(
             depth: entry.depth,
         });
     }
-    for imp in store.imports_from_file(&entry.file)? {
+    'imports: for imp in
+        work.source_rows(|limit| store.imports_from_file_capped(&entry.file, limit))?
+    {
+        if !work.take(WorkKind::ImportRow) || !work.take(WorkKind::StoreCall) {
+            break;
+        }
+        // Module candidates are the existing finite language-rule set, not a
+        // repository-wide filename scan. Charge each resolved path and lookup.
         for file_path in store.resolve_module_path(&entry.file, &imp.module_path)? {
+            if !work.take(WorkKind::ModulePath) {
+                break 'imports;
+            }
             if file_path == entry.file {
                 continue;
             }
+            if !work.take(WorkKind::StoreCall) {
+                break 'imports;
+            }
             if let Ok(Some(first_sym)) = store.first_symbol_in_file(&file_path) {
+                if !work.take(WorkKind::DefinitionRow) {
+                    break 'imports;
+                }
                 entries.push(ChainEntry {
                     file: file_path.clone(),
                     symbol: first_sym.name.clone(),
@@ -239,6 +396,11 @@ pub fn expand_chain(
     query: &str,
     config: &ChainConfig,
 ) -> Result<ChainResponse> {
+    if config.max_work > MAX_CHAIN_WORK {
+        return Err(crate::StoreError::Other(format!(
+            "chain max_work exceeds {MAX_CHAIN_WORK}"
+        )));
+    }
     if query.trim().is_empty() {
         return Ok(ChainResponse {
             query: query.to_string(),
@@ -249,6 +411,9 @@ pub fn expand_chain(
             decay_factor: config.decay_factor,
             node_count: 0,
             edge_count: 0,
+            truncated: false,
+            truncation_reasons: Vec::new(),
+            work: None,
         });
     }
     let searcher = Searcher::new(SearchOptions {
@@ -257,11 +422,12 @@ pub fn expand_chain(
         limit: config.top_n.max(1),
         ..SearchOptions::default()
     })?;
-    let seeds = build_seeds(store, &searcher.search(query)?.hits, config.top_n);
+    let seeds = build_seeds(store, &searcher.search(query)?.hits, config.top_n)?;
     let seed_nodes: Vec<ChainNode> = seeds.iter().map(entry_to_node).collect();
     let mut all_entries = seeds.clone();
     let mut all_edges = Vec::new();
     let mut frontier = seeds;
+    let mut work = WorkBudget::new(config.max_work);
     let mut seen_files: HashSet<String> = all_entries.iter().map(|e| e.file.clone()).collect();
     for d in 1..=config.max_depth {
         if frontier.is_empty() {
@@ -269,9 +435,15 @@ pub fn expand_chain(
         }
         let mut next = Vec::new();
         for entry in &frontier {
-            let (entries, edges) = expand_one(store, entry, d, config.decay_factor)?;
+            if !work.take(WorkKind::Expansion) {
+                break;
+            }
+            let (entries, edges) = expand_one(store, entry, d, config.decay_factor, &mut work)?;
             next.extend(entries);
             all_edges.extend(edges);
+            if work.exhausted {
+                break;
+            }
         }
         let novel: Vec<_> = dedup_by_file(&next)
             .into_iter()
@@ -279,6 +451,9 @@ pub fn expand_chain(
             .collect();
         all_entries.extend(novel.clone());
         frontier = novel;
+        if work.exhausted {
+            break;
+        }
     }
     let mut edge_set = HashSet::new();
     all_edges.retain(|e| {
@@ -298,7 +473,12 @@ pub fn expand_chain(
     all_edges.retain(|e| {
         node_files.contains(e.from_file.as_str()) && node_files.contains(e.to_file.as_str())
     });
+    let reasons = work.reasons();
+    let truncated = !reasons.is_empty();
     Ok(ChainResponse {
+        truncated,
+        truncation_reasons: reasons,
+        work: truncated.then_some(work.report),
         query: query.to_string(),
         seeds: seed_nodes,
         node_count: total_nodes,

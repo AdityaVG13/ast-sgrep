@@ -423,6 +423,81 @@ fn agent_search_modes_are_stable_and_bounded() {
     assert_eq!(compact["zb"][0], 12);
     assert_eq!(compact["zb"][1], 16);
     assert!(compact["zb"][2].as_u64().expect("used budget") <= 16);
+
+    let none_args = [
+        "--no-embed",
+        "--limit",
+        "2",
+        "--format",
+        "compact",
+        "--preview",
+        "none",
+    ];
+    let none = session.search_json("process_request", &none_args);
+    let identity = |doc: &Value| -> Vec<Value> {
+        doc["h"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| Value::Array(row.as_array().unwrap()[..4].to_vec()))
+            .collect()
+    };
+    assert!(
+        !identity(&none).is_empty(),
+        "no-preview control needs real hits"
+    );
+    assert!(none["h"].as_array().unwrap().iter().all(|row| row[4] == ""));
+    for budget in ["1", "300", "8192"] {
+        let mut args = none_args.to_vec();
+        args.extend(["--budget-tokens", budget]);
+        let budgeted = session.search_json("process_request", &args);
+        assert_eq!(
+            identity(&budgeted),
+            identity(&none),
+            "a preview budget must not drop hit metadata"
+        );
+        assert_eq!(budgeted["p"], none["p"]);
+        assert!(
+            budgeted["h"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row[4] == ""),
+            "explicit none must not emit snippets at budget {budget}: {budgeted}"
+        );
+        assert!(budgeted["h"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row[5] == "metadata"));
+        assert_eq!(
+            budgeted["zd"],
+            serde_json::json!([budget.parse::<usize>().unwrap(), 0])
+        );
+    }
+    for preview in ["short", "full"] {
+        let args = [
+            "--no-embed",
+            "--limit",
+            "2",
+            "--format",
+            "compact",
+            "--preview",
+            preview,
+            "--budget-tokens",
+            "8192",
+        ];
+        let detailed = session.search_json("process_request", &args);
+        assert_eq!(identity(&detailed), identity(&none));
+        assert!(
+            detailed["h"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row[4].as_str().is_some_and(|body| !body.is_empty())),
+            "positive {preview} control must still emit source"
+        );
+    }
 }
 /// Embed-default-ON machine contract (mock-free e2e gap lbx1.4).
 ///
@@ -1186,6 +1261,113 @@ fn bench_suite_json_is_single_envelope_even_on_failure() {
     }
 }
 
+#[test]
+fn codemode_no_embed_position_controls_real_session_and_json_precedence() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let temp = TempDir::new().unwrap();
+    for (case, (transport, flag_before, json_embed)) in [
+        ("batch", Some(true), None),
+        ("batch", Some(false), None),
+        ("batch", Some(false), Some(true)),
+        ("batch", None, Some(false)),
+        ("serve", Some(true), None),
+        ("serve", Some(false), None),
+        ("serve", None, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root = temp.path().join(format!("root-{case}"));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("lib.rs"),
+            "fn embedding_policy_target() { let _ = \"offline semantic phrase\"; }\n",
+        )
+        .unwrap();
+        let index = temp.path().join(format!("index-{case}.db"));
+        let mut command = Command::new(asgrep_bin());
+        command.args([
+            "--root",
+            root.to_str().unwrap(),
+            "--index-path",
+            index.to_str().unwrap(),
+        ]);
+        if flag_before == Some(true) {
+            command.arg("--no-embed");
+        }
+        command.arg(if transport == "batch" {
+            "codemode-batch"
+        } else {
+            "codemode-serve"
+        });
+        if transport == "batch" {
+            command.args(["--requests", "-"]);
+        }
+        if flag_before == Some(false) {
+            command.arg("--no-embed");
+        }
+        command
+            .env_remove("ASGREP_NO_EMBED")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let calls = serde_json::json!([
+            {"id":"index","tool":"index_repo","args":{}},
+            {"id":"status","tool":"index_status","args":{}}
+        ]);
+        let payload = if transport == "batch" {
+            let mut request = serde_json::json!({"calls":calls});
+            if let Some(use_embed) = json_embed {
+                request["use_embed"] = use_embed.into();
+            }
+            request.to_string()
+        } else {
+            format!(
+                "{}\n{}\n{}\n",
+                serde_json::json!({"type":"call","id":"index","tool":"index_repo","args":{}}),
+                serde_json::json!({"type":"call","id":"status","tool":"index_status","args":{}}),
+                serde_json::json!({"type":"end"})
+            )
+        };
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "case {case} flag placement must be equivalent: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status = if transport == "batch" {
+            let reply = parse_stdout(&output);
+            assert_eq!(reply["ok"], true);
+            assert_eq!(reply["all_ok"], true);
+            assert_eq!(reply["call_count"], 2);
+            assert_eq!(reply["results"].as_array().unwrap().len(), 2);
+            reply["results"][1]["value"].clone()
+        } else {
+            let replies: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(replies.len(), 3);
+            assert_eq!(replies[0]["ok"], true);
+            assert_eq!(replies[1]["ok"], true);
+            assert_eq!(replies[2]["type"], "bye");
+            replies[1]["value"].clone()
+        };
+        let enabled = json_embed.unwrap_or(flag_before.is_none());
+        assert_eq!(status["semantic_chunk_count"].as_u64().unwrap() > 0, enabled,
+            "flag must reach the session and explicit JSON must take precedence, case {case}: {status}");
+    }
+}
+
 /// d2a1.9: oversized batch file is rejected before OOM; machine envelope on failure.
 #[test]
 fn codemode_batch_oversized_file_is_machine_failure() {
@@ -1363,6 +1545,66 @@ fn path_free_usage_teaching_messages_match_goldens() {
         "expected agent teaching, got {format_msg}"
     );
     assert_golden_json_at(&cli_fixture("teaching_format_agnt.json"), &format);
+}
+
+#[test]
+fn chain_work_override_is_honest_in_machine_and_human_output() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().unwrap();
+    let root = session.root.to_str().unwrap();
+    let out = run(
+        &session.bin,
+        &[
+            "--json",
+            "--no-embed",
+            "--index-path",
+            index,
+            "chain",
+            "defs:process_request",
+            root,
+            "--max-work",
+            "1",
+        ],
+    );
+    let value = assert_success(&out, "chain");
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["node_count"], 1);
+    assert_eq!(value["work"]["used"], 1);
+    assert_eq!(value["edge_count"], 0);
+    assert!(!value["seeds"].as_array().unwrap().is_empty());
+    let human = run(
+        &session.bin,
+        &[
+            "--no-embed",
+            "--index-path",
+            index,
+            "chain",
+            "defs:process_request",
+            root,
+            "--max-work",
+            "1",
+        ],
+    );
+    assert!(human.status.success());
+    assert!(String::from_utf8(human.stdout)
+        .unwrap()
+        .contains("traversal incomplete"));
+    for bad in ["0", "-1", "1.5", "1000001", "18446744073709551615"] {
+        let bad = run(
+            &session.bin,
+            &[
+                "--json",
+                "chain",
+                "defs:process_request",
+                root,
+                "--max-work",
+                bad,
+            ],
+        );
+        // MJ-006 usage errors exit 1; exit 2 is operational failure (MJ-005).
+        assert_eq!(bad.status.code(), Some(1));
+        assert_eq!(parse_stdout(&bad)["error"]["kind"], "usage");
+    }
 }
 
 /// nz7i.4: freeze `chain process_request` nodes/edges (sorted; scores kept).

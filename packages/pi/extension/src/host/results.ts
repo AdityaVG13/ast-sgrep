@@ -111,14 +111,25 @@ const OPERATIONAL_FAILURES: ReadonlyArray<{ pattern: RegExp; hint?: string }> = 
   { pattern: /unable to open database file|no such table/i },
 ];
 
+// Query parser messages shared by the native and CLI transports. Do not
+// reinterpret arbitrary failures merely because they mention a scope.
+const INVALID_SCOPE = /^(?:search failed: )?(?:in: scope '.+' (?:is absolute; scopes are relative to the index root|escapes the index root: '\.\.' segments are not allowed)|in: token has no path; scope queries look like `in:src`|multiple in: scopes \(first: '.+'\); keep exactly one)$/u;
+const SCOPE_HINT = "Use one nonempty project-relative in: scope, such as in:src. For another authorized repository, start Pi there or give the CLI that repository as its positional root; in: does not switch workspaces.";
+
 export function errorDetails(cause: unknown, signal?: AbortSignal): { code: string; message: string; details: Readonly<Record<string, unknown>> } {
   if (signal?.aborted) {
     return { code: "CANCELLED", message: "cancelled", details: {} };
   }
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if ((!(cause instanceof RuntimeError) || cause.code === "OPERATIONAL_ERROR") && INVALID_SCOPE.test(message)) {
+    return {
+      code: "INVALID_ARGUMENTS", message,
+      details: { ...(cause instanceof RuntimeError ? cause.details : {}), hint: SCOPE_HINT },
+    };
+  }
   if (cause instanceof RuntimeError) {
     return { code: cause.code, message: cause.message, details: cause.details };
   }
-  const message = cause instanceof Error ? cause.message : String(cause);
   if (/timed out after \d+ms|timeout after \d+ms|exceeded \d+ms/i.test(message)) {
     return { code: "TIMEOUT", message, details: {} };
   }
@@ -163,8 +174,9 @@ export function extractInPath(query: string): string | undefined {
 
 export function failure(command: string, cause: unknown, signal?: AbortSignal) {
   const error = errorDetails(cause, signal);
+  const hints = typeof error.details.hint === "string" ? [error.details.hint] : [];
   return {
-    content: [{ type: "text" as const, text: bounded(`${command} failed [${error.code}]: ${error.message}`) }],
+    content: [{ type: "text" as const, text: withNotes(`${command} failed [${error.code}]: ${error.message}`, hints) }],
     details: { ok: false, command, error },
   };
 }

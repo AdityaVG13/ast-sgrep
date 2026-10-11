@@ -9,6 +9,11 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## [Unreleased]
 
+### Fixed
+
+- Classify rejected query scopes as `INVALID_ARGUMENTS` on Pi's native and CLI transports, preserve structured diagnostics, and keep recovery hints in bounded model-visible errors without relaxing root confinement.
+- Name stale CLI binary environment overrides and explain how to clear them, while preserving strict override validation and Pi's existing missing-file recovery.
+
 ## [2.5.4] - 2026-09-22
 
 Native-inclusive release: all five platform packages, the launcher, and the Pi

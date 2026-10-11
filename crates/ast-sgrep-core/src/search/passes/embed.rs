@@ -256,7 +256,7 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, options, &query, Some(dim))?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let pool = field_rescore_pool(hit_limit);
     // Door B: rank from the mmap'd concat payload, then SQLite-fetch only the
     // top-N survivors. Door C: field blobs are selected only for those ids
@@ -366,7 +366,7 @@ fn embed_pass_lazy_ivf_for_files(
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, options, &query, Some(dim))?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let pool = field_rescore_pool(hit_limit);
     let Some(ranked_payload) = ivf.search_members(&query_vec, &members, pool) else {
         return Ok(None);
@@ -462,7 +462,7 @@ pub(crate) fn embed_pass_for_files_cached(
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let mut survivors = Vec::new();
     let mut survivor_ids = Vec::new();
     for (id, row) in
@@ -533,7 +533,7 @@ fn try_warmed_file_embed(
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     // Pi unique: rank the warmed, already-normalized concat matrix in place.
     // Cloning every cascade SemanticChunkRow (path + excerpt + Vec<f32>) and
     // then L2-normalizing each copy was the 52-file unique-hybrid embed span.
@@ -681,7 +681,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
     let indices =
         rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.limit);
+    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let fetched_ids;
     let ids: &[i64] = match ctx.as_ref() {
         Some(ctx) if ctx.ids.len() == chunks.len() => ctx.ids.as_slice(),
@@ -1235,6 +1235,6 @@ fn embed_legacy_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
         &[],
-        EMBED_HIT_LIMIT.max(options.limit),
+        EMBED_HIT_LIMIT.max(options.retained_limit()),
     ))
 }

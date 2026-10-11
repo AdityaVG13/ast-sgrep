@@ -10,6 +10,382 @@ reconstructed from verifiable repo evidence only (git log, `benchmarks/`).
 
 ## Rejected
 
+- **Call-kind-first ancestor gate RETAINED (br-mcm).** Fresh real-call stacks
+  locate repeated parent lookups even for non-call nodes. One pure guard reorder
+  rejects those first, retaining full candidate ancestor checks, traversal and
+  matching semantics. Canonical same-host native prices, controls, maximum/RSS
+  countermetrics and scope: benchmarks/results/baselines.md call-kind-first row;
+  kind-first-verification.json.347 named passes,288 paired trials with exact
+  replies,82 cold/decode replay invocations. Prior six keeps intact. Retry broader
+  ancestor elision only for a new profiled caller with a proven inherited-trivia
+  invariant and exact native replies; no bypass for actual calls inferred.
+  CASS history remains BLOCKED code5 maintenance-required; the tool reports its
+  own detached rebuild, not a requested agent rebuild. Retry history only once
+  lexical metadata is searchable.
+
+- **PHP member-slot range membership RETAINED, None expansion WITHDRAWN
+  (br-mcm).** Member-slot work separately profiled/price-gated; exact pair
+  membership follows successful receiver+argument unification. Initial None
+  key fault survived337 pattern tests, so its branch restored unchanged before
+  final-native pricing. Canonical final numbers, +RAM and negative real-PHP
+  corpus control in `benchmarks/results/baselines.md` PHP member-slot row;
+  `member-slots-verification.json`.347 final passes, slots key fault killed,
+  exact98-invocation boundary/cold/decode replay. Child503 no-work failure is
+  not independent review; parent inline proof recorded. Retry broadening only
+  for measured exclusive-output emitters with exact span/capture/refusal proof,
+  meaningful existing discriminator and matched gains/ordinary/resource
+  controls; no universal PHP speed/RAM claim. CASS5 OPEN, prior five intact.
+
+- **Scoped native-call range membership RETAINED (br-mcm).** New synthetic
+  public-path scaling and actual `.any`-loop stacks satisfy profiling predicate.
+  Call-only fresh output uses exact range membership after successful capture
+  unification; no generic helper, schema/cap/default or output changes. Canonical
+  prices, real-call small slowdown, CPU/RSS and scope in
+  `benchmarks/results/baselines.md` scoped native-call range membership row;
+  `call-dedup-verification.json`.347 restored named passes, two existing-test
+  key-identity faults killed, exact cold/decode/slots/wide native replay.
+  Retry broadening only for another measured emitter with proven fresh output/
+  exclusive writers and exact Eq/order/first-capture semantics, matched public
+  gain and ordinary/resource controls. No universal matcher bound inferred;
+  CASS5 history OPEN. Prior four native keeps/dirty work intact.
+
+- **Signature last-line ownership reuse REJECTED (br-mcm).** Root-preorder
+  ordering supports lossless map compression and real cardinality shows fewer
+  owned keys, but paired full/ordinary performance stays nearflat while full
+  peak RSS rises. Original two files restored byte-exact, previous four keeps
+  intact. Canonical numbers/proof scope in `benchmarks/results/baselines.md`
+  signature last-line ownership reuse row; receipt
+  `signature-lastline-rejection-verification.json`;347 restored named passes,
+  local/worker180inputs/retained native verified. No traced malloc or unbounded
+  edited-tree/oversized-source theorem inferred. Retry only with a changed
+  mechanism and same-host material whole-index or peak-RSS improvement across
+  full/ordinary cases preserving exact rows/stats/depth/multilingual controls.
+  CASS5 history OPEN.
+
+- **Terminal identifier recording shortcut REJECTED (br-mcm).** Current kind
+  sets prove redundant declaration/call checks, but actual pristine-index
+  pairs show no material full/ordinary win. Multilingual-only gain is not a
+  general keep; source restored byte-exact with all four preceding keeps.
+  Canonical numbers/identities in `benchmarks/results/baselines.md` terminal
+  identifier recording shortcut row; receipt
+  `identifier-terminal-rejection-verification.json`;347 restored named passes,
+  180 local/worker inputs/retained native verified. No unrun mutant kill claimed
+  from the child report. Retry only with a changed mechanism and same-host
+  material full/ordinary whole-index gain retaining exact fields/stats/depth
+  semantics and multilingual controls. CASS5 history OPEN.
+
+- **Exact vocab preload DEFERRED after bounded backend attribution (br-mcm).**
+  Source review plus real own-inferior stacks support FTS5 posting enumeration
+  as the observed work, not Rust key-allocation guesses or a universal
+  irreducibility claim. No candidate/source change. Canonical counts/limits in
+  `benchmarks/results/baselines.md` exact vocabulary preload deferral row,
+  `vocab-warm-stack-summary.json`; retain the one getter observation separately.
+  Retry when a new measured mechanism removes repeated physical work while
+  preserving complete typed errors, exact term/doc selection, decoy defense,
+  generation/armed/unavailable/unknown semantics and representative replies,
+  without engine/schema/tokenizer/cache/warming-policy redesign. CASS5 OPEN.
+
+- **Warm LineCorpus borrowed-row caller extension REJECTED (br-mcm).**
+  Feasible two-file shared decoder/Rows-loop proof did not translate into a
+  net complete-call win. Original variant and one bounded already-read-language
+  ValueRef refinement reduce actual allocation churn but not peak RAM/CPU;
+  public unique17 regresses in both blocks. Both productfiles restored
+  byte-exact; all preceding keeps preserved;21 focused restored passes and
+  180 local/worker source inputs/retained native readback verified. Canonical
+  trial/churn/resource numbers and scope in `benchmarks/results/baselines.md`
+  warm corpus borrowed-row extension row; receipt
+  `corpus-borrow-rejection-verification.json`. Allocation count alone is not a
+  whole-path gain. Retry only with a changed mechanism and same-host material
+  whole-call/CPU/peak-RSS improvement across representative cases, preserving
+  complete row decoding/error precedence before cap/grouping, all packed
+  bytes/tokens/generation/retrieval behavior, and no warming-policy change.
+
+- **SQLite invariant pattern bindings REJECTED to noise (br-mcm).** Parent
+  tested a per-row-loop alternative the source-only no-lever review omitted:
+  reuse file identity/empty-excerpt bindings with the same INSERT text/order,
+  first-row binding order and reset/execute implementation. Whole-index pairs
+  preserve every field/stat but do not justify the added raw-binding machinery;
+  original source restored byte-exact, prior keeps intact. Canonical numbers,
+  opposing ordinary order effects/depth regression and binary IDs:
+  `benchmarks/results/baselines.md`, `SQLite invariant-pattern-binding experiment`;
+  receipt `binding-rejection-verification.json`. Restored24 store/transaction
+  passes with1 existing timing quarantine, source/native hashes verified.
+  Source statement-count ratios are not CPU-share or impossibility proofs.
+  Retry only with a changed mechanism and same-host paired material whole-call
+  improvement preserving IDs, canonical rows, errors/empty inputs/transactions
+  and representative controls. No schema or engine redesign authorized.
+
+- **Pattern-walk local trivia gate RETAINED (br-mcm).** Retry predicate for
+  ancestor work satisfied by actual own-inferior stack presence: pinned TS
+  parent calls re-descend from root; the child kind-vs-format dismissal is
+  refuted. Check only the current kind in the root-started sub-cap walker;
+  over-cap declaration/truncation arm and general helper callers untouched.
+  Exact fields/stats/limits survive pristine-index pairs and depth controls;
+  ordinary-source gains are not solely generated-table effects. Canonical
+  numbers/identities, higher full-case RSS and cold/tail controls:
+  `benchmarks/results/baselines.md`, `Pattern-walk local trivia gate`;
+  `local-trivia-verification.json`. Disabled-prune fault initially survived two
+  goldens; existing generator template test expanded with the fault present now
+  fails, as does extra identifier pruning; restored349 named passes.
+  Retry a more general inherited-context/fused walk only when a measured caller
+  outside this root-started sub-cap component dominates, with proof of unchanged
+  depth-exempt declarations/trivia/refusal and exact real-source rows. Retry
+  memory tuning only when repeated bounded-resource measurements reproduce a
+  material peak-RSS increase and an explicit retention change preserves outputs.
+
+- **Initial-index parser point reuse RETAINED (br-mcm).** Reuse already-stored
+  TS0.26.10 whole-UTF8 tree rows rather than rebuilding newline-offset tables or
+  counting source prefixes for every row. One leaf file, no new caches/allocations
+  or parser/depth/stats policy. Pristine-DB native pairs retain all canonical
+  fields and improve full and ordinary-source initial indexing; tiny-language
+  case nearflat, cold BEGIN DEFERRED tail regression retained. Canonical numbers/
+  identities: `benchmarks/results/baselines.md`, `Initial-index parser point reuse`;
+  receipt `node-points-verification.json`. Existing15-language goldens detect
+  endline/caller-line faults; restored12 passes, full stored-row exactness.
+  Retry a newline-offset table only when a measured caller needs arbitrary byte
+  offsets unavailable from existing node coordinates and same-host whole-call
+  comparisons preserve all rows/errors while outperforming the retained path.
+  The proposed bulk trailing-body skip is not a lever for fresh-DB initial index
+  (no body metas); retry for refresh only with explicit unchanged bulk stats,
+  embedding/depth/force/root/parse-error parity and a measured refresh hotspot.
+  Ancestor-check cost dismissal in the child report is source speculation,
+  not sampled CPU evidence; retry that optimization only with measured dominant
+  ancestor work and a proof preserving the distinct depth-budget arm.
+
+- **Code Mode second admission walk BLIND/unadmitted (br-mcm).** Public single
+  versus8 identical-call batches preserve all real payloads but all three
+  positive-control IQRs overlap. Do not infer per-call/cache-hit/admission CPU
+  cost from noisy median subtraction, or remove a safety gate on that evidence.
+  Canonical measurements: `benchmarks/results/baselines.md`, `Code Mode
+  admission duplicate-walk experiment`; artifacts `admission-baseline.{json,jsonl}`.
+  Retry only when same-public-path timings resolve the positive single/repeat
+  control while preserving real limits, payloads and safety; no cache schema or
+  admission redesign authorized. CASS history exclusion remains OPEN5.
+
+- **Corpus single-component token preparation RETAINED with cheap-control
+  tradeoffs (br-mcm).** A lowercase ASCII/digit-only identifier has one
+  split_ident component identical to the full key; reuse existing postings
+  instead of allocating/splitting/inserting twice. No new cache or change to
+  warm trigram preparation. Whole-public-path pairs preserve frozen batches/
+  cold replies and improve preparation; cheap catalog control is slightly
+  slower and mixed-case CPU samples noisy. Exact fingerprints/numbers/tails are
+  canonical in `benchmarks/results/baselines.md`, `Corpus single-component token
+  preparation`. Receipt `single-token-verification.json`. Initial key mutant
+  survived residual-scan tests; direct posting assertion written with that fault
+  present now fails, as does overbroad shape admission; restored24 passes.
+  Retry a broader spelling shortcut only when every split component/posting
+  remains exact for casing/underscore combinations and representative paired
+  workloads beat this version without material default-caller regressions.
+  Retry short-control tuning only when fixed same-host alternating measurements
+  reproduce a material absolute regression with both order arms and unchanged
+  frozen outputs; do not discard the current small control/tail regressions.
+
+- **Validated-prefix discovery exclusion RETAINED with tail caveats (br-mcm).**
+  Current profile identifies cold lexical discovery as dominant. The all-admitted
+  exclusion proposal's error proof was false: a pass may stop inside the last
+  admitted file. Restrict exclusion to admitted keys strictly before the furthest
+  previously decoded path, retaining the frontier file. Native24-pair controls
+  preserve all17 replies and improve eight conceptual-query medians; exact
+  numbers, initial control tail regressions, one60-pair control confirmation,
+  CPU/RSS and source/binary IDs are canonical in `benchmarks/results/baselines.md`,
+  `Validated-prefix discovery exclusion`. Boundary fault suppresses a real late
+  UTF-8 refusal, and is detected; source/native artifact restored exactly.
+  Receipt: current performance artifact root `exclusion-verification.json`.
+  Retry all-admitted exclusion only if every excluded file's complete row
+  validation is independently established within the same snapshot, and the
+  32-file late-error fixture still fails as originally. Retry control tuning only
+  if a fixed same-host alternating run reproduces a material median regression
+  with exact frozen replies; do not hide the initial p95 countermetrics.
+
+
+- **Current-tree search/index/materialization history lookup OPEN (br-mcm).**
+  Owner authorized a renewed profile-driven optimization campaign, not a replay
+  of retained or rejected levers. The current cold-search/discovery failure-term
+  CASS query failed code 5; no manual rebuild is authorized or run. Reuse existing
+  measured negatives and hash-bound current baselines before candidate admission.
+  Retry historical exclusion only when the same repository-scoped 60-day
+  cold-search/discovery/map_line_row/literal_sql/failure-term query succeeds.
+
+
+- **Chain cursor work contract RETAINED, not a speed keep (br-mcm).**
+  Original cached SQL plus predecode cursor admission removes the motivating
+  medium-graph SQL-LIMIT regression without changing candidate graph/counter
+  payloads. Exact source/binary IDs and paired wall/CPU/p95/order/RSS/HWM/startup
+  controls are canonical in `benchmarks/results/baselines.md`, `Retained chain
+  work-budget cursor admission`. All19 complete workload/mode payloads match;
+  nine are explicitly partial. Exact work4 completes; a work8 mixed fixture
+  demonstrates outgoing-first starvation of incoming/import evidence. Raising
+  four saturated fixtures to100,000 recovers original payloads. Tiny ordinary
+  warm marginal p50 adds about0.008ms; paired median+6.4% has opposing order arms.
+  RSS is not uniformly lower; warm-up/seed work/SQL scan/sort remain uncapped.
+  Receipt: local Hermes scratch `chain_budget_20261005/verification.json`.
+  Retry default/order changes only with an owner-approved completeness/bias
+  policy and the same-driver complete-payload/budget sweeps. Retry a new fetch
+  shape only if24 alternating under-budget real-Rust controls remain exact and
+  remove the motivating regression without material representative regressions.
+
+- **First chain SQL-LIMIT work-cap implementation NOT ADMITTED (br-mcm).**
+  Frozen first-prototype paired measurements preserve complete replies but
+  materially regress medium under-budget graphs. Cheaper saturated cases omit evidence and
+  cannot compensate for those controls. Exact numbers, identities, order arms,
+  retained payloads and resource/coverage counters: `benchmarks/results/baselines.md`,
+  `First work-cap implementation: under-budget regression, not admitted`.
+  Preserve the failed binary and data while changing one fetch-admission mechanism.
+  Retry admission only when the same frozen under-budget replies stay exact in
+  24 same-host alternating observations and the medium/control regression is
+  removed; keep truncation/count semantics and pre-decoding materialization bounds.
+  SQL sorts/scans, initial seeding/warming and byte-sized RAM remain outside the
+  traversal unit budget. No new schema/index, priority tuning or cap inflation.
+
+- **Text INSTR rejected as a speed keep; byte INSTR correctness tradeoff OPEN
+  (br-mcm).** The native query profiler locates most short-literal wall cost in
+  the full ordered scan. Replacing NUL-truncating GLOB with text INSTR repairs
+  real cold/warm false negatives and false positives, but measured ordinary
+  short-query medians worsen. Byte-mode INSTR reduces those costs while one
+  short miss still exceeds the non-regression envelope. Canonical executable
+  identities, exact numbers, paired versus marginal medians, all tails and
+  raw evidence: `benchmarks/results/baselines.md`, `Binary-safe literal SQL`.
+  Current code is correctness-ready, not a certified speed keep; no schema,
+  index format or callback-registration expansion is implemented. Retry speed
+  admission only if 24 alternating same-host preserved-binary observations keep
+  every frozen ordinary reply equal and remove the short-query regression, or
+  the owner explicitly accepts that latency tradeoff. The owner-approved local
+  substring-function experiment was completed and rejected: it preserved all
+  replies but did not remove the miss regression. Feature, callback and its
+  function-only test are restored out of the tree; prior byte correctness
+  remains. Retry the callback only with a changed single mechanism preserving
+  the same frozen replies/NUL controls that removes the original miss cost in
+  24 same-host alternating observations and stays within 5% of byte INSTR on
+  the other short controls. Exact rows and evidence are in the canonical
+  `Registered memchr substring function` subsection, not an optimization win.
+  CASS's history lookup still fails with missing searchable metadata and an
+  archive above its automatic-repair budget; retry exclusion only after the
+  same 60-day repository query succeeds.
+
+- **Code Mode borrowed-window history lookup OPEN (br-mcm).** Candidate-specific
+  ledger and commit review found no prior rejection of disk line materialization.
+  CASS failed with unavailable searchable metadata; its automatic rebuild remains
+  outside this task. Allocation and complete-call experiments can proceed, but
+  historical exclusion is not certified. Retry the history lookup when CASS
+  successfully searches `read_disk_window` / `slice_indexed` / `file_lines` in this repository
+  across the required 60-day window. Raw measurement artifacts live under the
+  existing `ast-sgrep-deep-review-20261002` artifact directory.
+
+- **Borrowed disk-window materialization RETAINED with tiny-control caveat
+  (br-mcm).** The shared window selector now consumes borrowed numbered lines;
+  the disk path no longer allocates an owned string for every source line.
+  Complete-call latency and RSS gains on large files agree with allocator
+  profiles, while an unpinned tiny/front regression and smaller CPU-pinned
+  tiny-control increases are preserved, not hidden. Canonical fingerprints,
+  all countermetrics and exact evidence paths: `benchmarks/results/baselines.md`,
+  `Code Mode borrowed line-window experiment`. No universal speedup or CPU
+  flame attribution is claimed. Retry the tiny-path investigation only when
+  a fixed same-host alternating experiment reproduces a material regression
+  above the stated noise envelope while all frozen payloads stay equal.
+
+- **Pi no-control sanitizer regex shortcut REJECTED (br-mcm leaf follow-up).**
+  Frozen source/source complete-card pairs show read gains but representative
+  search/edit regressions; unchanged and restored controls are retained. Parent
+  reconciled all raw pair counts/arithmetic. The older nine-hash restoration
+  receipt is not the current parent tree; accepted later width fixes remain.
+  Canonical measurements and exact scope: `benchmarks/results/baselines.md`,
+  `Pi sanitizer regex fast-path rejection`. CASS history is blocked by missing
+  metadata and its own rebuild notice. Retry history only when the same search
+  succeeds after that rebuild. Reopen the candidate only with a changed single
+  mechanism preserving frozen outputs, at least 24 same-host complete-card pairs,
+  at least 10% default-read gain, and no median paired regression above 5% on
+  tiny/default/large search/edit or ANSI controls in either AB or BA order.
+
+- **Cold discovery borrowed rows RETAINED with control/tail caveats (br-mcm).**
+  Current hash-bound native stage spans and an independent allocator capture
+  established the ordered lexical scan as material; `literal_sql` now borrows
+  projected text and owns only admitted evidence. SQL universe, distinct-file
+  cap, Unicode verification, representative lines and error order are unchanged.
+  Canonical allocation/timing rows and all countermetrics:
+  `benchmarks/results/baselines.md`, `Cold discovery borrowed SQL rows`.
+  The word control and one conceptual p95 worsened; no universal speedup or
+  peak-memory reduction is claimed. Frozen decoding observations reject an
+  error-suppressing mutant; exact source/native restoration is verified.
+  Retry a control-path investigation only if a same-host, same-build alternating
+  experiment with at least 24 observations per arm reproduces a median regression
+  above 5% with exact frozen replies. CASS `map_line_row` lookup still fails on
+  missing lexical metadata/rebuild; retry historical exclusion only when that
+  repository-scoped 60-day query succeeds. The older distinct-file latency
+  receipt still does not describe today's Unicode-corrected full-row scan;
+  do not reopen sort removal without a current plan demonstrating sort cost.
+
+- **Bounded Pi width-scan history lookup OPEN (br-mcm).** Candidate-specific
+  source/ledger review found full-line width scans before prefix cropping in the
+  shared renderer. This is a different lever from sanitizer absence guards.
+  CASS's `displayWidth` search failed with unavailable lexical metadata and an
+  automatic rebuild notice; no successful 60-day exclusion is claimed. Retry
+  that lookup only when the same repository-scoped query succeeds over 60 days.
+
+- **Bounded Pi crop-width scan RETAINED with small-card caveat (br-mcm).**
+  One shared walker keeps full geometry measurement exact while stopping crop
+  admission after a strict overflow. Complete uncached card measurements support
+  large read/search/edit gains; the original tiny-read regression and all mixed
+  controls remain in the canonical `Pi bounded display-width scan` row in
+  `benchmarks/results/baselines.md`, beside one larger-batch confirmation.
+  No sanitizer selector, cached-render or whole-tool speed claim is made. A
+  `>=` early-stop mutant failed eight existing tests; byte restoration, targeted
+  emit and installed-host width checks passed. Retry the small-card path only
+  when a fixed representative alternating experiment reproduces a material
+  default-case regression with all frozen output vectors unchanged.
+
+- **Read-only session warming lookup OPEN (br-mcm).** The connected read-startup
+  profile retains full line-corpus allocations even after SQL range selection.
+  The proposed lever is to defer search-cache preparation until retrieval, not
+  disable the established warm trigram/ranking path. Prior warm/cold ledger and
+  commit closures require preserving that retrieval boundary. CASS's
+  `warm_search_path` query failed with missing lexical metadata and an automatic
+  rebuild notice; no successful history exclusion or manual rebuild is claimed.
+  Retry history lookup when that repository-scoped query succeeds over 60 days.
+
+- **Read-only search-cache deferral RETAINED with retrieval countermetrics
+  (br-mcm).** Named preparation phases preserve snapshot anchoring before a read
+  and the existing once-per-open retrieval warm policy. Real read callers and
+  independent allocator profiles show the avoided corpus materialization; first
+  retrieval and mixed-call regressions are retained, not relabeled as wins.
+  Canonical fingerprints, initial prototypes and fixed-CPU refinement are in
+  `benchmarks/results/baselines.md`, `Code Mode read-only warming deferral`.
+  A sticky-serve snapshot-anchor mutant failed and the exact source/native path
+  was restored. Retry retrieval-first tuning only when a fixed real-source
+  alternating experiment reproduces a material default-caller regression,
+  with original ranking, warm DF preparation and frozen replies unchanged.
+
+- **Indexed source-window range selection RETAINED with small-input caveat
+  (br-mcm).** One SQLite statement replaces full-file line materialization with
+  an inclusive range, preserving snapshot identity, global EOF cursor exclusion,
+  and indexed-empty versus unindexed fallback. Alternating real CLI, reused-session
+  batch and frozen product-source measurements support the targeted gain; tiny
+  controls and mixed fresh-process measurements are retained in the canonical
+  `Code Mode indexed SQL-range experiment` in `benchmarks/results/baselines.md`.
+  Unchanged eager corpus warming remains a connected cost, not a claimed win.
+  CASS's `file_lines` history query failed with missing lexical metadata and an
+  automatic rebuild notice; no manual rebuild or successful exclusion is claimed.
+  Retry small-input specialization only when a fixed real-source same-host
+  experiment reproduces a material default-caller regression while the frozen
+  outputs and snapshot contract stay equal.
+
+- **Distinct-file streaming map REJECTED 2026-10-02 (br-9ds follow-up).**
+  Replacing the full SQLite line sort with a bounded Rust path map preserved
+  exact search stdout but did not recover the cold-search cost. The experiment
+  was reverted, not added as another search path. Exact fingerprints and paired
+  measurements: `benchmarks/results/baselines.md`, `2026-10-02 executable footprint
+  follow-up`. Retry predicate (measurement): reopen only when a changed admission
+  mechanism preserves the frozen recovered results and beats the sorted candidate
+  in a same-index, same-CPU paired run without regressing symbol/literal controls.
+- **release-ship default switch DEFERRED 2026-10-02 (br-9ds follow-up).**
+  Existing thin-LTO/one-codegen-unit profile is smaller but measured slower in
+  the shared-worker block; the production runners remain on ordinary release.
+  Symbol stripping alone was separated and retained as a footprint-only change.
+  Exact countermetrics and fingerprints are in the same baseline section. Retry
+  predicate (measurement): select release-ship only after a same-source paired
+  comparison on the intended target holds retrieval output and shows no one-shot
+  latency regression against symbol-stripped ordinary release, with worker CPU
+  placement controlled. The unpinned miss is not proof of an intrinsic LTO cost.
+
 - **literal-expansion-skip REJECTED 2026-09-21 (skill-loop pass 1).**
   Skipping concept expansion for Literal intent saves ~3.2 ms wall on S1
   (10.0 to 6.8 ms, hyperfine n=10, noisy host, M5 Max) with byte-identical
@@ -138,6 +514,35 @@ reconstructed from verifiable repo evidence only (git log, `benchmarks/`).
   structural path while the fusion path is the outlier.
 
 ## Open (measure before claiming)
+
+- **Chain work-budget baseline/history OPEN (br-mcm).** Owner approved explicit
+  traversal budgets and exhaustion reporting, independently of output trimming.
+  This is a resource-safety/partial-result contract, not behavior-preserving
+  optimization; cap values and speed claims await ordinary, hub, duplicate and
+  depth measurements. CASS's 60-day lexical query for `chain traversal budget
+  fanout rows truncated work rejected reverted regressed slower within noise`
+  failed with maintenance-required code 5: missing searchable metadata and an
+  archive exceeding its automatic-repair budget. Its diagnostic mentioned a
+  detached rebuild PID, but that PID was absent on immediate process inspection;
+  no history rebuild or recovery was performed here. Retry historical exclusion
+  only when the same repository-scoped 60-day query succeeds. Perf task-clock
+  access on spark-1672 is blocked by perf_event_paranoid=4; no sysctl or privilege
+  change is authorized. Establish alternative native attribution and record
+  available wall/CPU/RSS evidence; do not claim a flame profile without one.
+
+- **Distinct-file admission candidate (2026-10-02, br-9ds): quality gain,
+  speed keep NOT met.** A line-capped cold prefilter hid an implementation
+  behind repeated lines in one noise file. Counting distinct files before the
+  cap fixes the regression and improves the unchanged frozen self gold, but
+  paired cold conceptual latency increases. Exact quality, timing, executable
+  and corpus fingerprints: `benchmarks/results/baselines.md`, section
+  `2026-10-02 distinct-file admission candidate`. The code is an uncommitted
+  correctness candidate, not an accepted performance win. Both initial bench
+  arms were quarantined for CV; those misses remain in the raw artifacts.
+  Retry/acceptance predicate (contract-change): retain the tradeoff only when
+  the owner explicitly accepts the measured cold-latency cost, or a same-index
+  paired candidate preserves the recovered recall without that regression.
+  Do not raise thresholds, reweight channels, or relabel timing to pass it.
 
 - **lazy_framework link flags: product decision for the owner, not a rejection (skill-loop pass 4).** `ld -lazy_framework CoreFoundation/CoreServices` would defer framework load (faster startup for non-watch paths) but ld warns it needs a newer minimum deployment target, i.e. dropping old macOS. Untried; no perf claim for or against. Re-open as work only after the owner sets the minimum macOS version; then measure with a same-block order-swapped A/B before claiming.
 

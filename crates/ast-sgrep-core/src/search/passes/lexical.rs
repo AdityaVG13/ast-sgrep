@@ -9,11 +9,11 @@ use rusqlite::params;
 use std::collections::HashMap;
 pub type LineMatches = HashMap<(String, u32), (Vec<usize>, Option<String>, String)>;
 
-/// Floor for the lexical candidate pool. User `options.limit` raises this when larger (s7jw.1).
+/// Floor for lexical candidates; the retained rerank pool raises it when larger.
 pub const LEXICAL_POOL_FLOOR: usize = 100;
 
 pub fn lexical_pool_limit(options: &SearchOptions) -> usize {
-    options.limit.max(LEXICAL_POOL_FLOOR)
+    options.retained_limit().max(LEXICAL_POOL_FLOOR)
 }
 
 pub fn lexical_pass(
@@ -25,16 +25,19 @@ pub fn lexical_pass(
         return Ok(Vec::new());
     }
     if options.use_tantivy {
-        let sidecar = crate::tantivy_index::TantivySidecar::open_for_index(
+        match crate::tantivy_index::TantivySidecar::open_existing_for_search(
             &options.root,
-            options.index_path.as_deref(),
-        )?;
-        if sidecar.exists() && sidecar.is_fresh(store.index_data_version()?)? {
-            let hits = lexical_from_sidecar(options, parsed, &sidecar)?;
-            // s7jw.2: never empty-succeed on auto/sidecar path when SQL FTS still has hits.
-            if !hits.is_empty() {
-                return Ok(hits);
+            Some(store.db_path()),
+        )? {
+            Some(sidecar) if sidecar.is_fresh(store.index_data_version()?)? => {
+                let hits = lexical_from_sidecar(options, parsed, &sidecar)?;
+                // An absent/not-ready sidecar is inert; a fresh empty page
+                // must still fall back when the primary FTS contains hits.
+                if !hits.is_empty() {
+                    return Ok(hits);
+                }
             }
+            _ => {}
         }
     }
     lexical_from_fts(store, options, parsed)
@@ -46,7 +49,9 @@ fn lexical_from_sidecar(
 ) -> Result<Vec<SearchHit>> {
     let mut matches = LineMatches::new();
     let limit = lexical_pool_limit(options);
-    for (file, line_no, content, language, rank) in sidecar.search(&parsed.terms, limit)? {
+    for (file, line_no, content, language, rank) in
+        sidecar.search(&parsed.terms, limit, options.lang_filter.as_deref())?
+    {
         accumulate(
             options,
             &mut matches,

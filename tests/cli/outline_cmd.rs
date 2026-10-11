@@ -94,6 +94,40 @@ fn outline_lists_indexed_symbols_json() {
     assert_eq!(symbols[0]["kind"], "function");
     assert_eq!(symbols[0]["line_start"], 1);
     assert_eq!(symbols[0]["line_end"], 3);
+    for alias in ["./src/a.rs", "src//a.rs", "src/./a.rs"] {
+        let (code, stdout, stderr) = run_outline(&session, &[alias, "--json"]);
+        assert_eq!(code, 0, "alias={alias}: {stderr}");
+        let aliased: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            aliased, value,
+            "path spelling must not change indexed outline identity"
+        );
+    }
+    let (code, stdout, _) = run_outline(&session, &["src/../src/a.rs", "--json"]);
+    assert_eq!(code, 2, "parent traversal must retain its existing refusal");
+    assert_eq!(serde_json::from_str::<Value>(&stdout).unwrap()["ok"], false);
+}
+
+#[test]
+fn outline_absolute_path_uses_the_default_cwd_root() {
+    let session = outline_session();
+    let absolute = session.root.canonicalize().unwrap().join("src/a.rs");
+    let output = Command::new(asgrep_bin())
+        .current_dir(&session.root)
+        .args([
+            "--index-path",
+            session.index_path.to_str().unwrap(),
+            "outline",
+            absolute.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let value = ast_sgrep_testkit::assert_success(&output, "outline");
+    assert_eq!(value["file"], "src/a.rs");
+    assert_eq!(value["count"], 2);
+    assert_eq!(value["symbols"][0]["name"], "one");
+    assert_eq!(value["symbols"][1]["name"], "two");
 }
 
 #[cfg(unix)]

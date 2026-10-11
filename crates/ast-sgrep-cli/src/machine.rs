@@ -1,5 +1,6 @@
 //! Machine JSON envelopes and pre-parse failure helpers.
 
+use clap::CommandFactory;
 use std::io::{self, Read, Write};
 
 pub(crate) const MACHINE_SCHEMA_VERSION: &str = "1.0.0";
@@ -111,50 +112,33 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
 pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
     args.iter().any(|a| {
         a == "--json"
+            || a == "-j"
             || a == "--robot-triage"
             || a == "--format"
             || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
-    }) || (args.iter().any(|a| a == "codemod") && args.iter().any(|a| a == "--dry-run"))
-        || args.iter().any(|a| {
-            // Always-machine commands (success path is JSON even without --json).
-            a == "capabilities" || a == "doctor" || a == "codemode-batch"
-        })
+    }) || (raw_command_name(args) == "codemod" && args.iter().any(|a| a == "--dry-run"))
+        || matches!(
+            raw_command_name(args).as_str(),
+            "capabilities" | "doctor" | "codemode-batch"
+        )
 }
 
-pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> &'static str {
-    const C: &[&str] = &[
-        "index",
-        "status",
-        "reindex",
-        "codemod",
-        "search",
-        "bench",
-        "watch",
-        "keyword",
-        "semantic",
-        "chain",
-        "call-path",
-        "capabilities",
-        "version",
-        "robot-docs",
-        "doctor",
-        "eval",
-        "codemode-batch",
-        "codemode-serve",
-        "install",
-    ];
-    args.iter()
-        .filter_map(|a| a.to_str())
-        .find_map(|a| C.iter().copied().find(|c| a == *c))
-        .unwrap_or("search")
+pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> String {
+    crate::Cli::command()
+        // Recover only command provenance; the strict parse still owns refusal.
+        .ignore_errors(true)
+        .try_get_matches_from(args.iter().cloned())
+        .ok()
+        .and_then(|matches| matches.subcommand_name().map(str::to_owned))
+        .unwrap_or_else(|| "search".to_owned())
 }
 
 /// Max bytes for `codemode-batch` request payloads (file or stdin).
 /// 4× `MAX_STDIN_LINE_BYTES` keeps batch JSON roomy without unbounded alloc.
 pub(crate) const MAX_BATCH_REQUEST_BYTES: u64 = (ast_sgrep_core::MAX_STDIN_LINE_BYTES as u64) * 4;
 
-/// Read UTF-8 from `reader`, never allocating more than `max_bytes + 1`.
-/// Rejects payloads larger than `max_bytes` (stdin must not OOM).
+/// Read UTF-8 from `reader`, retaining at most `max_bytes + 1` input bytes.
+/// Rejects payloads larger than `max_bytes`; this is not a peak-memory bound.
 pub(crate) fn read_utf8_capped(mut reader: impl io::Read, max_bytes: u64) -> io::Result<String> {
     let mut buf = String::new();
     reader

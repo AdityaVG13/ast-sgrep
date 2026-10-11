@@ -2,6 +2,30 @@ use ast_sgrep_core::store::line_corpus::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+fn discovery<'a>(
+    corpus: &'a LineCorpus,
+    needle: &str,
+    cap: usize,
+    already: &HashSet<String>,
+) -> Vec<LineHit<'a>> {
+    let lower = needle.to_lowercase();
+    corpus.scan_distinct_files(
+        needle,
+        cap,
+        already,
+        None,
+        |_, _| true,
+        |content| {
+            ast_sgrep_core::search::passes::literal::content_matches_literal(
+                content,
+                needle,
+                Some(&lower),
+                false,
+            )
+        },
+    )
+}
+
 fn pack(lines: &[(&str, Option<&str>, u32, &str)]) -> Arc<LineCorpus> {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -37,12 +61,33 @@ fn pack(lines: &[(&str, Option<&str>, u32, &str)]) -> Arc<LineCorpus> {
 
 #[test]
 fn ident_token_map_finds_camel_case_pieces() {
+    // Assert the posting contract directly: residual full-file scanning can
+    // conceal lost token seeds in a small corpus.
+    let mut postings = std::collections::HashMap::new();
+    for (fi, text) in [
+        (0, "snapshot snapshot 12345 snapshotstamp SnapshotStamp"),
+        (0, "snapshot 12345 snake_case"),
+        (1, "snapshot 12345 SnapshotStamp snake_case"),
+    ] {
+        push_ascii_tokens(&mut postings, text, fi);
+    }
+    for key in [
+        "snapshot",
+        "12345",
+        "snapshotstamp",
+        "stamp",
+        "snake",
+        "case",
+        "snake_case",
+    ] {
+        assert_eq!(postings.get(key), Some(&vec![0, 1]), "posting for {key}");
+    }
     let corpus = pack(&[
         ("types.rs", Some("rust"), 10, "pub struct SnapshotStamp {"),
         ("other.rs", Some("rust"), 1, "fn unrelated() {}"),
     ]);
     let already = HashSet::new();
-    let hits = corpus.scan_distinct_files_cs("snapshot", 8, &already);
+    let hits = discovery(&corpus, "snapshot", 8, &already);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "types.rs");
     assert_eq!(hits[0].line_no, 10);
@@ -60,7 +105,7 @@ fn ident_token_map_prefers_code_over_markdown() {
         ),
     ]);
     let already = HashSet::new();
-    let hits = corpus.scan_distinct_files_cs("snapshot", 1, &already);
+    let hits = discovery(&corpus, "snapshot", 1, &already);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "search/types.rs");
 }
@@ -77,7 +122,7 @@ fn filename_backslashes_do_not_turn_source_files_into_test_directories() {
         ),
         ("z.rs", Some("rust"), 1, "pub struct SnapshotStamp;"),
     ]);
-    let hits = corpus.scan_distinct_files_cs("snapshot", 1, &HashSet::new());
+    let hits = discovery(&corpus, "snapshot", 1, &HashSet::new());
     assert_eq!(hits[0].path, r"a\tests\source.rs");
 }
 
@@ -99,9 +144,34 @@ fn packed_scan_is_path_sorted_and_respects_cap() {
 
 #[test]
 fn packed_scan_does_not_cross_newlines() {
-    let corpus = pack(&[("a.rs", None, 1, "Search"), ("a.rs", None, 2, "Hit")]);
-    let hits = corpus.scan_cs("SearchHit", false, None, 8, |_, _| true, |_, _, _| true);
-    assert!(hits.is_empty());
+    let corpus = pack(&[
+        ("a.rs", None, 1, "Search"),
+        ("a.rs", None, 2, "Hit"),
+        ("b.rs", None, 1, "tail"),
+        ("c.rs", None, 1, "head"),
+        ("d.rs", None, 1, "embedded\nmarker"),
+    ]);
+    for needle in ["SearchHit", "Search\nHit", "Search\n", "tail\nhead"] {
+        assert!(
+            corpus
+                .scan_cs(needle, false, None, 8, |_, _| true, |_, _, _| true)
+                .is_empty(),
+            "literal scan must not stitch records for {needle:?}"
+        );
+        assert!(
+            discovery(&corpus, needle, 8, &HashSet::new()).is_empty(),
+            "file discovery must not stitch records for {needle:?}"
+        );
+    }
+    // A newline inside one stored record is data, unlike the packing separator.
+    let needle = "embedded\nmarker";
+    let literal = corpus.scan_cs(needle, false, None, 8, |_, _| true, |_, _, _| true);
+    let discovery = discovery(&corpus, needle, 8, &HashSet::new());
+    for hits in [literal, discovery] {
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0].path, hits[0].line_no), ("d.rs", 1));
+        assert_eq!(hits[0].content, needle);
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@ import { registerAstSgrepTools } from "../../../packages/pi/extension/src/index.
 import { hostProvidesFileTools } from "../../../packages/pi/extension/src/host/tools.js";
 import { writesOffSession } from "../../../packages/pi/extension/src/host/tools.js";
 import { argvFor, NativeSessionPool } from "../../../packages/pi/extension/src/codemode/index.js";
-import { errorDetails } from "../../../packages/pi/extension/src/host/results.js";
+import { errorDetails, failure } from "../../../packages/pi/extension/src/host/results.js";
 import { RESOLVED_ROOT } from "../../../packages/pi/extension/src/runtime/types.js";
 import { RuntimeError, type MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
 
@@ -564,6 +564,43 @@ test("tool rows are one self-shelled card with no separate call line", () => {
  * (NAPI carries `err.to_string()`, so only text survives), the CLI sticky
  * worker, the runtime envelope parser, and aborts.
  */
+test("invalid scopes are actionable input errors on native and CLI transports", () => {
+  const messages = [
+    "in: scope '/other/repo' is absolute; scopes are relative to the index root",
+    "in: scope '../repo' escapes the index root: '..' segments are not allowed",
+    "in: token has no path; scope queries look like `in:src`",
+    "multiple in: scopes (first: 'src'); keep exactly one",
+  ];
+  for (const message of messages) {
+    for (const cause of [
+      new Error(message),
+      new RuntimeError("OPERATIONAL_ERROR", message, { exitCode: 2 }),
+      new RuntimeError("OPERATIONAL_ERROR", `search failed: ${message}`, { exitCode: 2 }),
+    ]) {
+      const error = errorDetails(cause);
+      assert.equal(error.code, "INVALID_ARGUMENTS", cause.message);
+      assert.equal(error.message, cause.message);
+      assert.match(String(error.details.hint), /project-relative/);
+      assert.match(String(error.details.hint), /positional root/);
+      if (cause instanceof RuntimeError) assert.equal(error.details.exitCode, 2);
+    }
+  }
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(errorDetails(new Error(messages[0]), controller.signal).code, "CANCELLED");
+  assert.equal(errorDetails(new RuntimeError("PATH_OUTSIDE_ROOT", messages[0])).code, "PATH_OUTSIDE_ROOT");
+  assert.equal(errorDetails(new Error("in: scope handling crashed unexpectedly")).code, "UNEXPECTED_ERROR");
+});
+
+test("failure recovery hints survive model-visible output limits", () => {
+  const hint = "Use a project-relative scope; the CLI positional root selects a different repository.";
+  const result = failure("search", new RuntimeError("INVALID_ARGUMENTS", "x".repeat(10_000), { hint }));
+  assert.ok(result.content[0].text.includes(hint));
+  assert.ok(result.content[0].text.includes("search failed [INVALID_ARGUMENTS]"));
+  assert.ok(result.content[0].text.length <= 8_000);
+  assert.match(failure("search", new Error("database disk image is malformed")).content[0].text, /\/asgrep-reindex/);
+});
+
 test("classifies every failure family the layers can raise", () => {
   const abort = (message: string) => Object.assign(new Error(message), { name: "AbortError" });
   const cases: Array<[string, unknown, string]> = [

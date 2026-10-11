@@ -171,8 +171,25 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
             if name.starts_with('$') {
                 return Some(kinds.iter().map(|kind| format!("kind:{kind}")).collect());
             }
-            if is_pattern_ident(name) {
-                return Some(vec![format!("decl:{}:{name}", prefix.trim())]);
+            // Name-only rows cannot enforce parameters, return types or bodies.
+            // Do not emit decl keys for these shapes: the depth-truncated
+            // cache lane trusts decl keys without an additional exactness gate.
+            if is_pattern_ident(name) && rest[name.len()..].trim().is_empty() {
+                // Stored prefixes follow AST kinds, not source keywords.
+                // Keep the persisted keys unchanged and address both families
+                // for the shared def/function shorthand (Ruby/PHP respectively).
+                let prefixes: &[&str] = match prefix.trim() {
+                    "def" => &["def", "function"],
+                    "function" => &["function", "def"],
+                    "func" => &["function"],
+                    other => return Some(vec![format!("decl:{other}:{name}")]),
+                };
+                return Some(
+                    prefixes
+                        .iter()
+                        .map(|prefix| format!("decl:{prefix}:{name}"))
+                        .collect(),
+                );
             }
             return None;
         }
@@ -350,6 +367,8 @@ fn longest_concrete_token(pattern: &str) -> Option<String> {
                 i += 1;
             }
             b'/' if bytes.get(i + 1) == Some(&b'/') || bytes.get(i + 1) == Some(&b'*') => {
+                // Comments separate tokens; deleting them must not invent one.
+                code.push(' ');
                 let line_comment = bytes.get(i + 1) == Some(&b'/');
                 i += 2;
                 while i < bytes.len() {

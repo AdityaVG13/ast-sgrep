@@ -227,10 +227,19 @@ fn is_windows_drive(s: &str) -> bool {
 
 pub fn file_uri_to_path(uri: &str) -> anyhow::Result<PathBuf> {
     let rest = uri
-        .strip_prefix("file://")
-        .or_else(|| uri.strip_prefix("file:"))
+        .strip_prefix("file:")
         .ok_or_else(|| anyhow::anyhow!("not a file URI: {uri}"))?;
-    let rest = rest.strip_prefix("//").unwrap_or(rest);
+    let rest = if let Some(with_authority) = rest.strip_prefix("//") {
+        let (authority, path) =
+            with_authority.split_at(with_authority.find('/').unwrap_or(with_authority.len()));
+        anyhow::ensure!(
+            authority.is_empty() || authority.eq_ignore_ascii_case("localhost"),
+            "unsupported file URI authority: {authority}"
+        );
+        path
+    } else {
+        rest
+    };
     let decoded = pct_dec(rest)?;
     let path = if rest.starts_with('/') && is_windows_drive(&decoded) {
         decoded.trim_start_matches('/').to_string()

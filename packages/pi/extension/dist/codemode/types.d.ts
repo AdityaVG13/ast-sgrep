@@ -35,6 +35,8 @@ export type EditArgs = {
 export type ChainArgs = {
     query: string;
     limit?: number;
+    /** Post-seeding traversal attempt budget, independent of output limit. */
+    max_work?: number;
     excerptLines?: number;
 };
 /** Host methods the program may invoke. Primary lookup methods first. */

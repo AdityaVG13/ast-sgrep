@@ -71,13 +71,14 @@ pub(crate) fn body_structure_hash(content: &str, language: Option<Language>) -> 
     h.finalize().to_hex().to_string()
 }
 
-/// Table-driven trailing trivia: hash-style vs C-family line/block comment prefixes.
+/// Strip only whole-line comments. Block comment prefixes and continuation
+/// stars can have executable suffixes, so they must participate in the hash.
 fn is_trailing_trivia_line(line: &str, language: Option<Language>) -> bool {
     if line.is_empty() {
         return true;
     }
     const HASH_PREFIXES: &[&str] = &["#"];
-    const C_FAMILY_PREFIXES: &[&str] = &["//", "/*", "*"];
+    const C_FAMILY_PREFIXES: &[&str] = &["//"];
     let prefixes: &[&str] = match language {
         Some(Language::Python | Language::Ruby) => HASH_PREFIXES,
         Some(

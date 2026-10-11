@@ -1,7 +1,7 @@
 //! Search / keyword / semantic / chain command helpers.
 
 use crate::machine::{print_machine_json, print_machine_json_with_style, write_stdout_line};
-use crate::{ensure_existing_root, open_indexed_store, open_searcher, usage_error, Cli};
+use crate::{open_indexed_store, open_searcher, usage_error, Cli};
 use anyhow::Context;
 use ast_sgrep_core::{
     call_path::{find_call_path, CallPathConfig},
@@ -10,12 +10,17 @@ use ast_sgrep_core::{
 };
 use std::path::Path;
 
-pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
-    let root = ensure_existing_root(root, cli)?;
-    let store = open_indexed_store(&root, cli)?;
+pub(crate) fn run_chain(
+    root: &Path,
+    cli: &Cli,
+    query: &str,
+    max_work: usize,
+) -> anyhow::Result<()> {
+    let store = open_indexed_store(root, cli)?;
     let config = ChainConfig {
         limit: ast_sgrep_core::clamp_output_limit(cli.limit, ChainConfig::default().limit),
         top_n: 1,
+        max_work,
         ..ChainConfig::default()
     };
     let r = expand_chain(&store, query, &config).context("chain search failed")?;
@@ -23,10 +28,21 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
         return print_machine_json("chain", &r);
     }
     // Human output: agents often pipe through head; never panic on broken pipe.
+    let suffix = if r.truncated {
+        "; traversal incomplete; node_count is a lower bound"
+    } else {
+        ""
+    };
     write_stdout_line(&format!(
-        "chain {:?}: {} nodes, {} edges (max depth {})",
-        r.query, r.node_count, r.edge_count, r.max_depth
+        "chain {:?}: {} nodes, {} edges (max depth {}){}",
+        r.query, r.node_count, r.edge_count, r.max_depth, suffix
     ))?;
+    if let Some(work) = &r.work {
+        write_stdout_line(&format!(
+            "  omitted exploration: {:?}; work {}/{}",
+            r.truncation_reasons, work.used, work.limit
+        ))?;
+    }
     write_stdout_line("nodes:")?;
     for n in &r.nodes {
         let sym = n.symbol.as_deref().unwrap_or("<file>");
@@ -48,8 +64,7 @@ pub(crate) fn run_chain(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<(
 }
 
 pub(crate) fn run_call_path(args: &crate::cli_args::CallPathArgs, cli: &Cli) -> anyhow::Result<()> {
-    let root = ensure_existing_root(&args.root, cli)?;
-    let store = open_indexed_store(&root, cli)?;
+    let store = open_indexed_store(&args.root, cli)?;
     let response = find_call_path(
         &store,
         &args.source,
@@ -99,28 +114,12 @@ pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow:
     let response = open_searcher(root, cli)?
         .search_lexical(query)
         .context("keyword search failed")?;
-    if !cli.search_machine_output() {
-        if cli.active_tuning().files_with_matches {
-            for path in files_from_hits(&response) {
-                write_stdout_line(&path)?;
-            }
-            return Ok(());
-        }
-        for hit in &response.hits {
-            write_stdout_line(&format_hit_line(hit))?;
-        }
-        return Ok(());
-    }
-    let format = resolve_output_format(
-        cli.active_tuning().format.as_deref(),
+    print_search_response(
+        "keyword",
+        &response,
         ast_sgrep_plugins::OutputFormat::Native,
-    )?;
-    print_search_response("keyword", &response, format, cli)
-}
-
-/// Whether this invocation runs the semantic channel (flag or global tuning).
-fn uses_semantic_channel(cli: &Cli, semantic: bool) -> bool {
-    semantic || cli.active_tuning().semantic_only
+        cli,
+    )
 }
 
 /// The boolean-listing result set — matching paths, sorted and deduped (a
@@ -155,28 +154,23 @@ pub(crate) fn run_search(
     query: &str,
     semantic: bool,
 ) -> anyhow::Result<()> {
-    let semantic_ch = uses_semantic_channel(cli, semantic);
+    // Use the same resolved channel for execution, diagnostics, and output.
+    let semantic_ch = semantic || cli.active_tuning().semantic_only;
     let ctx = if semantic_ch {
         "semantic search failed"
     } else {
         "search failed"
     };
-    let response =
-        do_search_with_cli(&open_searcher(root, cli)?, query, semantic, cli).context(ctx)?;
-    if !cli.search_machine_output() {
-        return print_human_hits(&response, cli.active_tuning().files_with_matches);
-    }
-    let tuning = cli.active_tuning();
+    let response = do_search(&open_searcher(root, cli)?, query, semantic_ch).context(ctx)?;
     let default = if semantic_ch {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
         ast_sgrep_plugins::OutputFormat::Native
     };
-    let format = resolve_output_format(tuning.format.as_deref(), default)?;
     print_search_response(
         if semantic_ch { "semantic" } else { "search" },
         &response,
-        format,
+        default,
         cli,
     )
 }
@@ -198,23 +192,25 @@ pub(crate) fn run_multi_pattern_search(
     let response = searcher
         .search_multi_pattern(patterns)
         .context("multi-pattern search failed")?;
-    if !cli.search_machine_output() {
-        return print_human_hits(&response, cli.active_tuning().files_with_matches);
-    }
-    let format = resolve_output_format(
-        cli.active_tuning().format.as_deref(),
+    print_search_response(
+        "search",
+        &response,
         ast_sgrep_plugins::OutputFormat::Native,
-    )?;
-    print_search_response("search", &response, format, cli)
+        cli,
+    )
 }
 
 fn print_search_response(
     command: &str,
     response: &ast_sgrep_core::SearchResponse,
-    format: ast_sgrep_plugins::OutputFormat,
+    default_format: ast_sgrep_plugins::OutputFormat,
     cli: &Cli,
 ) -> anyhow::Result<()> {
+    if !cli.search_machine_output() {
+        return print_human_hits(response, cli.active_tuning().files_with_matches);
+    }
     let tuning = cli.active_tuning();
+    let format = resolve_output_format(tuning.format.as_deref(), default_format)?;
     let preview = tuning.preview.unwrap_or_default();
     let mut value = render_search_json(command, response, format, preview, cli);
     // Machine envelopes carry the same sorted/deduped path set as a
@@ -262,12 +258,13 @@ fn render_search_json(
         return to_compact_miss_json(&response.query, &miss_context(command, cli));
     }
 
-    // Explicit token budget wins over preview defaults for compact output.
+    // Explicit token budget wins over preview size defaults, not explicit none.
     if format == OutputFormat::Compact {
         if let Some(max_tokens) = tuning.budget_tokens {
             let detail = match preview {
+                PreviewMode::None => DetailLevel::Metadata,
                 PreviewMode::Full => DetailLevel::Full,
-                _ => DetailLevel::Block,
+                PreviewMode::Short => DetailLevel::Block,
             };
             return to_budgeted_compact_json(
                 response,
@@ -390,14 +387,4 @@ pub(crate) fn do_search(s: &Searcher, q: &str, semantic: bool) -> anyhow::Result
     } else {
         Ok(s.search(q)?)
     }
-}
-
-pub(crate) fn do_search_with_cli(
-    s: &Searcher,
-    q: &str,
-    semantic: bool,
-    cli: &Cli,
-) -> anyhow::Result<SearchResponse> {
-    // `--semantic-only` / ASGREP_SEMANTIC_ONLY forces the semantic channel (ziij).
-    do_search(s, q, semantic || cli.active_tuning().semantic_only)
 }

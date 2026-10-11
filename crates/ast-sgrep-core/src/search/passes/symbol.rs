@@ -3,7 +3,6 @@ use crate::rank::{
     best_symbol_score_normalized, normalize_query_terms, score_caller_normalized, score_def,
     SCORE_ANCHOR, SCORE_GRAPH,
 };
-use crate::search::passes::bmh::retained_limit;
 use crate::search::types::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map};
@@ -16,7 +15,7 @@ const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
 
 fn mode_sql_limit(options: &SearchOptions) -> usize {
-    MODE_SQL_LIMIT.max(options.limit)
+    MODE_SQL_LIMIT.max(options.retained_limit())
 }
 const TYPE_SYMBOL_WEIGHT: f64 = 0.65;
 const SYMBOL_KIND_ORDER: &str =
@@ -115,6 +114,10 @@ pub fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp:
         .then_with(|| left.2.cmp(&right.2))
 }
 
+fn minority_slot_limit(limit: usize) -> usize {
+    ((limit / 2).max(4)).min(limit)
+}
+
 /// Quota buckets shared by the warmed table and the cold SQL lane: input
 /// must already be in [`cmp_symbol_rows`] order; output is functions first,
 /// then reserved type/other slots. Without the reservation, functions crowd
@@ -124,7 +127,7 @@ pub fn cmp_symbol_rows(left: &SymbolSpanRow, right: &SymbolSpanRow) -> std::cmp:
 pub fn quota_partition<T>(items: Vec<T>, group_of: impl Fn(&T) -> u8, limit: usize) -> Vec<T> {
     // Functions otherwise spend the whole budget before enums/structs
     // (`Durability`, `SnapshotStamp`) that conceptual gold names.
-    let other_keep = ((limit / 2).max(4)).min(limit);
+    let other_keep = minority_slot_limit(limit);
     let mut fns = Vec::new();
     let mut types = Vec::new();
     let mut others = Vec::new();
@@ -212,48 +215,9 @@ fn query_caller_rows(
     let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
     query_limit_map(store.connection(), &sql, bind, limit, map_caller_row)
 }
+/// Convert caller and graph evidence, optionally attaching excerpts and
+/// classifying resolution when a store is supplied for candidate counts.
 fn caller_rows_to_hits(
-    store: &IndexStore,
-    rows: Vec<CallerQueryRow>,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    mode: CallerMatchMode,
-) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_opts(store, rows, options, parsed, mode, None, true)
-}
-fn caller_rows_to_hits_opts(
-    store: &IndexStore,
-    rows: Vec<CallerQueryRow>,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    mode: CallerMatchMode,
-    store_for_resolution: Option<&IndexStore>,
-    attach_excerpts: bool,
-) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_resolved_opts(
-        store,
-        rows,
-        options,
-        parsed,
-        mode,
-        store_for_resolution,
-        attach_excerpts,
-    )
-}
-
-/// dvc4: same as above, but classifies how each name match resolved when a
-/// store is available to count candidates.
-fn caller_rows_to_hits_resolved(
-    excerpt_store: &IndexStore,
-    rows: Vec<CallerQueryRow>,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    mode: CallerMatchMode,
-    store: Option<&IndexStore>,
-) -> Result<Vec<SearchHit>> {
-    caller_rows_to_hits_resolved_opts(excerpt_store, rows, options, parsed, mode, store, true)
-}
-fn caller_rows_to_hits_resolved_opts(
     excerpt_store: &IndexStore,
     rows: Vec<CallerQueryRow>,
     options: &SearchOptions,
@@ -329,7 +293,7 @@ fn caller_rows_to_hits_resolved_opts(
 fn retain_scored_hits(hits: &mut Vec<SearchHit>, options: &SearchOptions) {
     // Keep a scoring pool above `options.limit`. TYPE_SYMBOL_WEIGHT (0.65)
     // otherwise truncates concept types (`SnapshotStamp`) before the critic.
-    let limit = retained_limit(options).max(32);
+    let limit = options.retained_limit().max(32);
     hits.sort_unstable_by(|left, right| {
         right
             .score
@@ -349,8 +313,6 @@ pub(crate) fn attach_indexed_excerpts_if_empty(
         if !hit.excerpt.is_empty() {
             continue;
         }
-        let before = hit.line_start.saturating_sub(u32::try_from(0).unwrap_or(0));
-        let _ = before;
         hit.excerpt = store.indexed_excerpt_in_range(&hit.file, hit.line_start, hit.line_end)?;
     }
     Ok(())
@@ -415,6 +377,33 @@ fn query_symbol_spans(
     );
     query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)
 }
+/// Admit minorities before functions in one SQLite snapshot, rather than
+/// cutting a function-first global window before the quota can see them.
+fn query_quota_symbol_spans(
+    store: &IndexStore,
+    where_clause: &str,
+    mut bind: Vec<String>,
+    limit: usize,
+) -> Result<Vec<SymbolSpanRow>> {
+    let other_keep = minority_slot_limit(limit);
+    // Each generated filter contains only anonymous placeholders. Repeat its
+    // bound values for the two arms; the final numbered parameter is the
+    // shared row budget. Only the typed, bounded quota is interpolated.
+    let budget_param = bind.len() * 2 + 1;
+    bind.extend_from_within(..);
+    let sql = format!(
+        "WITH minority AS MATERIALIZED (
+             {SYMBOL_SELECT}{where_clause} AND s.kind NOT IN ('function','method')
+             {SYMBOL_PATH_ORDER} LIMIT {other_keep}
+         ), functions AS (
+             {SYMBOL_SELECT}{where_clause} AND s.kind IN ('function','method')
+             {SYMBOL_PATH_ORDER} LIMIT (?{budget_param} - (SELECT count(*) FROM minority))
+         )
+         SELECT * FROM functions UNION ALL SELECT * FROM minority"
+    );
+    query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)
+}
+
 fn kind_weight(kind: &str) -> f64 {
     match kind {
         "function" | "method" => 1.0,
@@ -540,24 +529,17 @@ pub(crate) fn symbol_pass_for_files_warmed(
     // File-restricted hybrid does not need the 500-row exhaustive window;
     // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
     // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
-    let sql_limit = retained_limit(options).clamp(32, SYMBOL_SQL_LIMIT);
+    let sql_limit = options.retained_limit().clamp(32, SYMBOL_SQL_LIMIT);
     let rows = if let Some(table) = warmed {
         table.matches_for_files(options, &parsed.terms, allowed_files, sql_limit)
     } else {
         let (mut where_clause, mut bind) =
             like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
         restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-        // Same selection contract as the warmed table: a path-ordered wide
-        // window (not a rowid-ordered head-cut) through the shared quotas.
-        // Under-cap windows cover every match, so cold and warmed agree
-        // exactly; over-cap windows stay deterministic and quota-balanced.
-        let mut rows = query_symbol_spans(
-            store,
-            &where_clause,
-            bind,
-            SYMBOL_PATH_ORDER,
-            SYMBOL_SQL_LIMIT,
-        )?;
+        // Quotas must precede admission: even a 500-row function-first
+        // window can hide every minority kind. Fetch a bounded quota page in
+        // one statement, then preserve the shared canonical selection policy.
+        let mut rows = query_quota_symbol_spans(store, &where_clause, bind, sql_limit)?;
         rows.sort_by(cmp_symbol_rows);
         quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
     };
@@ -571,7 +553,7 @@ pub(crate) fn symbol_pass_for_files_warmed(
         false,
     )?;
     if include_callers {
-        hits.extend(caller_rows_to_hits_opts(
+        hits.extend(caller_rows_to_hits(
             store,
             query_caller_rows(
                 store,
@@ -597,7 +579,25 @@ pub fn anchor_pass_for_files(
     parsed: &ParsedQuery,
     allowed_files: &HashSet<String>,
 ) -> Result<Vec<SearchHit>> {
-    if allowed_files.is_empty() {
+    anchor_pass_impl(store, options, parsed, Some(allowed_files), false)
+}
+
+pub fn anchor_pass(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+) -> Result<Vec<SearchHit>> {
+    anchor_pass_impl(store, options, parsed, None, true)
+}
+
+fn anchor_pass_impl(
+    store: &IndexStore,
+    options: &SearchOptions,
+    parsed: &ParsedQuery,
+    allowed_files: Option<&HashSet<String>>,
+    attach_excerpts: bool,
+) -> Result<Vec<SearchHit>> {
+    if allowed_files.is_some_and(HashSet::is_empty) {
         return Ok(Vec::new());
     }
     let anchor_symbol = match parsed.primary_symbol() {
@@ -615,7 +615,7 @@ pub fn anchor_pass_for_files(
     let terms = vec![anchor_symbol];
     let (mut where_clause, mut bind) =
         like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
-    restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+    restrict_to_files(&mut where_clause, &mut bind, allowed_files);
     let rows = query_symbol_spans(
         store,
         &where_clause,
@@ -642,49 +642,8 @@ pub fn anchor_pass_for_files(
                 SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
             }
         },
-        false,
+        attach_excerpts,
     )
-}
-
-pub fn anchor_pass(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Vec<SearchHit>> {
-    let anchor_symbol = match parsed.primary_symbol() {
-        Some(s) => s.to_string(),
-        None => parsed
-            .terms
-            .iter()
-            .find(|t| t.len() > 3)
-            .cloned()
-            .unwrap_or_default(),
-    };
-    if anchor_symbol.is_empty() {
-        return Ok(vec![]);
-    }
-    let terms = vec![anchor_symbol];
-    let (where_clause, bind) = like_terms_filter("s.name", &terms, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(
-        store,
-        &where_clause,
-        bind,
-        SYMBOL_KIND_ORDER,
-        SYMBOL_SQL_LIMIT,
-    )?;
-    let term_count = parsed.terms.len();
-    symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Anchor, |name| {
-        let matched = parsed
-            .terms
-            .iter()
-            .filter(|t| crate::rank::score_symbol(t, name) > 0.0)
-            .count();
-        if matched == 0 {
-            0.0
-        } else {
-            SCORE_ANCHOR * (matched as f64 / term_count as f64).sqrt()
-        }
-    })
 }
 pub(crate) fn def_hits_for_terms(
     store: &IndexStore,
@@ -731,6 +690,8 @@ pub(crate) fn caller_hits_for_terms(
         options,
         parsed,
         CallerMatchMode::Hybrid,
+        None,
+        true,
     )
 }
 fn prefixed_mode_query(parsed: &ParsedQuery) -> Option<ParsedQuery> {
@@ -762,13 +723,14 @@ pub fn search_callers(
         mode_sql_limit(options),
         map_caller_row,
     )?;
-    caller_rows_to_hits_resolved(
+    caller_rows_to_hits(
         store,
         rows,
         options,
         &q,
         CallerMatchMode::CalleeOnly,
         Some(store),
+        true,
     )
 }
 pub fn search_defs(

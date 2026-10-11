@@ -67,7 +67,8 @@ struct GoldGraphEdge {
     line: Option<u32>,
 }
 fn load_gold(path: &Path) -> anyhow::Result<GoldFixture> {
-    let text = std::fs::read_to_string(path)
+    // Regular-file admission without imposing a new gold-fixture size limit.
+    let text = ast_sgrep_core::io_bounds::read_text_capped(path, u64::MAX)
         .with_context(|| format!("failed to read gold fixture {}", path.display()))?;
     let fixture: GoldFixture = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse gold fixture {}", path.display()))?;
@@ -80,7 +81,7 @@ fn load_gold(path: &Path) -> anyhow::Result<GoldFixture> {
     Ok(fixture)
 }
 fn gold_hit_matches(rel: &GoldRelevant, hit: &SearchHit) -> bool {
-    hit.file.ends_with(&rel.file)
+    Path::new(&hit.file).ends_with(Path::new(&rel.file))
         && rel
             .symbol
             .as_ref()
@@ -91,22 +92,50 @@ struct Scan {
     found: usize,
     dcg: f64,
 }
+// Augment a one-to-one assignment without dropping any earlier-ranked hit.
+// A successful path adds one item to the maximum matching for this rank prefix;
+// therefore gold order cannot change counts or the ranks receiving DCG credit.
+fn assign_gold(
+    relevant: &[GoldRelevant],
+    hits: &[SearchHit],
+    hit_index: usize,
+    assignment: &mut [Option<usize>],
+) -> bool {
+    let mut predecessors = vec![None; relevant.len()];
+    let mut pending = vec![(hit_index, None)];
+    while let Some((candidate, previous_gold)) = pending.pop() {
+        for (ri, rel) in relevant.iter().enumerate() {
+            if predecessors[ri].is_some() || !gold_hit_matches(rel, &hits[candidate]) {
+                continue;
+            }
+            predecessors[ri] = Some((candidate, previous_gold));
+            if let Some(occupied) = assignment[ri] {
+                pending.push((occupied, Some(ri)));
+            } else {
+                let mut cursor = Some(ri);
+                while let Some(gold) = cursor {
+                    let (hit, previous) = predecessors[gold].expect("visited augmenting path");
+                    assignment[gold] = Some(hit);
+                    cursor = previous;
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn scan(relevant: &[GoldRelevant], hits: &[SearchHit], cutoff: usize) -> Scan {
-    let mut matched = vec![false; relevant.len()];
+    let mut assignment = vec![None; relevant.len()];
     let mut first_rank = None;
     let mut found = 0usize;
     let mut dcg = 0.0f64;
-    for (idx, hit) in hits.iter().take(cutoff).enumerate() {
+    for idx in 0..hits.len().min(cutoff) {
         let rank = idx + 1;
-        for (ri, rel) in relevant.iter().enumerate() {
-            if matched[ri] || !gold_hit_matches(rel, hit) {
-                continue;
-            }
-            matched[ri] = true;
+        if assign_gold(relevant, hits, idx, &mut assignment) {
             found += 1;
             dcg += 1.0 / ((rank as f64) + 1.0).log2();
             first_rank.get_or_insert(rank);
-            break;
         }
     }
     Scan {
@@ -145,7 +174,8 @@ fn evaluate_query(query: &GoldQuery, hits: &[SearchHit]) -> QueryEval {
     };
     let mut recall_at = [(0usize, 0.0f64); RECALL_CUTOFFS.len()];
     for (slot, &n) in recall_at.iter_mut().zip(RECALL_CUTOFFS.iter()) {
-        let s = scan(&query.relevant, hits, n.min(query.k));
+        // Fixed cutoffs are independent of the fixture's primary metric k.
+        let s = scan(&query.relevant, hits, n);
         *slot = (n, recall_of(s.found, query.relevant.len()));
     }
     QueryEval {
@@ -407,6 +437,7 @@ fn run_single(
     })
 }
 pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
+    crate::ensure_unambiguous_root(&args.root, cli)?;
     let root = crate::effective_root(cli, &args.root);
     let gold = load_gold(&args.gold)?;
     let max_k = gold
@@ -419,7 +450,10 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     let limit = cli
         .limit
         .unwrap_or_else(SearchOptions::default_limit)
-        .max(max_k);
+        .max(max_k)
+        .max(*RECALL_CUTOFFS.iter().max().unwrap());
+    // Invalid modes must refuse before creating or mutating an index.
+    let ab = args.ab.as_deref().map(ab_config).transpose()?;
     let mut _temp_guard = None;
     let index_path = match &cli.index_path {
         Some(p) => p.clone(),
@@ -455,9 +489,8 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
         requested: args.scip.is_some(),
         degraded_channels: &degraded_channels,
     };
-    match &args.ab {
-        Some(mode) => {
-            let cfg_b = ab_config(mode)?;
+    match ab {
+        Some(cfg_b) => {
             let run_a = run_single(
                 cli,
                 &root,

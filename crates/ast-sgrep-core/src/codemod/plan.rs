@@ -102,9 +102,9 @@ pub fn plan_codemod(
     // Heal a tree left inconsistent by an apply process that died mid-swap
     // (canonical path missing, orphaned `.name.asgrep-codemod-backup-*`
     // beside it) BEFORE reading the planned files, so a re-run recovers the
-    // previous content instead of failing verification with ENOENT. Runs on
-    // std::fs because planning has no Dir handle yet; `root` is canonical
-    // and sidecar names are matched by exact marker, so confinement holds.
+    // previous content instead of failing verification with ENOENT. Recovery
+    // opens capability-rooted directory handles before any scan or mutation
+    // and matches only this source basename's backups.
     recover_orphans(&root, &indexed_paths)?;
     if indexed_paths.is_empty() {
         bail!(

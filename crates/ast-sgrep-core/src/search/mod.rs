@@ -17,7 +17,7 @@ pub use fusion::dedup_hits;
 use passes::bmh::asgrep_line_hit;
 use passes::embed::{run_embed_pass_cached, SemanticCache};
 use passes::lexical::lexical_pass;
-use passes::literal::literal_pass;
+use passes::literal::{literal_file_pass, literal_pass};
 use passes::regex::regex_pass;
 use passes::symbol::{
     anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
@@ -806,7 +806,8 @@ impl Searcher {
             // otherwise claim the whole string as its target.
             if let Some(conj) = conjunction::parse(query_str) {
                 let hits = conjunction::run(self, &conj)?;
-                let response_query = conjunction::response_query(query_str, &conj);
+                let mut response_query = conjunction::response_query(query_str, &conj);
+                resolve_path_scope(&self.options.root, &mut response_query)?;
                 return finish_response_checked(&response_query, &self.options, hits, true);
             }
             let mut parsed = ParsedQuery::parse(query_str);
@@ -821,7 +822,7 @@ impl Searcher {
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
-                    self.options.limit,
+                    self.options.retained_limit(),
                 )?,
                 QueryMode::Literal | QueryMode::Word => {
                     let mut hits = literal_pass(&self.store, &self.options, &parsed)?;
@@ -836,7 +837,13 @@ impl Searcher {
                     if let Some(spelling) = parsed.identifier_spelling() {
                         if spelling.chars().count() >= 3 {
                             let def_query = ParsedQuery::parse(&format!("defs:{spelling}"));
-                            let defs = search_defs(&self.store, &self.options, &def_query)?;
+                            let mut defs = search_defs(&self.store, &self.options, &def_query)?;
+                            // Def lookup folds case independently of the line
+                            // lane. Ranking enrichment must not widen a
+                            // case-sensitive literal/word query's membership.
+                            if !self.options.case_insensitive {
+                                defs.retain(|hit| hit.symbol.as_deref() == Some(spelling));
+                            }
                             if !defs.is_empty() {
                                 let mut seen: std::collections::HashSet<(String, u32)> = defs
                                     .iter()
@@ -904,7 +911,6 @@ impl Searcher {
                     hits,
                     true,
                     Some(&self.store),
-                    true,
                     !self.stamp_response,
                 )
             }
@@ -959,6 +965,11 @@ impl Searcher {
     /// Dispatches exactly like `search` does for the same prefix; the
     /// semantic channel runs the embedding-only pass.
     fn channel_hits(&self, channel: &conjunction::ChannelQuery) -> Result<Vec<SearchHit>> {
+        let mut parsed = match channel {
+            conjunction::ChannelQuery::Mode(parsed) => parsed.clone(),
+            conjunction::ChannelQuery::Semantic(query) => ParsedQuery::parse(query),
+        };
+        resolve_path_scope(&self.options.root, &mut parsed)?;
         let status = self.store.status()?;
         let exhaustive_limit = status
             .line_count
@@ -972,11 +983,11 @@ impl Searcher {
         options.use_rerank = false;
         options.rerank_top_k = exhaustive_limit;
         options.ann_probes = Some(usize::MAX);
-        match channel {
-            conjunction::ChannelQuery::Mode(parsed) => match parsed.mode {
-                QueryMode::Callers => search_callers(&self.store, &options, parsed),
-                QueryMode::Defs => search_defs(&self.store, &options, parsed),
-                QueryMode::Imports => search_imports(&self.store, &options, parsed),
+        let mut hits = match channel {
+            conjunction::ChannelQuery::Mode(_) => match parsed.mode {
+                QueryMode::Callers => search_callers(&self.store, &options, &parsed),
+                QueryMode::Defs => search_defs(&self.store, &options, &parsed),
+                QueryMode::Imports => search_imports(&self.store, &options, &parsed),
                 QueryMode::Pattern => crate::pattern::search_pattern(
                     parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
                     &self.store,
@@ -984,13 +995,14 @@ impl Searcher {
                     self.options.lang_filter.as_deref(),
                     options.limit,
                 ),
-                QueryMode::Literal | QueryMode::Word => literal_pass(&self.store, &options, parsed),
-                QueryMode::Regex => regex_pass(&self.store, &options, parsed),
+                QueryMode::Literal | QueryMode::Word => {
+                    literal_pass(&self.store, &options, &parsed)
+                }
+                QueryMode::Regex => regex_pass(&self.store, &options, &parsed),
                 // ChannelQuery::parse never yields Hybrid; stay total anyway.
                 QueryMode::Hybrid => Ok(Vec::new()),
             },
-            conjunction::ChannelQuery::Semantic(query) => {
-                let parsed = ParsedQuery::parse(query);
+            conjunction::ChannelQuery::Semantic(_) => {
                 let expanded = self.repository_expanded_query(&parsed)?;
                 run_embed_pass_cached(
                     &self.store,
@@ -1001,7 +1013,9 @@ impl Searcher {
                     self.use_field_rescoring,
                 )
             }
-        }
+        }?;
+        finish::filter_hit_paths(&parsed, &options, &mut hits)?;
+        Ok(hits)
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
@@ -1623,10 +1637,8 @@ fn literal_prefilter_pass(
     // Cached-only (one-shot literal discipline): the prefilter already
     // handles `None` via the per-term `literal_pass` fallback below.
     let corpus = store.line_corpus_if_cached()?;
-    let file_cap = match corpus.as_ref() {
-        Some(corpus) => CASCADE_PREFILTER_FILE_LIMIT.min(corpus.file_count().max(1)),
-        None => CASCADE_PREFILTER_FILE_LIMIT,
-    };
+    // Residency changes the candidate source, never the global quota policy.
+    let file_cap = CASCADE_PREFILTER_FILE_LIMIT;
     let mut files = HashSet::new();
     // Files the query's own terms found. Learned borrows may add lexical
     // candidates, but the structural passes constrain to this set when it is
@@ -1644,72 +1656,70 @@ fn literal_prefilter_pass(
         0
     };
     let user_budget = file_cap.saturating_sub(extra_reserve);
-    if let Some(corpus) = corpus.as_ref() {
-        for term in terms.iter().copied().filter(|term| term.is_ascii()) {
-            let extra = user_first.is_some_and(|user| !user.contains(term));
-            let budget = if extra { file_cap } else { user_budget };
-            let remaining = budget.saturating_sub(files.len());
-            if remaining == 0 {
-                continue;
-            }
-            // After a rare foothold, common leftovers only add junk files and
-            // memchr the rest of the packed corpus. Invent-path extras stay
-            // rare (df well under this on the mini fixture).
-            const CASCADE_FOOTHOLD_DF: i64 = 128;
-            // Missing df sorts last, but must still scan: invent-path "session"
-            // after a README "durable" foothold has no trigram row.
-            if !files.is_empty()
-                && !extra
-                && store
-                    .trigram_df()
-                    .min_df(store, term)
-                    .is_some_and(|df| df > CASCADE_FOOTHOLD_DF)
-            {
-                continue;
-            }
-            let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
-            for row in corpus.scan_distinct_files_cs(term, term_cap, &files) {
-                if files.insert(row.path.to_string()) {
-                    if !extra {
-                        user_files.insert(row.path.to_string());
-                    }
-                    out.push(asgrep_line_hit(
-                        row.path.to_string(),
-                        row.language.map(str::to_string),
-                        row.line_no,
-                        row.content.to_string(),
-                        1.0,
-                    ));
-                    if files.len() >= file_cap {
-                        break;
-                    }
-                }
-            }
-        }
-        if files.len() >= file_cap || terms.iter().all(|term| term.is_ascii()) {
-            return Ok((out, user_files));
-        }
-    }
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
-    prefilter_options.limit = file_cap;
     for term in terms {
         let extra = user_first.is_some_and(|user| !user.contains(term.as_str()));
-        let hits = literal_pass(store, &prefilter_options, &ParsedQuery::literal(term))?;
-        for mut hit in hits {
-            // Presence semantics, matching the corpus branch above (score
-            // 1.0 per distinct file): this funnel feeds fusion, and a
-            // rank-decay here would score identical file sets differently
-            // on cold (this fallback) vs warmed (corpus) sessions.
-            hit.score = 1.0;
+        let budget = if extra { file_cap } else { user_budget };
+        let remaining = budget.saturating_sub(files.len());
+        if remaining == 0 {
+            continue;
+        }
+        // Known common leftovers can be skipped after a foothold. Cold df
+        // remains unknown rather than paying an implicit vocabulary preload.
+        const CASCADE_FOOTHOLD_DF: i64 = 128;
+        if !files.is_empty()
+            && !extra
+            && store
+                .trigram_df()
+                .min_df(store, term)
+                .is_some_and(|df| df > CASCADE_FOOTHOLD_DF)
+        {
+            continue;
+        }
+        let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
+        let hits = match corpus.as_ref() {
+            Some(corpus) => {
+                let lower = term.to_lowercase();
+                corpus
+                    .scan_distinct_files(
+                        term,
+                        term_cap,
+                        &files,
+                        options.lang_filter.as_deref(),
+                        types::matches_lang,
+                        |content| {
+                            passes::literal::content_matches_literal(
+                                content,
+                                term,
+                                Some(&lower),
+                                false,
+                            )
+                        },
+                    )
+                    .into_iter()
+                    .map(|row| {
+                        asgrep_line_hit(
+                            row.path.to_owned(),
+                            row.language.map(str::to_owned),
+                            row.line_no,
+                            row.content.to_owned(),
+                            1.0,
+                        )
+                    })
+                    .collect()
+            }
+            None => {
+                prefilter_options.limit = term_cap;
+                literal_file_pass(store, &prefilter_options, term, &files)?
+            }
+        };
+        for hit in hits {
             if files.insert(hit.file.clone()) {
                 if !extra {
                     user_files.insert(hit.file.clone());
                 }
                 out.push(hit);
-                if files.len() >= file_cap {
-                    return Ok((out, user_files));
-                }
             }
         }
     }
@@ -1755,7 +1765,7 @@ fn structural_index_pass(
         );
         // Same row budget as the symbol/caller/anchor passes: enough to score
         // inside the 100-file cascade, never the whole node population.
-        let pattern_row_budget = crate::search::passes::bmh::retained_limit(options).clamp(32, 500);
+        let pattern_row_budget = options.retained_limit().clamp(32, 500);
         store.pattern_nodes_matching_for_files(
             &signatures,
             lang,
@@ -1915,18 +1925,36 @@ fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Resul
     let Some(scope) = parsed.path_scope.as_deref() else {
         return Ok(());
     };
-    if scope.contains('*') || scope.contains('?') {
-        return Ok(());
+    if !scope.contains('*') && !scope.contains('?') {
+        // Check the authored path before lexical normalization: file/ must
+        // still refuse instead of being changed into an admitted file.
+        let target = root.join(scope);
+        if target.is_file() {
+            parsed.path_scope_exact = true;
+        } else if !target.is_dir() {
+            return Err(crate::StoreError::Other(format!(
+                "in: scope '{scope}' matches no file or directory under {}",
+                root.display()
+            )));
+        }
     }
-    let target = root.join(scope);
-    if target.is_file() {
-        parsed.path_scope_exact = true;
-    } else if !target.is_dir() {
-        return Err(crate::StoreError::Other(format!(
-            "in: scope '{scope}' matches no file or directory under {}",
-            root.display()
-        )));
+    // Disk admission and hit filtering must use the same relative identity.
+    // Do not canonicalize filesystem paths: that would follow symlinks and
+    // rewrite authored glob components or literal Unix backslash filenames.
+    let relative: std::path::PathBuf = std::path::Path::new(scope)
+        .components()
+        .filter(|component| !matches!(component, std::path::Component::CurDir))
+        .collect();
+    let mut normalized = relative
+        .to_str()
+        .expect("components of a UTF-8 query scope remain UTF-8")
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    if normalized.is_empty() {
+        normalized.push_str("**");
+    } else if scope.ends_with('/') || scope.ends_with("/.") {
+        normalized.push('/');
     }
+    parsed.path_scope = Some(normalized);
     Ok(())
 }
 

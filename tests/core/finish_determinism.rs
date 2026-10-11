@@ -62,6 +62,116 @@ fn tied_hits_serialize_identically_regardless_of_input_order() {
     );
 }
 
+/// A definition rescued after the ranking cut must use the same canonical
+/// tie-breaks as ordinary results, even when both candidates share a file.
+#[test]
+fn rescued_definition_is_independent_of_channel_order() {
+    let parsed = ParsedQuery::parse("auth refresh");
+    let options = SearchOptions {
+        limit: 1,
+        use_embed: false,
+        use_rerank: false,
+        ..SearchOptions::default()
+    };
+    let definition = |line| {
+        let mut hit = channel_hit("src/auth.rs", line, HitKind::Def);
+        hit.symbol = Some("auth_refresh".into());
+        hit.caller = None;
+        hit.callee = None;
+        hit.score = 1.0;
+        hit.excerpt = "fn auth_refresh() {}".into();
+        hit
+    };
+    // Three stronger non-definitions fill the hybrid ranking cut before the
+    // definition guarantee rescues one of the two tied definitions.
+    let mut hits = vec![definition(10), definition(20)];
+    for n in 0..3 {
+        let mut hit = channel_hit(&format!("src/use{n}.rs"), 1, HitKind::Asgrep);
+        hit.score = 10.0;
+        hit.excerpt = "auth refresh".into();
+        hits.push(hit);
+    }
+    let mut expected_json = None;
+    for input in [hits.clone(), hits.into_iter().rev().collect()] {
+        let response = finish_response(&parsed, &options, input, false);
+        assert_eq!(response.hits.len(), 1);
+        let rescued = &response.hits[0];
+        assert_eq!(rescued.kind, HitKind::Def);
+        assert_eq!(rescued.file, "src/auth.rs");
+        assert_eq!(rescued.line_start, 10, "rescue must prefer canonical locus");
+        let json = serde_json::to_string(&response).unwrap();
+        if let Some(expected) = &expected_json {
+            assert_eq!(&json, expected, "rescued evidence must be byte-stable");
+        }
+        expected_json = Some(json);
+    }
+}
+
+/// Lazy definition rescue must retain indexed text and its byte accounting,
+/// even when stronger callers force that definition outside the ranking cut.
+#[test]
+fn rescued_lazy_definition_keeps_indexed_excerpt() {
+    use ast_sgrep_core::{IndexOptions, Indexer, Searcher};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let definition = "fn qzz_helper() {}";
+    std::fs::write(
+        root.join("target.rs"),
+        format!("// qzz_marker\n\n{definition}\n"),
+    )
+    .unwrap();
+    for n in 0..8 {
+        std::fs::write(
+            root.join(format!("use{n}.rs")),
+            format!("fn use{n}() {{ qzz_marker(); }}\n"),
+        )
+        .unwrap();
+    }
+    let db = root.join("index.db");
+    Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(db.clone()),
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap()
+    .index_all()
+    .unwrap();
+    for limit in [1, 32] {
+        let response = Searcher::new(SearchOptions {
+            root: root.to_path_buf(),
+            index_path: Some(db.clone()),
+            use_embed: false,
+            limit,
+            ..SearchOptions::default()
+        })
+        .unwrap()
+        .search("qzz_marker")
+        .unwrap();
+        let rescued = response
+            .hits
+            .iter()
+            .find(|hit| hit.kind == HitKind::Def && hit.symbol.as_deref() == Some("qzz_helper"))
+            .expect("the definition guarantee must preserve the partial-match definition");
+        assert_eq!(
+            rescued.excerpt, definition,
+            "rescued lazy definition lost indexed evidence at limit={limit}"
+        );
+        assert_eq!(
+            response.returned_excerpt_bytes,
+            response
+                .hits
+                .iter()
+                .map(|hit| hit.excerpt.len() as u64)
+                .sum::<u64>(),
+            "returned excerpt bytes must include rescued evidence"
+        );
+        if limit == 1 {
+            assert_eq!(response.hits.len(), 1);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PASS 56 (P48-R1 remediation): per-process emission-order determinism.
 //

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -62,7 +62,7 @@ function expectCode(code, action, pathPart) {
   });
 }
 
-function stagedPackage(root, target, payload = Buffer.from("staged native executable"), addonPayload = Buffer.from("staged napi addon")) {
+function stagedPackage(root, target, payload = Buffer.from("staged native executable"), addonPayload = Buffer.from("staged napi addon"), watchPayload = Buffer.from("staged watch helper")) {
   const piDir = join(root, "packages/pi");
   const platformsDir = join(piDir, "platforms");
   const packageDir = join(platformsDir, target.id);
@@ -74,12 +74,16 @@ function stagedPackage(root, target, payload = Buffer.from("staged native execut
   cpSync(join(repoRoot, "packages/pi/platforms", target.id), packageDir, { recursive: true });
   const executablePath = join(packageDir, target.executable);
   const addonPath = join(packageDir, "ast-sgrep-codemode.node");
+  const watchName = target.platform === "win32" ? "asgrep-watch.exe" : "asgrep-watch";
   writeFileSync(executablePath, payload);
   chmodSync(executablePath, 0o755);
   writeFileSync(addonPath, addonPayload);
+  writeFileSync(join(packageDir, watchName), watchPayload);
+  chmodSync(join(packageDir, watchName), 0o755);
   writeFileSync(join(packageDir, "checksum.sha256"),
     createHash("sha256").update(payload).digest("hex") + "  " + target.executable + "\n" +
-    createHash("sha256").update(addonPayload).digest("hex") + "  ast-sgrep-codemode.node\n");
+    createHash("sha256").update(addonPayload).digest("hex") + "  ast-sgrep-codemode.node\n" +
+    createHash("sha256").update(watchPayload).digest("hex") + "  " + watchName + "\n");
   return packageDir;
 }
 
@@ -99,6 +103,15 @@ test("returns null when the NAPI addon is absent from an otherwise valid package
     assert.equal(resolveBinary(f.options), f.executablePath);
     assert.equal(resolveCodemodeAddon(f.options), null);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("both native resolvers report corrupt non-object metadata with its path", () => {
+  for (const manifestText of ["null", "[]", "true", "1", '"package"']) {
+    const f = fixture(targets[0], { manifestText });
+    for (const resolver of [resolveBinary, resolveCodemodeAddon]) {
+      expectCode("ASGREP_PLATFORM_METADATA_CORRUPT", () => resolver(f.options), /package\.json$/u);
+    }
+  }
 });
 
 test("reports representative unsupported tuples and omitted packages", () => {
@@ -149,14 +162,18 @@ test("committed target, contract, package, and checksum metadata do not drift", 
     assert.equal(contractPackage.optionalDependencyVersion, contract.canonicalVersion.version);
     assert.equal(launcher.optionalDependencies[target.name], contract.canonicalVersion.version);
     const checksumText = readFileSync(join(packageDir, "checksum.sha256"), "utf8");
-    assert.match(checksumText, new RegExp("^[0-9a-f]{64}  " + target.executable.replace(".", "\\.") + "\\n[0-9a-f]{64}  ast-sgrep-codemode\\.node\\n$", "u"));
+    const watchName = target.platform === "win32" ? "asgrep-watch.exe" : "asgrep-watch";
     const lines = checksumText.trimEnd().split("\n");
-    assert.equal(lines.length, 2);
-    assert.equal(lines[0].split(/\s+/u)[1], target.executable);
-    assert.equal(lines[0].split(/\s+/u)[0], createHash("sha256").update(readFileSync(join(packageDir, target.executable))).digest("hex"));
-    assert.equal(lines[1].split(/\s+/u)[1], "ast-sgrep-codemode.node");
-    assert.equal(lines[1].split(/\s+/u)[0], createHash("sha256").update(readFileSync(join(packageDir, "ast-sgrep-codemode.node"))).digest("hex"));
-    assert.deepEqual(manifest.files?.slice().sort(), [target.executable, "ast-sgrep-codemode.node", "checksum.sha256", "LICENSE"].sort());
+    assert.equal(lines.length, 3);
+    const digests = new Map(lines.map(line => {
+      assert.match(line, /^[0-9a-f]{64}  \S+$/u);
+      const [digest, name] = line.split(/\s+/u);
+      return [name, digest];
+    }));
+    for (const name of [target.executable, "ast-sgrep-codemode.node", watchName]) {
+      assert.equal(digests.get(name), createHash("sha256").update(readFileSync(join(packageDir, name))).digest("hex"));
+    }
+    assert.deepEqual(manifest.files?.slice().sort(), [target.executable, target.platform === "win32" ? "asgrep-watch.exe" : "asgrep-watch", "ast-sgrep-codemode.node", "checksum.sha256", "LICENSE"].sort());
   }
 });
 
@@ -203,6 +220,36 @@ test("empty platform package remains a hard error even when PATH has asgrep", ()
     rmSync(f.root, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
   }
+});
+
+test("missing environment binaries name the override without weakening strict resolution", () => {
+  const missing = Object.assign(new Error("missing fixture"), { code: "ENOENT" });
+  const options = {
+    fs: { statSync() { throw missing; } },
+    requireResolve() { assert.fail("an invalid CLI override must not fall back to the bundled package"); },
+  };
+  for (const [name, env] of [
+    ["ASGREP_BIN", { ASGREP_BIN: "stale/asgrep" }],
+    ["AST_SGREP_BINARY", { AST_SGREP_BINARY: "stale/asgrep" }],
+    ["ASGREP_BIN", { ASGREP_BIN: "stale/asgrep", AST_SGREP_BINARY: "another/asgrep" }],
+  ]) {
+    assert.throws(() => resolveBinary({ ...options, env }), error => {
+      assert.equal(error.code, "ASGREP_EXECUTABLE_MISSING");
+      assert.equal(error.path, resolve("stale/asgrep"));
+      assert.equal(error.cause, missing, "Pi recovery still needs the original filesystem error");
+      assert.ok(error.message.includes(`selected by ${name}`));
+      assert.match(error.message, /unset ASGREP_BIN and AST_SGREP_BINARY/i);
+      assert.match(error.message, /installed bundled executable/);
+      return true;
+    });
+  }
+  assert.throws(() => resolveBinary({ ...options, binaryPath: "explicit/asgrep", env: { ASGREP_BIN: "stale/asgrep" } }), error => {
+    assert.equal(error.code, "ASGREP_EXECUTABLE_MISSING");
+    assert.equal(error.path, resolve("explicit/asgrep"));
+    assert.equal(error.cause, missing);
+    assert.doesNotMatch(error.message, /selected by|unset ASGREP_BIN/i);
+    return true;
+  });
 });
 
 test("validates checksum, executable presence, mode, version, and metadata", () => {
@@ -276,7 +323,7 @@ test("raw placeholders cannot pack and staged inventories are exact", () => {
       assert.equal(result.status, 0, result.stderr);
       const packed = JSON.parse(result.stdout)[0];
       const inventory = packed.files.map(file => file.path).sort();
-      assert.deepEqual(inventory, ["LICENSE", "ast-sgrep-codemode.node", "checksum.sha256", "package.json", target.executable].sort());
+      assert.deepEqual(inventory, ["LICENSE", "ast-sgrep-codemode.node", "checksum.sha256", "package.json", target.executable, target.platform === "win32" ? "asgrep-watch.exe" : "asgrep-watch"].sort());
       assert.match(packed.integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/u);
       assert.match(packed.shasum, /^[0-9a-f]{40}$/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -310,4 +357,22 @@ test("packed launcher install executes both aliases and preserves argv", () => {
       assert.deepEqual(JSON.parse(result.stdout), ["space value", "--flag=✓"]);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("every platform prepack rejects a missing or tampered watch helper", () => {
+  for (const target of targets) {
+    const root = mkdtempSync(join(tmpdir(), "asgrep-watch-integrity-"));
+    const packageDir = stagedPackage(root, target);
+    const helper = join(packageDir, target.platform === "win32" ? "asgrep-watch.exe" : "asgrep-watch");
+    renameSync(helper, helper + ".held");
+    let result = spawnSync(process.execPath, [join(dirname(packageDir), "prepack-verify.mjs")], { cwd: packageDir, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /ASGREP_PREPACK_EXECUTABLE_MISSING/u);
+    renameSync(helper + ".held", helper);
+    writeFileSync(helper, "tampered helper");
+    result = spawnSync(process.execPath, [join(dirname(packageDir), "prepack-verify.mjs")], { cwd: packageDir, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /ASGREP_PREPACK_CHECKSUM_MISMATCH/u);
+    console.log("retained watch-integrity fixture: " + root);
+  }
 });

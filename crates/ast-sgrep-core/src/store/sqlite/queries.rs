@@ -1,8 +1,8 @@
 use super::super::embed_support::{embed_cache_cap, read_sym_loc};
 use super::super::sql::{
-    append_lang_filter, at_least_rows, calls_matching, count_star, emb_vec, lang_and_clause,
-    like_terms_filter, optional_row, query_cached_map, query_limit_map, query_map_rows,
-    read_legacy_emb, read_sem_row, where_clause,
+    append_lang_filter, at_least_rows, calls_matching, calls_matching_limited, count_star, emb_vec,
+    lang_and_clause, like_terms_filter, optional_row, query_cached_map, query_cached_map_capped,
+    query_limit_map, query_map_rows, read_legacy_emb, read_sem_row, where_clause,
 };
 use super::{
     sql_usize_from_byte_offset, CallEvidenceRow, CallRow, ImportQueryRow, ImportRow, IndexStore,
@@ -655,6 +655,12 @@ impl IndexStore {
     pub fn outgoing_calls(&self, caller: &str) -> Result<Vec<CallRow>> {
         calls_matching(&self.conn, "caller", caller)
     }
+    pub(crate) fn incoming_calls_capped(&self, callee: &str, limit: usize) -> Result<Vec<CallRow>> {
+        calls_matching_limited(&self.conn, "callee", callee, Some(limit))
+    }
+    pub(crate) fn outgoing_calls_capped(&self, caller: &str, limit: usize) -> Result<Vec<CallRow>> {
+        calls_matching_limited(&self.conn, "caller", caller, Some(limit))
+    }
     pub(crate) fn outgoing_calls_with_scip(
         &self,
         caller: &str,
@@ -707,11 +713,26 @@ impl IndexStore {
         )
     }
     pub fn imports_from_file(&self, path: &str) -> Result<Vec<ImportRow>> {
-        query_cached_map(
+        self.imports_from_file_limited(path, None)
+    }
+    pub(crate) fn imports_from_file_capped(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<Vec<ImportRow>> {
+        self.imports_from_file_limited(path, Some(limit))
+    }
+    fn imports_from_file_limited(
+        &self,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<ImportRow>> {
+        query_cached_map_capped(
             &self.conn,
             "SELECT i.module_path, i.line_no FROM imports i JOIN files f ON f.id=i.file_id \
              WHERE f.path=?1 ORDER BY i.line_no, i.module_path",
             params![path],
+            limit,
             |r| {
                 Ok(ImportRow {
                     module_path: r.get(0)?,
@@ -953,6 +974,37 @@ impl IndexStore {
     pub fn file_lines(&self, path: &str) -> Result<Vec<(u32, String)>> {
         query_cached_map( &self.conn, "SELECT l.line_no, l.content FROM lines l JOIN files f ON f.id=l.file_id WHERE f.path=?1 ORDER BY l.line_no",
             params![path], |r| Ok((r.get(0)?, r.get(1)?)), )
+    }
+    /// Indexed source rows in an inclusive range, excluding only the global
+    /// empty EOF cursor. `None` means no indexed rows; `Some([])` means an
+    /// indexed empty/past-EOF window and must not trigger a disk fallback.
+    /// One statement keeps EOF discovery and range selection on one snapshot.
+    pub fn source_lines_in_range(
+        &self,
+        path: &str,
+        start: u32,
+        end: u32,
+    ) -> Result<Option<Vec<(u32, String)>>> {
+        let mut stmt = self.conn.prepare_cached(
+            "WITH tail AS (
+                SELECT l.file_id, l.line_no - (l.content = '') AS source_end
+                FROM lines l JOIN files f ON f.id = l.file_id
+                WHERE f.path = ?1 ORDER BY l.line_no DESC LIMIT 1
+             )
+             SELECT l.line_no, l.content FROM tail
+             LEFT JOIN lines l ON l.file_id = tail.file_id
+                AND l.line_no >= ?2 AND l.line_no <= MIN(?3, tail.source_end)
+             ORDER BY l.line_no",
+        )?;
+        let mut rows = stmt.query(params![path, start, end])?;
+        let mut lines = None;
+        while let Some(row) = rows.next()? {
+            let selected = lines.get_or_insert_with(Vec::new);
+            if let Some(no) = row.get::<_, Option<u32>>(0)? {
+                selected.push((no, row.get(1)?));
+            }
+        }
+        Ok(lines)
     }
     pub fn line_content(&self, path: &str, line: u32) -> Result<Option<String>> {
         optional_row(

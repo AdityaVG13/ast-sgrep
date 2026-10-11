@@ -14,7 +14,8 @@
  *   an external editor write, which the freshness layer already reconciles.
  */
 
-import { readFile, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { open, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { pathContained, realpathUtf8 as realpath } from "../runtime/index-health.js";
 
@@ -35,10 +36,10 @@ function assertUnicode(text: string): void {
   if (Buffer.from(text, "utf8").toString("utf8") !== text) throw new Error("invalid Unicode: unpaired UTF-16 surrogate");
 }
 
-/** Mirror serde as_u64 (integers only, then wrapping `as u32`). */
+/** Mirror native as_u64 admission, then saturate before u32 narrowing. */
 function u32(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) return undefined;
-  return value % (U32_MAX + 1);
+  const integer = u64(value);
+  return integer === undefined ? undefined : Math.min(integer, U32_MAX);
 }
 
 /** Mirror serde as_u64 without narrowing (context/max budgets). */
@@ -177,18 +178,55 @@ function sliceWindow(numbered: Array<[number, string]>, start: number, end: numb
 }
 
 async function readFileCapped(abs: string, display: string, signal?: AbortSignal): Promise<string> {
-  const bytes = await readFile(abs, { signal }).catch(() => {
+  const cannotRead = (): Error => {
     signal?.throwIfAborted();
-    throw new Error(`cannot read ${display}`);
-  });
-  if (bytes.length > MAX_INDEX_FILE_BYTES) throw new Error(`${display} exceeds max ${MAX_INDEX_FILE_BYTES} bytes`);
+    return new Error(`cannot read ${display}`);
+  };
+  const oversized = new Error(`${display} exceeds max ${MAX_INDEX_FILE_BYTES} bytes`);
+  const validate = (metadata: Stats): void => {
+    if (!metadata.isFile()) throw cannotRead();
+    if (metadata.size > MAX_INDEX_FILE_BYTES) throw oversized;
+  };
   signal?.throwIfAborted();
+  // Reject static FIFOs before open; nonblocking open also covers a FIFO
+  // substituted at that boundary. This is not race-free path confinement.
+  validate(await stat(abs).catch(() => { throw cannotRead(); }));
+  const handle = await open(abs, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+    .catch(() => { throw cannotRead(); });
   try {
-    // Match Rust's strict UTF-8 reads. Replacement decoding would corrupt bytes
-    // outside the requested edit; ignoreBOM retains a literal source BOM.
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    throw new Error(`cannot read ${display}: invalid UTF-8`);
+    validate(await handle.stat().catch(() => { throw cannotRead(); }));
+    const chunks: Buffer[] = [];
+    let size = 0;
+    // Inclusive end admits one sentinel byte beyond the cap, even if the
+    // regular file grows after metadata admission. Never load the rest.
+    const stream = handle.createReadStream({
+      autoClose: false,
+      end: MAX_INDEX_FILE_BYTES,
+      ...(signal ? { signal } : {}),
+    });
+    try {
+      for await (const chunk of stream) {
+        signal?.throwIfAborted();
+        size += chunk.length;
+        if (size > MAX_INDEX_FILE_BYTES) throw oversized;
+        chunks.push(chunk as Buffer);
+      }
+    } catch (cause) {
+      if (cause === oversized) throw cause;
+      throw cannotRead();
+    } finally {
+      stream.destroy();
+    }
+    signal?.throwIfAborted();
+    try {
+      // Match Rust's strict UTF-8 reads. Replacement decoding would corrupt
+      // bytes outside an edit; ignoreBOM retains a literal source BOM.
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks, size));
+    } catch {
+      throw new Error(`cannot read ${display}: invalid UTF-8`);
+    }
+  } finally {
+    await handle.close();
   }
 }
 

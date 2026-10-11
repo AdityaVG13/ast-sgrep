@@ -136,7 +136,10 @@ pub(crate) fn java_synchronized_meta_match(
         .iter()
         .copied()
         .find(|c| c.kind() == "parenthesized_expression")?;
-    let resource_inner = resource.named_child(0)?;
+    let mut resource_cursor = resource.walk();
+    let resource_inner = resource
+        .named_children(&mut resource_cursor)
+        .find(|child| !is_trivia_kind(child.kind()))?;
     let resource_text = node_text(&resource_inner, source)?;
     // The resource section of the PATTERN binds like the general lane: a
     // meta takes the inner text; any other spelling byte-matches.
@@ -216,8 +219,7 @@ pub(crate) enum PhpNamespaceBody {
 /// `;` is not a statement run.
 pub(crate) fn php_mixed_namespace_body(section: &str) -> Option<(String, LaneMeta)> {
     let s = section.trim();
-    let tail_start = s.rfind(char::is_whitespace)? + 1;
-    let tail = &s[tail_start..];
+    let (prefix, tail) = s.rsplit_once(is_sg_php_gap_trivia)?;
     if tail.is_empty() {
         return None;
     }
@@ -225,7 +227,7 @@ pub(crate) fn php_mixed_namespace_body(section: &str) -> Option<(String, LaneMet
     if meta.multi {
         return None;
     }
-    let prefix = s[..tail_start].trim_end();
+    let prefix = prefix.trim_end_matches(is_sg_php_gap_trivia);
     if prefix.is_empty() || !prefix.ends_with(';') {
         return None;
     }
@@ -344,7 +346,7 @@ pub(crate) fn php_namespace_block_match(
         (PhpNamespaceBody::Meta(body_meta), _) => body_meta,
         (PhpNamespaceBody::Mixed { prefix, tail }, members) => {
             // The candidate's members must be the prefix statement run EXACTLY
-            // (statement-wise, whitespace-normalized, comment-stripped)
+            // (statement-wise, with exact literal leaves)
             // followed by exactly ONE trailing member — the mixed-ORDER,
             // zero-trailing, two-trailing, and prefix-mismatch faces all
             // refuse.
@@ -369,15 +371,8 @@ pub(crate) fn php_namespace_block_match(
             if prefix_members.is_empty() || members.len() != prefix_members.len() + 1 {
                 return None;
             }
-            let normalize = |node: &Node, src: &str| -> Option<String> {
-                Some(
-                    strip_comment_spans(node_text(node, src)?)
-                        .split_whitespace()
-                        .collect(),
-                )
-            };
             for (p_stmt, c_stmt) in prefix_members.iter().zip(members.iter()) {
-                if normalize(p_stmt, &doc) != normalize(c_stmt, source) {
+                if !literal_structural_eq(*p_stmt, &doc, *c_stmt, source, false) {
                     return None;
                 }
             }

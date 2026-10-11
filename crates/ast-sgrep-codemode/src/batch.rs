@@ -117,7 +117,8 @@ pub enum ServeResponse {
         id: String,
         all_ok: bool,
         results: Vec<BatchCallResult>,
-        wall_ms: u128,
+        // Serde's internally tagged content buffer supports u64, not u128.
+        wall_ms: u64,
         mode: String,
     },
     Bye,
@@ -167,7 +168,12 @@ pub fn run_batch(
     config: SessionConfig,
     request: &BatchRequest,
 ) -> Result<BatchResponse, CallError> {
-    validate_calls(&request.calls)?;
+    validate_batch(
+        request
+            .calls
+            .iter()
+            .map(|call| (call.id.as_str(), call.tool.as_str())),
+    )?;
     let config = apply_config(config, request);
     let mode = resolve_mode(request);
     let started = Instant::now();
@@ -188,8 +194,12 @@ pub fn run_batch(
     })
 }
 
-fn validate_calls(calls: &[BatchCall]) -> Result<(), CallError> {
-    if calls.is_empty() {
+/// Admit a batch without owning or converting its transport-specific payloads.
+/// Count errors precede identity errors; each id is checked before its tool.
+pub fn validate_batch<'a>(
+    calls: impl ExactSizeIterator<Item = (&'a str, &'a str)>,
+) -> Result<(), CallError> {
+    if calls.len() == 0 {
         return Err(CallError::InvalidArgs(
             "batch.calls must be non-empty".into(),
         ));
@@ -199,8 +209,8 @@ fn validate_calls(calls: &[BatchCall]) -> Result<(), CallError> {
             "batch.calls exceeds max {MAX_BATCH_CALLS}"
         )));
     }
-    for call in calls {
-        validate_call_identity(&call.id, &call.tool)?;
+    for (id, tool) in calls {
+        validate_call_identity(id, tool)?;
     }
     Ok(())
 }
@@ -307,7 +317,8 @@ fn enforce_batch_response_budget(results: &mut [BatchCallResult]) {
     }
 }
 
-fn bound_error(mut error: String) -> String {
+/// Bound a batch/serve error by UTF-8 bytes, retaining an ellipsis on truncation.
+pub fn bound_error(mut error: String) -> String {
     if error.len() <= MAX_BATCH_ERROR_BYTES {
         return error;
     }
@@ -452,7 +463,11 @@ pub fn run_serve(
                     )?;
                     continue;
                 }
-                if let Err(err) = validate_calls(&calls) {
+                if let Err(err) = validate_batch(
+                    calls
+                        .iter()
+                        .map(|call| (call.id.as_str(), call.tool.as_str())),
+                ) {
                     write_line(
                         &mut stdout,
                         &ServeResponse::Error {
@@ -486,7 +501,7 @@ pub fn run_serve(
                         id,
                         all_ok,
                         results,
-                        wall_ms: started.elapsed().as_millis(),
+                        wall_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
                         mode: "serial".into(),
                     },
                 )?;

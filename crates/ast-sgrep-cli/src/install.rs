@@ -196,20 +196,21 @@ fn install_json_mcp(path: &Path, command: &str, force: bool, target: Target) -> 
         Target::Cursor | Target::OpenCode => ensure_object(&mut root, "mcpServers")?,
         Target::Codex => unreachable!(),
     };
-    let key = "asgrep";
-    if servers.get(key).is_some() && !force {
-        bail!(
-            "{} already has mcpServers.{key}; pass --force to replace (path {})",
-            target.label(),
-            path.display()
-        );
+    let replaced_names = ["asgrep", "ast-sgrep", "zvec_grep"];
+    for key in replaced_names {
+        if servers.contains_key(key) && !force {
+            bail!(
+                "{} already has mcpServers.{key}; pass --force to replace (path {})",
+                target.label(),
+                path.display()
+            );
+        }
     }
-    servers.insert(key.to_owned(), mcp_server_entry(command));
-    // Drop legacy name if present when forcing a clean managed entry.
-    if force {
-        servers.remove("ast-sgrep");
-        servers.remove("zvec_grep");
+    // Admission and cleanup must agree on every name this install supersedes.
+    for key in replaced_names {
+        servers.remove(key);
     }
+    servers.insert("asgrep".to_owned(), mcp_server_entry(command));
     write_json(path, &Value::Object(root))?;
     Ok(())
 }
@@ -220,54 +221,38 @@ fn install_codex_toml(path: &Path, command: &str, force: bool) -> anyhow::Result
     } else {
         String::new()
     };
-    let block = format!(
-        "\n# BEGIN asgrep-mcp (managed by `asgrep install`; no daemon)\n\
-         [mcp_servers.asgrep]\n\
-         command = \"{}\"\n\
-         args = []\n\
-         # END asgrep-mcp\n",
-        escape_toml_string(command)
-    );
-    if existing.contains("[mcp_servers.asgrep]") || existing.contains("[mcp_servers.ast-sgrep]") {
-        if !force {
-            bail!(
-                "codex config already has an asgrep MCP server; pass --force to replace ({})",
-                path.display()
-            );
-        }
-        let stripped = strip_managed_codex_block(&existing);
-        fs::write(path, format!("{stripped}{block}"))
-            .with_context(|| format!("write {}", path.display()))?;
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parse {}", path.display()))?;
+    if !doc.contains_key("mcp_servers") {
+        let mut table = toml_edit::Table::new();
+        table.set_implicit(true);
+        doc["mcp_servers"] = toml_edit::Item::Table(table);
+    }
+    let inline = doc["mcp_servers"].is_inline_table();
+    let servers = doc["mcp_servers"]
+        .as_table_like_mut()
+        .context("mcp_servers must be a TOML table")?;
+    if !force && (servers.contains_key("asgrep") || servers.contains_key("ast-sgrep")) {
+        bail!(
+            "codex config already has an asgrep MCP server; pass --force to replace ({})",
+            path.display()
+        );
+    }
+    // Replace the whole server subtree, not marker-looking text in authored data.
+    servers.remove("asgrep");
+    servers.remove("ast-sgrep");
+    let mut server = toml_edit::Table::new();
+    server["command"] = toml_edit::value(command);
+    server["args"] = toml_edit::value(toml_edit::Array::new());
+    let entry = if inline {
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(server.into_inline_table()))
     } else {
-        let mut out = existing;
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(&block);
-        fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
-    }
+        toml_edit::Item::Table(server)
+    };
+    servers.insert("asgrep", entry);
+    fs::write(path, doc.to_string()).with_context(|| format!("write {}", path.display()))?;
     Ok(())
-}
-
-fn strip_managed_codex_block(text: &str) -> String {
-    const START: &str = "# BEGIN asgrep-mcp";
-    const END: &str = "# END asgrep-mcp";
-    if let (Some(a), Some(b)) = (text.find(START), text.find(END)) {
-        if b > a {
-            let end = b + END.len();
-            let mut out = String::new();
-            out.push_str(&text[..a]);
-            if end < text.len() {
-                out.push_str(text[end..].trim_start_matches('\n'));
-            }
-            return out;
-        }
-    }
-    text.to_owned()
-}
-
-fn escape_toml_string(raw: &str) -> String {
-    raw.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn read_json_object(path: &Path) -> anyhow::Result<Map<String, Value>> {

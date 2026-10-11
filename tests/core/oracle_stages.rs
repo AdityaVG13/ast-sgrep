@@ -30,6 +30,54 @@ use ast_sgrep_core::{
 use ast_sgrep_mmap::map_readonly;
 use ast_sgrep_testkit::{finish_options, hit_key_bits, mk_hit, write_temp};
 
+#[cfg(unix)]
+#[test]
+fn scip_nonregular_ingress_degrades_without_blocking() {
+    const CHILD: &str = "ASTSGREP_SCIP_FIFO_CHILD";
+    if let Some(kind) = std::env::var_os(CHILD) {
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("index.scip.json");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        if kind == "source" {
+            assert!(
+                read_text_capped(&fifo, 64).is_err(),
+                "a FIFO is not source text"
+            );
+        } else {
+            let loaded = load_scip_index(&fifo);
+            assert!(
+                !loaded.is_loaded(),
+                "SCIP must degrade for nonregular input"
+            );
+            assert!(loaded.degraded_reason().is_some());
+        }
+        return;
+    }
+    // The existing runner kills and reaps a blocked real reader, not a mock.
+    for kind in ["source", "scip"] {
+        let output = ast_sgrep_testkit::run_drain_timeout(
+            &std::env::current_exe().unwrap(),
+            &[
+                "--exact",
+                "scip_nonregular_ingress_degrades_without_blocking",
+                "--test-threads=1",
+            ],
+            &[(CHILD, kind)],
+            std::time::Duration::from_secs(5),
+        );
+        assert!(
+            output.status.success(),
+            "{kind} FIFO ingress: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// INTENT: bounded IO ingress — stdin lines (CRLF, at/over-limit, TooLong
 /// drain, zero-limit), capped reads (exact boundary, binary/dir refusal),
 /// indexed rel-path accept/refuse, and CRLF line splitting with 1-based
@@ -867,6 +915,9 @@ fn lexicon_and_scip_knowledge() {
     let mut thin = LexiconBuilder::new();
     thin.observe(&observation(&["alpha", "beta"]));
     thin.observe(&observation(&["alpha", "beta"]));
+    // Contrast makes PPMI positive, so only the support gate can reject these.
+    thin.observe(&observation(&["gamma", "delta"]));
+    thin.observe(&observation(&["gamma", "delta"]));
     assert!(thin.finish().is_empty());
     // A lone term is not evidence of any pairing.
     let mut lone = LexiconBuilder::new();

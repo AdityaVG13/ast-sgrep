@@ -78,7 +78,8 @@
     "compile": "tsc --noEmit -p ./ && esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=out/extension.js --sourcemap",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --no-dependencies",
-    "test:multi-root": "esbuild src/multiRoot.test.ts --bundle --platform=node --outfile=out/multiRoot.test.js && node out/multiRoot.test.js"
+    "test:multi-root": "npm run test:lifecycle",
+    "test:lifecycle": "node --experimental-vm-modules --test ../../tests/editors/vscode-lifecycle.test.cjs"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

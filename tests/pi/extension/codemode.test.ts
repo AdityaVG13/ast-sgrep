@@ -56,6 +56,43 @@ test("positional search, defs, and method aliases reach the host", async () => {
   assert.match(flat, /defs:Foo/);
 });
 
+test("guest chain work budgets reach typed and direct CLI transports", async () => {
+  for (const typed of [true, false]) {
+    const received: Array<Record<string, unknown>> = [];
+    const argv: string[][] = [];
+    const reply = { tool: "asgrep", schema_version: "1.0.0", ok: true };
+    const host = {
+      async run(args: readonly string[]): Promise<MachineEnvelope> {
+        assert.equal(typed, false, "typed path must not spawn CLI");
+        argv.push([...args]);
+        return reply;
+      },
+      ...(typed ? { sticky: {
+        async call(tool: string, args: Record<string, unknown>) {
+          assert.equal(tool, "chain"); received.push(args); return reply;
+        },
+        async batch(calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>) {
+          for (const item of calls) { assert.equal(item.tool, "chain"); received.push(item.args); }
+          return { results: calls.map(item => ({ id: item.id, ok: true, value: reply })) };
+        },
+      } } : {}),
+    };
+    const bundle = createAsgrepConnector(host, { cwd: "/p" });
+    const outcome = await runCodemode(`
+      await asgrep.chain({query:"Foo", max_work:1});
+      await Promise.all([asgrep.chain("Foo", {max_work:17}), asgrep.chain({query:"Foo", max_work:8192})]);
+      return null;
+    `, bundle.asgrep);
+    assert.equal(outcome.ok, true, outcome.ok ? undefined : outcome.error);
+    if (typed) {
+      assert.deepEqual(received.map(args => args.max_work), [1, 17, 8192]);
+      assert.ok(received.every(args => args.query === "Foo" && args.top_n === 20));
+    } else {
+      assert.deepEqual(argv.map(args => args.slice(-2)), [["--max-work", "1"], ["--max-work", "17"], ["--max-work", "8192"]]);
+    }
+  }
+});
+
 test("unknown method names a close match", async () => {
   const bundle = createAsgrepConnector({
     async run(): Promise<MachineEnvelope> {
@@ -381,6 +418,32 @@ test("one-shot batch transport kills output that exceeds its configured cap", as
         maxOutputBytes: 1024,
       }),
       /output exceeded 1024 bytes/u,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("one-shot batch transport preserves UTF-8 across pipe chunks and rejects invalid bytes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "asgrep-batch-unicode-"));
+  try {
+    const expected = { tool: "asgrep", schema_version: "1.0.0", ok: true, text: "café 日本語 🦀" };
+    await writeFile(join(dir, "codemode-batch"), `
+const bytes = Buffer.from(${JSON.stringify(JSON.stringify(expected))});
+let offset = 0;
+const timer = setInterval(() => {
+  if (offset === bytes.length) { clearInterval(timer); return; }
+  process.stdout.write(bytes.subarray(offset, ++offset));
+}, 5);
+`, "utf8");
+    assert.deepEqual(await runBatchViaStdin({ binary: process.execPath, cwd: dir, body: "{}", timeoutMs: 5_000 }), expected);
+
+    await writeFile(join(dir, "codemode-batch"), `
+process.stdout.write(Buffer.concat([Buffer.from('{"text":"'), Buffer.from([0xff]), Buffer.from('"}') ]));
+`, "utf8");
+    await assert.rejects(
+      runBatchViaStdin({ binary: process.execPath, cwd: dir, body: "{}", timeoutMs: 5_000 }),
+      /utf-8/i,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -830,6 +893,12 @@ test("argvFor emits typed-equivalent CLI for spawn fallback", () => {
   assert.deepEqual(argvFor("chain", { query: "Foo", limit: 4 }), [
     "chain", "Foo", ".", "--json", "--limit", "4",
   ]);
+  assert.deepEqual(argvFor("chain", { query: "Foo", limit: 4, max_work: 17 }), [
+    "chain", "Foo", ".", "--json", "--limit", "4", "--max-work", "17",
+  ]);
+  for (const max_work of [0, -1, 1.5, 1_000_001, Number.MAX_SAFE_INTEGER, "17", true]) {
+    assert.throws(() => argvFor("chain", { query: "Foo", max_work }), /max_work/);
+  }
   assert.throws(
     () => argvFor("catalog_search", { query: "search" }),
     /no direct CLI fallback/,

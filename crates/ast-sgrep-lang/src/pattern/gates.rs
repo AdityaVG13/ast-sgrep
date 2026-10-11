@@ -248,13 +248,7 @@ pub fn native_pattern_answerable(lang: Language, pattern: &str) -> bool {
             // The `;`-ful del template family is ACCEPTED-EMPTY in the
             // multi-language run — census-answerable, the walk's empty IS
             // the agreement.
-            if lang == Language::Python
-                && pattern.starts_with("del")
-                && pattern.ends_with(';')
-                && pattern
-                    .strip_suffix(';')
-                    .is_some_and(|s| py_delete_template(s.trim()).is_some())
-            {
+            if lang == Language::Python && py_delete_semi_pattern(pattern) {
                 return true;
             }
             // The csharp statement-head lane answers its faces natively —
@@ -289,7 +283,7 @@ pub fn native_pattern_answerable(lang: Language, pattern: &str) -> bool {
             // own parse is the admission; the walk decides per file. The go
             // `;`-ful keyword spellings are ACCEPTED-EMPTY, census-answerable
             // with the walk's empty as the agreement.
-            if directive_lane_serves(lang, pattern) {
+            if admitted_directive_template(lang, pattern).is_some() {
                 return true;
             }
             if lang == Language::Go

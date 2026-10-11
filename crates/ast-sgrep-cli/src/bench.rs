@@ -187,7 +187,7 @@ fn update_bench_history(
     // whatever regression or corruption produced the parse error into a
     // fresh baseline) and never auto-delete it.
     let mut root = if path.exists() {
-        let raw = std::fs::read_to_string(&path)
+        let raw = ast_sgrep_core::io_bounds::read_text_capped(&path, u64::MAX)
             .with_context(|| format!("failed to read bench history file {}", path.display()))?;
         serde_json::from_str(&raw).map_err(|error| {
             anyhow::anyhow!(
@@ -248,6 +248,8 @@ fn update_bench_history(
         let latest = crate::keep_gate::committed_latest_path(label);
         let mut committed = run_doc.clone();
         committed["placeholder"] = serde_json::json!(false);
+        // An established baseline is usable as a prior, but is not a measured win.
+        committed["keep_eligible"] = serde_json::json!(true);
         std::fs::write(&latest, serde_json::to_string_pretty(&committed)?)?;
     }
 
@@ -681,7 +683,8 @@ fn run_bench_batch(
     iterations: u32,
     skip_index: bool,
 ) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(queries_path)
+    // Keep payload-size behavior; refuse nonregular inputs before indexing.
+    let content = ast_sgrep_core::io_bounds::read_text_capped(queries_path, u64::MAX)
         .with_context(|| format!("failed to read queries file {}", queries_path.display()))?;
     let queries: Vec<String> = content
         .lines()
@@ -759,12 +762,15 @@ fn run_bench_batch(
             .collect::<Vec<_>>(),
     );
     let batch_geomean = crate::keep_gate::geomean_ms(&batch_avgs);
+    // Preserve order and duplicates: these are the queries actually timed,
+    // independent of incidental blank lines/outer whitespace in the input file.
     let batch_label = format!(
-        "batch:{}",
+        "batch:{}:{}",
         queries_path
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("queries")
+            .unwrap_or("queries"),
+        serde_json::to_string(&queries)?
     );
     let history = update_bench_history(&batch_label, batch_avg, batch_cv, batch_geomean)?;
     enforce_bench_ratchet(&history, &format!("batch {}", queries_path.display()))?;

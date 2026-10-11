@@ -331,6 +331,138 @@ test("shutdown prevents an in-flight start from repopulating the pool", async ()
   await pool.shutdown();
 });
 
+test("invalidated startup failures cannot poison a replacement generation", async () => {
+  const staleStart = Promise.withResolvers<StickyWorker>();
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    if (++starts === 1) return staleStart.promise;
+    return fakeWorker([]);
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const stale = pool.acquire("/project");
+  const invalidated = pool.invalidate("/project");
+  staleStart.reject(new Error("old startup failed after invalidation"));
+  await invalidated;
+  assert.equal(await stale, null);
+  try {
+    assert.equal(pool.lastStartError("/project"), undefined, "obsolete errors must not impose restart backoff");
+    assert.ok(await pool.acquire("/project"), "replacement must be available immediately after invalidation");
+  } finally {
+    await pool.shutdown();
+  }
+});
+
+test("a stale closed call cannot retire the replacement worker", async () => {
+  const failedCall = Promise.withResolvers<MachineEnvelope>();
+  const callStarted = Promise.withResolvers<void>();
+  let starts = 0;
+  let replacementClosed = false;
+  const replacement: StickyWorker = {
+    ...fakeWorker([]),
+    closed: () => replacementClosed,
+    async end() { replacementClosed = true; },
+  };
+  const pool = new NativeSessionPool(async () => {
+    if (++starts === 1) return {
+      ...fakeWorker([]),
+      call() { callStarted.resolve(); return failedCall.promise; },
+    };
+    return starts === 2 ? replacement : fakeWorker([]);
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  const pending = pool.call("/project", "search");
+  await callStarted.promise;
+  try {
+    await pool.invalidate("/project");
+    assert.equal(await pool.acquire("/project"), replacement);
+    failedCall.reject(new Error("codemode-serve is closed"));
+    assert.equal((await pending).ok, true);
+    assert.equal(replacementClosed, false, "a retired worker has no authority over its replacement");
+    assert.equal(await pool.acquire("/project"), replacement);
+  } finally {
+    failedCall.reject(new Error("codemode-serve is closed"));
+    await pending.catch(() => undefined);
+    await pool.shutdown();
+  }
+});
+
+test("a retired session's closed call cannot restart after shutdown", async () => {
+  const failedCall = Promise.withResolvers<MachineEnvelope>();
+  const callStarted = Promise.withResolvers<void>();
+  const pool = new NativeSessionPool(async () => ({
+    ...fakeWorker([]),
+    call() { callStarted.resolve(); return failedCall.promise; },
+  }));
+  pool.configure({ binary: "/fake/asgrep" });
+  const pending = pool.call("/project", "search");
+  await callStarted.promise;
+  const rejected = assert.rejects(pending, /codemode-serve is closed/);
+  try {
+    await pool.shutdown();
+    failedCall.reject(new Error("codemode-serve is closed"));
+    await rejected;
+    assert.equal(pool.backend(), "none", "retired calls must not restart the backend");
+    assert.ok(await pool.acquire("/project"), "an explicit new call may reuse the pool after shutdown");
+  } finally {
+    failedCall.reject(new Error("codemode-serve is closed"));
+    await rejected.catch(() => undefined);
+    await pool.shutdown();
+  }
+});
+
+test("shutdown drains workers already removed by invalidation", async () => {
+  const retirementStarted = Promise.withResolvers<void>();
+  const releaseRetirement = Promise.withResolvers<void>();
+  const pool = new NativeSessionPool(async () => ({
+    ...fakeWorker([]),
+    async end() { retirementStarted.resolve(); await releaseRetirement.promise; },
+  }));
+  pool.configure({ binary: "/fake/asgrep" });
+  await pool.acquire("/project");
+  const invalidated = pool.invalidate("/project");
+  await retirementStarted.promise;
+  let shutdownComplete = false;
+  const shutdown = pool.shutdown().then(() => { shutdownComplete = true; });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownComplete, false, "shutdown must drain previously admitted retirement");
+  } finally {
+    releaseRetirement.resolve();
+    await Promise.all([invalidated, shutdown]);
+  }
+});
+
+test("a closed acquire cannot resume into a retired session", async () => {
+  const retirementStarted = Promise.withResolvers<void>();
+  const releaseRetirement = Promise.withResolvers<void>();
+  let closed = false;
+  let starts = 0;
+  const pool = new NativeSessionPool(async () => {
+    if (++starts !== 1) return fakeWorker([]);
+    return {
+      ...fakeWorker([]),
+      closed: () => closed,
+      async end() { retirementStarted.resolve(); await releaseRetirement.promise; },
+    };
+  });
+  pool.configure({ binary: "/fake/asgrep" });
+  await pool.acquire("/project");
+  closed = true;
+  const pending = pool.acquire("/project");
+  await retirementStarted.promise;
+  const shutdown = pool.shutdown();
+  try {
+    releaseRetirement.resolve();
+    assert.equal(await pending, null, "an acquire admitted before shutdown must not create a new worker");
+    await shutdown;
+    assert.ok(await pool.acquire("/project"), "new callers can reuse the completed pool");
+  } finally {
+    releaseRetirement.resolve();
+    await Promise.all([pending, shutdown]);
+    await pool.shutdown();
+  }
+});
+
 test("uncached unique search is deferred off the JS thread", () => {
   assert.equal(
     isUncachedSearchError(new Error("callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain")),

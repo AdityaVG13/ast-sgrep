@@ -443,10 +443,10 @@ pub(crate) fn ruby_modifier_statement_pattern(p: &str, head: &str) -> bool {
         )
 }
 
-/// True when `#` appears OUTSIDE string-literal quotes. Quote state scanned
-/// with escape handling, exactly like the `//`-`/*` scan below; unterminated
-/// quotes make the tail in-string (conservative).
-pub(crate) fn contains_hash_outside_strings(p: &str) -> bool {
+/// Test each unquoted, non-delimiter byte's suffix. Backslashes escape the
+/// next byte inside quotes; an unterminated quote keeps the tail in-string.
+/// Callers own the comment policy; this scan does not interpret a language.
+fn any_outside_strings(p: &str, mut predicate: impl FnMut(&[u8]) -> bool) -> bool {
     let bytes = p.as_bytes();
     let mut quote: Option<u8> = None;
     let mut i = 0;
@@ -465,12 +465,17 @@ pub(crate) fn contains_hash_outside_strings(p: &str) -> bool {
         }
         match b {
             b'"' | b'\'' | b'`' => quote = Some(b),
-            b'#' => return true,
+            _ if predicate(&bytes[i..]) => return true,
             _ => {}
         }
         i += 1;
     }
     false
+}
+
+/// True when `#` appears outside string-literal quotes.
+pub(crate) fn contains_hash_outside_strings(p: &str) -> bool {
+    any_outside_strings(p, |tail| tail.starts_with(b"#"))
 }
 
 /// The per-language comment-syntax refusal. `#` is comment syntax only in
@@ -502,32 +507,7 @@ pub(crate) fn lane_comment_refused(lang: Language, pattern: &str) -> bool {
 /// when a block-comment opener appears outside string-literal quotes (same
 /// quote scan).
 pub(crate) fn contains_block_comment_syntax_outside_strings(p: &str) -> bool {
-    let bytes = p.as_bytes();
-    let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = quote {
-            if b == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b == q {
-                quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'"' | b'\'' | b'`' => quote = Some(b),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                return true;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
+    any_outside_strings(p, |tail| tail.starts_with(b"/*"))
 }
 
 /// True when some quote-external `#` starts a tail that carries no code
@@ -536,64 +516,39 @@ pub(crate) fn contains_block_comment_syntax_outside_strings(p: &str) -> bool {
 /// `[`/`$`), never a mid-chain private field (`this.#x = $V` — `=` follows),
 /// never a raw-string delimiter (`tag(r#"$A"#)` — a quote follows).
 pub(crate) fn contains_comment_glued_hash(pattern: &str) -> bool {
-    let bytes = pattern.as_bytes();
-    let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = quote {
-            if b == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b == q {
-                quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'"' | b'\'' | b'`' => quote = Some(b),
-            b'#' => {
-                let glued = bytes[i + 1..].iter().all(|&rest| {
-                    !matches!(
-                        rest,
-                        b'(' | b')'
-                            | b'['
-                            | b']'
-                            | b'{'
-                            | b'}'
-                            | b'='
-                            | b'.'
-                            | b'"'
-                            | b'\''
-                            | b'$'
-                            | b'/'
-                            | b'*'
-                            | b'<'
-                            | b'>'
-                            | b'!'
-                            | b'?'
-                            | b';'
-                            | b':'
-                            | b','
-                            | b'&'
-                            | b'|'
-                            | b'^'
-                            | b'~'
-                            | b'+'
-                            | b'-'
-                    )
-                });
-                if glued {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
+    any_outside_strings(pattern, |tail| {
+        tail[0] == b'#'
+            && tail[1..].iter().all(|&rest| {
+                !matches!(
+                    rest,
+                    b'(' | b')'
+                        | b'['
+                        | b']'
+                        | b'{'
+                        | b'}'
+                        | b'='
+                        | b'.'
+                        | b'"'
+                        | b'\''
+                        | b'$'
+                        | b'/'
+                        | b'*'
+                        | b'<'
+                        | b'>'
+                        | b'!'
+                        | b'?'
+                        | b';'
+                        | b':'
+                        | b','
+                        | b'&'
+                        | b'|'
+                        | b'^'
+                        | b'~'
+                        | b'+'
+                        | b'-'
+                )
+            })
+    })
 }
 
 /// True when `//` or `/*` appears OUTSIDE string-literal quotes
@@ -604,32 +559,7 @@ pub(crate) fn contains_comment_glued_hash(pattern: &str) -> bool {
 /// language-free `#` refusal failed rust/c/swift/js `#`-syntax patterns
 /// closed where the reference answers.
 pub(crate) fn contains_comment_syntax_outside_strings(p: &str) -> bool {
-    let bytes = p.as_bytes();
-    let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = quote {
-            if b == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b == q {
-                quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'"' | b'\'' | b'`' => quote = Some(b),
-            b'/' if bytes.get(i + 1) == Some(&b'/') || bytes.get(i + 1) == Some(&b'*') => {
-                return true;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
+    any_outside_strings(p, |tail| tail.starts_with(b"//") || tail.starts_with(b"/*"))
 }
 
 /// Replace `$NAME` metavariables with placeholder identifiers, returning the

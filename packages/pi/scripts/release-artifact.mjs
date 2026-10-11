@@ -8,6 +8,7 @@ const matrixPath = path.join(root, 'packages/pi/release/targets.json');
 const contractPath = path.join(root, 'packages/pi/release-contract.json');
 const cliBuildFlags = ['--locked', '--release', '-p', 'ast-sgrep-cli', '--bin', 'asgrep', '--no-default-features'];
 const napiBuildFlags = ['--locked', '--release', '-p', 'ast-sgrep-codemode-napi'];
+const watchBuildFlags = ['--locked', '--release', '-p', 'ast-sgrep-watch', '--bin', 'asgrep-watch'];
 const fail = (message) => { throw new Error(message); };
 const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const sha256 = async (file) => createHash('sha256').update(await readFile(file)).digest('hex');
@@ -18,7 +19,7 @@ const option = (name) => {
 };
 const load = async () => {
   const [matrix, contract] = await Promise.all([readJson(matrixPath), readJson(contractPath)]);
-  if (matrix.schemaVersion !== 1 || matrix.artifactSchemaVersion !== 2 || typeof matrix.napiAddon !== 'string' || !Array.isArray(matrix.targets)) {
+  if (matrix.schemaVersion !== 1 || matrix.artifactSchemaVersion !== 3 || typeof matrix.napiAddon !== 'string' || !Array.isArray(matrix.targets) || matrix.targets.some(target => target.watchHelper !== (target.os === 'win32' ? 'asgrep-watch.exe' : 'asgrep-watch'))) {
     fail('unsupported target matrix schema');
   }
   return { matrix, contract };
@@ -47,27 +48,32 @@ const requireNonEmptyFile = async (file, label) => {
 const command = process.argv[2];
 const { matrix, contract } = await load();
 if (command === 'matrix') {
-  const include = matrix.targets.map(({ id, runner, rustTarget, package: packageName, executable, os, cpu }) => ({
-    id, runner, rustTarget, package: packageName, executable, os, cpu, napiAddon: matrix.napiAddon
+  const include = matrix.targets.map(({ id, runner, rustTarget, package: packageName, executable, watchHelper, os, cpu }) => ({
+    id, runner, rustTarget, package: packageName, executable, watchHelper, os, cpu, napiAddon: matrix.napiAddon
   }));
   process.stdout.write(JSON.stringify({ include }));
 } else if (command === 'prepare') {
   const target = selectTarget(matrix, option('target'));
   const binary = path.resolve(option('binary'));
   const napi = path.resolve(option('napi'));
+  const watch = path.resolve(option('watch'));
   const output = path.resolve(option('output'));
   const commit = option('commit').toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(commit)) fail('commit must be a full 40-character hexadecimal SHA');
   await requireNonEmptyFile(binary, 'binary');
   await requireNonEmptyFile(napi, 'napi addon');
+  await requireNonEmptyFile(watch, 'watch helper');
   await mkdir(output, { recursive: true });
   const executable = path.join(output, target.executable);
   const addon = path.join(output, matrix.napiAddon);
+  const watchHelper = path.join(output, target.watchHelper);
   await copyFile(binary, executable);
   await copyFile(napi, addon);
-  if (target.os !== 'win32') await chmod(executable, 0o755);
+  await copyFile(watch, watchHelper);
+  if (target.os !== 'win32') { await chmod(executable, 0o755); await chmod(watchHelper, 0o755); }
   const executableChecksum = await sha256(executable);
   const napiChecksum = await sha256(addon);
+  const watchChecksum = await sha256(watchHelper);
   const metadata = {
     schemaVersion: matrix.artifactSchemaVersion,
     artifact: target.package + '-v' + contract.canonicalVersion.version,
@@ -77,34 +83,39 @@ if (command === 'matrix') {
     target: target.rustTarget,
     npm: { os: [target.os], cpu: [target.cpu], libc: target.libc ? [target.libc] : [] },
     executable: target.executable,
+    watchHelper: target.watchHelper,
     napiAddon: matrix.napiAddon,
-    build: { profile: 'release', cliFlags: cliBuildFlags, napiFlags: napiBuildFlags },
+    build: { profile: 'release', cliFlags: cliBuildFlags, napiFlags: napiBuildFlags, watchFlags: watchBuildFlags },
     checksums: {
       algorithm: 'sha256',
       files: {
         [target.executable]: executableChecksum,
-        [matrix.napiAddon]: napiChecksum
+        [matrix.napiAddon]: napiChecksum,
+        [target.watchHelper]: watchChecksum
       }
     }
   };
   await writeFile(path.join(output, 'artifact-metadata.json'), canonicalMetadata(metadata));
   await writeFile(path.join(output, 'SHA256SUMS'), formatSha256Sums([
     [executableChecksum, target.executable],
-    [napiChecksum, matrix.napiAddon]
+    [napiChecksum, matrix.napiAddon],
+    [watchChecksum, target.watchHelper]
   ]));
   console.log(metadata.artifact);
 } else if (command === 'verify') {
   const target = selectTarget(matrix, option('target'));
   const input = path.resolve(option('input'));
   const entries = (await readdir(input)).sort();
-  const expectedEntries = ['SHA256SUMS', 'artifact-metadata.json', target.executable, matrix.napiAddon].sort();
+  const expectedEntries = ['SHA256SUMS', 'artifact-metadata.json', target.executable, target.watchHelper, matrix.napiAddon].sort();
   if (JSON.stringify(entries) !== JSON.stringify(expectedEntries)) {
-    fail('artifact must contain CLI + NAPI addon plus artifact-metadata.json and SHA256SUMS; found: ' + entries.join(', '));
+    fail('artifact must contain CLI + watch helper + NAPI addon plus artifact-metadata.json and SHA256SUMS; found: ' + entries.join(', '));
   }
   const executableFile = path.join(input, target.executable);
   const napiFile = path.join(input, matrix.napiAddon);
+  const watchFile = path.join(input, target.watchHelper);
   await requireNonEmptyFile(executableFile, 'artifact executable');
   await requireNonEmptyFile(napiFile, 'artifact napi addon');
+  await requireNonEmptyFile(watchFile, 'artifact watch helper');
   const metadataFile = path.join(input, 'artifact-metadata.json');
   const metadataText = await readFile(metadataFile, 'utf8');
   const metadata = JSON.parse(metadataText);
@@ -120,8 +131,9 @@ if (command === 'matrix') {
     target: target.rustTarget,
     npm: { os: [target.os], cpu: [target.cpu], libc: target.libc ? [target.libc] : [] },
     executable: target.executable,
+    watchHelper: target.watchHelper,
     napiAddon: matrix.napiAddon,
-    build: { profile: 'release', cliFlags: cliBuildFlags, napiFlags: napiBuildFlags },
+    build: { profile: 'release', cliFlags: cliBuildFlags, napiFlags: napiBuildFlags, watchFlags: watchBuildFlags },
     checksums: metadata.checksums
   };
   if (!/^[0-9a-f]{40}$/.test(metadata.commit ?? '')) fail('metadata commit is not a full hexadecimal SHA');
@@ -131,20 +143,23 @@ if (command === 'matrix') {
   }
   const executableChecksum = await sha256(executableFile);
   const napiChecksum = await sha256(napiFile);
+  const watchChecksum = await sha256(watchFile);
   if (metadata.checksums?.algorithm !== 'sha256') fail('checksum algorithm must be sha256');
   if (metadata.checksums?.files?.[target.executable] !== executableChecksum) fail('executable checksum does not match metadata');
   if (metadata.checksums?.files?.[matrix.napiAddon] !== napiChecksum) fail('napi addon checksum does not match metadata');
+  if (metadata.checksums?.files?.[target.watchHelper] !== watchChecksum) fail('watch helper checksum does not match metadata');
   const checksumText = await readFile(path.join(input, 'SHA256SUMS'), 'utf8');
   const expectedSums = formatSha256Sums([
     [executableChecksum, target.executable],
-    [napiChecksum, matrix.napiAddon]
+    [napiChecksum, matrix.napiAddon],
+    [watchChecksum, target.watchHelper]
   ]);
   if (checksumText !== expectedSums) fail('SHA256SUMS does not match staged artifacts');
   const parsed = parseSha256Sums(checksumText);
-  if (parsed.get(target.executable) !== executableChecksum || parsed.get(matrix.napiAddon) !== napiChecksum || parsed.size !== 2) {
+  if (parsed.get(target.executable) !== executableChecksum || parsed.get(matrix.napiAddon) !== napiChecksum || parsed.get(target.watchHelper) !== watchChecksum || parsed.size !== 3) {
     fail('SHA256SUMS parse round-trip failed');
   }
   console.log('Verified ' + metadata.artifact + ' (' + metadata.target + ')');
 } else {
-  fail('usage: release-artifact.mjs matrix | prepare --target ID --binary PATH --napi PATH --output DIR --commit SHA | verify --target ID --input DIR');
+  fail('usage: release-artifact.mjs matrix | prepare --target ID --binary PATH --watch PATH --napi PATH --output DIR --commit SHA | verify --target ID --input DIR');
 }

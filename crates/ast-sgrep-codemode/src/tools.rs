@@ -104,19 +104,11 @@ pub fn call_tool(
             session.search(&a).map_err(CallError::from)
         }
         ToolName::Chain => session.chain(&args).map_err(CallError::from),
-        ToolName::Defs => {
+        ToolName::Defs | ToolName::Callers => {
             let symbol = require_symbol(&args)?;
             let mut a = args.clone();
             if let Some(obj) = a.as_object_mut() {
-                obj.insert("query".into(), json!(format!("defs:{symbol}")));
-            }
-            session.search(&a).map_err(CallError::from)
-        }
-        ToolName::Callers => {
-            let symbol = require_symbol(&args)?;
-            let mut a = args.clone();
-            if let Some(obj) = a.as_object_mut() {
-                obj.insert("query".into(), json!(format!("callers:{symbol}")));
+                obj.insert("query".into(), json!(format!("{}:{symbol}", tool.as_str())));
             }
             session.search(&a).map_err(CallError::from)
         }

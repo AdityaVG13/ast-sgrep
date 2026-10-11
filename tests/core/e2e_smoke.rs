@@ -436,7 +436,7 @@ fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(EmbedBackend::Neural.to_preference_str(), "neural");
     assert_eq!(EmbedBackend::parse("neural"), EmbedBackend::Neural);
     assert_eq!(EmbedBackend::parse("fastembed"), EmbedBackend::Neural);
-    let opts = SearchOptions {
+    let mut opts = SearchOptions {
         use_neural_embed: true,
         ann_probes: Some(4),
         use_rerank: true,
@@ -447,22 +447,57 @@ fn parity_embed_backend_and_search_option_wiring() {
     assert_eq!(opts.ann_probes, Some(4));
     assert!(opts.use_rerank);
     assert_eq!(opts.rerank_top_k, 5);
-    let _indexed = index_sample(IndexOptions {
+    let indexed = index_sample(IndexOptions {
         force_reindex: true,
         embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     });
+    opts.root = indexed.indexer.store().root().to_path_buf();
+    opts.index_path = Some(indexed.indexer.store().db_path().to_path_buf());
+    let control = searcher_from(
+        &indexed,
+        SearchOptions {
+            use_embed: false,
+            ..SearchOptions::default()
+        },
+    );
+    assert!(
+        control
+            .search("defs:auth_refresh")
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| { hit.symbol.as_deref() == Some("auth_refresh") }),
+        "the same indexed fixture must serve the non-neural control"
+    );
     // Fail-closed contract (parity_search_option_wiring): Searcher::new rejects
     // the flags when the features are not compiled; with them, the wiring must
     // still surface defs hits.
     #[cfg(not(all(feature = "neural-embed", feature = "rerank")))]
-    assert!(
-        ast_sgrep_core::Searcher::new(opts.clone()).is_err(),
-        "neural/rerank flags must fail closed when features are off"
-    );
+    for (feature, enabled) in [
+        ("neural-embed", cfg!(feature = "neural-embed")),
+        ("rerank", cfg!(feature = "rerank")),
+    ] {
+        if enabled {
+            continue;
+        }
+        let mut unavailable = opts.clone();
+        unavailable.use_neural_embed = feature == "neural-embed";
+        unavailable.use_rerank = feature == "rerank";
+        let error = match Searcher::new(unavailable) {
+            Ok(_) => panic!("unavailable {feature} must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("built without the `{feature}` feature")),
+            "must reject the unavailable feature, not an unrelated fixture error: {error}"
+        );
+    }
     #[cfg(all(feature = "neural-embed", feature = "rerank"))]
     {
-        let searcher = searcher_from(&_indexed, opts.clone());
+        let searcher = searcher_from(&indexed, opts.clone());
         let resp = searcher.search("defs:auth_refresh").unwrap();
         assert!(
             resp.hits

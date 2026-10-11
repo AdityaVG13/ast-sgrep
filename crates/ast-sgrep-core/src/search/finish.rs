@@ -1,3 +1,4 @@
+use super::critic::identifier_tokens;
 use super::fusion::dedup_hits;
 use super::types::{
     assign_hit_confidence, assign_signal_margins, HitKind, SearchHit, SearchOptions,
@@ -7,30 +8,6 @@ use crate::query::{ParsedQuery, QueryMode};
 use crate::Result;
 
 const MAX_HITS_PER_FILE: usize = 3;
-
-fn identifier_tokens(symbol: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut previous_lower_or_digit = false;
-    for ch in symbol.chars() {
-        if !ch.is_alphanumeric() {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
-            previous_lower_or_digit = false;
-            continue;
-        }
-        if ch.is_uppercase() && previous_lower_or_digit && !current.is_empty() {
-            tokens.push(std::mem::take(&mut current));
-        }
-        current.extend(ch.to_lowercase());
-        previous_lower_or_digit = ch.is_lowercase() || ch.is_ascii_digit();
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
-}
 
 pub(super) fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -> u8 {
     let Some(symbol) = hit.symbol.as_deref() else {
@@ -131,7 +108,34 @@ pub(crate) fn finish_response_checked(
     hits: Vec<SearchHit>,
     dedup: bool,
 ) -> Result<SearchResponse> {
-    finish_response_checked_lazy(parsed, options, hits, dedup, None, false, false)
+    finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
+}
+
+/// Apply the same path contract before channel joins and final ranking.
+/// An explicit file filter takes precedence over a resolved query scope.
+pub(super) fn filter_hit_paths(
+    parsed: &ParsedQuery,
+    options: &SearchOptions,
+    hits: &mut Vec<SearchHit>,
+) -> Result<()> {
+    if let Some(ref filter) = options.file_filter {
+        // Invalid globs error -- never silently skip the filter.
+        let re = super::compile_glob(filter).map_err(|e| {
+            crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
+    } else if let Some(scope) = parsed.path_scope.as_deref() {
+        let glob = if parsed.path_scope_exact {
+            scope.to_string()
+        } else {
+            crate::query::path_scope_glob(scope)
+        };
+        let re = super::compile_glob(&glob).map_err(|e| {
+            crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
+        })?;
+        hits.retain(|h| re.is_match(&h.file));
+    }
+    Ok(())
 }
 
 /// Variant that defers per-hit excerpt SQL out of the channel passes.
@@ -143,26 +147,6 @@ pub(crate) fn finish_response_checked(
 pub(crate) fn finish_response_checked_lazy(
     parsed: &ParsedQuery,
     options: &SearchOptions,
-    hits: Vec<SearchHit>,
-    dedup: bool,
-    lazy_excerpt_store: Option<&crate::store::IndexStore>,
-    mut lazy_excerpts_pending: bool,
-    skip_fs_byte_estimates: bool,
-) -> Result<SearchResponse> {
-    let _ = &mut lazy_excerpts_pending;
-    finish_response_inner(
-        parsed,
-        options,
-        hits,
-        dedup,
-        lazy_excerpt_store,
-        skip_fs_byte_estimates,
-    )
-}
-
-fn finish_response_inner(
-    parsed: &ParsedQuery,
-    options: &SearchOptions,
     mut hits: Vec<SearchHit>,
     dedup: bool,
     lazy_excerpt_store: Option<&crate::store::IndexStore>,
@@ -171,25 +155,7 @@ fn finish_response_inner(
     if dedup {
         hits = dedup_hits(hits);
     }
-    if let Some(ref filter) = options.file_filter {
-        // Invalid globs error — never silently skip the filter.
-        let re = super::compile_glob(filter).map_err(|e| {
-            crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
-        })?;
-        hits.retain(|h| re.is_match(&h.file));
-    } else if let Some(scope) = parsed.path_scope.as_deref() {
-        // A file-resolved scope filters by exact rel path — the historic
-        // `scope/**` expansion can never match a file.
-        let glob = if parsed.path_scope_exact {
-            scope.to_string()
-        } else {
-            crate::query::path_scope_glob(scope)
-        };
-        let re = super::compile_glob(&glob).map_err(|e| {
-            crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
-        })?;
-        hits.retain(|h| re.is_match(&h.file));
-    }
+    filter_hit_paths(parsed, options, &mut hits)?;
     assign_signal_margins(&mut hits);
     // Confidence is independent of ranking order but must run after margins
     // (which rewrite display `signal` from `kind`) and on every path -- including
@@ -217,12 +183,13 @@ fn finish_response_inner(
         super::record_ledger_from_env(&response);
         return Ok(response);
     }
-    let gate_limit = rerank_candidate_limit(options);
+    let gate_limit = options.retained_limit();
     let hybrid = parsed.mode == QueryMode::Hybrid;
-    let best_definition = if hybrid {
+    let best_definition_index = if hybrid {
         hits.iter()
-            .filter(|hit| hit.kind == HitKind::Def)
-            .max_by(|a, b| {
+            .enumerate()
+            .filter(|(_, hit)| hit.kind == HitKind::Def)
+            .max_by(|(_, a), (_, b)| {
                 a.score
                     .partial_cmp(&b.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -230,17 +197,22 @@ fn finish_response_inner(
                         definition_query_affinity(parsed, a)
                             .cmp(&definition_query_affinity(parsed, b))
                     })
-                    .then_with(|| b.file.cmp(&a.file))
+                    // Rescue must share the normal result-order tail. File
+                    // alone leaves same-file definitions dependent on channel order.
+                    .then_with(|| cmp_ranked_hits(b, 0, a, 0, false))
             })
-            .cloned()
+            .map(|(index, _)| index)
     } else {
         None
     };
     // Fill deferred structural excerpts after the stages that ignore
-    // them and before the first excerpt-dependent prune.
+    // them and before the first excerpt-dependent prune. Hydration changes
+    // fields, not indices: clone the selected definition only after its text
+    // is attached so rescue cannot publish stale empty evidence.
     if let Some(store) = lazy_excerpt_store {
         crate::search::passes::symbol::attach_indexed_excerpts_if_empty(store, &mut hits)?;
     }
+    let best_definition = best_definition_index.map(|index| hits[index].clone());
     let keep = if hybrid {
         gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
     } else {
@@ -309,13 +281,6 @@ fn finish_response_inner(
     };
     super::record_ledger_from_env(&response);
     Ok(response)
-}
-pub(super) fn rerank_candidate_limit(options: &SearchOptions) -> usize {
-    if options.use_rerank {
-        options.limit.max(options.rerank_top_k)
-    } else {
-        options.limit
-    }
 }
 fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
     if hits.is_empty() {

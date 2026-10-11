@@ -26,6 +26,20 @@ fn determinism_across_threads() {
     let mut seed = 0x7E57_1C0D_EF00_1234;
     let a = lcg_vec(&mut seed, 70, 1.0);
     let b = lcg_vec(&mut seed, 70, 1.0);
+    for vector in [&a, &b] {
+        assert!(
+            vector.iter().any(|x| *x > 0.5),
+            "fixture must exercise positive lanes"
+        );
+        assert!(
+            vector.iter().any(|x| *x < -0.5),
+            "fixture must exercise negative lanes"
+        );
+        assert!(
+            vector.iter().all(|x| x.abs() <= 1.0),
+            "fixture must stay in its unit range"
+        );
+    }
     let flat: Vec<f32> = (0..32).flat_map(|_| lcg_vec(&mut seed, 2, 1.0)).collect();
     let corpus: Vec<(usize, f32)> = (0..32)
         .map(|i| (i, cosine_similarity(&a[..2], &flat[i * 2..(i + 1) * 2])))

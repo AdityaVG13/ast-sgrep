@@ -116,16 +116,22 @@ pub fn calls_matching(
     column: &str,
     name: &str,
 ) -> Result<Vec<(String, u32, String, String)>> {
+    calls_matching_limited(conn, column, name, None)
+}
+/// Cursor admission bounds decoded rows, not SQLite's matched-row scan or sort.
+pub fn calls_matching_limited(
+    conn: &Connection,
+    column: &str,
+    name: &str,
+    limit: Option<usize>,
+) -> Result<Vec<(String, u32, String, String)>> {
     assert_sql_ident(column, CALLER_COLUMN_ALLOWLIST)?;
     let sql = format!( "SELECT f.path, c.line_no, c.caller, c.callee FROM callers c JOIN files f ON f.id = c.file_id
          WHERE lower(c.{column}) = lower(?1) ORDER BY f.path, c.line_no"
     );
-    let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map(params![name], |row| {
+    query_cached_map_capped(conn, &sql, params![name], limit, |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(Into::into)
+    })
 }
 pub fn append_lang_filter(parts: &mut Vec<String>, bind: &mut Vec<String>, lang: Option<&str>) {
     if let Some(lang) = ast_sgrep_lang::Language::canonical_filter(lang) {
@@ -259,9 +265,26 @@ where
     P: rusqlite::Params,
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
 {
+    query_cached_map_capped(conn, sql, params, None, map)
+}
+/// Stop cursor consumption before decoding/owning another row. Keep the original
+/// ordered SQL: a runtime LIMIT can select a different, costly SQLite sorter.
+/// SQLite may still scan/sort the full match universe before producing rows.
+pub fn query_cached_map_capped<T, P, F>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+    limit: Option<usize>,
+    map: F,
+) -> Result<Vec<T>>
+where
+    P: rusqlite::Params,
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+{
     let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(params, map)?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
+    rows.take(limit.unwrap_or(usize::MAX))
+        .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
 }
 pub fn count_star(conn: &Connection, table: &str) -> Result<usize> {

@@ -207,6 +207,81 @@ fn batch_fails_closed_on_fallback_pattern() {
     assert_eq!(single_envelope["ok"], false);
 }
 
+#[test]
+fn structural_pattern_flags_refuse_semantic_only_before_index_effects() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let root = temp.path().join("fixture");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("main.js"), "console.log(42);\n").unwrap();
+    for source in ["parent", "local", "env"] {
+        for count in [1, 2] {
+            let index = temp.path().join(format!("{source}-{count}.db"));
+            let mut args = vec![
+                "--json",
+                "--no-embed",
+                "--auto-index",
+                "--index-path",
+                index.to_str().unwrap(),
+                "--root",
+                root.to_str().unwrap(),
+            ];
+            if source == "parent" {
+                args.push("--semantic-only");
+            }
+            args.push("search");
+            if source == "local" {
+                args.push("--semantic-only");
+            }
+            for _ in 0..count {
+                args.extend(["--pattern", "console.log($$$A)"]);
+            }
+            let output = ast_sgrep_testkit::run_env(
+                &asgrep_bin(),
+                &args,
+                &[(
+                    "ASGREP_SEMANTIC_ONLY",
+                    if source == "env" { "1" } else { "0" },
+                )],
+            );
+            let reply: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(output.status.code(), Some(1), "{source}/{count}: {reply}");
+            ast_sgrep_testkit::assert_failure_envelope(&output, "search", 1, "usage");
+            assert!(
+                !index.exists(),
+                "{source}/{count} conflict must refuse before auto-indexing"
+            );
+        }
+    }
+    // Plain structural flags remain supported; a false environment is not a conflict.
+    let index = temp.path().join("control.db");
+    let base = [
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "--root",
+        root.to_str().unwrap(),
+    ];
+    let mut structural = base.to_vec();
+    structural.extend(["--auto-index", "search", "--pattern", "console.log($$$A)"]);
+    let output =
+        ast_sgrep_testkit::run_env(&asgrep_bin(), &structural, &[("ASGREP_SEMANTIC_ONLY", "0")]);
+    let response = ast_sgrep_testkit::assert_success(&output, "search");
+    assert_eq!(response["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(response["hits"][0]["symbol"], "console.log($$$A)");
+    // Ordinary semantic query routing is not banned by the structural admission guard.
+    let mut semantic = base.to_vec();
+    semantic.extend([
+        "--no-auto-index",
+        "search",
+        "--semantic-only",
+        "pattern:console.log($$$A)",
+    ]);
+    let output =
+        ast_sgrep_testkit::run_env(&asgrep_bin(), &semantic, &[("ASGREP_SEMANTIC_ONLY", "0")]);
+    ast_sgrep_testkit::assert_success(&output, "semantic");
+}
+
 /// QUERY positional and --pattern are mutually exclusive (loud usage error).
 #[test]
 fn query_and_pattern_flags_are_exclusive() {

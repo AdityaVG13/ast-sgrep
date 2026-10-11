@@ -6,9 +6,11 @@
 //! `edit` is a unique-string replace + targeted reindex — never a second
 //! Searcher open.
 
-use crate::session::CodeModeSession;
+use crate::session::{admit_response, CodeModeSession};
 use anyhow::{anyhow, Context};
-use ast_sgrep_core::{IndexOptions, Indexer, MAX_EXCERPT_LINES, MAX_INDEX_FILE_BYTES};
+use ast_sgrep_core::{
+    read_text_capped, IndexOptions, Indexer, MAX_EXCERPT_LINES, MAX_INDEX_FILE_BYTES,
+};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -112,14 +114,7 @@ impl CodeModeSession {
                 Some(&index) => index,
                 None => {
                     let abs = root.join(&rel);
-                    let original = fs::read_to_string(&abs)
-                        .with_context(|| format!("cannot read {}", rel.display()))?;
-                    if original.len() > MAX_INDEX_FILE_BYTES as usize {
-                        return Err(anyhow!(
-                            "{} exceeds max {MAX_INDEX_FILE_BYTES} bytes",
-                            rel.display()
-                        ));
-                    }
+                    let original = read_text_capped(&abs, MAX_INDEX_FILE_BYTES)?;
                     plan.push(PendingWrite {
                         rel: rel.clone(),
                         abs,
@@ -154,6 +149,14 @@ impl CodeModeSession {
             }
             applied.push(row);
         }
+        let response = json!({
+            "ok": true,
+            "changed": applied.iter().filter(|row| row["changed"] == true).count(),
+            "edits": applied,
+        });
+        // The exact response must fit before any file can change. Returning this
+        // same value keeps later call-level admission from failing after writes.
+        admit_response(&response)?;
         // Phase 2: every edit validated — write each touched file once.
         let mut rel_paths = Vec::new();
         for write in plan {
@@ -175,11 +178,7 @@ impl CodeModeSession {
             indexer.flush_deferred_rebuilds()?;
             self.invalidate_searcher_cache();
         }
-        Ok(json!({
-            "ok": true,
-            "changed": applied.iter().filter(|row| row["changed"] == true).count(),
-            "edits": applied,
-        }))
+        Ok(response)
     }
 }
 
@@ -228,14 +227,14 @@ fn collect_refs(args: &Value) -> anyhow::Result<Vec<ReadSpec>> {
         .get("start")
         .or_else(|| args.get("line_start"))
         .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
+        .map(|n| n.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(1)
         .max(1);
     let end = args
         .get("end")
         .or_else(|| args.get("line_end"))
         .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
+        .map(|n| n.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(start)
         .max(start);
     Ok(vec![ReadSpec {
@@ -264,14 +263,14 @@ fn parse_ref_value(value: &Value) -> anyhow::Result<ReadSpec> {
         .get("start")
         .or_else(|| obj.get("line_start"))
         .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
+        .map(|n| n.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(1)
         .max(1);
     let end = obj
         .get("end")
         .or_else(|| obj.get("line_end"))
         .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
+        .map(|n| n.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(start)
         .max(start);
     Ok(ReadSpec {
@@ -348,15 +347,26 @@ fn parse_edit_value(value: &Value) -> anyhow::Result<EditSpec> {
     })
 }
 
-/// Bounded line split for edit diffs — caps each side so a whole-file paste
-/// can't bloat the envelope. Returns (lines, had_more).
+/// Bound both lines and cumulative characters per side, including single-line
+/// pastes. A character needs at most six JSON bytes even when escaped.
 fn diff_lines(text: &str) -> (Vec<String>, bool) {
     const MAX_DIFF_LINES: usize = 24;
-    let all: Vec<String> = text.lines().map(str::to_string).collect();
-    (
-        all.iter().take(MAX_DIFF_LINES).cloned().collect(),
-        all.len() > MAX_DIFF_LINES,
-    )
+    const MAX_DIFF_CHARS: usize = 1_024;
+    let mut lines = Vec::new();
+    let mut remaining = MAX_DIFF_CHARS;
+    for line in text.lines() {
+        if lines.len() == MAX_DIFF_LINES || remaining == 0 {
+            return (lines, true);
+        }
+        let mut chars = line.chars();
+        let preview: String = chars.by_ref().take(remaining).collect();
+        remaining -= preview.chars().count();
+        lines.push(preview);
+        if chars.next().is_some() {
+            return (lines, true);
+        }
+    }
+    (lines, false)
 }
 
 fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String> {
@@ -395,6 +405,14 @@ fn jail_rel_path(root: &Path, raw: &str) -> anyhow::Result<PathBuf> {
     if !canon.starts_with(root) {
         return Err(anyhow!("path escapes session root: {raw}"));
     }
+    // Reject static FIFOs/devices before opening: even a capped read can block
+    // at File::open on a FIFO with no writer. External writers are not locked.
+    if !fs::metadata(&canon)
+        .with_context(|| format!("cannot inspect path {raw}"))?
+        .is_file()
+    {
+        return Err(anyhow!("path is not a regular file: {raw}"));
+    }
     Ok(canon
         .strip_prefix(root)
         .map(|p| p.to_path_buf())
@@ -418,18 +436,15 @@ fn read_one_window(
     let ctx = context_lines as u32;
     let start = spec.start.saturating_sub(ctx).max(1);
     let end = spec.end.saturating_add(ctx);
-    let indexed = store.file_lines(&rel_s)?;
-    let (text, actual_start, actual_end, truncated) = if indexed.is_empty() {
-        read_disk_window(root, &rel, start, end, max_chars)?
-    } else {
-        // The index stores an empty EOF cursor row after a final LF (and for
-        // empty files). Source windows follow str::lines, like disk reads.
-        let source_lines = if indexed.last().is_some_and(|(_, line)| line.is_empty()) {
-            &indexed[..indexed.len() - 1]
-        } else {
-            &indexed
-        };
-        slice_indexed(source_lines, start, end, max_chars)
+    let indexed = store.source_lines_in_range(&rel_s, start, end)?;
+    let (text, actual_start, actual_end, truncated) = match indexed {
+        None => read_disk_window(root, &rel, start, end, max_chars)?,
+        Some(lines) => slice_indexed(
+            lines.iter().map(|(no, line)| (*no, line.as_str())),
+            start,
+            end,
+            max_chars,
+        ),
     };
     Ok(json!({
         "path": rel_s,
@@ -441,8 +456,8 @@ fn read_one_window(
     }))
 }
 
-fn slice_indexed(
-    lines: &[(u32, String)],
+fn slice_indexed<'a>(
+    lines: impl IntoIterator<Item = (u32, &'a str)>,
     start: u32,
     end: u32,
     max_chars: usize,
@@ -454,13 +469,13 @@ fn slice_indexed(
     let mut truncated = false;
     let mut chars = 0usize;
     for (no, content) in lines {
-        if *no < start {
+        if no < start {
             continue;
         }
-        if *no > end {
+        if no > end {
             break;
         }
-        let mut line = content.as_str();
+        let mut line = content;
         if line.chars().count() > MAX_LINE_CHARS {
             let end_idx = line
                 .char_indices()
@@ -476,13 +491,13 @@ fn slice_indexed(
             break;
         }
         if first {
-            actual_start = *no;
+            actual_start = no;
             first = false;
         } else {
             out.push('\n');
         }
         out.push_str(line);
-        actual_end = *no;
+        actual_end = no;
         chars += add;
     }
     if first {
@@ -499,18 +514,12 @@ fn read_disk_window(
     end: u32,
     max_chars: usize,
 ) -> anyhow::Result<(String, u32, u32, bool)> {
-    let text = fs::read_to_string(root.join(rel))
-        .with_context(|| format!("cannot read {}", rel.display()))?;
-    if text.len() > MAX_INDEX_FILE_BYTES as usize {
-        return Err(anyhow!(
-            "{} exceeds max {MAX_INDEX_FILE_BYTES} bytes",
-            rel.display()
-        ));
-    }
-    let numbered: Vec<(u32, String)> = text
+    let text = read_text_capped(&root.join(rel), MAX_INDEX_FILE_BYTES)?;
+    // Borrow lines lazily: only the accepted window is copied. Materializing
+    // every line multiplied memory and allocations even for a tiny window.
+    let numbered = text
         .lines()
         .enumerate()
-        .map(|(i, line)| (i as u32 + 1, line.to_string()))
-        .collect();
-    Ok(slice_indexed(&numbered, start, end, max_chars))
+        .map(|(i, line)| (i as u32 + 1, line));
+    Ok(slice_indexed(numbered, start, end, max_chars))
 }

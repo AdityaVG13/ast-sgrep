@@ -84,41 +84,63 @@ fn bead_2hhq_chain_drops_edges_to_truncated_nodes() {
         byte_start: 0,
         byte_end: 10,
     }];
-    let lines_b = [(1u32, "fn hop_target() {}".into())];
+    let lines_b = [(1u32, "fn hop_target() { leaf_target(); }".into())];
     let mut input_b = base("hop.rs", Some("rust"), &lines_b, "hhop");
     input_b.symbols = &symbols_b;
+    let callers_b = [CallerRow {
+        line_no: 1,
+        caller: "hop_target".into(),
+        callee: "leaf_target".into(),
+        byte_start: 0,
+        byte_end: 0,
+    }];
+    input_b.callers = &callers_b;
     store.upsert_file(input_b).unwrap();
 
-    for i in 0..8 {
-        let name = format!("filler{i}");
-        let symbols = [SymbolRow {
-            name: name.clone(),
-            kind: "function".into(),
-            line_start: 1,
-            line_end: 1,
-            byte_start: 0,
-            byte_end: 1,
-        }];
-        let lines = [(1u32, format!("fn {name}() {{}}"))];
-        let path = format!("f{i}.rs");
-        let hash = format!("hf{i}");
-        let mut input = base(&path, Some("rust"), &lines, &hash);
-        input.symbols = &symbols;
-        store.upsert_file(input).unwrap();
-    }
+    let symbols_c = [SymbolRow {
+        name: "leaf_target".into(),
+        kind: "function".into(),
+        line_start: 1,
+        line_end: 1,
+        byte_start: 0,
+        byte_end: 11,
+    }];
+    let lines_c = [(1u32, "fn leaf_target() {}".into())];
+    let mut input_c = base("leaf.rs", Some("rust"), &lines_c, "hleaf");
+    input_c.symbols = &symbols_c;
+    store.upsert_file(input_c).unwrap();
 
     let resp = expand_chain(
         &store,
-        "hop_target",
+        "defs:seed_fn",
         &ChainConfig {
             max_depth: 2,
             decay_factor: 0.5,
             limit: 2,
-            top_n: 8,
+            top_n: 1,
+            ..ChainConfig::default()
         },
     )
     .unwrap();
+    assert_eq!(
+        resp.node_count, 3,
+        "the walk must discover the omitted leaf"
+    );
+    assert_eq!(
+        resp.nodes
+            .iter()
+            .map(|node| node.file.as_str())
+            .collect::<Vec<_>>(),
+        vec!["seed.rs", "hop.rs"],
+        "the lower-scored leaf must be truncated"
+    );
     assert_eq!(resp.edge_count, resp.edges.len());
+    assert!(
+        resp.edges
+            .iter()
+            .any(|edge| { edge.from_file == "seed.rs" && edge.to_file == "hop.rs" }),
+        "truncation must preserve the retained connection"
+    );
     let node_files: HashSet<_> = resp.nodes.iter().map(|n| n.file.as_str()).collect();
     for e in &resp.edges {
         assert!(
@@ -228,6 +250,7 @@ fn bead_ql1u_chain_seed_skips_first_symbol_invention() {
             decay_factor: 0.5,
             limit: 20,
             top_n: 8,
+            ..ChainConfig::default()
         },
     )
     .unwrap();

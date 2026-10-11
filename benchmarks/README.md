@@ -70,6 +70,22 @@ Quality pack (writes gitignored `results/raw/`):
 ./benchmarks/run_eval.sh
 ```
 
+### Measurement semantics
+
+- `eval` reports MRR, nDCG and Recall@k at each gold query's `k`.
+  Recall@1/5/20 use their named cutoffs independently of `k`; the search
+  requests at least 20 results even when `--limit` or every gold `k` is smaller.
+  Aggregates are macro-averages of unrounded per-query metrics.
+- Runs before this correction capped fixed cutoffs at `min(cutoff, k)`.
+  Do not interpret a change in those reported values as better retrieval.
+- The pack measures complete CLI stdout **bytes**, including Unicode encoding,
+  whitespace and the final newline. Its legacy `self-token-efficiency.json`
+  filename is not a token claim: the report declares `unit: bytes` and the
+  summary calls it `output_bytes`. No tokenizer is run. Older pack totals
+  counted stripped Unicode characters and are not comparable.
+- Search-hit confidence is heuristic channel evidence, not a calibrated
+  probability of relevance. Higher confidence alone is not a quality win.
+
 ## Latency notes
 
 Published CLI numbers are sample measurements, not SLOs. The old 285 ms

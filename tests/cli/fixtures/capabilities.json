@@ -65,7 +65,9 @@
     },
     {
       "about": "Expand a bounded symbol/caller/import graph",
-      "flags": [],
+      "flags": [
+        "--max-work"
+      ],
       "name": "chain",
       "usage": "asgrep chain"
     },
@@ -105,6 +107,7 @@
     {
       "about": "Run many Code Mode tool calls in one warm process",
       "flags": [
+        "--no-embed",
         "--requests"
       ],
       "name": "codemode-batch",
@@ -112,7 +115,9 @@
     },
     {
       "about": "Sticky NDJSON Code Mode worker",
-      "flags": [],
+      "flags": [
+        "--no-embed"
+      ],
       "name": "codemode-serve",
       "usage": "asgrep codemode-serve"
     },

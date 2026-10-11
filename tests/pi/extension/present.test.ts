@@ -7,6 +7,7 @@ import {
   formatSearchResult,
   formatStatusResult,
   sanitizeContent,
+  truncateToWidth,
 } from "../../../packages/pi/extension/src/ui/present.js";
 import { renderAsgrepResult } from "../../../packages/pi/extension/src/ui/card.js";
 import { success } from "../../../packages/pi/extension/src/host/results.js";
@@ -228,6 +229,17 @@ function piWidth(text: string): number {
   return width;
 }
 
+test("truncation bounds wide and styled ellipses by terminal cells", () => {
+  for (const ellipsis of ["界", "🙂", "\u001b[31m界\u001b[0m", "…"]) {
+    for (const width of [0, 1, 2, 3, 4]) {
+      const cropped = truncateToWidth("overlong", width, ellipsis);
+      assert.ok(piWidth(cropped) <= width,
+        `${JSON.stringify(ellipsis)} at ${width} cells produced ${JSON.stringify(cropped)}`);
+    }
+  }
+  assert.ok(displayWidth("\ud800\tX") >= 4, "a lone surrogate must not consume the following tab");
+});
+
 test("the width oracle matches pi's visibleWidth on the glyphs the card draws", () => {
   const measuredInPi: Array<[string, number]> = [
     ["\u2026", 1], ["\u00b7", 1], ["\u2713", 1], ["\u2717", 1], ["\u00d7", 1],
@@ -299,6 +311,10 @@ const CARD_MODELS: Array<[string, Parameters<typeof renderAsgrepResult>[0]]> = [
       trace: [{ tool: "search", target: "a very long query string that keeps going and going", ok: true, ms: 1_234 }],
     },
   }],
+  ["Code Mode return with unpaired UTF-16 before a tab", {
+    content: [{ type: "text", text: "codemode" }],
+    details: { ok: true, command: "codemode", result: "\ud800\tX\n\ud800\ud800\tX\n\ud800\ud83d\ude00\tX" },
+  }],
   ["codemode result lines with wide glyphs", {
     content: [{ type: "text", text: "codemode" }],
     details: { ok: true, command: "codemode", result: { summary: "\u4e2d\u6587 summary " + "y".repeat(200), hits: 3 } },
@@ -309,7 +325,7 @@ for (const [label, result] of CARD_MODELS) {
   test("card stays inside the terminal width: " + label, () => {
     for (const expanded of [false, true]) {
       const card = renderAsgrepResult(result, { expanded }, THEME);
-      for (const width of [40, 60, 80, 91, 100, 120, 200]) {
+      for (const width of [1, 2, 4, 7, 8, 40, 60, 80, 91, 100, 120, 200]) {
         const lines = card.render(width);
         assert.ok(lines.length > 0, "card rendered nothing");
         for (const [index, line] of lines.entries()) {

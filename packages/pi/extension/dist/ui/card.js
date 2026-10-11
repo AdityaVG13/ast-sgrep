@@ -141,8 +141,11 @@ export class AsgrepCard {
         // us. Capping it left the host's message background showing as a dark
         // band to the right of the border.
         const lines = framedLines(theme, model, Math.max(8, width));
-        this.cache = { width, lines };
-        return lines;
+        // During a resize Pi can offer fewer cells than the smallest frame. Its
+        // renderer treats any overflowing row as fatal, including border rows.
+        const bounded = width < 8 ? lines.map(line => truncateToWidth(line, width, "")) : lines;
+        this.cache = { width, lines: bounded };
+        return bounded;
     }
 }
 /** Rounded card: header embedded in the top rule, body rows in \u2502 gutters. */
@@ -266,20 +269,89 @@ function resultPreviewLines(value) {
     }
     return [sanitizeContent(String(value))];
 }
-/** Build the card model from the tool result's details payload. */
+/** Nested and flat status counts are distinct wire shapes, not result previews. */
+function statusCounts(response) {
+    const counts = response?.counts;
+    if (counts && typeof counts === "object") {
+        return Object.entries(counts).slice(0, 4).map(([k, v]) => k + "=" + String(v)).join(" ");
+    }
+    if (!response)
+        return undefined;
+    const flat = [];
+    for (const k of ["file_count", "symbol_count", "caller_count"]) {
+        const v = response[k];
+        if (typeof v === "number" || typeof v === "bigint")
+            flat.push(k.replace(/_count$/, "s") + "=" + String(v));
+    }
+    if (typeof response.embed_backend === "string")
+        flat.push(response.embed_backend);
+    return flat.length > 0 ? flat.join(" ") : undefined;
+}
+function appendStatusTitle(title, response) {
+    const state = typeof response?.status === "string" ? response.status
+        : typeof response?.index_status === "string" ? response.index_status
+            : response?.ok === true ? "ok" : undefined;
+    if (state)
+        title.push(state);
+    const counts = statusCounts(response);
+    if (counts !== undefined)
+        title.push(counts);
+}
+function appendCompletionTitle(model, details) {
+    if (["status", "index", "reindex"].includes(model.command)) {
+        appendStatusTitle(model.title, details.response);
+    }
+    const ms = typeof details.wallMs === "number" ? details.wallMs : typeof details.activationMs === "number" ? details.activationMs : undefined;
+    if (ms !== undefined)
+        model.title.push(fmtMs(ms));
+    if (typeof details.backend === "string")
+        model.title.push(details.backend);
+}
+function readPreviewLines(response, expanded) {
+    if (!response || !Array.isArray(response.windows))
+        return undefined;
+    const windows = response.windows;
+    return windows.flatMap((w) => [
+        sanitizeContent((w.path ?? "?") + ":" + (w.start ?? 1) + "-" + (w.end ?? "")),
+        ...(typeof w.text === "string" ? sanitizeContent(w.text).split("\n").slice(0, expanded ? 20 : 6).map((l) => "  " + l) : []),
+    ]);
+}
+function appendResultContent(model, details) {
+    const response = details.response;
+    const hits = hitsOf(response) ?? hitsOf(details.result);
+    const resultEdits = editsOf(details.result) ?? editsOf(response);
+    const readLines = model.command === "read" ? readPreviewLines(response, model.expanded === true) : undefined;
+    // Empty hits/diffs still own the answer; only their absence permits a preview.
+    const resultLines = hits || resultEdits ? undefined : (readLines ?? resultPreviewLines(details.result));
+    if (hits)
+        model.hits = hits;
+    if (resultEdits)
+        model.edits = resultEdits;
+    if (resultLines)
+        model.resultLines = resultLines;
+}
+function appendOperations(model, value) {
+    if (!Array.isArray(value) || value.length === 0)
+        return;
+    const trace = value;
+    model.ops = trace.map((t) => ({ tool: t.tool, target: t.target ?? "", ok: t.ok !== false, ms: typeof t.ms === "number" ? t.ms : 0 }));
+}
+/** Warnings qualify the answer in the TUI as well as in model-visible text. */
+function appendNotes(model, value) {
+    if (!Array.isArray(value))
+        return;
+    const notes = value.filter((note) => typeof note === "string" && note.length > 0);
+    if (notes.length > 0)
+        model.notes = notes.map((note) => sanitizeContent(note));
+}
+/** Lifecycle precedence: partial without ok, then failure, then completed content. */
 export function cardModel(result, options, callArgs) {
     const details = (result.details && typeof result.details === "object" ? result.details : {});
     const command = typeof details.command === "string" ? details.command : "asgrep";
     const expanded = options.expanded === true;
-    // In-flight partial updates carry only {command, phase}.
     if (options.isPartial && !("ok" in details)) {
         const phase = typeof details.phase === "string" && details.phase !== "started" ? details.phase : undefined;
-        return {
-            command,
-            title: [...callTargetBits(callArgs), phase],
-            running: true,
-            expanded,
-        };
+        return { command, title: [...callTargetBits(callArgs), phase], running: true, expanded };
     }
     const title = [];
     if (typeof details.query === "string" && details.query)
@@ -288,73 +360,13 @@ export function cardModel(result, options, callArgs) {
         title.push(sanitizeContent(details.mode));
     const error = details.error;
     if (result.isError || details.ok === false || error) {
-        return {
-            command,
-            title,
-            error: typeof error?.message === "string" ? sanitizeContent(error.message) : "tool failed",
-            expanded,
-        };
+        return { command, title, error: typeof error?.message === "string" ? sanitizeContent(error.message) : "tool failed", expanded };
     }
-    const response = details.response;
-    if (command === "status" || command === "index" || command === "reindex") {
-        const state = typeof response?.status === "string" ? response.status
-            : typeof response?.index_status === "string" ? response.index_status
-                : response?.ok === true ? "ok" : undefined;
-        if (state)
-            title.push(state);
-        const counts = response?.counts;
-        if (counts && typeof counts === "object") {
-            title.push(Object.entries(counts).slice(0, 4).map(([k, v]) => k + "=" + String(v)).join(" "));
-        }
-        else if (response) {
-            // Flat status envelope: file_count/symbol_count/caller_count + embed info.
-            const flat = [];
-            for (const k of ["file_count", "symbol_count", "caller_count"]) {
-                const v = response[k];
-                if (typeof v === "number" || typeof v === "bigint")
-                    flat.push(k.replace(/_count$/, "s") + "=" + String(v));
-            }
-            if (typeof response.embed_backend === "string")
-                flat.push(response.embed_backend);
-            if (flat.length > 0)
-                title.push(flat.join(" "));
-        }
-    }
-    const ms = typeof details.wallMs === "number" ? details.wallMs : typeof details.activationMs === "number" ? details.activationMs : undefined;
-    if (ms !== undefined)
-        title.push(fmtMs(ms));
-    if (typeof details.backend === "string")
-        title.push(details.backend);
-    const trace = Array.isArray(details.trace) ? details.trace : undefined;
-    const ops = trace?.map((t) => ({ tool: t.tool, target: t.target ?? "", ok: t.ok !== false, ms: typeof t.ms === "number" ? t.ms : 0 }));
-    const hits = hitsOf(response) ?? hitsOf(details.result);
-    const resultEdits = editsOf(details.result) ?? editsOf(response);
-    // read envelopes carry windows: preview each window's first lines.
-    const windows = command === "read" && response && Array.isArray(response.windows)
-        ? response.windows
-        : undefined;
-    const readLines = windows?.flatMap((w) => [
-        sanitizeContent((w.path ?? "?") + ":" + (w.start ?? 1) + "-" + (w.end ?? "")),
-        ...(typeof w.text === "string" ? sanitizeContent(w.text).split("\n").slice(0, expanded ? 20 : 6).map((l) => "  " + l) : []),
-    ]);
-    // When edits carry diffs they are the interesting part of the result.
-    const resultLines = hits || resultEdits ? undefined : (readLines ?? resultPreviewLines(details.result));
     const model = { command, title, expanded };
-    if (ops && ops.length > 0)
-        model.ops = ops;
-    if (hits)
-        model.hits = hits;
-    if (resultEdits)
-        model.edits = resultEdits;
-    if (resultLines)
-        model.resultLines = resultLines;
-    // Warnings travel with the model-visible text; keep them visible in the TUI
-    // too, or the transcript looks clean while the answer is qualified.
-    if (Array.isArray(details.notes)) {
-        const notes = details.notes.filter((note) => typeof note === "string" && note.length > 0);
-        if (notes.length > 0)
-            model.notes = notes.map((note) => sanitizeContent(note));
-    }
+    appendCompletionTitle(model, details);
+    appendOperations(model, details.trace);
+    appendResultContent(model, details);
+    appendNotes(model, details.notes);
     return model;
 }
 /** renderResult entrypoint: bind one card per result slot, feed it details. */

@@ -15,7 +15,7 @@ pub mod supervisor;
 mod watch;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli_args::{Cli, Commands, VersionArgs};
 use index_cmd::{print_status_command, run_full_index, run_index_dry_run, run_targeted_index};
 use machine::{
@@ -33,6 +33,10 @@ pub(crate) use index_cmd::{
 pub(crate) use machine::print_machine_json_status;
 
 pub fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    if supervisor::guardian_requested() {
+        supervisor::run_guardian();
+    }
     #[cfg(not(unix))]
     {
         run_process()
@@ -41,7 +45,7 @@ pub fn main() -> anyhow::Result<()> {
     {
         if supervisor::is_worker() {
             if supervisor::worker_authenticate() {
-                supervisor::worker_start();
+                supervisor::worker_start()?;
                 run_process()
             } else {
                 supervisor::supervise()
@@ -54,49 +58,74 @@ pub fn main() -> anyhow::Result<()> {
     }
 }
 
-fn rewrite_search_path_alias(raw: Vec<OsString>) -> Vec<OsString> {
-    let mut saw_search = false;
-    let mut saw_index = false;
-    for arg in raw.iter().skip(1) {
+fn rewrite_search_path_alias(mut raw: Vec<OsString>) -> Vec<OsString> {
+    if !raw
+        .iter()
+        .skip(1)
+        .any(|arg| arg == "--path" || arg.to_str().is_some_and(|s| s.starts_with("--path=")))
+    {
+        return raw;
+    }
+    // Only the first positional can select a command. Option values and later
+    // positionals (queries/roots) must not change what --path means.
+    let parser = Cli::command();
+    let mut active = &parser;
+    let mut command_seen = false;
+    let mut value_pending = false;
+    let mut aliases = Vec::new();
+    for (index, arg) in raw.iter().enumerate().skip(1) {
+        if value_pending {
+            value_pending = false;
+            continue;
+        }
         if arg == "--" {
             break;
         }
         let Some(s) = arg.to_str() else {
+            command_seen = true;
             continue;
         };
-        match s {
-            "search" | "find" | "query" | "keyword" | "semantic" => saw_search = true,
-            "index" | "reindex" => saw_index = true,
-            _ => {}
-        }
-    }
-    if saw_index && !saw_search {
-        return raw;
-    }
-    let mut out = Vec::with_capacity(raw.len());
-    let mut passthrough = false;
-    for arg in raw {
-        if passthrough {
-            out.push(arg);
-            continue;
-        }
-        if arg == "--" {
-            passthrough = true;
-            out.push(arg);
-            continue;
-        }
-        match arg.to_str() {
-            Some("--path") => out.push(OsString::from("--file-filter")),
-            Some(s) if s.starts_with("--path=") => {
-                out.push(OsString::from(format!("--file-filter={}", &s[7..])));
+        if let Some(option) = s.strip_prefix("--") {
+            let (name, attached) = option
+                .split_once('=')
+                .map_or((option, false), |(name, _)| (name, true));
+            if name == "path" {
+                aliases.push(index);
             }
-            _ => out.push(arg),
+            value_pending = !attached
+                && (name == "path"
+                    || active
+                        .get_arguments()
+                        .chain(parser.get_arguments())
+                        .any(|spec| {
+                            spec.get_long() == Some(name) && spec.get_action().takes_values()
+                        }));
+        } else if (!s.starts_with('-') || s == "-") && !command_seen {
+            command_seen = true;
+            if let Some(command) = parser.find_subcommand(arg) {
+                if !matches!(command.get_name(), "search" | "keyword" | "semantic") {
+                    return raw;
+                }
+                active = command;
+            }
         }
     }
-    out
+    for index in aliases {
+        if let Some(value) = raw[index].to_str().and_then(|s| s.strip_prefix("--path=")) {
+            raw[index] = OsString::from(format!("--file-filter={value}"));
+        } else {
+            raw[index] = OsString::from("--file-filter");
+        }
+    }
+    raw
 }
 
 fn run_process() -> ! {
+    run_process_with(run_cli)
+}
+
+/// Shared parser and terminal error boundary for the CLI and exec helpers.
+fn run_process_with(run: impl FnOnce(&Cli) -> anyhow::Result<()>) -> ! {
     let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
     let (raw_args, typo_warnings) = agent::rewrite_typos(raw_args);
     for warning in &typo_warnings {
@@ -119,10 +148,10 @@ fn run_process() -> ! {
                 );
             }
             let command = raw_command_name(&raw_args);
-            msg = agent::augment_clap_usage_message(&msg, command);
+            msg = agent::augment_clap_usage_message(&msg, &command);
             let augmented = msg != error.to_string();
             if exit_code == 1 && raw_machine_output_requested(&raw_args) {
-                print_machine_failure(command, "usage", exit_code, &msg);
+                print_machine_failure(&command, "usage", exit_code, &msg);
             } else if exit_code == 1 {
                 // Always teach: triad footer on every usage error (not only when we rewrote the body).
                 if augmented {
@@ -140,7 +169,7 @@ fn run_process() -> ! {
             std::process::exit(exit_code);
         }
     };
-    match run_cli(&cli) {
+    match run(&cli) {
         Ok(()) => std::process::exit(0),
         Err(error) => {
             let usage = error.downcast_ref::<UsageError>().is_some();
@@ -169,12 +198,28 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
     if cli.robot_help {
         return agent::emit_robot_guide(cli);
     }
+    validate_cli(cli)?;
+    match cli.command.as_ref() {
+        Some(c) => run_command(cli, c),
+        None => run_default_search(cli),
+    }
+}
+
+fn validate_cli(cli: &Cli) -> anyhow::Result<()> {
     // Search-only flags must fail on commands that cannot apply them.
     let search_command = matches!(
         cli.command.as_ref(),
         None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
     );
     let tuning = cli.active_tuning();
+    if tuning.semantic_only
+        && matches!(cli.command.as_ref(), Some(Commands::Search(q)) if !q.pattern.is_empty())
+    {
+        return Err(usage_error(
+            "--pattern selects structural search and cannot be combined with --semantic-only; \
+             remove the flag or unset ASGREP_SEMANTIC_ONLY",
+        ));
+    }
     if tuning.format.is_some() && !search_command {
         return Err(usage_error(
             "--format applies only to search, keyword, or semantic commands",
@@ -196,10 +241,7 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
             )));
         }
     }
-    match cli.command.as_ref() {
-        Some(c) => run_command(cli, c),
-        None => run_default_search(cli),
-    }
+    Ok(())
 }
 
 fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
@@ -257,54 +299,46 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
             queries_file.as_deref(),
             *skip_index,
         ),
-        Commands::Watch { .. } => watch::run_watch_via_helper(),
+        Commands::Watch { root, .. } => {
+            ensure_unambiguous_root(&root.root, cli)?;
+            watch::run_watch_via_helper()
+        }
         Commands::Keyword(q) => search_cmd::run_keyword_search(&q.query.root, cli, &q.query.query),
         Commands::Semantic(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, true),
-        Commands::Chain(q) => search_cmd::run_chain(&q.root, cli, &q.query),
+        Commands::Chain(q) => search_cmd::run_chain(
+            &q.query.root,
+            cli,
+            &q.query.query,
+            usize::try_from(q.max_work).expect("bounded chain work fits usize"),
+        ),
         Commands::CallPath(args) => search_cmd::run_call_path(args, cli),
         Commands::Capabilities(args) => agent::run_capabilities(cli, args),
         Commands::Version(args) => run_version(cli, args),
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
-        Commands::CodemodeBatch { requests } => run_codemode_batch(cli, requests),
-        Commands::CodemodeServe => run_codemode_serve(cli),
+        Commands::CodemodeBatch { requests, .. } => run_codemode_batch(cli, requests),
+        Commands::CodemodeServe { .. } => run_codemode_serve(cli),
         Commands::Install(args) => install::run_install(args),
     }
 }
 
-/// Parsed `watch` launch for the `asgrep-watch` helper: plain data, no CLI
-/// types, so the helper reuses the identical parser without duplicating it.
-/// The shim already parsed successfully, so a parse failure here is an
-/// internal inconsistency (or a direct hand-invocation of the helper).
-pub struct WatchLaunch {
-    pub opts: ast_sgrep_core::IndexOptions,
-    pub debounce_ms: u64,
-}
-
-/// Re-parse the shim-forwarded argv into a [`WatchLaunch`]. Uses the same
-/// alias/typo rewrites and the same `Cli` parser as the shim, so index
-/// options can never drift between the two processes. Typo warnings are
-/// dropped: the shim's identical parse already printed them.
-pub fn parse_watch_launch() -> anyhow::Result<WatchLaunch> {
-    let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
-    let (raw_args, _warnings) = agent::rewrite_typos(raw_args);
-    let cli = match Cli::try_parse_from(&raw_args) {
-        Ok(cli) => cli,
-        // Only reachable by direct hand-invocation (the shim's identical
-        // parse already succeeded): mirror the main binary's rendering.
-        Err(error) => error.exit(),
-    };
-    match &cli.command {
-        Some(Commands::Watch { root, debounce_ms }) => {
-            let opts = index_cmd::index_options(&root.root, &cli);
-            Ok(WatchLaunch {
-                opts,
-                debounce_ms: *debounce_ms,
-            })
-        }
-        _ => anyhow::bail!("asgrep-watch only runs `watch`; use asgrep for other commands"),
-    }
+/// Run the file-watcher callback with the CLI's parsing, validation, error
+/// envelopes and exit classes, including failures after the shim has exec'd.
+/// The callback keeps the `notify` dependency out of the main CLI binary.
+pub fn run_watch_process(
+    watch: impl FnOnce(ast_sgrep_core::IndexOptions, u64) -> anyhow::Result<()>,
+) -> ! {
+    run_process_with(|cli| {
+        validate_cli(cli)?;
+        let Some(Commands::Watch { root, debounce_ms }) = &cli.command else {
+            return Err(usage_error(
+                "asgrep-watch only runs `watch`; use asgrep for other commands",
+            ));
+        };
+        let root = ensure_existing_root(&root.root, cli)?;
+        watch(index_options(&root, cli), *debounce_ms)
+    })
 }
 
 fn codemode_session_config(cli: &Cli, root: PathBuf) -> ast_sgrep_codemode::SessionConfig {

@@ -72,7 +72,11 @@ function isOptionalHostMiss(error) {
 /** Early-fail JSON read used by resolveHost (and keeps corrupt codes stable). */
 function readJsonFile(fs, path, code, message) {
   try {
-    return JSON.parse(fs.readFileSync(path, "utf8"));
+    const value = JSON.parse(fs.readFileSync(path, "utf8"));
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError("Native package metadata must be an object");
+    }
+    return value;
   } catch (cause) {
     fail(code, message, path, cause);
   }
@@ -172,7 +176,16 @@ export function resolveBinary(options = {}) {
   const platform = options.platform ?? process.platform;
   const override = options.binaryPath ?? env.ASGREP_BIN ?? env.AST_SGREP_BINARY;
   const fs = options.fs ?? { accessSync, existsSync, readFileSync, statSync };
-  if (override) return validateExecutable(resolve(override), fs, platform !== "win32");
+  if (override) {
+    try { return validateExecutable(resolve(override), fs, platform !== "win32"); }
+    catch (error) {
+      if (error instanceof AstSgrepBinaryError && error.code === "ASGREP_EXECUTABLE_MISSING" && options.binaryPath == null) {
+        const variable = env.ASGREP_BIN != null ? "ASGREP_BIN" : "AST_SGREP_BINARY";
+        fail(error.code, `${error.message}; selected by ${variable}. Unset ASGREP_BIN and AST_SGREP_BINARY to use the installed bundled executable, or correct the override path.`, error.path, error.cause);
+      }
+      throw error;
+    }
+  }
 
   const host = resolveHost(options);
   const executablePath = join(host.packageDir, host.executableName);

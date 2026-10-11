@@ -3,6 +3,14 @@ use ast_sgrep_core::store::IndexStore;
 
 #[test]
 fn ascii_trigram_extraction_dedups_and_bounds() {
+    // Byte-window extraction only supports ASCII. Public helper callers must
+    // receive the same conservative fallback as scan_shortcut, not a UTF-8 panic.
+    for needle in ["éab", "aébc", "abcé", "😀ab", "界ab", "界"] {
+        assert!(
+            distinct_trigrams(needle).is_none(),
+            "non-ASCII needle {needle:?} must decline byte-window extraction"
+        );
+    }
     let tris = distinct_trigrams("process_request").unwrap();
     // 15 chars -> 13 sliding windows; none repeat.
     assert_eq!(tris.len(), 13);

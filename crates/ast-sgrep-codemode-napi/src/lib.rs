@@ -21,15 +21,15 @@
 #![deny(clippy::all)]
 
 use ast_sgrep_codemode::{
-    CodeModeSession, SessionConfig, MAX_BATCH_CALLS, MAX_BATCH_ERROR_BYTES, MAX_BATCH_ID_BYTES,
-    MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_TOOL_BYTES, MAX_BATCH_VALUE_BYTES,
+    batch::{bound_error, validate_batch},
+    session::encoded_len,
+    CodeModeSession, SessionConfig, MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_VALUE_BYTES,
 };
 use napi::bindgen_prelude::*;
 use napi::{JsValue, ScopedTask, Task};
 use napi_derive::napi;
 use serde::Serialize;
 use serde_json::Value;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -121,12 +121,20 @@ fn cancelled_error() -> Error {
 
 struct SessionCancelGuard<'a> {
     session: &'a mut CodeModeSession,
+    call_count: &'a AtomicU32,
 }
 
 impl<'a> SessionCancelGuard<'a> {
-    fn arm(session: &'a mut CodeModeSession, cancel: &Arc<AtomicBool>) -> Self {
+    fn arm(
+        session: &'a mut CodeModeSession,
+        cancel: &Arc<AtomicBool>,
+        call_count: &'a AtomicU32,
+    ) -> Self {
         session.set_cancel(Some(Arc::clone(cancel)));
-        Self { session }
+        Self {
+            session,
+            call_count,
+        }
     }
 
     fn session(&mut self) -> &mut CodeModeSession {
@@ -137,7 +145,18 @@ impl<'a> SessionCancelGuard<'a> {
 impl Drop for SessionCancelGuard<'_> {
     fn drop(&mut self) {
         self.session.set_cancel(None);
+        // Publish even when a cancelled batch or result-budget error returns
+        // early, while the session lock still protects the executed prefix.
+        publish_call_count(self.session, self.call_count);
     }
+}
+
+fn publish_call_count(session: &CodeModeSession, call_count: &AtomicU32) {
+    // Saturate at u32::MAX; the session cap makes wrap unreachable.
+    call_count.store(
+        session.call_count().min(u32::MAX as usize) as u32,
+        Ordering::Relaxed,
+    );
 }
 
 fn watch_cancel(
@@ -204,15 +223,10 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         let mut locked = lock_session(&self.inner, &self.cancelled)?;
-        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
+        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled, &self.call_count);
         let result = session
             .session()
             .call(&self.tool, std::mem::take(&mut self.args));
-        // Saturate at u32::MAX; session cap 10_000 makes wrap unreachable (pb2w).
-        self.call_count.store(
-            session.session().call_count().min(u32::MAX as usize) as u32,
-            Ordering::Relaxed,
-        );
         result.map_err(map_err)
     }
 
@@ -236,7 +250,7 @@ impl Task for SessionBatchTask {
     fn compute(&mut self) -> Result<Self::Output> {
         let started = Instant::now();
         let mut locked = lock_session(&self.inner, &self.cancelled)?;
-        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
+        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled, &self.call_count);
         let mut all_ok = true;
         let mut results = Vec::with_capacity(self.calls.len());
         let mut response_bytes = MAX_BATCH_RESPONSE_BYTES - MAX_BATCH_VALUE_BYTES;
@@ -265,10 +279,6 @@ impl Task for SessionBatchTask {
             all_ok &= result.ok;
             results.push(result);
         }
-        self.call_count.store(
-            session.session().call_count().min(u32::MAX as usize) as u32,
-            Ordering::Relaxed,
-        );
         Ok(JsBatchResponse {
             all_ok,
             results,
@@ -281,56 +291,6 @@ impl Task for SessionBatchTask {
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
     }
-}
-
-fn validate_session_batch(calls: &[JsBatchCall]) -> Result<()> {
-    if calls.is_empty() {
-        return Err(Error::from_reason("batch.calls must be non-empty"));
-    }
-    if calls.len() > MAX_BATCH_CALLS {
-        return Err(Error::from_reason(format!(
-            "batch.calls exceeds max {MAX_BATCH_CALLS}"
-        )));
-    }
-    for call in calls {
-        if call.id.is_empty() {
-            return Err(Error::from_reason("batch call id must be non-empty"));
-        }
-        if call.id.len() > MAX_BATCH_ID_BYTES {
-            return Err(Error::from_reason(format!(
-                "batch call id exceeds {MAX_BATCH_ID_BYTES} bytes"
-            )));
-        }
-        if call.tool.is_empty() {
-            return Err(Error::from_reason("batch call tool must be non-empty"));
-        }
-        if call.tool.len() > MAX_BATCH_TOOL_BYTES {
-            return Err(Error::from_reason(format!(
-                "batch call tool exceeds {MAX_BATCH_TOOL_BYTES} bytes"
-            )));
-        }
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct CountingWriter(usize);
-
-impl Write for CountingWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(bytes.len());
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn encoded_len(value: &impl Serialize) -> std::result::Result<usize, serde_json::Error> {
-    let mut writer = CountingWriter::default();
-    serde_json::to_writer(&mut writer, value)?;
-    Ok(writer.0)
 }
 
 fn enforce_result_budget(
@@ -349,19 +309,6 @@ fn enforce_result_budget(
     ));
     *response_bytes = response_bytes.saturating_add(encoded_len(&result).map_err(map_err)?);
     Ok(result)
-}
-
-fn bound_error(mut error: String) -> String {
-    if error.len() <= MAX_BATCH_ERROR_BYTES {
-        return error;
-    }
-    let mut end = MAX_BATCH_ERROR_BYTES.saturating_sub(3);
-    while end > 0 && !error.is_char_boundary(end) {
-        end -= 1;
-    }
-    error.truncate(end);
-    error.push('…');
-    error
 }
 
 #[napi]
@@ -422,10 +369,7 @@ impl Session {
                 // on every unique Pi search).
                 return Ok(Value::Null);
             };
-            self.call_count.store(
-                session.call_count().min(u32::MAX as usize) as u32,
-                Ordering::Relaxed,
-            );
+            publish_call_count(&session, &self.call_count);
             return Ok(value);
         }
         if !is_fast_lookup(&tool) {
@@ -438,10 +382,7 @@ impl Session {
             .try_lock()
             .map_err(|_| Error::from_reason("session is busy"))?;
         let result = session.call(&tool, args);
-        self.call_count.store(
-            session.call_count().min(u32::MAX as usize) as u32,
-            Ordering::Relaxed,
-        );
+        publish_call_count(&session, &self.call_count);
         result.map_err(map_err)
     }
 
@@ -452,7 +393,12 @@ impl Session {
         calls: Vec<JsBatchCall>,
         signal: Option<Object<'_>>,
     ) -> Result<AsyncTask<SessionBatchTask>> {
-        validate_session_batch(&calls)?;
+        validate_batch(
+            calls
+                .iter()
+                .map(|call| (call.id.as_str(), call.tool.as_str())),
+        )
+        .map_err(map_err)?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let signal = watch_cancel(signal, &cancelled)?;
         Ok(AsyncTask::with_optional_signal(

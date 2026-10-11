@@ -1,5 +1,5 @@
 use crate::query::ParsedQuery;
-use crate::search::passes::bmh::{asgrep_line_hit, attach_regex_context, retained_limit};
+use crate::search::passes::bmh::{asgrep_line_hit, attach_regex_context, check_regex_deadline};
 use crate::search::types::matches_lang;
 use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
@@ -76,7 +76,7 @@ pub fn regex_pass(
         let rows = stmt.query_map([], map_regex_row)?;
         scan_regex_rows(rows, &re, file_filter.as_ref(), options, deadline, budget)?
     };
-    hits.truncate(retained_limit(options));
+    hits.truncate(options.retained_limit());
     attach_regex_context(store, options, &mut hits, deadline, budget)?;
     Ok(hits)
 }
@@ -87,8 +87,7 @@ fn required_literal(pattern: &str) -> Option<String> {
     let mut runs = Vec::new();
     let mut run = String::new();
     let mut escaped = false;
-    let chars: Vec<char> = pattern.chars().collect();
-    for (index, &ch) in chars.iter().enumerate() {
+    for ch in pattern.chars() {
         if escaped {
             escaped = false;
             if matches!(ch, 'x' | 'u' | 'U' | 'p' | 'P') {
@@ -115,12 +114,9 @@ fn required_literal(pattern: &str) -> Option<String> {
             }
             ']' => {}
             '|' | '?' | '*' => return None,
-            '{' if chars[index..]
-                .iter()
-                .take(3)
-                .collect::<String>()
-                .starts_with("{0") =>
-            {
+            '{' => {
+                // Repetition bounds are syntax, never required source text.
+                // Escaped braces are handled above as literal characters.
                 return None;
             }
             _ if ch.is_ascii_alphanumeric() || ch == '_' => run.push(ch),
@@ -153,19 +149,14 @@ fn scan_regex_rows(
     budget: Duration,
 ) -> Result<Vec<SearchHit>> {
     const PREFERRED_PER_FILE: usize = 3;
-    let candidate_limit = options.limit.max(100);
+    let candidate_limit = options.retained_limit().max(100);
     let mut preferred = Vec::new();
     let mut overflow = Vec::new();
     let mut per_file = HashMap::<Arc<str>, usize>::new();
     for (rank, row) in rows.enumerate() {
         // Between-line deadline check (56w1.3): a zero budget must fail
         // immediately instead of scanning everything.
-        if Instant::now() >= deadline {
-            return Err(StoreError::Other(format!(
-                "regex search exceeded wall-clock budget of {}ms (ASGREP_REGEX_BUDGET_MS); partial results discarded",
-                budget.as_millis()
-            )));
-        }
+        check_regex_deadline(deadline, budget)?;
         let (path, line_no, content, language) = row?;
         if file_filter.is_some_and(|filter| !filter.is_match(&path))
             || !matches_lang(language.as_deref(), options.lang_filter.as_deref())

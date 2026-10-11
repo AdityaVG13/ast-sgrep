@@ -144,16 +144,39 @@ fn complete_templates_resolve_via_the_walk_when_truncation_is_in_scope() {
 /// SEP15-3 (R-SEPT14E-2 closure): decl signatures are budget-exempt at
 /// extraction — a node beyond MAX_EXTRACTION_DEPTH records its own decl row
 /// (prefix+name from direct children), only the recursion stops. A decl-exact
-/// template's rows are therefore COMPLETE even with a truncated file in
-/// scope, and the cached lane must serve the full hit set.
+/// name-only shorthand's rows are therefore COMPLETE even with a truncated
+/// file in scope. Parameter constraints must still be decided by the matcher.
 #[test]
 fn python_partial_def_template_never_answers_silent_empty_under_truncation() {
     let temp = TempDir::new().unwrap();
     write_src(
         temp.path(),
         "src/shallow.py",
-        "def shallow_top():\n    return 1\n\nshallow_top()\n",
+        "def shallow_top():\n    return 1\n\ndef shallow_top(value):\n    return value\n\nshallow_top()\n",
     );
+    let search_options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 12,
+        ..SearchOptions::default()
+    };
+    let mut indexer = ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer");
+    let stats = indexer.index_all().expect("shallow index");
+    assert_eq!(stats.files_depth_truncated, 0);
+    let constrained_hits = |searcher: &Searcher| {
+        searcher
+            .search("pattern:def shallow_top($X)")
+            .expect("parameter-constrained declaration search")
+            .hits
+            .into_iter()
+            .map(|hit| (hit.file.replace('\\', "/"), hit.line_start))
+            .collect::<Vec<_>>()
+    };
+    let ordinary = constrained_hits(&Searcher::new(search_options.clone()).expect("searcher"));
     let mut deep = String::new();
     for i in 0..300 {
         deep.push_str(&format!("{}def level_{i}():\n", "    ".repeat(i)));
@@ -161,23 +184,12 @@ fn python_partial_def_template_never_answers_silent_empty_under_truncation() {
     deep.push_str(&format!("    {}def shallow_top():\n", "    ".repeat(300)));
     deep.push_str(&format!("    {}    return 2\n", "    ".repeat(300)));
     write_src(temp.path(), "src/deep.py", &deep);
-    ast_sgrep_core::Indexer::new(IndexOptions {
-        root: temp.path().to_path_buf(),
-        force_reindex: true,
-        ..IndexOptions::default()
-    })
-    .expect("indexer")
-    .index_all()
-    .expect("index");
-    let searcher = Searcher::new(SearchOptions {
-        root: temp.path().to_path_buf(),
-        limit: 12,
-        ..SearchOptions::default()
-    })
-    .expect("searcher");
+    let stats = indexer.index_all().expect("index with deep file");
+    assert_eq!(stats.files_depth_truncated, 1);
+    let searcher = Searcher::new(search_options).expect("searcher");
     let response = searcher
-        .search("pattern:def shallow_top():")
-        .expect("decl-exact template must be served from its budget-exempt decl rows; a refusal here means the extraction exemption (SEP15-3) is missing");
+        .search("pattern:def shallow_top")
+        .expect("bare declaration shorthand must retain budget-exempt deep rows");
     let shallow = first_hit_file(&response.hits, "shallow.py");
     assert_eq!(
         shallow.as_deref(),
@@ -189,5 +201,14 @@ fn python_partial_def_template_never_answers_silent_empty_under_truncation() {
         deep.as_deref(),
         Some("src/deep.py"),
         "the beyond-budget nested def must be served from its budget-exempt decl row; missing = decl rows still skipped past the budget (R-SEPT14E-2 unfixed)\n{response:#?}"
+    );
+    // Execute both cache paths before comparing, so a failure identifies
+    // ordinary and truncated admission independently.
+    let truncated = constrained_hits(&searcher);
+    let expected = vec![("src/shallow.py".to_owned(), 4)];
+    assert_eq!(
+        (ordinary, truncated),
+        (expected.clone(), expected),
+        "name-only rows must not answer parameter constraints in either cache path"
     );
 }

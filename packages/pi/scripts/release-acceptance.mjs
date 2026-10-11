@@ -46,8 +46,8 @@ const validateAlignment = (state) => {
     const contractPlatform = contract.packages.platforms[index];
     if (manifest.name !== target.package || manifest.version !== version || dependencyVersion !== version || contractPlatform?.optionalDependencyVersion !== version) fail('ASGREP_RELEASE_VERSION_SKEW', `${target.package} is not exactly aligned to ${version}`);
     if (JSON.stringify(manifest.os) !== JSON.stringify([target.os]) || JSON.stringify(manifest.cpu) !== JSON.stringify([target.cpu]) || JSON.stringify(manifest.libc ?? []) !== JSON.stringify(target.libc ? [target.libc] : [])) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} platform selectors do not match the target matrix`);
-    const expectedFiles = [target.executable, matrix.napiAddon, 'checksum.sha256', 'LICENSE'].sort();
-    if (JSON.stringify([...(manifest.files ?? [])].sort()) !== JSON.stringify(expectedFiles)) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} files inventory must include CLI and NAPI addon`);
+    const expectedFiles = [target.executable, target.watchHelper, matrix.napiAddon, 'checksum.sha256', 'LICENSE'].sort();
+    if (JSON.stringify([...(manifest.files ?? [])].sort()) !== JSON.stringify(expectedFiles)) fail('ASGREP_RELEASE_PLATFORM_SKEW', `${target.package} files inventory must include CLI, watch helper, and NAPI addon`);
   }
 };
 const classify = (state, name) => state.matrix.targets.some((target) => target.package === name) ? 'native' : name === state.launcher.name ? 'launcher' : name === state.extension.name ? 'extension' : fail('ASGREP_RELEASE_UNKNOWN_PACKAGE', name);
@@ -82,7 +82,7 @@ const validateFiles = (state, artifact) => {
   const files = artifact.files.map((file) => file.path).sort();
   const nativeTarget = state.matrix.targets.find((target) => target.package === artifact.name);
   const required = artifact.layer === 'native'
-    ? ['LICENSE', 'checksum.sha256', nativeTarget.executable, state.matrix.napiAddon, 'package.json']
+    ? ['LICENSE', 'checksum.sha256', nativeTarget.executable, nativeTarget.watchHelper, state.matrix.napiAddon, 'package.json']
     : artifact.layer === 'launcher'
       ? ['LICENSE', 'README.md', 'bin/asgrep.js', 'package.json', 'src/index.d.ts', 'src/index.js']
       : ['LICENSE', 'README.md', 'assets/preview.png', 'dist/codemode/index.d.ts', 'dist/codemode/index.js', 'dist/codemode/native.d.ts', 'dist/codemode/native.js', 'dist/codemode/guest-worker.mjs', 'dist/index.d.ts', 'dist/index.js', 'dist/ui/present.d.ts', 'dist/ui/present.js', 'dist/runtime/runtime.d.ts', 'dist/runtime/runtime.js', 'dist/runtime/types.d.ts', 'dist/runtime/types.js', 'dist/runtime/config.d.ts', 'dist/runtime/config.js', 'dist/runtime/freshness.d.ts', 'dist/runtime/freshness.js', 'dist/runtime/index-health.d.ts', 'dist/runtime/index-health.js', 'dist/host/results.d.ts', 'dist/host/results.js', 'dist/host/tools.d.ts', 'dist/host/tools.js', 'dist/host/commands.d.ts', 'dist/host/commands.js', 'native/README.md', 'package.json'];
@@ -100,7 +100,7 @@ const inspectPackResult = (state, result) => {
 const validateChecksumRecord = (target, napiAddon, checksumText, digests) => {
   if (checksumText === null) fail('ASGREP_RELEASE_CHECKSUM_MISSING', target.package);
   const parsed = parseSha256Sums(checksumText);
-  if (!parsed || parsed.size !== 2 || parsed.get(target.executable) !== digests.executable || parsed.get(napiAddon) !== digests.napi) {
+  if (!parsed || parsed.size !== 3 || parsed.get(target.executable) !== digests.executable || parsed.get(target.watchHelper) !== digests.watch || parsed.get(napiAddon) !== digests.napi) {
     fail('ASGREP_RELEASE_CHECKSUM_MISMATCH', target.package);
   }
 };
@@ -108,15 +108,19 @@ const verifyNativeSource = async (target, napiAddon) => {
   const directory = path.join(root, 'packages/pi/platforms', target.id);
   const executable = path.join(directory, target.executable);
   const addon = path.join(directory, napiAddon);
+  const watch = path.join(directory, target.watchHelper);
   const checksumFile = path.join(directory, 'checksum.sha256');
   const executableStat = await stat(executable).catch(() => fail('ASGREP_RELEASE_EXECUTABLE_MISSING', target.package));
   if (!executableStat.isFile() || executableStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', target.package);
   const addonStat = await stat(addon).catch(() => fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} napi`));
   if (!addonStat.isFile() || addonStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} napi`);
+  const watchStat = await stat(watch).catch(() => fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} watch`));
+  if (!watchStat.isFile() || watchStat.size === 0) fail('ASGREP_RELEASE_EXECUTABLE_MISSING', `${target.package} watch`);
   const checksumText = await readFile(checksumFile, 'utf8').catch(() => null);
   validateChecksumRecord(target, napiAddon, checksumText, {
     executable: await sha256(executable),
-    napi: await sha256(addon)
+    napi: await sha256(addon),
+    watch: await sha256(watch)
   });
 };
 const stageNative = async (state, nativeRoot, commit) => {
@@ -139,6 +143,8 @@ const stageNative = async (state, nativeRoot, commit) => {
     await mkdir(destination, { recursive: true });
     for (const file of ['package.json', 'LICENSE']) await copyFile(path.join(root, 'packages/pi/platforms', target.id, file), path.join(destination, file));
     await copyFile(path.join(source, target.executable), path.join(destination, target.executable));
+    await copyFile(path.join(source, target.watchHelper), path.join(destination, target.watchHelper));
+    if (target.os !== 'win32') { await chmod(path.join(destination, target.executable), 0o755); await chmod(path.join(destination, target.watchHelper), 0o755); }
     await copyFile(path.join(source, state.matrix.napiAddon), path.join(destination, state.matrix.napiAddon));
     await copyFile(path.join(source, 'SHA256SUMS'), path.join(destination, 'checksum.sha256'));
   }
@@ -340,10 +346,12 @@ const fixtureNative = async () => {
   for (const target of state.matrix.targets) {
     const binary = path.join(output, `${target.id}.fixture`);
     const napi = path.join(output, `${target.id}.napi.fixture`);
+    const watch = path.join(output, `${target.id}.watch.fixture`);
     await writeFile(binary, `contract-only target-shaped fixture for ${target.package}@${state.version}\n`);
     await writeFile(napi, `contract-only napi fixture for ${target.package}@${state.version}\n`);
+    await writeFile(watch, `contract-only watch fixture for ${target.package}@${state.version}\n`);
     if (target.os !== 'win32') await chmod(binary, 0o755);
-    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--napi', napi, '--output', path.join(output, target.id), '--commit', commit]);
+    run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'prepare', '--target', target.id, '--binary', binary, '--napi', napi, '--watch', watch, '--output', path.join(output, target.id), '--commit', commit]);
     run(process.execPath, ['packages/pi/scripts/release-artifact.mjs', 'verify', '--target', target.id, '--input', path.join(output, target.id)]);
   }
   console.log(`[pi-release] created and verified ${state.matrix.targets.length} disposable target-shaped fixtures at commit ${commit}`);

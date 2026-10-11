@@ -144,9 +144,9 @@ pub(crate) fn scan_line_window(
         );
         if bytes.last() == Some(&b'\n') {
             bytes.pop();
-        }
-        if bytes.last() == Some(&b'\r') {
-            bytes.pop();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
         }
         let line = String::from_utf8(bytes).context("node file is not valid UTF-8")?;
         total_lines = line_number;

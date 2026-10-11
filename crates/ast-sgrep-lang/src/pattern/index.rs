@@ -1,7 +1,7 @@
 //! Pattern-node extraction and declaration index rows.
 
 use super::*;
-use crate::extract::{is_ident_kind, is_in_comment_or_string, node_text};
+use crate::extract::{is_ident_kind, node_text, COMMENT_OR_STRING_KINDS};
 use crate::PatternNode;
 use tree_sitter::Node;
 
@@ -49,7 +49,9 @@ pub(crate) fn collect_node_signatures(
         }
         return;
     }
-    if is_in_comment_or_string(&node) {
+    // This root-started walk already pruned every sub-cap trivia ancestor.
+    // The over-cap declaration arm above deliberately keeps its old policy.
+    if COMMENT_OR_STRING_KINDS.contains(&node.kind()) {
         // B1 (Sept 14 wave): comment/string subtrees hold no extractable
         // signatures. Recursing into them only burns depth budget and can
         // false-flag a file whose real code is shallow, so prune here.

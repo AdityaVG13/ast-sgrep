@@ -395,11 +395,14 @@ impl LspBackend {
     ) -> anyhow::Result<()> {
         self.with_locked_indexer(|indexer| {
             let rel = uri_to_rel_path(uri, &self.root)?;
-            let mut content = indexer
-                .store()
-                .file_text(&rel)?
-                .or_else(|| std::fs::read_to_string(self.root.join(&rel)).ok())
-                .unwrap_or_default();
+            // Index rows normalize mixed EOLs. Edits need the exact editor text,
+            // or exact disk text after didSave has cleared the dirty buffer.
+            let dirty = self.dirty_map().get(&rel).cloned();
+            let mut content =
+                match dirty.or_else(|| std::fs::read_to_string(self.root.join(&rel)).ok()) {
+                    Some(content) => content,
+                    None => indexer.store().file_text(&rel)?.unwrap_or_default(),
+                };
             for c in changes {
                 content = if c.range.is_some() {
                     try_apply_text_edit(&content, c)?

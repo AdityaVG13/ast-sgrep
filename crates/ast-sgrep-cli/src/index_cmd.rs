@@ -59,6 +59,7 @@ pub(crate) fn ensure_nonempty_index(root: &Path, empty: bool) -> anyhow::Result<
 }
 
 /// Index an empty checkout, or incrementally refresh a non-empty one.
+/// The caller has already resolved and validated the CLI root.
 /// Returns true when the caller must reopen the store/searcher.
 pub(crate) fn ensure_fresh_index(root: &Path, cli: &Cli, empty: bool) -> anyhow::Result<bool> {
     if !cli.should_auto_index() {
@@ -68,7 +69,7 @@ pub(crate) fn ensure_fresh_index(root: &Path, cli: &Cli, empty: bool) -> anyhow:
     if empty && !cli.search_machine_output() && !agent::suppress_progress() {
         eprintln!("asgrep: indexing {} ...", root.display());
     }
-    let mut indexer = open_indexer(root, cli)?;
+    let mut indexer = open_indexer_resolved(root, cli)?;
     let stats = indexer
         .index_all()
         .with_context(|| format!("auto-index failed for {}", root.display()))?;
@@ -105,7 +106,11 @@ pub(crate) fn open_readonly_store(root: &Path, cli: &Cli) -> anyhow::Result<Inde
 }
 
 pub(crate) fn open_indexer(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
-    ensure_existing_root(root, cli)?;
+    let root = ensure_existing_root(root, cli)?;
+    open_indexer_resolved(&root, cli)
+}
+
+fn open_indexer_resolved(root: &Path, cli: &Cli) -> anyhow::Result<Indexer> {
     let opts = index_options(root, cli);
     let db = index_db_display(&opts.root, opts.index_path.as_deref());
     Indexer::new(opts).with_context(|| {

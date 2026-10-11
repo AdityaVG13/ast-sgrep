@@ -83,8 +83,8 @@ fn e4_serve_batch_fault_mid_stream_isolates_and_resumes() {
         }
     }
 
-    // BatchResult carries wall_ms: u128, which serde_json cannot deserialize;
-    // pin the envelope via its `type` tag discriminant plus field shapes.
+    // Pin the raw envelope's tag and field shapes. Typed BatchResult decoding
+    // is independently covered in batch.rs.
     let batch: Value = serde_json::from_str(&lines[1]).expect("batch line");
     assert_eq!(
         batch.get("type").and_then(Value::as_str),

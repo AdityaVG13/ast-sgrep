@@ -66,10 +66,12 @@ pub(crate) fn byte_to_line(source: &str, byte: usize) -> u32 {
         + 1
 }
 
-pub(crate) fn node_lines(node: &Node, source: &str) -> (u32, u32) {
+pub(crate) fn node_lines(node: &Node, _source: &str) -> (u32, u32) {
+    // Whole-source UTF-8 trees already store the LF-prefix counts at both
+    // byte boundaries. Reuse them instead of rescanning each source prefix.
     (
-        byte_to_line(source, node.start_byte()),
-        byte_to_line(source, node.end_byte()),
+        node.start_position().row as u32 + 1,
+        node.end_position().row as u32 + 1,
     )
 }
 
@@ -693,6 +695,7 @@ pub(crate) fn first_string_literal(node: &Node, source: &str) -> Option<String> 
 const ENCLOSING_NAMED_FN_KINDS: &[&str] = &[
     "function_item",
     "function_declaration",
+    "generator_function_declaration",
     "method_declaration",
     "method_definition",
     "method",
@@ -807,16 +810,16 @@ impl Extractor {
         self.calls.push(CallSite {
             caller: enclosing_symbol_name(node, source).unwrap_or_else(|| "<module>".into()),
             callee,
-            line: byte_to_line(source, node.start_byte()),
+            line: node.start_position().row as u32 + 1,
             byte_start: node.start_byte(),
             byte_end: node.end_byte(),
         });
     }
 
-    pub(crate) fn add_import(&mut self, node: &Node, source: &str, module: &str) {
+    pub(crate) fn add_import(&mut self, node: &Node, _source: &str, module: &str) {
         self.imports.push(ImportSite {
             module_path: module.to_string(),
-            line: byte_to_line(source, node.start_byte()),
+            line: node.start_position().row as u32 + 1,
         });
     }
 }

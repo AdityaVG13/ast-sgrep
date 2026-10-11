@@ -12,7 +12,7 @@ use ast_sgrep_testkit::{
     assert_doctor_unhealthy, assert_failure_envelope, assert_success, run_in, run_index,
     run_reindex, run_search, run_status, seed_project, KillOnDrop, QUERY, SOURCE,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -464,6 +464,50 @@ fn install_config_missing_rebuilt_corrupt_refused() {
     let doc: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
     assert_eq!(doc["mcpServers"]["asgrep"]["command"], fake_bin_s);
 
+    // Legacy and current names share the same explicit replacement contract.
+    for name in ["asgrep", "ast-sgrep", "zvec_grep"] {
+        let authored = json!({
+            "editor": {"keep": true},
+            "mcpServers": {
+                name: {"command": "old", "env": {"OLD": "legacy"}},
+                "peer": {"command": "keep-peer", "args": ["authored argument"]}
+            }
+        });
+        let bytes = serde_json::to_string_pretty(&authored).unwrap();
+        fs::write(&config, &bytes).unwrap();
+        let run = |force: bool| {
+            let mut args = vec!["install", "--target", "cursor", "--yes", "--json"];
+            if force {
+                args.push("--force");
+            }
+            run_in(
+                &asgrep(),
+                temp.path(),
+                &args,
+                &[
+                    ("CURSOR_CONFIG_DIR", cursor_dir.as_str()),
+                    ("ASGREP_MCP_BIN", fake_bin_s.as_str()),
+                ],
+            )
+        };
+        assert_failure_envelope(&run(false), "install", 2, "operational");
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            bytes,
+            "refusal must preserve {name}"
+        );
+        assert!(run(true).status.success());
+        let merged = fs::read_to_string(&config).unwrap();
+        let doc: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(doc["editor"], authored["editor"]);
+        assert_eq!(doc["mcpServers"]["peer"], authored["mcpServers"]["peer"]);
+        assert_eq!(doc["mcpServers"].as_object().unwrap().len(), 2);
+        assert_eq!(doc["mcpServers"]["asgrep"]["command"], fake_bin_s);
+        assert_eq!(doc["mcpServers"]["asgrep"]["env"], json!({}));
+        assert!(run(true).status.success());
+        assert_eq!(fs::read_to_string(&config).unwrap(), merged);
+    }
+
     fs::write(&config, "{ corrupt json").unwrap();
     let output = run_in(
         &asgrep(),
@@ -482,6 +526,100 @@ fn install_config_missing_rebuilt_corrupt_refused() {
         "{ corrupt json",
         "a corrupt config must not be overwritten"
     );
+}
+
+#[test]
+fn install_codex_force_replaces_server_without_touching_peers() {
+    let temp = TempDir::new().unwrap();
+    let command = "/new/quoted\"\\asgrep-mcp\nnext";
+    let project = "[projects.\"/preserve/project\"]\ntrust_level = \"trusted\"\n";
+    // Header/marker-looking string data must never become deletion boundaries.
+    let preamble = "model = \"keep-model\"\nnotes = '''\n[mcp_servers.asgrep]\n# BEGIN asgrep-mcp\n# END asgrep-mcp\n'''\n";
+    let entries = [
+        "[mcp_servers.ast-sgrep]\ncommand = 'old'\n[mcp_servers.ast-sgrep.env]\nOLD = 'legacy'\n[mcp_servers.peer]\ncommand = 'keep-peer'\n",
+        "[mcp_servers.asgrep]\ncommand = 'old'\n[mcp_servers.asgrep.env]\nOLD = 'legacy'\n[mcp_servers.peer]\ncommand = 'keep-peer'\n",
+        "[mcp_servers.'ast-sgrep']\ncommand = 'old'\n[mcp_servers.'ast-sgrep'.env]\nOLD = 'legacy'\n[mcp_servers.peer]\ncommand = 'keep-peer'\n",
+        "mcp_servers = { asgrep = { command = 'old', env = { OLD = 'legacy' } }, peer = { command = 'keep-peer' } }\n",
+        "mcp_servers.asgrep.command = 'old'\nmcp_servers.asgrep.env.OLD = 'legacy'\nmcp_servers.peer.command = 'keep-peer'\n",
+        "# BEGIN asgrep-mcp (managed by `asgrep install`; no daemon)\n[mcp_servers.asgrep]\ncommand = 'old'\nargs = []\n# END asgrep-mcp\n[mcp_servers.peer]\ncommand = 'keep-peer'\n",
+    ];
+    for (case, entry) in entries.iter().enumerate() {
+        let home = temp.path().join(case.to_string());
+        fs::create_dir(&home).unwrap();
+        let config = home.join("config.toml");
+        let authored = format!("{preamble}{entry}{project}");
+        fs::write(&config, &authored).unwrap();
+        let run = |force: bool| {
+            let mut args = vec!["install", "--target", "codex", "--yes"];
+            if force {
+                args.push("--force");
+            }
+            run_in(
+                &asgrep(),
+                temp.path(),
+                &args,
+                &[
+                    ("CODEX_HOME", home.to_str().unwrap()),
+                    ("ASGREP_MCP_BIN", command),
+                ],
+            )
+        };
+        assert_eq!(run(false).status.code(), Some(2), "case {case}");
+        assert_eq!(fs::read_to_string(&config).unwrap(), authored);
+        let output = run(true);
+        assert!(
+            output.status.success(),
+            "case {case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let merged = fs::read_to_string(&config).unwrap();
+        let doc = merged.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            doc["mcp_servers"]["asgrep"]["command"].as_str(),
+            Some(command)
+        );
+        assert_eq!(
+            doc["mcp_servers"]["asgrep"]["args"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let servers = doc["mcp_servers"].as_table_like().unwrap();
+        assert!(
+            servers.get("ast-sgrep").is_none(),
+            "legacy server must not stay live"
+        );
+        assert!(
+            servers
+                .get("asgrep")
+                .unwrap()
+                .as_table_like()
+                .unwrap()
+                .get("env")
+                .is_none(),
+            "superseded descendants must be removed"
+        );
+        assert_eq!(
+            doc["mcp_servers"]["peer"]["command"].as_str(),
+            Some("keep-peer")
+        );
+        assert!(
+            merged.contains(preamble) && merged.contains(project),
+            "authored peers must retain their formatting"
+        );
+        assert!(run(true).status.success());
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            merged,
+            "repeated force must be idempotent"
+        );
+        for invalid in ["{ corrupt toml", "mcp_servers = 'not a table'\n"] {
+            fs::write(&config, invalid).unwrap();
+            assert_eq!(run(true).status.code(), Some(2));
+            assert_eq!(fs::read_to_string(&config).unwrap(), invalid);
+        }
+    }
 }
 
 /// INTENT: a `watch` loop killed mid-run resumes through the next plain `index`

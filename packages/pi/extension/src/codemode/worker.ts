@@ -281,7 +281,7 @@ export async function runBatchViaStdin(options: {
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
-    let stdout = "";
+    const stdout: Buffer[] = [];
     let stderr = "";
     let outputBytes = 0;
     let settled = false;
@@ -314,14 +314,16 @@ export async function runBatchViaStdin(options: {
     options.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (c: Buffer | string) => {
+      if (settled) return;
       outputBytes += Buffer.byteLength(c);
       if (outputBytes > maxOutputBytes) {
         fail(new Error(`codemode-batch output exceeded ${maxOutputBytes} bytes`));
         return;
       }
-      stdout += String(c);
+      stdout.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
     });
     child.stderr.on("data", (c: Buffer | string) => {
+      if (settled) return;
       outputBytes += Buffer.byteLength(c);
       if (outputBytes > maxOutputBytes) {
         fail(new Error(`codemode-batch output exceeded ${maxOutputBytes} bytes`));
@@ -334,12 +336,21 @@ export async function runBatchViaStdin(options: {
     });
     child.on("close", (code) => {
       if (settled) return;
+      let text: string;
+      try {
+        // Pipe chunks can split a code point. Decode once, strictly, rather
+        // than silently replacing split or malformed bytes in search results.
+        text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(stdout));
+      } catch {
+        fail(new Error("codemode-batch output is not valid UTF-8"));
+        return;
+      }
       if (code !== 0) {
-        fail(new Error(`codemode-batch exited ${code}: ${stderr.slice(0, 512) || stdout.slice(0, 512)}`));
+        fail(new Error(`codemode-batch exited ${code}: ${stderr.slice(0, 512) || text.slice(0, 512)}`));
         return;
       }
       try {
-        const value = JSON.parse(stdout) as MachineEnvelope;
+        const value = JSON.parse(text) as MachineEnvelope;
         finish(() => resolve(value));
       } catch (cause) {
         fail(cause instanceof Error ? cause : new Error(String(cause)));

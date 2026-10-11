@@ -3,6 +3,284 @@ use ast_sgrep_core::tantivy_index::TantivySidecar;
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 use std::path::Path;
 
+#[test]
+fn relative_index_path_writer_stamp_is_next_to_the_actual_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let relative = Path::new("private-index/index.db");
+    let absolute = ast_sgrep_core::try_index_db_path(root, Some(relative)).unwrap();
+    assert_eq!(
+        ast_sgrep_core::store::writer_generation_path(root, Some(relative)),
+        ast_sgrep_core::store::writer_generation_path(root, Some(&absolute)),
+        "relative and absolute spellings of the same database must share an epoch"
+    );
+}
+
+#[test]
+fn adjacent_explicit_databases_do_not_serve_each_others_lexical_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let first_db = temp.path().join("indexes/first.db");
+    let second_db = temp.path().join("indexes/second.db");
+    for (root, db, source) in [
+        (&first, &first_db, "fn foreignneedle() {}\n"),
+        (&second, &second_db, "fn localneedle() {}\n"),
+    ] {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("a.rs"), source).unwrap();
+        Indexer::new(IndexOptions {
+            root: root.clone(),
+            index_path: Some(db.clone()),
+            use_tantivy: true,
+            embed_semantic: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .index_all()
+        .unwrap();
+    }
+    for (root, db, absent, present) in [
+        (first, first_db, "localneedle", "foreignneedle"),
+        (second, second_db, "foreignneedle", "localneedle"),
+    ] {
+        let searcher = Searcher::new(SearchOptions {
+            root,
+            index_path: Some(db),
+            use_tantivy: true,
+            use_embed: false,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(searcher.search_lexical(absent).unwrap().hits.is_empty());
+        assert!(!searcher.search_lexical(present).unwrap().hits.is_empty());
+    }
+}
+
+#[test]
+fn aborted_cross_root_indexer_preserves_the_committed_root_binding() {
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let db = temp.path().join("shared/index.db");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(first.join("a.rs"), "fn first_root_only() {}\n").unwrap();
+    std::fs::write(second.join("a.rs"), "fn second_root_only() {}\n").unwrap();
+    let options = |root: &Path| IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(db.clone()),
+        embed_semantic: false,
+        ..Default::default()
+    };
+    Indexer::new(options(&first)).unwrap().index_all().unwrap();
+    let before = IndexStore::open_readonly(&first, Some(&db))
+        .unwrap()
+        .get_meta("root")
+        .unwrap();
+
+    let mut aborted = Indexer::new(options(&second)).unwrap();
+    aborted.set_cancel(Arc::new(AtomicBool::new(true)));
+    assert!(aborted.index_all().is_err());
+    drop(aborted);
+    let store = IndexStore::open_readonly(&first, Some(&db)).unwrap();
+    assert_eq!(store.get_meta("root").unwrap(), before);
+    let wrong_root = Searcher::new(SearchOptions {
+        root: second,
+        index_path: Some(db),
+        use_embed: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        !wrong_root.store().file_exists("a.rs").unwrap(),
+        "foreign-root search must use its inert stand-in, not certify old rows for the new root"
+    );
+}
+
+#[test]
+fn trailing_block_comment_prefix_does_not_hide_executable_declarations() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: false,
+        ..Default::default()
+    })
+    .unwrap();
+    indexer
+        .index_content("a.rs", "fn stable() {}\n/* note */ fn old_name() {}\n")
+        .unwrap();
+    indexer
+        .index_content("a.rs", "fn stable() {}\n/* note */ fn new_name() {}\n")
+        .unwrap();
+    let mut names: Vec<String> = indexer
+        .store()
+        .symbols_in_file("a.rs")
+        .unwrap()
+        .into_iter()
+        .map(|symbol| symbol.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["new_name", "stable"]);
+}
+
+#[test]
+fn root_binding_requires_complete_cross_root_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    let db = temp.path().join("shared/index.db");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(first.join("a.rs"), "fn first_only() {}\n").unwrap();
+    std::fs::write(first.join("old.rs"), "fn old_only() {}\n").unwrap();
+    std::fs::write(second.join("a.rs"), "fn second_only() {}\n").unwrap();
+    let options = |root: &Path| IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(db.clone()),
+        embed_semantic: false,
+        ..Default::default()
+    };
+    Indexer::new(options(&first)).unwrap().index_all().unwrap();
+    let mut indexer = Indexer::new(options(&second)).unwrap();
+    let before = indexer.store().get_meta("root").unwrap();
+    assert!(indexer
+        .index_content("a.rs", "fn second_only() {}\n")
+        .is_err());
+    assert!(indexer.index_file(&second.join("a.rs"), "a.rs").is_err());
+    assert!(indexer.update_paths(&[second.join("old.rs")]).is_err());
+    assert_eq!(indexer.store().get_meta("root").unwrap(), before);
+    assert_eq!(
+        indexer.store().symbols_in_file("a.rs").unwrap()[0].name,
+        "first_only"
+    );
+    assert!(indexer.store().file_exists("old.rs").unwrap());
+    drop(indexer);
+
+    let mut filtered = options(&second);
+    filtered.lang_filter = Some("rust".into());
+    assert!(Indexer::new(filtered).unwrap().index_all().is_err());
+    // A preparation failure is not permission to certify surviving old rows.
+    std::fs::write(second.join("a.rs"), [0xff]).unwrap();
+    let mut indexer = Indexer::new(options(&second)).unwrap();
+    assert!(indexer.index_all().is_err());
+    assert_eq!(indexer.store().get_meta("root").unwrap(), before);
+    assert!(indexer.store().file_exists("old.rs").unwrap());
+    std::fs::write(second.join("a.rs"), "fn second_only() {}\n").unwrap();
+    indexer.index_all().unwrap();
+    assert_eq!(
+        indexer.store().get_meta("root").unwrap(),
+        Some(second.canonicalize().unwrap().display().to_string())
+    );
+    assert!(!indexer.store().file_exists("old.rs").unwrap());
+    assert_eq!(
+        indexer.store().symbols_in_file("a.rs").unwrap()[0].name,
+        "second_only"
+    );
+}
+
+#[test]
+fn initial_partial_root_binding_rolls_back_with_failed_rows() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut indexer = Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(indexer.store().get_meta("root").unwrap(), None);
+    indexer.store().connection().execute_batch(
+        "CREATE TEMP TRIGGER refuse_file BEFORE INSERT ON files BEGIN SELECT RAISE(ABORT, 'injected row failure'); END;"
+    ).unwrap();
+    assert!(indexer.index_content("a.rs", "fn initial() {}\n").is_err());
+    assert_eq!(indexer.store().get_meta("root").unwrap(), None);
+    assert!(!indexer.store().file_exists("a.rs").unwrap());
+    indexer
+        .store()
+        .connection()
+        .execute_batch("DROP TRIGGER refuse_file")
+        .unwrap();
+    indexer.index_content("a.rs", "fn initial() {}\n").unwrap();
+    assert_eq!(
+        indexer.store().get_meta("root").unwrap(),
+        Some(temp.path().canonicalize().unwrap().display().to_string())
+    );
+    assert_eq!(
+        indexer.store().symbols_in_file("a.rs").unwrap()[0].name,
+        "initial"
+    );
+}
+
+#[test]
+fn copied_or_legacy_lexical_sidecar_is_not_owned_by_the_target_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let first = root.join(".asgrep/first.db");
+    let second = root.join(".asgrep/second.db");
+    for (db, source) in [
+        (&first, "fn foreignneedle() {}\n"),
+        (&second, "fn localneedle() {}\n"),
+    ] {
+        std::fs::write(root.join("a.rs"), source).unwrap();
+        Indexer::new(IndexOptions {
+            root: root.to_path_buf(),
+            index_path: Some(db.clone()),
+            embed_semantic: false,
+            use_tantivy: true,
+            ..Default::default()
+        })
+        .unwrap()
+        .index_all()
+        .unwrap();
+    }
+    let generation = IndexStore::open_readonly(root, Some(&second))
+        .unwrap()
+        .index_data_version()
+        .unwrap();
+    assert_eq!(
+        IndexStore::open_readonly(root, Some(&first))
+            .unwrap()
+            .index_data_version()
+            .unwrap(),
+        generation
+    );
+    let first_sidecar = ast_sgrep_core::tantivy_index::sidecar_path(root, Some(&first));
+    let second_sidecar = ast_sgrep_core::tantivy_index::sidecar_path(root, Some(&second));
+    std::fs::copy(first_sidecar, &second_sidecar).unwrap();
+    for legacy in [false, true] {
+        if legacy {
+            rusqlite::Connection::open(&second_sidecar)
+                .unwrap()
+                .execute("DELETE FROM meta WHERE key = 'source_identity'", [])
+                .unwrap();
+        }
+        assert!(!TantivySidecar::open_for_index(root, Some(&second))
+            .unwrap()
+            .is_fresh(generation)
+            .unwrap());
+        let searcher = Searcher::new(SearchOptions {
+            root: root.to_path_buf(),
+            index_path: Some(second.clone()),
+            use_tantivy: true,
+            use_embed: false,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(searcher
+            .search_lexical("foreignneedle")
+            .unwrap()
+            .hits
+            .is_empty());
+        assert!(!searcher
+            .search_lexical("localneedle")
+            .unwrap()
+            .hits
+            .is_empty());
+    }
+}
+
 fn pass17_indexer(root: &Path) -> Indexer {
     Indexer::new(IndexOptions {
         root: root.to_path_buf(),
@@ -93,7 +371,7 @@ fn noop_refresh_skips_fresh_sidecar_and_real_change_rebuilds() {
         "a real file change must rebuild the sidecar"
     );
     let beta_hits = sidecar
-        .search(&["beta_replacement".to_string()], 10)
+        .search(&["beta_replacement".to_string()], 10, None)
         .unwrap();
     assert_eq!(beta_hits.len(), 1, "rebuilt sidecar must hold the new line");
     let searcher = pass17_searcher(root);

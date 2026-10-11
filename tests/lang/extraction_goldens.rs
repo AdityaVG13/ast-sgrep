@@ -38,6 +38,47 @@ fn all_languages_satisfy_shared_parse_extract_and_pattern_contract() {
     }
 }
 
+/// INTENT: generator declarations are callable scopes just like ordinary
+/// functions, including a generator nested inside another named function.
+/// KILLS: attributing generator calls to <module> or the outer function.
+#[test]
+fn generator_calls_keep_their_declared_caller() {
+    let source = "function* stream() { yield readItem(); yield `${ghostItem()}`; }\n\
+                  function outer() { function* nested() { yield nextItem(); } }\n";
+    for language in [Language::JavaScript, Language::TypeScript] {
+        let result = assert_language_conformance(&LanguageConformanceCase {
+            language,
+            source,
+            symbols: &[
+                ("stream", Function),
+                ("outer", Function),
+                ("nested", Function),
+            ],
+            imports: &[],
+            calls: &[("stream", "readItem"), ("nested", "nextItem")],
+            patterns: &[],
+            forbid: &[],
+        });
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|call| (call.caller.as_str(), call.callee.as_str()))
+            .collect();
+        assert_eq!(calls, vec![("stream", "readItem"), ("nested", "nextItem")]);
+        assert!(result
+            .pattern_nodes
+            .iter()
+            .any(|node| node.signature == "call:readItem"));
+        assert!(
+            result
+                .pattern_nodes
+                .iter()
+                .all(|node| !node.signature.contains("ghostItem")),
+            "cached signatures must keep the same template-string boundary as calls"
+        );
+    }
+}
+
 const CASES: &[LanguageConformanceCase] = &[
     LanguageConformanceCase {
         language: Language::Rust,

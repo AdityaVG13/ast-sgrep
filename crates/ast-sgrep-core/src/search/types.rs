@@ -388,6 +388,16 @@ impl Default for SearchOptions {
     }
 }
 impl SearchOptions {
+    /// Candidate retention shared by search passes and the final result gates.
+    /// Reranking needs its full top-k pool before the output limit is applied.
+    pub(crate) fn retained_limit(&self) -> usize {
+        if self.use_rerank {
+            self.limit.max(self.rerank_top_k)
+        } else {
+            self.limit
+        }
+    }
+
     pub fn default_limit() -> usize {
         crate::limits::clamp_output_limit(
             std::env::var("ASGREP_LIMIT")

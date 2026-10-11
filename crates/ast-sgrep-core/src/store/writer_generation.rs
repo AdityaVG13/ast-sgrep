@@ -4,7 +4,7 @@
 //! long-lived MCP / Code Mode Searcher caches poll it and reopen when it changes.
 //! This is not a lease or IPC bus — peers detect staleness by reading the file.
 
-use super::{as_db_path, INDEX_DIR};
+use super::{index_db_path, INDEX_DIR};
 
 /// Historical generation-layout directory name. Origin no longer uses
 /// build-then-swap, but leftover `generations/<id>/index.db` paths still
@@ -27,13 +27,7 @@ pub const WRITER_GENERATION_FILE: &str = "writer_generation";
 /// `generations/<id>/` still resolve to the enclosing index home so activation
 /// and candidate builds share one stamp peers can poll.
 pub fn writer_generation_home(root: &Path, index_path: Option<&Path>) -> PathBuf {
-    if let Some(path) = index_path {
-        return home_for_db(&as_db_path(path.to_path_buf()), root);
-    }
-    if let Ok(env_path) = std::env::var("ASGREP_INDEX_PATH") {
-        return home_for_db(&as_db_path(PathBuf::from(env_path)), root);
-    }
-    root.join(INDEX_DIR)
+    home_for_db(&index_db_path(root, index_path), root)
 }
 
 fn home_for_db(db: &Path, root: &Path) -> PathBuf {

@@ -286,6 +286,166 @@ fn file_uris_reject_invalid_utf8_instead_of_aliasing_replacement_characters() {
     assert!(file_uri_to_path("file:///tmp/%ED%A0%80.rs").is_err());
 }
 
+/// INTENT: localhost is a local file authority, not a relative path segment.
+#[test]
+fn lsp_localhost_file_uri_preserves_workspace_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a b.rs");
+    std::fs::write(&file, "fn target() {}\n").unwrap();
+    let uri = path_to_file_uri(&file).replacen("file://", "file://localhost", 1);
+    assert_eq!(
+        file_uri_to_path(&uri).unwrap(),
+        file.canonicalize().unwrap()
+    );
+    assert_eq!(uri_to_rel_path(&uri, dir.path()).unwrap(), "a b.rs");
+    let upper = uri.replacen("localhost", "LOCALHOST", 1);
+    assert_eq!(uri_to_rel_path(&upper, dir.path()).unwrap(), "a b.rs");
+    let remote = uri.replacen("localhost", "other-host", 1);
+    assert!(file_uri_to_path(&remote).is_err());
+}
+
+/// INTENT: the advertised call-hierarchy feature accepts the standard wire method.
+#[test]
+fn lsp_standard_prepare_call_hierarchy_request_reaches_backend() {
+    use ast_sgrep_lsp::transport::{read_message, write_message};
+    use serde_json::{json, Value};
+    use std::io::Cursor;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    std::fs::write(&file, "fn target() {}\n").unwrap();
+    let uri = path_to_file_uri(&file);
+    let mut input = Vec::new();
+    for message in [
+        json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+            "rootUri":path_to_file_uri(dir.path()),
+            "initializationOptions":{"asgrep":{"noEmbed":true,"indexPath":"index.sqlite"}}
+        }}),
+        json!({"jsonrpc":"2.0", "method":"initialized", "params":{}}),
+        json!({"jsonrpc":"2.0", "method":"textDocument/didOpen", "params":{
+            "textDocument":{"uri":uri,"languageId":"rust","version":1,"text":"fn target() {}\n"}
+        }}),
+        json!({"jsonrpc":"2.0", "id":2, "method":"textDocument/prepareCallHierarchy", "params":{
+            "textDocument":{"uri":uri},"position":{"line":0,"character":4}
+        }}),
+        json!({"jsonrpc":"2.0", "id":3, "method":"shutdown", "params":null}),
+        json!({"jsonrpc":"2.0", "method":"exit"}),
+    ] {
+        write_message(&mut input, &message.to_string()).unwrap();
+    }
+    let mut output = Vec::new();
+    let mut server = ast_sgrep_lsp::LspServer::new();
+    server
+        .run_with(&mut Cursor::new(input), &mut output)
+        .unwrap();
+    let mut reader = Cursor::new(output);
+    let mut prepared = None;
+    while let Some(body) = read_message(&mut reader).unwrap() {
+        let response: Value = serde_json::from_str(&body).unwrap();
+        if response["id"] == 1 {
+            assert_eq!(
+                response["result"]["capabilities"]["callHierarchyProvider"],
+                true
+            );
+        }
+        if response["id"] == 2 {
+            prepared = Some(response);
+        }
+    }
+    let prepared = prepared.expect("prepare response");
+    assert!(prepared.get("error").is_none(), "{prepared:#}");
+    assert_eq!(prepared["result"][0]["name"], "target", "{prepared:#}");
+    assert_eq!(prepared["result"][0]["uri"], uri);
+    assert_eq!(server.process_exit_code(), 0);
+}
+
+/// INTENT: distinguish pre-initialize, invalid-params, and malformed-JSON errors.
+/// PROTO-08: regression only until parent confirms semantic RED.
+#[test]
+fn lsp_wire_errors_use_protocol_codes() {
+    use ast_sgrep_lsp::transport::{read_message, write_message};
+    use serde_json::{json, Value};
+    use std::io::Cursor;
+
+    let mut input = Vec::new();
+    for body in [
+        json!({"jsonrpc":"2.0", "id":1, "method":"workspace/symbol", "params":{"query":"target"}})
+            .to_string(),
+        json!({"jsonrpc":"2.0", "id":2, "method":"initialize", "params":{"rootUri":3}}).to_string(),
+        "{".to_string(),
+        json!({"jsonrpc":"2.0", "id":3, "method":"shutdown", "params":null}).to_string(),
+        json!({"jsonrpc":"2.0", "method":"exit"}).to_string(),
+    ] {
+        write_message(&mut input, &body).unwrap();
+    }
+    let mut output = Vec::new();
+    let mut server = ast_sgrep_lsp::LspServer::new();
+    server
+        .run_with(&mut Cursor::new(input), &mut output)
+        .unwrap();
+    let mut reader = Cursor::new(output);
+    let mut responses = Vec::new();
+    while let Some(body) = read_message(&mut reader).unwrap() {
+        let response: Value = serde_json::from_str(&body).unwrap();
+        responses.push(json!([response["id"], response["error"]["code"]]));
+    }
+    assert_eq!(
+        responses,
+        vec![
+            json!([1, -32002]),
+            json!([2, -32602]),
+            json!([null, -32700]),
+            json!([3, null])
+        ],
+        "every bad frame needs the protocol-defined response; later frames must still be handled"
+    );
+    assert_eq!(server.process_exit_code(), 0);
+}
+
+/// INTENT: rangeLength counts the exact open buffer, not normalized index EOLs.
+#[test]
+fn lsp_incremental_edit_uses_exact_mixed_eol_buffer() {
+    let session = ast_sgrep_testkit::isolated_index_session();
+    let mut backend = ast_sgrep_lsp::LspBackend::new(session.corpus_root.clone());
+    backend.set_index_path(session.index_path.clone());
+    backend
+        .apply_settings(ast_sgrep_lsp::settings::AsgrepSettings {
+            no_embed: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+    backend.index_content("mixed.rs", "// a\n// b\r\n").unwrap();
+    let uri = path_to_file_uri(&session.corpus_root.join("mixed.rs"));
+    backend
+        .apply_document_changes(&uri, &[edit_ranged_len((0, 4), (1, 0), Some(1), "")])
+        .unwrap();
+    assert_eq!(
+        session
+            .open_store()
+            .file_text("mixed.rs")
+            .unwrap()
+            .as_deref(),
+        Some("// a// b\r\n"),
+        "deleting the original one-unit LF must join the lines"
+    );
+
+    // didSave clears the dirty buffer; the next edit must use exact disk text.
+    session.write("mixed.rs", "// c\n// d\r\n");
+    backend.reindex_file("mixed.rs").unwrap();
+    backend
+        .apply_document_changes(&uri, &[edit_ranged_len((0, 4), (1, 0), Some(1), "")])
+        .unwrap();
+    assert_eq!(
+        session
+            .open_store()
+            .file_text("mixed.rs")
+            .unwrap()
+            .as_deref(),
+        Some("// c// d\r\n"),
+        "after save, disk EOLs must take precedence over index reconstruction"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn scip_overlay_keeps_distinct_indexed_paths_distinct() {

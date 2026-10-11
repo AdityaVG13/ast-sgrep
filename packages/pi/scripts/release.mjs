@@ -52,7 +52,11 @@ if (canonical !== version || extensionContract !== version || extensionManifest 
 // placeholders that crash every later `npm ci` with `Invalid Version:` once
 // the version goes live. Refuse to tag over them.
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
-const stubs = Object.entries(lock.packages ?? {}).filter(([name, entry]) => name.includes('@ast-sgrep/') && !entry.version && !entry.resolved && !entry.link).map(([name]) => name);
+const stubs = contract.packages.platforms.filter(({ name }) => {
+  const entry = lock.packages?.['node_modules/' + name];
+  return !entry || entry.link || typeof entry.version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(entry.version) ||
+    typeof entry.resolved !== 'string' || !/^https?:\/\//u.test(entry.resolved) || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(entry.integrity ?? '');
+}).map(({ name }) => name);
 if (stubs.length) fail('ASGREP_RELEASE_LOCK_STUBS', `lockfile has unresolvable optionals (${stubs.join(', ')}); restore the last published lock (git checkout origin/main -- package-lock.json) — do NOT regenerate until after publish`);
 
 if (runCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') fail('ASGREP_RELEASE_BRANCH', 'releases cut from main only');

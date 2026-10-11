@@ -121,6 +121,7 @@ pub(crate) struct JaSyncMethodTemplate {
     /// The PATTERN-side leading annotation run — each demanded annotation
     /// must match a candidate annotation in order (an absent one refuses).
     annotations: Vec<String>,
+    return_type: String,
     name: LaneMeta,
     body: JaSyncMethodBody,
 }
@@ -294,7 +295,6 @@ pub(crate) fn ja_sync_method_template(pattern: &str) -> Option<JaSyncMethodTempl
     let (annotations, p) = ja_strip_annotation_run(p);
     let (modifiers, head_sync, rest) = ja_strip_modifier_run(p);
     let (ret, rest) = ja_strip_ret(rest)?;
-    let _ = ret;
     let (name, rest) = ja_name_then_parens(rest)?;
     let body = ja_method_body(rest)?;
     if head_sync {
@@ -303,6 +303,7 @@ pub(crate) fn ja_sync_method_template(pattern: &str) -> Option<JaSyncMethodTempl
         return Some(JaSyncMethodTemplate {
             modifiers,
             annotations,
+            return_type: ret.to_string(),
             name,
             body,
         });
@@ -314,6 +315,7 @@ pub(crate) fn ja_sync_method_template(pattern: &str) -> Option<JaSyncMethodTempl
         JaSyncMethodBody::SyncBlock(_) => Some(JaSyncMethodTemplate {
             modifiers,
             annotations,
+            return_type: ret.to_string(),
             name,
             body,
         }),
@@ -381,7 +383,10 @@ pub(crate) fn java_sync_block_bind(
         .iter()
         .copied()
         .find(|c| c.kind() == "parenthesized_expression")?;
-    let resource_inner = resource.named_child(0)?;
+    let mut resource_cursor = resource.walk();
+    let resource_inner = resource
+        .named_children(&mut resource_cursor)
+        .find(|child| !is_trivia_kind(child.kind()))?;
     let resource_text = node_text(&resource_inner, source)?;
     match &block.resource {
         Ok(meta) => meta.bind(captures, resource_text.trim())?,
@@ -487,12 +492,20 @@ pub(crate) fn java_sync_method_match(
             }
         }
     }
+    let return_type = node.child_by_field_name("type")?;
+    if node_text(&return_type, source)?.trim() != template.return_type {
+        return None;
+    }
     let name_node = node.child_by_field_name("name")?;
     let name_text = node_text(&name_node, source)?;
     template.name.bind(&mut captures, name_text.trim())?;
     // The probed method shape carries an EMPTY parameter list.
     let parameters = node.child_by_field_name("parameters")?;
-    if parameters.named_child_count() != 0 {
+    let mut parameter_cursor = parameters.walk();
+    if parameters
+        .named_children(&mut parameter_cursor)
+        .any(|child| !is_trivia_kind(child.kind()))
+    {
         return None;
     }
     let body = node.child_by_field_name("body")?;

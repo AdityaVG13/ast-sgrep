@@ -37,6 +37,8 @@ const piEntry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-age
 const piRoot = path.resolve(path.dirname(piEntry), '..');
 const piCli = path.join(path.dirname(piEntry), 'cli.js');
 const nativeSource = path.join(root, 'target', 'debug', host.executable);
+const watchName = process.platform === 'win32' ? 'asgrep-watch.exe' : 'asgrep-watch';
+const watchSource = path.join(root, 'target', 'debug', watchName);
 const children = new Set();
 const stages = [];
 const inheritedEnvironment = { ...process.env };
@@ -85,6 +87,7 @@ function pack(directory, destination) {
 const packArtifacts = async () => {
   assert.ok(existsSync(nativeSource), 'current native binary is missing: ' + nativeSource);
   assert.ok((await stat(nativeSource)).size > 0, 'current native binary is empty: ' + nativeSource);
+  assert.ok(existsSync(watchSource) && (await stat(watchSource)).size > 0, 'current watch helper is missing or empty: ' + watchSource);
   const native = path.join(staging, 'native');
   const launcher = path.join(staging, 'launcher');
   const extension = path.join(staging, 'extension');
@@ -92,12 +95,14 @@ const packArtifacts = async () => {
   await cp(path.join(root, 'packages/pi/launcher'), launcher, { recursive: true });
   await cp(path.join(root, 'packages/pi/extension'), extension, { recursive: true });
   await cp(nativeSource, path.join(native, host.executable));
-  if (process.platform !== 'win32') await chmod(path.join(native, host.executable), 0o755);
+  await cp(watchSource, path.join(native, watchName));
+  if (process.platform !== 'win32') { await chmod(path.join(native, host.executable), 0o755); await chmod(path.join(native, watchName), 0o755); }
   const napiPath = path.join(native, 'ast-sgrep-codemode.node');
   await writeFile(napiPath, 'e2e-napi-placeholder\n');
   const checksum = createHash('sha256').update(await readFile(path.join(native, host.executable))).digest('hex');
   const napiChecksum = createHash('sha256').update(await readFile(napiPath)).digest('hex');
-  await writeFile(path.join(native, 'checksum.sha256'), checksum + '  ' + host.executable + '\n' + napiChecksum + '  ast-sgrep-codemode.node\n');
+  const watchChecksum = createHash('sha256').update(await readFile(path.join(native, watchName))).digest('hex');
+  await writeFile(path.join(native, 'checksum.sha256'), checksum + '  ' + host.executable + '\n' + napiChecksum + '  ast-sgrep-codemode.node\n' + watchChecksum + '  ' + watchName + '\n');
   await setJson(path.join(native, 'package.json'), (manifest) => { delete manifest.scripts; });
   const nativeTar = path.join(artifacts, 'native.tgz');
   pack(native, nativeTar);

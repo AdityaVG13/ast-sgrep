@@ -335,63 +335,34 @@ pub(crate) fn optional_call_matches(
     if !arguments_match(node, arguments, &["arguments"]) {
         return None;
     }
-    // Php's member calls split the chain across fields — the callee is a
-    // `name` node, not a member expression, and the nullsafe connector
-    // gets its own named kind `nullsafe_member_call_expression` (plain
-    // `->` stays `member_call_expression`). The kind IS the token-exact
-    // discriminator: the plain spelling never answers here, and the
-    // wildcard head folds the whole object expression like the reference
-    // (O= `g?->h` on `g?->h?->i()`).
-    if matches!(
-        node.kind(),
-        "member_call_expression" | "nullsafe_member_call_expression"
-    ) {
-        let object = node.child_by_field_name("object")?;
-        let name = node.child_by_field_name("name")?;
-        let nullsafe = node.kind() == "nullsafe_member_call_expression";
-        if !nullsafe {
-            return None;
+    // Resolve grammar-specific receiver spans once; literal admission and
+    // capture publication below are identical for optional and nullsafe calls.
+    let (head_text, tail_text) = match node.kind() {
+        "member_call_expression" => return None,
+        "nullsafe_member_call_expression" => {
+            // PHP's connector is the node kind; the object is already the
+            // whole folded receiver (`g?->h` on `g?->h?->i()`).
+            let object = node.child_by_field_name("object")?;
+            let name = node.child_by_field_name("name")?;
+            (node_text(&object, source)?, node_text(&name, source)?)
         }
-        let head_text = node_text(&object, source)?;
-        let tail_text = node_text(&name, source)?;
-        if tail_literal.is_some_and(|literal| literal != tail_text) {
-            return None;
+        _ => {
+            let field = call_field_node(node)?;
+            let (segments, connectors) = optional_chain_decompose(lang, &field)?;
+            if segments.len() < 2 || !*connectors.last()? {
+                return None;
+            }
+            let tail_text = node_text(segments.last()?, source)?;
+            // The folded head ends before the final connector; `user?.profile`
+            // must never acquire the trailing `?` from `user?.profile?.load()`.
+            let head_end = segments[segments.len() - 2].end_byte();
+            let head_text = source.get(segments[0].start_byte()..head_end)?;
+            (head_text, tail_text)
         }
-        if head_literal.is_some_and(|literal| literal != head_text) {
-            return None;
-        }
-        let mut captures = BTreeMap::new();
-        if let Some(text) = node_text(node, source) {
-            captures.insert("MATCH".to_string(), text.to_string());
-        }
-        capture_arguments(node, source, pattern, &mut captures)?;
-        if let Some(name) = head_capture {
-            bind_capture(&mut captures, name, head_text)?;
-        }
-        if let Some(name) = tail_capture {
-            bind_capture(&mut captures, name, tail_text)?;
-        }
-        return Some(captures);
-    }
-    let field = call_field_node(node)?;
-    let (segments, connectors) = optional_chain_decompose(lang, &field)?;
-    // A two-segment template needs a member chain: head + `?.` + tail.
-    if segments.len() < 2 || !*connectors.last()? {
-        return None;
-    }
-    let tail_node = segments.last()?;
-    let tail_text = node_text(tail_node, source)?;
+    };
     if tail_literal.is_some_and(|literal| literal != tail_text) {
         return None;
     }
-    // Wildcard-head folding: the receiver span covers segments 0..last,
-    // ending at the LAST FOLDED segment's end — the trailing `?.` connector
-    // bytes stay out of the capture (the reference binds
-    // `user?.profile`, never `user?.profile?`; the proven codemod
-    // corruption class).
-    let head_node = &segments[0];
-    let head_end = segments[segments.len() - 2].end_byte();
-    let head_text = source.get(head_node.start_byte()..head_end)?;
     if head_literal.is_some_and(|literal| literal != head_text) {
         return None;
     }
@@ -497,8 +468,8 @@ pub(crate) fn optional_call_chain_decompose<'a>(
 /// the registered plain-call rest-slot semantics (`call_arg_slots_match`:
 /// trailing rest + single ⇒ n ≥ 2, k ≥ 2 rests ⇒ n ≥ k-1, non-trailing
 /// rest ⇒ n == 1 — the `?.`-chain faces answer at exactly those arities).
-/// Plain templates keep `arguments_match` + the args-capture bind,
-/// byte-identical.
+/// Plain templates enforce arity and bind both whole-list and positional
+/// captures, including repeated-name equality across segments.
 pub(crate) fn chain_segment_args_contract(
     node: &Node,
     segment: &CallChainSegment,
@@ -515,6 +486,15 @@ pub(crate) fn chain_segment_args_contract(
     if let Some((name, multi)) = &segment.args_capture {
         if let Some(text) = capture_arguments_text(node, source) {
             bind_capture_kind(captures, name, strip_container(&text), *multi)?;
+        }
+    }
+    if let Some(names) = &segment.arg_metas {
+        let nodes = argument_nodes(node, &["arguments"])?;
+        if names.len() != nodes.len() {
+            return None;
+        }
+        for (name, argument) in names.iter().zip(nodes.iter()) {
+            bind_capture(captures, name, node_text(argument, source)?)?;
         }
     }
     Some(())
@@ -709,6 +689,34 @@ pub(crate) fn walk_optional_call_chains(
     }
 }
 
+/// Capture arguments at any plain-chain call level after its arity check.
+/// Missing containers/text keep this lane's existing permissive behavior;
+/// `chain_segment_args_contract` separately enforces strict optional-chain slots.
+fn capture_chain_segment_arguments(
+    node: &Node,
+    segment: &CallChainSegment,
+    source: &str,
+    captures: &mut BTreeMap<String, String>,
+) -> Option<()> {
+    if let Some((name, multi)) = &segment.args_capture {
+        if let Some(text) = capture_arguments_text(node, source) {
+            bind_capture_kind(captures, name, strip_container(&text), *multi)?;
+        }
+    }
+    let Some(names) = &segment.arg_metas else {
+        return Some(());
+    };
+    let Some(nodes) = argument_nodes(node, &["arguments"]) else {
+        return Some(());
+    };
+    for (name, argument) in names.iter().zip(nodes.iter()) {
+        if let Some(text) = node_text(argument, source) {
+            bind_capture(captures, name, text)?;
+        }
+    }
+    Some(())
+}
+
 /// Segment unification + argument-template check for one candidate call.
 /// A leading METAVARIABLE head absorbs the whole property-access receiver
 /// prefix — the pattern's tail aligns with the candidate path's LAST
@@ -825,44 +833,12 @@ pub(crate) fn chain_matches(
         if !arguments_match(&receiver, segment.args.as_ref(), &["arguments"]) {
             return None;
         }
-        if let Some((name, multi)) = &segment.args_capture {
-            if let Some(text) = capture_arguments_text(&receiver, source) {
-                // The argument capture binds the LIST CONTENT (container
-                // stripped), the same convention as the single-call lane's
-                // `$$$` capture — the reference's multi list for `()` is empty.
-                bind_capture_kind(&mut captures, name, strip_container(&text), *multi)?;
-            }
-        }
-        // Positional `$A, $B` binding, same contract as the member-chain lane
-        // (`r.m1($A, $B).m2()` binds A=1, B=2).
-        if let Some(names) = &segment.arg_metas {
-            if let Some(nodes) = argument_nodes(&receiver, &["arguments"]) {
-                for (name, argument) in names.iter().zip(nodes.iter()) {
-                    if let Some(text) = node_text(argument, source) {
-                        bind_capture(&mut captures, name, text)?;
-                    }
-                }
-            }
-        }
+        capture_chain_segment_arguments(&receiver, segment, source, &mut captures)?;
     }
     if !arguments_match(node, last.args.as_ref(), &["arguments"]) {
         return None;
     }
-    if let Some((name, multi)) = &last.args_capture {
-        if let Some(text) = capture_arguments_text(node, source) {
-            bind_capture_kind(&mut captures, name, strip_container(&text), *multi)?;
-        }
-    }
-    // The tail call carries the positional contract.
-    if let Some(names) = &last.arg_metas {
-        if let Some(nodes) = argument_nodes(node, &["arguments"]) {
-            for (name, argument) in names.iter().zip(nodes.iter()) {
-                if let Some(text) = node_text(argument, source) {
-                    bind_capture(&mut captures, name, text)?;
-                }
-            }
-        }
-    }
+    capture_chain_segment_arguments(node, last, source, &mut captures)?;
     Some(captures)
 }
 
@@ -988,13 +964,28 @@ pub(crate) fn chain_receiver<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     if node.kind() == "method_invocation" {
         return node.child_by_field_name("object");
     }
+    // Ruby splits dot calls into receiver/method rather than a callee field.
+    // The path resolver already enforces dots; keep every consumed call
+    // parenthesized and do not treat a bare property link as a zero-arg call.
+    if let ("call", Some(receiver)) = (node.kind(), node.child_by_field_name("receiver")) {
+        if !candidate_call_parenthesized(node) {
+            return None;
+        }
+        if receiver.kind() == "call"
+            && (receiver.child_by_field_name("arguments").is_none()
+                || !candidate_call_parenthesized(&receiver))
+        {
+            return None;
+        }
+        return Some(receiver);
+    }
     let field = call_field_node(node)?;
     member_receiver(&field)
 }
 
 /// The candidate call's argument-list text between its parentheses.
 pub(crate) fn capture_arguments_text(node: &Node, source: &str) -> Option<String> {
-    node.child_by_field_name("arguments")
+    argument_container(node, &["arguments"])
         .and_then(|list| node_text(&list, source))
         .map(str::to_string)
 }
@@ -1021,7 +1012,9 @@ pub(crate) fn call_match_path(
     source: &str,
     path: &[Option<String>],
 ) -> Option<Vec<String>> {
-    if is_in_comment_or_string(node) || !is_call_kind(node.kind()) {
+    // Non-call nodes need no ancestor lookup; call candidates retain the
+    // complete comment/string veto before callee resolution.
+    if !is_call_kind(node.kind()) || is_in_comment_or_string(node) {
         return None;
     }
     let (callee, synthetic_chain) = call_callee(node, source)?;

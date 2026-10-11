@@ -79,6 +79,49 @@ fn relative_index_path_resolves_against_session_root() {
 }
 
 #[test]
+fn chain_work_override_preserves_seeds_and_rejects_malformed_budgets() {
+    let (_tmp, mut session) = indexed_session();
+    let query = "defs:process_request";
+    let full = session
+        .call("chain", json!({"query":query, "top_n":1}))
+        .unwrap();
+    assert!(
+        full["node_count"].as_u64().unwrap() > 1,
+        "fixture must actually expand: {full}"
+    );
+    let capped = session
+        .call("chain", json!({"query":query, "top_n":1, "max_work":1}))
+        .unwrap();
+    assert_eq!(
+        capped["node_count"], 1,
+        "budget override must reach the core"
+    );
+    assert_eq!(capped["truncated"], true);
+    assert_eq!(capped["work"]["used"], 1);
+    assert_eq!(capped["seeds"], full["seeds"]);
+    for bad in [
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!(1_000_001),
+        json!(u64::MAX),
+        json!("17"),
+        json!(true),
+    ] {
+        let err = session
+            .call("chain", json!({"query":query,"max_work":bad}))
+            .expect_err("invalid work budget");
+        assert!(err.to_string().contains("max_work"), "{err}");
+    }
+    assert_eq!(
+        session
+            .call("chain", json!({"query":query,"top_n":1}))
+            .unwrap(),
+        full
+    );
+}
+
+#[test]
 fn search_returns_capsule_by_default() {
     let (_tmp, mut session) = indexed_session();
     let out = session
@@ -139,6 +182,36 @@ fn example_plan_is_valid_json_shape() {
 #[test]
 fn session_rejects_an_oversized_encoded_tool_value() {
     let (_tmp, mut session) = indexed_session();
+    // A conservative estimate may exceed the cap while the wire value fits.
+    // Count JSON escaping and admit equality, not just values below the cap.
+    let overhead = serde_json::to_vec(&json!({"payload": ""})).unwrap().len();
+    let body_bytes = MAX_CALL_RESPONSE_BYTES - overhead;
+    for escaped in [false, true] {
+        let payload = if escaped {
+            format!(
+                "{}{}",
+                "\u{1}".repeat(body_bytes / 6),
+                "x".repeat(body_bytes % 6)
+            )
+        } else {
+            "x".repeat(body_bytes)
+        };
+        let exact = json!({"payload": payload});
+        assert_eq!(
+            serde_json::to_vec(&exact).unwrap().len(),
+            MAX_CALL_RESPONSE_BYTES
+        );
+        let value = session
+            .call("select", json!({"value": exact, "fields": ["payload"]}))
+            .expect("exact wire boundary is admitted");
+        assert_eq!(value, exact);
+        session
+            .call(
+                "select",
+                json!({"value": {"payload": format!("{payload}x")}, "fields": ["payload"]}),
+            )
+            .expect_err("one encoded byte over the cap is rejected");
+    }
     let error = session
         .call(
             "select",
@@ -609,6 +682,148 @@ fn peek_cached_search_hits_after_first_call() {
         .peek_cached_search(&args)
         .expect("sticky repeat must hit the render cache");
     assert_eq!(peeked["hits"], first["hits"], "{peeked} vs {first}");
+}
+
+/// Large legal replacements need bounded diffs, not a post-write payload error.
+#[test]
+fn edit_large_single_line_reports_bounded_success() {
+    let root = TempDir::new().expect("root");
+    fs::write(root.path().join("source.txt"), "OLD\n").expect("source");
+    let (_index, mut session) = ast_sgrep_testkit::indexed_session_at(root.path());
+    let replacement = "X".repeat(1_100_000);
+    let value = session
+        .call(
+            "edit",
+            json!({"path": "source.txt", "oldText": "OLD", "newText": replacement}),
+        )
+        .expect("legal edit must not fail response admission after writing");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["changed"], 1);
+    assert_eq!(value["edits"][0]["truncated"], true);
+    assert!(
+        serde_json::to_vec(&value).unwrap().len() <= ast_sgrep_codemode::MAX_CALL_RESPONSE_BYTES
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("source.txt")).unwrap(),
+        format!("{replacement}\n")
+    );
+
+    // Also bound removed text and preserve Unicode/control characters in
+    // previews; escaping must not turn a legal edit into a post-write error.
+    let escaped = "\u{1}🦀".repeat(1_024);
+    let value = session
+        .call(
+            "edit",
+            json!({"path": "source.txt", "oldText": replacement, "newText": escaped}),
+        )
+        .expect("bounded replacement and removal");
+    assert_eq!(value["edits"][0]["removed"], json!(["X".repeat(1_024)]));
+    assert_eq!(value["edits"][0]["added"], json!(["\u{1}🦀".repeat(512)]));
+    assert_eq!(value["edits"][0]["truncated"], true);
+    assert!(serde_json::to_vec(&value).unwrap().len() <= MAX_CALL_RESPONSE_BYTES);
+    assert_eq!(
+        fs::read_to_string(root.path().join("source.txt")).unwrap(),
+        format!("{escaped}\n")
+    );
+}
+
+/// A failed response-size admission must not seed a usable callNow cache entry.
+#[test]
+fn oversized_search_cannot_escape_through_cached_take() {
+    let root = TempDir::new().expect("root");
+    for index in 0..150 {
+        fs::write(
+            root.path().join(format!("f{index}.txt")),
+            format!("budgetneedle {}\n", "\u{1}".repeat(1500)),
+        )
+        .expect("source");
+    }
+    let (_index, mut session) = ast_sgrep_testkit::indexed_session_at(root.path());
+    let args = json!({"query": "literal:budgetneedle", "format": "agent", "limit": 500});
+    let error = session
+        .call("search", args.clone())
+        .expect_err("wire-size cap");
+    assert!(error.to_string().contains("response exceeds"), "{error}");
+    assert!(
+        session.peek_cached_search(&args).is_none(),
+        "a rejected render must not remain eligible for callNow"
+    );
+    assert!(session.take_cached_search(&args).unwrap().is_none());
+}
+
+/// Language filtering must run before top-k so another language cannot crowd it out.
+#[test]
+fn language_filter_applies_before_search_limit() {
+    let root = TempDir::new().expect("root");
+    for index in 0..5 {
+        fs::write(
+            root.path().join(format!("a{index}.rs")),
+            "// languageneedle\n",
+        )
+        .unwrap();
+    }
+    fs::write(root.path().join("z.py"), "# languageneedle\n").unwrap();
+    let (_index, mut session) = ast_sgrep_testkit::indexed_session_at(root.path());
+    for limit in [1, 10, 1] {
+        let value = session
+            .call(
+                "search",
+                json!({"query": "literal:languageneedle", "lang": "py", "limit": limit}),
+            )
+            .expect("language-scoped search");
+        let hits = value["hits"].as_array().expect("hits");
+        assert_eq!(hits.len(), 1, "limit {limit}: {value}");
+        assert_eq!(hits[0]["file"], "z.py");
+    }
+    // Switching language identity must rebuild retrieval, not only rendering.
+    let all_args = json!({"query": "literal:languageneedle", "limit": 10});
+    let all = session.call("search", all_args.clone()).unwrap();
+    assert_eq!(all["hits"].as_array().unwrap().len(), 6);
+    for lang in ["rs", "py", "rs"] {
+        let args = json!({"query": "literal:languageneedle", "lang": lang, "limit": 1});
+        let value = session.call("search", args.clone()).unwrap();
+        let hits = value["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!(".{lang}")));
+        assert_eq!(session.take_cached_search(&args).unwrap(), Some(value));
+    }
+    assert_eq!(
+        session.call("search", all_args).unwrap()["hits"],
+        all["hits"]
+    );
+}
+
+/// Cached results belong to the resolved root, even when the index stamp is shared.
+#[test]
+fn cached_search_does_not_cross_contained_roots() {
+    let root = TempDir::new().expect("root");
+    fs::create_dir(root.path().join("child")).expect("child");
+    fs::write(root.path().join("parent.rs"), "fn parent_only_token() {}\n").expect("source");
+    let (_index, mut session) = ast_sgrep_testkit::indexed_session_at(root.path());
+    let args = json!({"query": "literal:parent_only_token"});
+    let parent = session.call("search", args.clone()).expect("parent search");
+    assert!(!parent["hits"].as_array().unwrap().is_empty());
+
+    let child_args = json!({"query": "literal:parent_only_token", "root": "child"});
+    assert!(
+        session.peek_cached_search(&child_args).is_none(),
+        "a contained-root override must not reuse the parent render"
+    );
+    let mut fresh = CodeModeSession::new(session.config().clone());
+    let expected = fresh
+        .call("search", child_args.clone())
+        .expect("fresh child");
+    assert!(expected["hits"].as_array().unwrap().is_empty());
+    let child = session.call("search", child_args).expect("warm child");
+    assert_eq!(child["hits"], expected["hits"]);
+    assert!(session.peek_cached_search(&args).is_none());
+    assert_eq!(
+        session.call("search", args).expect("return to parent")["hits"],
+        parent["hits"]
+    );
 }
 
 #[test]
