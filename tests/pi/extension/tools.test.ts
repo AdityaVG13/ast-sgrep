@@ -743,10 +743,13 @@ test("an anchored root is not re-resolved into the configured subdirectory", asy
  * A checkout with no index yet puts it at the work tree root, and an index that
  * merely lives above the work tree is not this project's.
  */
-test("an unindexed checkout anchors at its work tree root, not the session subdirectory", async () => {
+test("an unindexed checkout anchors at its work tree root, not the session subdirectory", { timeout: 2000 }, async (t) => {
   const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
+  const { resetCodemodeSandboxForTests } = await import("../../../packages/pi/extension/src/codemode/index.js");
+  t.after(resetCodemodeSandboxForTests);
   const outer = await mkdtemp(join(tmpdir(), "asgrep-worktree-"));
   await mkdir(join(outer, ".asgrep"), { recursive: true });
   await writeFile(join(outer, ".asgrep", "index.db"), ""); // unrelated parent index
@@ -756,14 +759,28 @@ test("an unindexed checkout anchors at its work tree root, not the session subdi
   await mkdir(subdir, { recursive: true });
 
   const tools: Tool[] = [];
-  const pi = { registerTool(tool: Tool) { tools.push(tool); }, on() {} } as unknown as ExtensionAPI;
+  const handlers = new Map<string, (event: unknown, ctx: { cwd: string }) => void>();
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on(event: string, handler: (event: unknown, ctx: { cwd: string }) => void) { handlers.set(event, handler); },
+  } as unknown as ExtensionAPI;
+  let completeWarmup!: () => void;
+  const warmed = new Promise<void>(resolve => { completeWarmup = resolve; });
   const indexed: string[] = [];
   const runtime = {
     async resolveRoot(context: { cwd: string }) { return context.cwd; },
     resolveIndexPath(root: string) { return join(root, ".asgrep", "index.db"); },
     nativeEnv() { return {} as NodeJS.ProcessEnv; },
     config: { timeoutMs: 1_000, maxOutputBytes: 1_000_000, refreshIntervalMs: 30_000 },
-    async run() { return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] }; },
+    async run(args: readonly string[], context: { cwd: string; [RESOLVED_ROOT]?: true }) {
+      if (args[0] === "index") {
+        assert.equal(context[RESOLVED_ROOT], true);
+        await mkdir(join(context.cwd, ".asgrep"), { recursive: true });
+        await writeFile(join(context.cwd, ".asgrep", "index.db"), "indexed");
+      }
+      return { tool: "asgrep" as const, schema_version: "1.0.0", ok: true, hits: [] };
+    },
+    binaryWarning() { completeWarmup(); return undefined; },
   };
   const freshness = {
     async ensureFresh(_runtime: unknown, context: { cwd: string }) { indexed.push(context.cwd); return context.cwd; },
@@ -771,11 +788,81 @@ test("an unindexed checkout anchors at its work tree root, not the session subdi
   };
   registerAstSgrepTools(pi, runtime as never, freshness as never);
 
+  handlers.get("session_start")!({}, { cwd: subdir });
+  await warmed;
+  assert.ok(existsSync(join(repo, ".asgrep", "index.db")), "cold startup must index the checkout root");
+  assert.equal(existsSync(join(subdir, ".asgrep")), false, "startup must not create a nested index");
   const search = tools.find((tool) => tool.name === "asgrep_search")!;
   await search.execute("c1", { query: "auth" }, new AbortController().signal, () => {}, { cwd: subdir });
   assert.deepEqual(indexed, [repo], "the index belongs at the work tree root");
+  handlers.get("session_shutdown")!({}, { cwd: subdir });
 });
 
+
+test("retired session warmups cannot index after late root resolution", { timeout: 2000 }, async (t) => {
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { resetCodemodeSandboxForTests } = await import("../../../packages/pi/extension/src/codemode/index.js");
+  t.after(resetCodemodeSandboxForTests);
+
+  for (const phase of ["live", "inflight", "retired"] as const) {
+    const root = await mkdtemp(join(tmpdir(), "asgrep-warmup-"));
+    const index = join(root, ".asgrep");
+    let releaseRoot!: (root: string) => void;
+    const pendingRoot = new Promise<string>(resolve => { releaseRoot = resolve; });
+    let finished!: () => void;
+    const settled = new Promise<void>(resolve => { finished = resolve; });
+    let indexStarted!: () => void;
+    const started = new Promise<void>(resolve => { indexStarted = resolve; });
+    let releaseIndex!: () => void;
+    const pendingIndex = new Promise<void>(resolve => { releaseIndex = resolve; });
+    let indexSignal: AbortSignal | undefined;
+    const handlers = new Map<string, (event: unknown, ctx: { cwd: string }) => void>();
+    const pi = {
+      registerTool() {},
+      on(event: string, handler: (event: unknown, ctx: { cwd: string }) => void) { handlers.set(event, handler); },
+    } as unknown as ExtensionAPI;
+    registerAstSgrepTools(pi, {
+      resolveRoot: () => pendingRoot,
+      resolveIndexPath: () => index,
+      async run(args, _ctx, options) {
+        assert.deepEqual(args, ["index", ".", "--json", "--no-embed"]);
+        if (phase === "inflight") {
+          indexSignal = options?.signal;
+          indexStarted();
+          await pendingIndex;
+          if (indexSignal?.aborted) throw new Error("index cancelled");
+        }
+        await writeFile(index, "indexed");
+        return { tool: "asgrep", schema_version: "1.0.0", ok: true };
+      },
+      // The startup diagnostic is requested in finally, after all warmup work.
+      binaryWarning() { finished(); return undefined; },
+    }, { async ensureFresh() { return root; }, markAffectedPath() {} });
+
+    const ctx = { cwd: root };
+    handlers.get("session_start")!({}, ctx);
+    if (phase === "retired") {
+      handlers.get("session_shutdown")!({}, ctx);
+      // Let the empty pool finish shutting down before root resolution resumes.
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    releaseRoot(root);
+    if (phase === "inflight") {
+      await started;
+      handlers.get("session_shutdown")!({}, ctx);
+      releaseIndex();
+    }
+    await settled;
+    assert.equal(existsSync(index), phase === "live",
+      phase === "live" ? "a live cold session must still index" : "a retired session must not create an index");
+    if (phase === "inflight") assert.ok(indexSignal?.aborted, "shutdown must cancel admitted index work");
+    handlers.get("session_shutdown")!({}, ctx);
+    await resetCodemodeSandboxForTests();
+  }
+});
 
 /**
  * Package-only hosts: pi ships read/edit built in, so paying for schema tokens

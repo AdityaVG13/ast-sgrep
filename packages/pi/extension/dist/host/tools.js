@@ -180,7 +180,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
      * so a warm session pays one stat while a cold one gets its first search
      * answered from a warm index instead of waiting behind the build.
      */
-    const warmColdIndex = async (root) => {
+    const warmColdIndex = async (root, signal) => {
         // Opt out on very large checkouts where the startup walk is not worth it:
         // ASGREP_NO_WARM_INDEX=1.
         if ((runtime.nativeEnv?.() ?? {}).ASGREP_NO_WARM_INDEX === "1")
@@ -195,7 +195,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         catch {
             return;
         }
-        await runCli(["index", ".", "--json", "--no-embed"], rootedAt(root));
+        await runCli(["index", ".", "--json", "--no-embed"], rootedAt(root), { signal });
     };
     const resolveRoot = async (context) => runtime.resolveRoot ? await runtime.resolveRoot(context) : context.cwd;
     /**
@@ -439,6 +439,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         return host;
     };
     let stopWorkspaceEvents;
+    let warmupController;
     function watchWorkspaceChanges() {
         stopWorkspaceEvents ??= pi.events?.on("workspace:changed", (data) => {
             if (!data || typeof data !== "object")
@@ -471,32 +472,46 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         // need them) but off the model's tool list.
         if (hostProvidesFileTools(pi))
             deactivateRedundantFileTools(pi);
+        // Root resolution precedes pool admission, so the pool's retirement fence
+        // alone cannot stop a late startup continuation or its cold-index process.
+        warmupController?.abort();
+        const controller = new AbortController();
+        warmupController = controller;
+        const signal = controller.signal;
         // Warm the in-process Searcher at session start so the first asgrep
         // search does not pay NAPI/SQLite open on the user's first lookup.
         void (async () => {
             try {
                 ensurePool();
-                const root = await resolveRoot({ cwd: ctx.cwd });
+                const { root } = await anchorRoot(ctx.cwd);
+                if (signal.aborted)
+                    return;
                 await Promise.all([pool.acquire(root), warmCodemodeSandbox()]);
+                if (signal.aborted)
+                    return;
                 // Cold checkout: build the index now, in the background, out of process.
                 // Session start (system prompt, first model turn) is a second or two of
                 // free time, and a lexical/AST index of a few thousand files takes a few
                 // hundred ms — so the first search answers from a warm index instead of
                 // waiting behind a build (measured cold first search: 271ms and rising
                 // with repo size). Failures stay silent: the search path owns recovery.
-                await warmColdIndex(root);
+                await warmColdIndex(root, signal);
             }
             catch {
                 // Doctor reports backend errors; a failed warmup must not block the session.
             }
             finally {
                 const warning = runtime.binaryWarning?.();
-                if (warning && ctx.hasUI)
+                if (warning && ctx.hasUI && !signal.aborted)
                     ctx.ui.notify(warning, "warning");
+                if (warmupController === controller)
+                    warmupController = undefined;
             }
         })();
     });
     pi.on("session_shutdown", () => {
+        warmupController?.abort();
+        warmupController = undefined;
         stopWorkspaceEvents?.();
         stopWorkspaceEvents = undefined;
         freshness.shutdown?.();
@@ -511,7 +526,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         promptSnippet: ASGREP_PROMPT_SNIPPET,
         promptGuidelines: [...(hostProvidesFileTools(pi) ? ASGREP_PROMPT_GUIDELINES_HOST_FILES : ASGREP_PROMPT_GUIDELINES)],
         description: [
-            "Code search: use it for any code lookup instead of grep.",
+            "Use it for any code lookup, not grep.",
             "The returned value is your result.",
             CODEMODE_TYPES_FOR_MODEL,
             "Example: async () => (await asgrep.search(\"auth\", { limit: 5 })).hits",
