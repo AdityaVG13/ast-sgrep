@@ -63,11 +63,11 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "ast-sgrep": ">=2.5.4 <3",
-    "typebox": "^1.0.0"
+    "ast-sgrep": ">=2.5.4 <3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.6 <1"
+    "@earendil-works/pi-coding-agent": ">=0.80.6",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {

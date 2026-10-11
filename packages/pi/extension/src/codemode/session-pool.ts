@@ -60,13 +60,14 @@ export function isUncachedSearchError(cause: unknown): boolean {
   return /use call\(\) for search/i.test(message);
 }
 
-/** NAPI can surface SQLite u64 counters as BigInt (writer_generation exceeds
- * 2^53). BigInt breaks JSON.stringify downstream (pi serializes result
- * details) — normalize to Number at the boundary. Precision past 2^53 is
- * display-only here; equality comparisons still hold since both sides
- * convert the same integer identically. */
-function normalizeNativeValue(value: unknown): unknown {
-  if (typeof value === "bigint") return Number(value);
+/** NAPI can surface SQLite u64 counters as BigInt. Preserve exact values
+ * above the safe-integer range in JSON-shaped tool results. */
+export function normalizeNativeValue(value: unknown): unknown {
+  if (typeof value === "bigint") {
+    return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(value)
+      : value.toString();
+  }
   if (Array.isArray(value)) return value.map(normalizeNativeValue);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};

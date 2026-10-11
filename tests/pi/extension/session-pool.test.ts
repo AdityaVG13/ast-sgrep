@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isUncachedSearchError, NativeSessionPool } from "../../../packages/pi/extension/src/codemode/session-pool.js";
+import { isUncachedSearchError, NativeSessionPool, normalizeNativeValue } from "../../../packages/pi/extension/src/codemode/session-pool.js";
 import type { StickyWorker } from "../../../packages/pi/extension/src/codemode/dispatch.js";
 import type { MachineEnvelope } from "../../../packages/pi/extension/src/runtime/runtime.js";
+
+test("native BigInts retain exact JSON values outside the safe range", () => {
+  const result = normalizeNativeValue({ generation: 9007199254740993n, small: 3n, values: [-9007199254740993n] });
+  assert.deepEqual(result, { generation: "9007199254740993", small: 3, values: ["-9007199254740993"] });
+  assert.doesNotThrow(() => JSON.stringify(result));
+});
 
 function fakeWorker(log: string[]): StickyWorker {
   return {
