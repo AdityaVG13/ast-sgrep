@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -29,13 +29,16 @@ test('a clean packed launcher watches and indexes a new file without PATH or aut
   assert.ok(target, 'this host is not in the supported native target matrix');
   assert.ok(process.env.ASGREP_TEST_NATIVE_DIR, 'set ASGREP_TEST_NATIVE_DIR to a directory containing the real CLI, watch helper, and NAPI addon');
   const source = path.resolve(process.env.ASGREP_TEST_NATIVE_DIR);
-  const root = await mkdtemp(path.join(tmpdir(), 'asgrep-npm-watch-'));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'asgrep-npm-watch-')));
   const native = path.join(root, 'packages/pi/platforms', target.id);
   const launcher = path.join(root, 'packages/pi/launcher');
   const packs = path.join(root, 'packs');
   const install = path.join(root, 'install');
   const fixture = path.join(root, 'fixture');
   for (const directory of [native, packs, install, fixture, path.join(root, 'packages/pi/release')]) await mkdir(directory, { recursive: true });
+  // A real checkout boundary prevents an enclosing developer index from owning
+  // this cold fixture; watch must still create and update its default index.
+  run('git', ['init', '--quiet', fixture], root);
   for (const file of ['packages/pi/release/targets.json', 'packages/pi/release-contract.json', 'packages/pi/platforms/prepack-verify.mjs']) await copyFile(path.join(repo, file), path.join(root, file));
   for (const file of ['package.json', 'LICENSE']) await copyFile(path.join(repo, 'packages/pi/platforms', target.id, file), path.join(native, file));
   const checksums = [];

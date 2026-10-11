@@ -122,10 +122,16 @@
     },
     "pi": {
       "package": "@earendil-works/pi-coding-agent",
-      "range": ">=0.80.6 <1",
+      "range": ">=0.80.6",
       "minimum": "0.80.6",
       "api": "ExtensionAPI",
-      "policy": "Each release MUST pass the real Pi loader acceptance suite on the minimum and current stable Pi versions; Pi 1.x requires an explicit contract revision."
+      "policy": "Pi 1.x is admitted explicitly. Each release MUST pass the real Pi loader acceptance suite on the minimum and current stable Pi versions. The peer range is an admission floor, not certification of untested future Pi versions or unchanged future host APIs."
+    },
+    "typebox": {
+      "package": "typebox",
+      "range": "*",
+      "ownership": "host-peer",
+      "policy": "Use the host's TypeBox peer, not a private runtime dependency. Real minimum/current Pi acceptance MUST validate registered schemas through the selected host's validator; the peer wildcard does not certify untested host/schema combinations."
     },
     "layers": {
       "extension": {

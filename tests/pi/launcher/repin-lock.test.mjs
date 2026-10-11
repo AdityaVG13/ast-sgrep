@@ -133,3 +133,70 @@ test('the pre-tag release guard rejects partially populated native entries befor
   }
   assert.equal(f.requests.length, 0);
 });
+
+test('release retries compare peeled commits and refuse failed or malformed tag lookups', async t => {
+  const f = await fixture(t);
+  const directory = path.join(f.root, 'packages/pi/scripts');
+  await mkdir(directory, { recursive: true });
+  await copyFile(path.join(repo, 'packages/pi/scripts/release.mjs'), path.join(directory, 'release.mjs'));
+  const lock = JSON.parse(f.before);
+  for (const [name, pack] of f.packs) lock.packages['node_modules/' + name] = { version, resolved: `http://localhost/tarballs/${pack.target.id}.tgz`, integrity: pack.integrity, optional: true };
+  await writeFile(path.join(f.root, 'package-lock.json'), JSON.stringify(lock));
+  const hook = path.join(f.root, 'git-fixture.mjs');
+  await writeFile(hook, `
+    import child from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const fixture = JSON.parse(process.env.RELEASE_GIT_FIXTURE);
+    child.spawnSync = (command, args) => {
+      console.error('fixture-command:' + JSON.stringify([command, ...args]));
+      const ok = stdout => ({ status: 0, stdout, stderr: '' });
+      if (command === 'gh' && args.join(' ') === 'auth status') return ok('');
+      if (command !== 'git') throw new Error('unexpected release side effect: ' + command);
+      const key = args.join(' ');
+      if (key === 'rev-parse --abbrev-ref HEAD') return ok('main');
+      if (key === 'status --porcelain' || key === 'fetch origin main') return ok('');
+      if (key === 'rev-parse HEAD' || key === 'rev-parse origin/main') return ok(fixture.head);
+      if (args[0] === 'ls-remote') {
+        if (fixture.remoteError) return { status: 128, stdout: '', stderr: 'remote unavailable' };
+        return ok(fixture.remote);
+      }
+      if (args[0] === 'show-ref') {
+        if (fixture.localError) return { status: 128, stdout: '', stderr: 'local repository unreadable' };
+        return fixture.local === null ? { status: 1, stdout: '', stderr: '' } : ok(fixture.local + ' ' + args.at(-1));
+      }
+      if (args[0] === 'rev-list' || args[0] === 'rev-parse') {
+        return fixture.local === null || fixture.localError ? { status: 128, stdout: '', stderr: 'local lookup failed' } : ok(fixture.local);
+      }
+      throw new Error('unexpected git command: ' + key);
+    };
+    syncBuiltinESMExports();
+  `);
+  const head = 'a'.repeat(40), other = 'b'.repeat(40), object = 'c'.repeat(40);
+  const ref = 'refs/tags/v' + version;
+  const cases = [
+    { name: 'signed/annotated', local: head, remote: `${object}\t${ref}\n${head}\t${ref}^{}\n`, ok: true },
+    { name: 'lightweight', local: head, remote: `${head}\t${ref}\n`, ok: true },
+    { name: 'absent', local: null, remote: '', ok: true, sign: true },
+    { name: 'remote mismatch', local: head, remote: `${object}\t${ref}\n${other}\t${ref}^{}\n`, error: 'ASGREP_RELEASE_TAG_EXISTS' },
+    { name: 'local mismatch', local: other, remote: '', error: 'ASGREP_RELEASE_TAG_EXISTS' },
+    { name: 'remote failure', local: head, remote: '', remoteError: true, error: 'ASGREP_RELEASE_COMMAND' },
+    { name: 'local failure', local: null, remote: '', localError: true, error: 'ASGREP_RELEASE_COMMAND' },
+    { name: 'malformed remote', local: head, remote: `not-a-sha\t${ref}\n`, error: 'ASGREP_RELEASE_TAG_LOOKUP' },
+    { name: 'orphan peeled ref', local: head, remote: `${head}\t${ref}^{}\n`, error: 'ASGREP_RELEASE_TAG_LOOKUP' },
+    { name: 'duplicate direct ref', local: head, remote: `${head}\t${ref}\n${other}\t${ref}\n`, error: 'ASGREP_RELEASE_TAG_LOOKUP' },
+  ];
+  for (const c of cases) {
+    const result = await run(process.execPath, ['--import', hook, path.join(directory, 'release.mjs'), version, '--dry-run'], f.root, { ...f.env, RELEASE_GIT_FIXTURE: JSON.stringify({ head, ...c }) });
+    if (c.ok) {
+      assert.equal(result.code, 0, c.name + ': ' + result.stderr);
+      assert.equal(result.stdout.includes('sign tag'), c.sign === true, c.name);
+      assert.match(result.stderr, /refs\/tags\/v[^" ]+\^\{\}/u, 'remote lookup must request the peeled ref');
+    } else {
+      assert.notEqual(result.code, 0, c.name);
+      assert.ok(result.stderr.includes(c.error), c.name + ': ' + result.stderr);
+      assert.equal(result.stdout, '', 'failed lookups must not authorize release actions');
+    }
+    assert.ok(!result.stderr.includes('fixture-command:["git","tag"') && !result.stderr.includes('fixture-command:["git","push"') && !result.stderr.includes('fixture-command:["gh","workflow"'), 'dry-run may not mutate external state');
+  }
+  assert.equal(f.requests.length, 0, 'tag validation must not publish or query npm');
+});

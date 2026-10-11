@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { existsSync, renameSync } from 'node:fs';
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
@@ -12,7 +13,7 @@ const releaseContract = JSON.parse(await readFile(path.join(root, 'packages/pi/r
 const version = releaseContract.canonicalVersion.version;
 const extensionVersion = releaseContract.packages.extension.version;
 const machineSchema = '1.0.0';
-const piVersion = '0.80.6';
+
 const maxCapturedBytes = 4 * 1024 * 1024;
 const hosts = new Map([
   ['darwin:arm64', { directory: 'darwin-arm64', packageName: '@ast-sgrep/darwin-arm64', executable: 'asgrep' }],
@@ -33,18 +34,23 @@ const agentDir = path.join(home, '.pi-agent');
 const artifacts = path.join(temporary, 'artifacts');
 const staging = path.join(temporary, 'staging');
 const emptyPath = path.join(temporary, 'empty-path');
-const piEntry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
+const piEntry = process.env.ASGREP_TEST_PI_ROOT ? path.join(path.resolve(process.env.ASGREP_TEST_PI_ROOT), 'dist', 'index.js') : fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
 const piRoot = path.resolve(path.dirname(piEntry), '..');
-const piCli = path.join(path.dirname(piEntry), 'cli.js');
-const nativeSource = path.join(root, 'target', 'debug', host.executable);
+const piManifest = JSON.parse(await readFile(path.join(piRoot, 'package.json'), 'utf8'));
+const piVersion = piManifest.version;
+const piCli = path.resolve(piRoot, piManifest.bin.pi);
+const hostRequire = createRequire(piEntry);
+const nativeDirectory = process.env.ASGREP_TEST_NATIVE_DIR ? path.resolve(process.env.ASGREP_TEST_NATIVE_DIR) : path.join(root, 'target', 'debug');
+const nativeSource = path.join(nativeDirectory, host.executable);
 const watchName = process.platform === 'win32' ? 'asgrep-watch.exe' : 'asgrep-watch';
-const watchSource = path.join(root, 'target', 'debug', watchName);
+const watchSource = path.join(nativeDirectory, watchName);
+const napiSource = path.join(nativeDirectory, 'ast-sgrep-codemode.node');
 const children = new Set();
 const stages = [];
 const inheritedEnvironment = { ...process.env };
 
 function cleanEnvironment() {
-  const env = { ...process.env, HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_cache: path.join(home, '.npm'), NO_COLOR: '1' };
+  const env = { ...process.env, HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: '1', npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_user_agent: 'OpenAI File Downloader, XaiImageApiFetch/1.0', npm_config_cache: path.join(home, '.npm'), NO_COLOR: '1' };
   for (const key of Object.keys(env)) if (/(?:^ASGREP_|API_KEY|ACCESS_TOKEN|AUTH_TOKEN|OAUTH_TOKEN|MCP)/u.test(key)) delete env[key];
   return env;
 }
@@ -88,6 +94,7 @@ const packArtifacts = async () => {
   assert.ok(existsSync(nativeSource), 'current native binary is missing: ' + nativeSource);
   assert.ok((await stat(nativeSource)).size > 0, 'current native binary is empty: ' + nativeSource);
   assert.ok(existsSync(watchSource) && (await stat(watchSource)).size > 0, 'current watch helper is missing or empty: ' + watchSource);
+  assert.ok(existsSync(napiSource) && (await stat(napiSource)).size > 0, 'current NAPI addon is missing or empty: ' + napiSource);
   const native = path.join(staging, 'native');
   const launcher = path.join(staging, 'launcher');
   const extension = path.join(staging, 'extension');
@@ -98,7 +105,10 @@ const packArtifacts = async () => {
   await cp(watchSource, path.join(native, watchName));
   if (process.platform !== 'win32') { await chmod(path.join(native, host.executable), 0o755); await chmod(path.join(native, watchName), 0o755); }
   const napiPath = path.join(native, 'ast-sgrep-codemode.node');
-  await writeFile(napiPath, 'e2e-napi-placeholder\n');
+  await cp(napiSource, napiPath);
+  const addon = hostRequire(napiPath);
+  assert.equal(addon.isNative(), true, 'acceptance requires a real NAPI addon');
+  assert.equal(addon.bindingVersion(), releaseContract.canonicalVersion.nativeCliVersion);
   const checksum = createHash('sha256').update(await readFile(path.join(native, host.executable))).digest('hex');
   const napiChecksum = createHash('sha256').update(await readFile(napiPath)).digest('hex');
   const watchChecksum = createHash('sha256').update(await readFile(path.join(native, watchName))).digest('hex');
@@ -109,14 +119,15 @@ const packArtifacts = async () => {
   const launcherTar = path.join(artifacts, 'launcher.tgz');
   await setJson(path.join(launcher, 'package.json'), (manifest) => { manifest.optionalDependencies = { [host.packageName]: 'file:' + nativeTar }; });
   pack(launcher, launcherTar);
-  const typeboxRoot = path.join(root, 'packages/pi/extension', 'node_modules', 'typebox');
-  assert.ok(existsSync(path.join(typeboxRoot, 'package.json')), 'local typebox dependency is unavailable');
+  const typeboxRoot = path.resolve(path.dirname(hostRequire.resolve('typebox')), '..');
+  assert.equal((await json(path.join(typeboxRoot, 'package.json'))).name, 'typebox', 'host TypeBox package layout changed');
   const typeboxTar = path.join(artifacts, 'typebox.tgz');
   pack(typeboxRoot, typeboxTar);
   const extensionTar = path.join(artifacts, 'extension.tgz');
   await setJson(path.join(extension, 'package.json'), (manifest) => {
     manifest.dependencies['ast-sgrep'] = 'file:' + launcherTar;
-    manifest.dependencies.typebox = 'file:' + typeboxTar;
+    assert.equal(manifest.dependencies.typebox, undefined, 'extension must not privately own TypeBox');
+    assert.equal(manifest.peerDependencies.typebox, '*');
     delete manifest.scripts;
   });
   pack(extension, extensionTar);
@@ -170,6 +181,8 @@ function assertHit(response, needle) {
 let primaryFailure;
 try {
   await Promise.all([mkdir(project, { recursive: true }), mkdir(home, { recursive: true }), mkdir(artifacts, { recursive: true }), mkdir(staging, { recursive: true }), mkdir(emptyPath, { recursive: true })]);
+  // Fence this fixture from indexes above the user's scratch directory.
+  await mkdir(path.join(project, '.git'));
   await writeFile(path.join(project, 'app.ts'), 'export function initialNeedle(name: string) { return "hello " + name; }\nexport function initialCaller() { return initialNeedle("Pi"); }\n');
   await writeFile(path.join(project, 'worker.ts'), 'import { initialCaller } from "./app";\nexport const initialResult = initialCaller();\n');
   await writeFile(path.join(project, 'calls.rs'), 'pub fn rust_needle() -> i32 { 1 }\npub fn rust_caller() -> i32 { rust_needle() }\n');
@@ -177,6 +190,9 @@ try {
   await stage('extension-build', async () => run('npm', ['run', 'build', '--workspace', 'pi-ast-sgrep']));
   const extensionTar = await stage('pack-local-artifacts', packArtifacts);
   const source = 'npm:pi-ast-sgrep@file:' + extensionTar;
+  const npmProject = path.join(project, '.pi', 'npm');
+  await mkdir(npmProject, { recursive: true });
+  await writeFile(path.join(npmProject, 'package.json'), JSON.stringify({ private: true, dependencies: { typebox: 'file:' + path.join(artifacts, 'typebox.tgz') } }));
   await stage('pi-install-packed-extension', async () => run(process.execPath, [piCli, 'install', source, '-l', '--approve'], { cwd: project }));
   const installRoot = path.join(project, '.pi', 'npm', 'node_modules');
   const extensionRoot = path.join(installRoot, 'pi-ast-sgrep');
@@ -184,11 +200,10 @@ try {
     assert.equal((await json(path.join(extensionRoot, 'package.json'))).version, extensionVersion);
     assert.equal((await json(path.join(installRoot, 'ast-sgrep', 'package.json'))).version, version);
     assert.equal((await json(path.join(installRoot, host.packageName, 'package.json'))).version, version);
-    // The installed pi agent must satisfy the declared peer range (>=0.80.6 <1),
-    // not pin an exact patch — the lockfile may resolve a newer 0.80.x.
+    // The selected real host must satisfy the admitted floor; future hosts are
+    // not certified merely because their versions satisfy this peer range.
     const installedPi = (await json(path.join(piRoot, 'package.json'))).version;
-    const [pMajor, pMinor, pPatch] = installedPi.split('.').map(Number);
-    assert.ok(pMajor === 0 && (pMinor > 80 || (pMinor === 80 && pPatch >= 6)), 'installed pi agent must satisfy >=0.80.6 <1, got ' + installedPi);
+    assert.ok(hostRequire('semver').satisfies(installedPi, releaseContract.compatibility.pi.range), 'installed Pi host is outside the declared peer range: ' + installedPi);
     const extensionManifest = await json(path.join(extensionRoot, 'package.json'));
     assert.ok(
       typeof extensionManifest.peerDependencies?.['@earendil-works/pi-coding-agent'] === 'string' &&
@@ -221,6 +236,20 @@ try {
   const readTool = runner.getToolDefinition('asgrep_read');
   const editTool = runner.getToolDefinition('asgrep_edit');
   assert.ok(codemodeTool && searchTool && indexTool && readTool && editTool);
+  await stage('host-typebox-schema-validation', async () => {
+    const { Compile } = await import(pathToFileURL(hostRequire.resolve('typebox/compile')).href);
+    for (const [tool, valid, invalid] of [
+      [codemodeTool, { code: 'return 1;' }, { code: {} }],
+      [searchTool, { query: 'initialNeedle' }, { query: {} }],
+      [indexTool, { force: false }, { force: {} }],
+      [readTool, { path: 'app.ts' }, { path: {} }],
+      [editTool, { path: 'app.ts', oldText: 'hello', newText: 'hi' }, { path: {} }],
+    ]) {
+      const validator = Compile(tool.parameters);
+      assert.equal(validator.Check(valid), true, tool.name + ' must accept valid arguments through host TypeBox');
+      assert.equal(validator.Check(invalid), false, tool.name + ' must refuse malformed arguments through host TypeBox');
+    }
+  });
   const invokeSearch = (params, signal = undefined) => searchTool.execute('release-gate', params, signal, undefined, context);
   await stage('tool-prompt-auto-register', async () => {
     assert.ok(codemodeTool.promptSnippet, 'asgrep must contribute a system-prompt snippet');
@@ -229,12 +258,21 @@ try {
     // capability and automatic-use guidance, not redundant branding.
     assert.match(codemodeTool.promptSnippet, /code search/i);
     assert.match(codemodeTool.promptSnippet, /use without being asked/i);
-    assert.match(codemodeTool.description, /instead of grep/i);
+    assert.match(codemodeTool.description, /any code lookup, (?:not|instead of) grep/i);
     assert.match(searchTool.description, /asgrep/i);
   });
   const lazy = await stage('lazy-index-natural-search', async () => invokeSearch({ query: 'initialNeedle', mode: 'natural', limit: 8 }));
   assert.ok(existsSync(path.join(project, '.asgrep', 'index.db')), 'lazy search did not create the project index');
   assertHit(envelope(lazy), 'initialNeedle');
+  await stage('native-codemode-bigint-result', async () => {
+    const result = await codemodeTool.execute('bigint-result', { code: 'async () => ({ read: await asgrep.read({ path: "app.ts", start: 1, end: 1 }), generation: 9007199254740993n })' }, undefined, undefined, context);
+    assert.equal(result.details.ok, true, JSON.stringify(result.details.error));
+    assert.equal(result.details.backend, 'napi', 'Code Mode must use the packed native addon');
+    assert.equal(String(result.details.result.generation), '9007199254740993');
+    assertHit(result.details.result.read, 'initialNeedle');
+    assert.match(result.content[0].text, /9007199254740993/u);
+    assert.doesNotMatch(result.content[0].text, /9007199254740992/u);
+  });
   await stage('pattern-defs-callers-semantic', async () => {
     assertHit(envelope(await invokeSearch({ query: '$CLIENT.fetch($$$ARGS)', mode: 'pattern', limit: 8 })), 'pattern.ts');
     assertHit(envelope(await invokeSearch({ query: 'initialNeedle', mode: 'defs', limit: 8 })), 'initialNeedle');
@@ -289,7 +327,7 @@ try {
     assert.ok(!(await readdir(path.dirname(indexPath))).some((name) => name.startsWith('.rebuild-') || name.includes('.backup-')));
   });
   await stage('two-version-lifecycle-reuse', async () => {
-    const output = run(process.execPath, [path.join(root, 'packages/pi/scripts/two-version-e2e.mjs')], { cwd: root, timeout: 600_000, env: { ASGREP_CURRENT_ARTIFACT: extensionTar, ASGREP_EXPECTED_EXTENSION_VERSION: extensionVersion, ASGREP_EXPECTED_LAUNCHER_VERSION: version, ASGREP_EXPECTED_NATIVE_VERSION: version } });
+    const output = run(process.execPath, [path.join(root, 'packages/pi/scripts/two-version-e2e.mjs')], { cwd: root, timeout: 600_000, env: { ASGREP_TEST_PI_ROOT: piRoot, ASGREP_TEST_TYPEBOX_TAR: path.join(artifacts, 'typebox.tgz'), ASGREP_CURRENT_ARTIFACT: extensionTar, ASGREP_EXPECTED_EXTENSION_VERSION: extensionVersion, ASGREP_EXPECTED_LAUNCHER_VERSION: version, ASGREP_EXPECTED_NATIVE_VERSION: version } });
     const value = JSON.parse(output.split(/\r?\n/u).at(-1));
     assert.equal(value.ok, true);
     assert.equal(value.currentArtifactLifecycle, true);
@@ -311,7 +349,8 @@ try {
     restorationFailure = cause;
     if (primaryFailure) console.error('[release-gate] environment restoration also failed: ' + String(cause));
   }
-  await rm(temporary, { recursive: true, force: true });
+  if (process.env.ASGREP_KEEP_E2E !== '1') await rm(temporary, { recursive: true, force: true });
+  else console.error('kept release-gate fixture at ' + temporary);
   if (restorationFailure && !primaryFailure) throw restorationFailure;
 }
 // The pi runtime keeps a handle alive after cleanup; exit explicitly so the

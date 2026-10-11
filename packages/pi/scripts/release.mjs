@@ -65,9 +65,31 @@ runCapture('gh', ['auth', 'status']);
 runCapture('git', ['fetch', 'origin', 'main']);
 const head = runCapture('git', ['rev-parse', 'HEAD']);
 if (head !== runCapture('git', ['rev-parse', 'origin/main'])) fail('ASGREP_RELEASE_SYNC', 'main is not in sync with origin/main (push or pull first)');
-const localTag = query('git', ['rev-list', '-n', '1', `refs/tags/${tag}`]);
-const remoteLine = query('git', ['ls-remote', 'origin', `refs/tags/${tag}`]);
-const remoteTag = remoteLine ? remoteLine.split('\t')[0] : null;
+const tagRef = `refs/tags/${tag}`;
+// show-ref has a documented missing-ref status; repository/transport failures
+// must never become authorization to create or push a replacement tag.
+const localProbe = spawnSync('git', ['show-ref', '--verify', '--quiet', tagRef], { cwd: root, encoding: 'utf8', windowsHide: true });
+if (localProbe.status !== 0 && !(localProbe.status === 1 && !localProbe.stderr)) {
+  fail('ASGREP_RELEASE_COMMAND', `local tag lookup failed (${localProbe.status}): ${String(localProbe.stderr ?? '').trim()}`);
+}
+const localTag = localProbe.status === 0 ? runCapture('git', ['rev-list', '-n', '1', tagRef]) : null;
+const remoteLines = runCapture('git', ['ls-remote', '--tags', 'origin', tagRef, `${tagRef}^{}`]);
+const remoteRefs = new Map();
+for (const line of remoteLines ? remoteLines.split(/\r?\n/u) : []) {
+  const fields = line.split('\t');
+  const [oid, ref] = fields;
+  if (fields.length !== 2 || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid) ||
+      (ref !== tagRef && ref !== `${tagRef}^{}`) || remoteRefs.has(ref)) {
+    fail('ASGREP_RELEASE_TAG_LOOKUP', 'origin returned malformed or duplicate tag references');
+  }
+  remoteRefs.set(ref, oid);
+}
+if (remoteRefs.has(`${tagRef}^{}`) && !remoteRefs.has(tagRef)) {
+  fail('ASGREP_RELEASE_TAG_LOOKUP', 'origin returned a peeled tag without its direct reference');
+}
+// Annotated (including signed) tags advertise their tag-object OID first.
+// Compare the peeled commit; a lightweight tag already advertises the commit.
+const remoteTag = remoteRefs.get(`${tagRef}^{}`) ?? remoteRefs.get(tagRef) ?? null;
 if (localTag !== null && localTag !== head) fail('ASGREP_RELEASE_TAG_EXISTS', `${tag} exists locally at another commit; move it only manually while nothing is published`);
 if (remoteTag !== null && remoteTag !== head) fail('ASGREP_RELEASE_TAG_EXISTS', `${tag} exists on origin at another commit; move it only manually while nothing is published`);
 

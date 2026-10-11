@@ -125,7 +125,9 @@ fn rerun_after_mid_swap_crash_heals_instead_of_failing() {
 
     // Post-crash state of a mid-swap death: canonical gone, orphan backup left.
     let lib = src.join("lib.rs");
-    let backup = src.join(".lib.rs.asgrep-codemod-backup-test-1");
+    // The producer emits a numeric pid-clock-nonce suffix; lookalikes are not
+    // recoverable backups and are deliberately preserved by the recovery gate.
+    let backup = src.join(".lib.rs.asgrep-codemod-backup-12345-1-0");
     fs::rename(&lib, &backup).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_asgrep"))

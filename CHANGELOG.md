@@ -9,10 +9,26 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 ## [Unreleased]
 
+### Added
+
+- Bound graph-chain exploration with `max_work` and expose work/truncation diagnostics; retain disambiguated call-path evidence without claiming value flow.
+
 ### Fixed
 
 - Classify rejected query scopes as `INVALID_ARGUMENTS` on Pi's native and CLI transports, preserve structured diagnostics, and keep recovery hints in bounded model-visible errors without relaxing root confinement.
 - Name stale CLI binary environment overrides and explain how to clear them, while preserving strict override validation and Pi's existing missing-file recovery.
+- Preserve literal, word, and regex answers across warm/cold search, Unicode and embedded-NUL boundaries, language filtering, and candidate admission.
+- Repair multilingual structural matching, including repeated metavariable binding, qualified C# imports, optional/nullsafe calls, and fail-closed unsupported patterns.
+- Bound codemod apply rereads, confine orphan recovery, and preserve concurrent writes and their capture-sidecar evidence on refusal.
+- Preserve bounded Code Mode reads/batches and structured CLI/watch/MCP failures; repair LSP protocol errors and edits against exact open-buffer text.
+- Anchor Pi startup warmups to the authoritative checkout and cancel late startup/index work when its host session retires. Keep tool-definition text within its existing budget.
+- Preserve large integers in native and CLI Pi results and nested tool output. Use the host-owned TypeBox peer and explicitly admit Pi 1.x; the peer range is not certification of future hosts.
+- Compare annotated release tags by their peeled commit, reject malformed tag lookups, and refuse lookup failures before authorizing release actions. Retry delayed npm metadata and reject versionless native lock entries.
+
+### Changed
+
+- Retain scoped search, indexing, and structural-matcher optimizations with frozen-response evidence. Measurements and tradeoffs remain in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md); no universal speedup is claimed.
+- Public Rust `ChainConfig` and `ChainResponse` gained required fields. Existing exhaustive struct literals need updating. The planned 2.6.0 release includes this Rust source-compatibility break; downstream users must update those literals. No version has been bumped or publication approved.
 
 ## [2.5.4] - 2026-09-22
 

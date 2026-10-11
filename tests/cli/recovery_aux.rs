@@ -375,12 +375,24 @@ fn bench_history_fault_matrix() {
         let (temp, root, index) = seed_project();
         let hist_dir = temp.path().join("hist");
         fs::create_dir(&hist_dir).unwrap();
-        let prior = hist_dir.join("query-probe-target.latest.json");
         let history = temp.path().join("hist.json");
         let root_s = root.to_str().unwrap().to_owned();
         let index_s = index.to_str().unwrap().to_owned();
         let history_s = history.to_str().unwrap().to_owned();
         let hist_dir_s = hist_dir.to_str().unwrap().to_owned();
+        // Use the CLI's declared paths, including its collision-resistant label
+        // identity, rather than seeding an obsolete unhashed filename.
+        let baseline = assert_success(
+            &run_bench(&temp, &root_s, &index_s, &history_s, &hist_dir_s),
+            "bench",
+        );
+        assert_eq!(baseline["bench_history"]["verdict"], "establish_baseline");
+        let prior = PathBuf::from(
+            baseline["bench_history"]["committed_prior"]
+                .as_str()
+                .unwrap(),
+        );
+        let run_path = PathBuf::from(baseline["bench_history"]["run_path"].as_str().unwrap());
         fs::write(
             &prior,
             serde_json::json!({
@@ -422,10 +434,8 @@ fn bench_history_fault_matrix() {
             "{ corrupt json",
             "the corrupt prior is evidence and must not be rewritten"
         );
-        let run_snapshot: Value = serde_json::from_str(
-            &fs::read_to_string(hist_dir.join("query-probe-target.run.json")).unwrap(),
-        )
-        .unwrap();
+        let run_snapshot: Value =
+            serde_json::from_str(&fs::read_to_string(run_path).unwrap()).unwrap();
         assert_eq!(run_snapshot["label"], "query:probe_target");
         assert_eq!(run_snapshot["verdict"], "establish_baseline");
     }

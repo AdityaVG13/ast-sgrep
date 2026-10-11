@@ -21,8 +21,10 @@ if (!host) throw new Error(`two-version E2E has no local artifact target for ${p
 const temporary = await mkdtemp(path.join(tmpdir(), 'asgrep-pi-upgrade-'));
 const project = path.join(temporary, 'project');
 const agentDir = path.join(temporary, 'agent');
-const piEntry = fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
-const piCli = path.join(path.dirname(piEntry), 'cli.js');
+const piEntry = process.env.ASGREP_TEST_PI_ROOT ? path.join(path.resolve(process.env.ASGREP_TEST_PI_ROOT), 'dist', 'index.js') : fileURLToPath(import.meta.resolve('@earendil-works/pi-coding-agent'));
+const piRoot = path.resolve(path.dirname(piEntry), '..');
+const piManifest = JSON.parse(await readFile(path.join(piRoot, 'package.json'), 'utf8'));
+const piCli = path.resolve(piRoot, piManifest.bin.pi);
 const currentArtifact = process.env.ASGREP_CURRENT_ARTIFACT ? path.resolve(process.env.ASGREP_CURRENT_ARTIFACT) : undefined;
 if (!currentArtifact) throw new Error('two-version-e2e.mjs runs only via npm run test:pi-e2e: ASGREP_CURRENT_ARTIFACT is unset');
 const expectedVersions = {
@@ -106,6 +108,12 @@ async function assertInstalled() {
 
 try {
   await mkdir(project, { recursive: true });
+  await mkdir(path.join(project, '.git'));
+  if (process.env.ASGREP_TEST_TYPEBOX_TAR) {
+    const npmProject = path.join(project, '.pi', 'npm');
+    await mkdir(npmProject, { recursive: true });
+    await writeFile(path.join(npmProject, 'package.json'), JSON.stringify({ private: true, dependencies: { typebox: 'file:' + path.resolve(process.env.ASGREP_TEST_TYPEBOX_TAR) } }));
+  }
   await writeFile(path.join(project, 'source.ts'), 'export function currentArtifactNeedle() { return "current"; }\n');
   await stage('pi-install-current-artifact', async () => run(process.execPath, [piCli, 'install', source, '-l', '--approve'], { cwd: project }));
   let binary = await stage('assert-current-artifact-alignment', () => assertInstalled());

@@ -107,6 +107,33 @@ Recorded 2.5.0 sizes (unpacked MiB from `release-manifest.json`; packed decimal 
 
 ## Preparation
 
+### Planned 2.6.0 scope
+
+The unreleased checkpoint adds graph work controls and repairs search, matcher,
+codemod, protocol, and Pi behavior; see the Unreleased changelog. Do not label the
+whole checkpoint a patch. The selected release version is **2.6.0**.
+The public `ast_sgrep_core::chain::ChainConfig` gained `max_work`, and
+`ChainResponse` gained `truncated`, `truncation_reasons`, and `work`. These
+structs are not `non_exhaustive`: old exhaustive struct literals no longer
+compile and downstream callers must update them. This release-specific
+exception to the general major-bump policy must remain explicit in the release
+notes; 2.6.0 is not fully Rust source-compatible with 2.5.x. No compatibility
+shim, version change, tag, or publication is implied by this preparation note.
+
+Pre-approval checks exercised named Rust targets, all five real native targets,
+packed CLI/watch installs, and the real Pi 0.80.6/1.1.0 loaders under Node
+22.19.0/24.21.0 on macOS ARM64. macOS x64 execution used Rosetta; Linux x64 used
+native Windows WSL. These checks are not an official release artifact or a
+full feature/MSRV/conformance certificate. Final versioned artifacts must be
+rebuilt and reverified from the approved source commit and release toolchain.
+
+Outstanding prerequisites: DSR has no configured quality checks, the UBS JS
+scan timed out, and GitHub still lists `NPM_TOKEN` in repository-secret metadata.
+The underlying npm credential's revocation is unverified. Do not read its value
+or retire credentials without owner authorization. `br-r8k`, `br-zvh`, and
+`br-f3s` retain their external cleanup/publication acceptance requirements;
+local mocked tag checks and local-registry lock checks do not close them.
+
 1. Confirm the working tree contains the intended release and the workspace version is consistent:
 
    ```sh
