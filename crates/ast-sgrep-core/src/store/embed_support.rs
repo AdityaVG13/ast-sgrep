@@ -107,7 +107,7 @@ fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Opt
     };
     ast_sgrep_embed::configured_backend_model_id(backend, dim)
 }
-pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
+pub(crate) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
     use ast_sgrep_embed::EmbedPreference;
     match preference {
         EmbedPreference::Neural => neural_mid(),

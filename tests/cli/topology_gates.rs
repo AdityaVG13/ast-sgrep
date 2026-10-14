@@ -232,7 +232,8 @@ fn neural_gates_fail_closed_with_canonical_envelope() {
 }
 
 /// INTENT: the single search/index gate asymmetry — `index --neural-embed`
-/// degrades to local embeddings (exit 0, `semantic-v2` stamp) where `search
+/// degrades to local embeddings (exit 0, `static` stamp — the native
+/// engine is the local fallback since Phase 2A) where `search
 /// --neural-embed` rejects (see the test above).
 /// KILLS: gate-inversion, stamp-regression.
 /// Absorbs: T1 index degrade pin (only index-side pin; kept verbatim).
@@ -271,7 +272,7 @@ fn index_neural_flag_degrades_to_local() {
         &[],
     );
     assert_eq!(code, 0);
-    assert_eq!(status["embed_backend"], "semantic-v2");
+    assert_eq!(status["embed_backend"], "static");
     assert!(status["semantic_chunk_count"].as_u64().unwrap_or(0) > 0);
 }
 

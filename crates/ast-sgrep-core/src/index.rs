@@ -482,6 +482,18 @@ impl Indexer {
             // identity (backend/model) differs from the active preference.
             let semantic_rewrite_required =
                 options.embed_semantic && !self.semantic_identity_matches()?;
+            if semantic_rewrite_required {
+                // Explicit, never silent: a stored model differing from the
+                // active one means this run re-embeds every chunk.
+                if let Some(stored_model) = self.store.get_meta("embed_model")? {
+                    eprintln!(
+                        "[asgrep] embedding model changed ({stored_model} -> {}); rewriting all semantic vectors (one-time migration)",
+                        crate::store::requested_model_identity(
+                            options.embed_backend.to_preference()
+                        )
+                    );
+                }
+            }
             let semantic_identity_ok = !options.embed_semantic || !semantic_rewrite_required;
             let identities = self.store.file_identities()?;
             self.check_cancel()?;
@@ -567,7 +579,10 @@ impl Indexer {
                     ));
                 }
                 if complete_semantic_rewrite {
-                    self.store.reset_semantic_index_for_rewrite()?;
+                    let requested = crate::store::requested_model_identity(
+                        self.options.embed_backend.to_preference(),
+                    );
+                    self.store.reset_semantic_index_for_rewrite(&requested)?;
                 }
                 self.commit_prepared_files(
                     &candidates,
@@ -1258,16 +1273,16 @@ impl Indexer {
         if !identity_ok {
             return Ok(false);
         }
-        let dim = self
-            .store
-            .get_meta("embed_dim")?
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or_else(ast_sgrep_embed::default_semantic_dim);
-        let current_model = stored
-            .as_deref()
-            .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
-            .and_then(|backend| ast_sgrep_embed::configured_backend_model_id(backend, dim));
-        if self.store.get_meta("embed_model")? != current_model {
+        // The stored model must equal the ACTIVE preference's model
+        // identity. The previous self-consistency check (stored model vs
+        // the model configured for the stored backend) let an Auto reopen
+        // keep serving vectors from a retired default backend forever.
+        // Comparing against the active identity turns any backend/model
+        // change — including a changed Auto resolution — into a full
+        // semantic rewrite, which is the Phase-2B migration path.
+        let requested =
+            crate::store::requested_model_identity(self.options.embed_backend.to_preference());
+        if self.store.get_meta("embed_model")?.as_deref() != Some(requested.as_str()) {
             return Ok(false);
         }
         Ok(true)

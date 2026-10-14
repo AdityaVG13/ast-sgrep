@@ -488,7 +488,7 @@ fn default_flows_exact_and_topk_inert() {
     );
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(status["ok"], true);
-    assert_eq!(status["embed_backend"], "semantic-v2");
+    assert_eq!(status["embed_backend"], "static");
     assert_eq!(status["embed_dim"], 256);
     assert_eq!(status["semantic_chunk_count"], 3);
     assert_eq!(status["symbol_count"], 2);

@@ -1163,9 +1163,15 @@ impl IndexStore {
     /// transaction. Old vectors are removed before the first upsert so that
     /// its resolved provider/model can establish the store-wide identity;
     /// every later upsert must match it or the bulk transaction rolls back.
-    pub(crate) fn reset_semantic_index_for_rewrite(&self) -> Result<()> {
+    /// Embed-cache rows for any other model are dead weight after the
+    /// rewrite (the cache is keyed by model id) and are purged here.
+    pub(crate) fn reset_semantic_index_for_rewrite(&self, keep_model_id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM semantic_chunks", [])?;
         self.conn.execute("DELETE FROM embeddings", [])?;
+        self.conn.execute(
+            "DELETE FROM embed_cache WHERE model_id != ?1",
+            rusqlite::params![keep_model_id],
+        )?;
         for key in [
             "embed_backend",
             "embed_backend_pref",

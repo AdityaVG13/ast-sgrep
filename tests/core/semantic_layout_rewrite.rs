@@ -1,9 +1,9 @@
 //! Regression for partial unversioned-semantic layout migration.
 //!
-//! A store advertising embed_backend="semantic" must not flip to
-//! "semantic-v2" after a single-file update under Auto — that opened the
+//! A store advertising embed_backend="semantic" must not flip to the
+//! active backend after a single-file update under Auto — that opened the
 //! search gate while sibling chunks stayed on the old layout. Full index_all may promote.
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 
 fn write_py(root: &std::path::Path, name: &str, body: &str) {
@@ -40,7 +40,7 @@ fn single_file_update_does_not_promote_unversioned_semantic_meta() {
             .get_meta("embed_backend")
             .unwrap()
             .as_deref(),
-        Some("semantic-v2")
+        Some("static")
     );
 
     // Simulate a store that still advertises the unversioned backend.
@@ -50,15 +50,23 @@ fn single_file_update_does_not_promote_unversioned_semantic_meta() {
         .unwrap();
     assert!(indexer.store().needs_legacy_semantic_rewrite().unwrap());
 
-    // Content change on only one file (watch / update_paths path).
+    // Content change on only one file (watch / update_paths path). The
+    // active backend (static via Auto) differs from the store's vectors,
+    // so the targeted update must refuse rather than mix vector spaces —
+    // and the unversioned meta must remain untouched.
     write_py(
         corpus.path(),
         "a.py",
         "def alpha():\n    return 'credential legacy updated'\n",
     );
-    indexer
+    let err = indexer
         .index_file(&corpus.path().join("a.py"), "a.py")
-        .unwrap();
+        .expect_err("targeted update must refuse to mix embedding identities");
+    assert!(
+        err.to_string()
+            .contains("does not match existing repository vectors"),
+        "unexpected error: {err}"
+    );
 
     assert_eq!(
         indexer
@@ -123,7 +131,7 @@ fn index_all_promotes_unversioned_semantic_after_full_rewrite() {
             .get_meta("embed_backend")
             .unwrap()
             .as_deref(),
-        Some("semantic-v2"),
+        Some("static"),
         "full index_all must promote after rewriting all reachable files"
     );
     assert!(!indexer.store().needs_legacy_semantic_rewrite().unwrap());
@@ -230,10 +238,124 @@ fn targeted_update_refuses_to_mix_resolved_embedding_identities() {
             .get_meta("embed_backend")
             .unwrap()
             .as_deref(),
-        Some("semantic-v2")
+        Some("static")
     );
     assert_eq!(
         indexer.store().get_meta("embed_model").unwrap().as_deref(),
-        Some("semantic:hashed-v2:256")
+        Some("static:potion-code-16M-v2:256")
     );
+}
+
+/// INTENT (br-6oh Phase 2B): a store built under an explicit legacy backend
+/// (hashed semantic-v2) migrates on the next default (Auto) index_all —
+/// identity rewritten to the active static model, dead-model embed_cache
+/// rows purged. Before migration, default search must REFUSE the stale
+/// store with an actionable error, never silently serve vectors embedded
+/// by a different model. KILLS: mixed-backend stores served silently.
+#[test]
+fn auto_index_migrates_legacy_semantic_store_to_static() {
+    let corpus = tempfile::tempdir().unwrap();
+    let index_dir = tempfile::tempdir().unwrap();
+    let index_path = index_dir.path().join("index.db");
+    write_py(
+        corpus.path(),
+        "a.py",
+        "def refresh_credentials():\n    return 'rotate the access token'\n",
+    );
+    write_py(
+        corpus.path(),
+        "b.py",
+        "def compute_invoice():\n    return 'sum the line items'\n",
+    );
+
+    // Build a legacy hashed store (explicit Semantic preference).
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        embed_semantic: true,
+        embed_backend: EmbedBackend::Semantic,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    // Stamp as a pre-2A default (Auto) build did: hashed vectors with
+    // embed_backend_pref="auto". This is the common real-world store the
+    // migration must catch — the backend-part identity check passes for
+    // it, so only the active-model comparison can trigger the rewrite.
+    indexer
+        .store()
+        .set_meta("embed_backend_pref", "auto")
+        .unwrap();
+    assert_eq!(
+        indexer
+            .store()
+            .get_meta("embed_backend")
+            .unwrap()
+            .as_deref(),
+        Some("semantic-v2")
+    );
+    drop(indexer);
+
+    // Default (Auto) search must refuse the stale-identity store.
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let err = searcher
+        .search("rotate credentials")
+        .expect_err("search must refuse a store embedded by a retired model");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("asgrep index"),
+        "refusal must name the migration command: {msg}"
+    );
+
+    // Default index_all (no force flag) performs the migration.
+    let mut indexer = Indexer::new(IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path.clone()),
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    assert_eq!(
+        indexer
+            .store()
+            .get_meta("embed_backend")
+            .unwrap()
+            .as_deref(),
+        Some("static")
+    );
+    assert_eq!(
+        indexer.store().get_meta("embed_model").unwrap().as_deref(),
+        Some("static:potion-code-16M-v2:256")
+    );
+    drop(indexer);
+
+    // Dead-model cache rows are gone.
+    let conn = rusqlite::Connection::open(&index_path).unwrap();
+    let dead: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM embed_cache WHERE model_id NOT LIKE 'static:%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dead, 0, "embed_cache must not retain retired-model rows");
+    drop(conn);
+
+    // Search works over the migrated store.
+    let searcher = Searcher::new(SearchOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path),
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let resp = searcher.search("rotate credentials").unwrap();
+    assert!(!resp.hits.is_empty(), "migrated store must serve hits");
 }

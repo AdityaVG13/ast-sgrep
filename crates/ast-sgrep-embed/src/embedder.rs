@@ -193,13 +193,13 @@ pub fn embed_with_chain(text: &str, preference: EmbedPreference) -> EmbedResult 
     if matches!(preference, EmbedPreference::Neural) && !env_allows_neural_fallback() {
         eprintln!(
             "asgrep: neural preference requested but neural embedder unavailable; \
-             refusing silent hashed swap -- set ASGREP_NEURAL_FALLBACK=1 to acknowledge"
+             falling back to the native static engine -- set ASGREP_NEURAL_FALLBACK=1 to acknowledge"
         );
     }
     EmbedResult {
-        vector: try_backend(EmbedBackendKind::Semantic, text)
-            .expect("local semantic embedder is always available and infallible"),
-        backend: EmbedBackendKind::Semantic,
+        vector: try_backend(EmbedBackendKind::Static, text)
+            .expect("native static embedder is always available and infallible"),
+        backend: EmbedBackendKind::Static,
     }
 }
 
@@ -218,12 +218,12 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
                 .collect();
         }
     }
-    try_backend_batch(EmbedBackendKind::Semantic, texts)
-        .expect("local semantic embedder is always available and infallible")
+    try_backend_batch(EmbedBackendKind::Static, texts)
+        .expect("native static embedder is always available and infallible")
         .into_iter()
         .map(|v| EmbedResult {
             vector: v,
-            backend: EmbedBackendKind::Semantic,
+            backend: EmbedBackendKind::Static,
         })
         .collect()
 }
@@ -232,7 +232,7 @@ fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
     match preference {
         EmbedPreference::Neural => vec![EmbedBackendKind::Neural],
         EmbedPreference::Static => vec![EmbedBackendKind::Static],
-        EmbedPreference::Semantic => vec![],
+        EmbedPreference::Semantic => vec![EmbedBackendKind::Semantic],
         EmbedPreference::Auto => {
             // Explicit backend selection without a CLI/config preference,
             // e.g. ASGREP_EMBED_BACKEND=static.

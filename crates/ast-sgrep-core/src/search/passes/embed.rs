@@ -904,6 +904,21 @@ fn embed_query_vector_from_meta(
         let backend = ast_sgrep_embed::EmbedBackendKind::parse(backend_name).ok_or_else(|| {
             crate::StoreError::Other(format!("unknown stored embedding backend {backend_name:?}"))
         })?;
+        // Phase 2B: under the default (Auto) preference, never serve
+        // vectors embedded by a different model than the active default —
+        // that would silently serve the retired engine until the next
+        // index run; `asgrep index` performs the migration rewrite.
+        // Explicit preferences keep stored-wins semantics (the query is
+        // embedded in the store's own space by embed_query below).
+        let requested = crate::store::requested_model_identity(options.embed_preference());
+        if options.embed_preference() == ast_sgrep_embed::EmbedPreference::Auto
+            && stored_model != Some(requested.as_str())
+        {
+            return Err(crate::StoreError::Other(format!(
+                "index was embedded with model {:?}; active embedding model is {requested:?} — run `asgrep index` to migrate (one-time full re-embed)",
+                stored_model.unwrap_or("unknown")
+            )));
+        }
         let active_model = ast_sgrep_embed::configured_backend_model_id(backend, dim);
         if stored_model != active_model.as_deref() {
             return Err(crate::StoreError::Other(format!(

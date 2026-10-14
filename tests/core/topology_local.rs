@@ -223,15 +223,21 @@ fn offline_resolution_surface_stable() {
     let r = embed_with_chain("refresh token", EmbedPreference::Semantic);
     assert_eq!(r.backend, EmbedBackendKind::Semantic);
     assert_eq!(r.vector, direct);
-    // Auto without env config: local too (chain empty => no load even ON).
+    // Auto without env config resolves to the native static engine (the
+    // Phase-2 default; still pure/local, no load even with neural ON).
     // With env configured, the ON side would resolve neural (model load), so
     // this test scopes itself to the unconfigured case and returns.
     if NeuralEmbeddingConfig::from_env().is_some() {
         return;
     }
     let r = embed_with_chain("refresh token", EmbedPreference::Auto);
-    assert_eq!(r.backend, EmbedBackendKind::Semantic);
-    assert_eq!(r.vector, direct);
+    assert_eq!(r.backend, EmbedBackendKind::Static);
+    assert_eq!(
+        r.vector,
+        ast_sgrep_embed::StaticEmbedder::new()
+            .embed("refresh token")
+            .unwrap()
+    );
 }
 
 /// INTENT: where neural is OFF, Neural/Auto requests resolve to the EXACT
@@ -250,23 +256,24 @@ fn non_neural_cells_fallback_exact_and_stored_neural_rejected() {
     // cell cannot compile, let alone run, with neural compiled in.
     use ast_sgrep_embed::{
         embed_batch_with_chain, embed_query, embed_with_chain, EmbedBackendKind, EmbedPreference,
-        Embedder, HashedEmbedder, SEMANTIC_DIM,
+        Embedder, HashedEmbedder, StaticEmbedder, SEMANTIC_DIM,
     };
     let hashed = HashedEmbedder::default();
-    // Neural/Auto requests resolve to the local backend with the EXACT local
-    // vector (single + batch APIs).
+    let statik = StaticEmbedder::new();
+    // Neural/Auto requests resolve to the native static engine (the
+    // Phase-2 local default) with its EXACT vector (single + batch APIs).
     for pref in [EmbedPreference::Neural, EmbedPreference::Auto] {
         for input in ["refresh token", ""] {
             let r = embed_with_chain(input, pref);
-            assert_eq!(r.backend, EmbedBackendKind::Semantic);
-            assert_eq!(r.vector, hashed.embed(input).unwrap());
+            assert_eq!(r.backend, EmbedBackendKind::Static);
+            assert_eq!(r.vector, statik.embed(input).unwrap());
         }
     }
     let batched = embed_batch_with_chain(&["alpha", "beta"], EmbedPreference::Neural);
     assert_eq!(batched.len(), 2);
     for (r, input) in batched.iter().zip(["alpha", "beta"]) {
-        assert_eq!(r.backend, EmbedBackendKind::Semantic);
-        assert_eq!(r.vector, hashed.embed(input).unwrap());
+        assert_eq!(r.backend, EmbedBackendKind::Static);
+        assert_eq!(r.vector, statik.embed(input).unwrap());
     }
     // Stored neural spellings cannot resolve without the feature, at any dim
     // (no load: the no-feature stub returns None before any model touch).

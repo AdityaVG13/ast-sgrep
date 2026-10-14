@@ -163,7 +163,7 @@ fn assert_default_flow() -> Fixture {
     );
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(status["ok"], true);
-    assert_eq!(status["embed_backend"], "semantic-v2");
+    assert_eq!(status["embed_backend"], "static");
     assert_eq!(status["embed_dim"], 256);
     assert_eq!(status["semantic_chunk_count"], 6);
     assert_eq!(status["symbol_count"], 4);
@@ -180,16 +180,20 @@ fn assert_default_flow() -> Fixture {
         .iter()
         .map(|h| (h["kind"].as_str(), h["symbol"].as_str(), h["file"].as_str()))
         .collect();
-    // Three rows, not four: RRF fuses one row per (file, line) and the b.rs:2
-    // exact evidence folds into the caller row (visible in its contributors).
-    // The Sep 18 consolidation snapshot a fourth standalone asgrep row on
-    // b.rs that line-fusion cannot emit; H1 + §41.3 pin n1/line at the CLI.
+    // The three structural rows fuse one per (file, line): the b.rs:2 exact
+    // evidence folds into the caller row (visible in its contributors).
+    // A fourth, embed-only row (gamma_extra) trails: the page is thin, so
+    // the learned embed channel generates candidates, and its name-field
+    // cosine clears admission. Under the retired hashed default the same
+    // fallback ran but hashed cosines never admitted a row here. The row
+    // is marked semantic_uncorroborated and ranks last by a wide margin.
     assert_eq!(
         seq,
         [
             (Some("def"), Some("alpha_query_target"), Some("a.rs")),
             (Some("caller"), Some("alpha_query_target"), Some("a.rs")),
             (Some("caller"), Some("alpha_query_target"), Some("b.rs")),
+            (Some("embed"), Some("gamma_extra"), Some("b.rs")),
         ],
         "value={value}"
     );
@@ -223,9 +227,18 @@ fn assert_default_flow() -> Fixture {
         .iter()
         .map(|h| h["symbol"].as_str().expect("symbol"))
         .collect();
+    // Semantic channel ranking under the native static engine (Phase 2A
+    // default in every feature cell): exact symbol first, then the
+    // remaining symbols by learned name/body similarity. The hashed-era
+    // transcript ranked only three rows with a different tail order.
     assert_eq!(
         symbols,
-        ["alpha_query_target", "delta_caller", "beta_helper"]
+        [
+            "alpha_query_target",
+            "gamma_extra",
+            "beta_helper",
+            "delta_caller"
+        ]
     );
 
     for (file, names) in [
