@@ -1,8 +1,9 @@
 # Native Embed Engine — Plan
 
-Status: **Phase 1 landed** (engine + ungate + magnitude fusion). Phases 2–4
-below are the approved direction; each needs explicit go-ahead before work
-starts. All quality numbers cited here trace to
+Status: **Phase 1 landed; Phase 2A+2B landed** (static is the default;
+stale-model stores refuse under Auto and migrate on the next `index`
+run). Remaining Phase-2 items (2C deletions, 2D ablation) and Phase 3
+below are approved; each step still lands as its own verified commit. All quality numbers cited here trace to
 [`benchmarks/results/static-engine-ab-2026-10-14.md`](../../benchmarks/results/static-engine-ab-2026-10-14.md)
 and the frozen reconstruction suite in `benchmarks/sgrep_suite/`.
 
@@ -49,36 +50,60 @@ pipeline. Remaining gap to sgrep's home-suite numbers is documented, not
 hidden.
 
 Phase 1 leaves defaults unchanged: the static backend is opt-in via
-`ASGREP_EMBED_BACKEND=static` / `EmbedPreference::Static`.
+`ASGREP_EMBED_BACKEND=static` / `EmbedPreference::Static`. (Superseded
+by Phase 2A below.)
 
-## Phase 2 — make static the default; delete the fallback (needs approval)
+## Phase 2A+2B — landed
+
+- **2A (91347dc8):** `EmbedPreference::Auto` resolves to Static in the
+  embed chain and in model-identity resolution; the chain's terminal
+  fallback is the static engine (Semantic is an explicit chain entry,
+  no longer the silent trapdoor). Verified: no-env frozen-suite arm
+  stores `embed_backend=static` and reproduces RepoQA MRR@10 .494.
+- **2B:** model-identity migration. `semantic_identity_matches`
+  compares the stored `embed_model` against the *active* preference's
+  identity, so an Auto build over a legacy (hashed) store takes the
+  proven-complete rewrite path and logs the migration; the rewrite
+  purges `embed_cache` rows for other models. Under Auto, search
+  refuses a stale-model store with the migration instruction (explicit
+  preferences keep stored-wins semantics). Targeted single-file updates
+  refuse to mix vector spaces. Pinned by
+  `tests/core/semantic_layout_rewrite.rs`
+  (`auto_index_migrates_legacy_semantic_store_to_static`, mutant-killed).
+- `self_gold_has_no_loss` under the static default: 5 misses → 2
+  (`conceptual-snapshot-consistency` misses the `search/types.rs` leg;
+  `conceptual-follow-up-derivation` misses `search/planner.rs`).
+  Both are ranking-quality residuals for 2D/Phase 3, not migration
+  defects; not tuned against.
+
+## Phase 2 — remaining (approved)
 
 Work items:
 
-1. Flip `EmbedPreference::Auto` to resolve to Static. Remove
-   `HashedEmbedder`, the concept-expansion path, the `semantic-v2` model
-   identity, and the fastembed/ONNX neural path (`ASGREP_NEURAL_EMBED`)
-   with its Cargo dependencies.
-2. Index migration: existing indexes store `embed_backend` / `embed_model`
-   in meta. On mismatch, re-embed from stored chunk text (no re-parse) or
-   invalidate semantic columns; drop `embed_cache` rows for dead model ids.
-   Migration must be explicit in logs, never silent.
+1. ~~Flip `EmbedPreference::Auto` to resolve to Static.~~ (2A, done.)
+   Remove `HashedEmbedder`, the concept-expansion path, the
+   `semantic-v2` model identity, and the fastembed/ONNX neural path
+   (`ASGREP_NEURAL_EMBED`) with its Cargo dependencies. (2C; rerank
+   goes with it, fastembed leaves the tree entirely.)
+2. ~~Index migration~~ (2B, done — implemented as full re-embed via the
+   proven-complete rewrite path on identity mismatch, with an explicit
+   log line and dead-model `embed_cache` purge; search under Auto
+   refuses a stale-model store until then.)
 3. Ablate compensation scaffolding that only existed to contain hashed
    noise, one piece at a time, each gated on the frozen suite: thin-page
    fallback condition, conceptual weight shape, field-rescore heuristics.
-   Keep whatever still earns its place with the learned backend.
+   Keep whatever still earns its place with the learned backend. (2D)
 4. Docs/contracts: `crates/ast-sgrep-embed/CONTRACT.md`,
-   `docs/semantic-search.md`, `docs/fusion-ranking.md`.
+   `docs/semantic-search.md`, `docs/fusion-ranking.md`. (2F)
 
 Acceptance criteria:
 
-- `self_gold_has_no_loss` passes with the static backend. (It currently
-  fails 5/17, all `conceptual-*`, under the hashed default — verified
-  pre-existing by mutant control; those five are the Phase-2 target.)
-- Frozen suite: no regression vs Phase-1 static numbers on either dataset;
-  fresh-index storage bytes and index wall-time measured and recorded.
-- Old-index behavior covered by a test: open a hashed-era index, observe
-  defined migration, search results correct.
+- `self_gold_has_no_loss` passes with the static backend. (2A+2B state:
+  2/17 residual misses, named above; closing them is 2D/Phase-3 work.)
+- Frozen suite: no regression vs Phase-1 static numbers on either dataset
+  (2A verified .494 no-env); fresh-index storage bytes and index wall-time
+  measured and recorded.
+- ~~Old-index behavior covered by a test~~ (2B, done).
 
 Risks: first-run re-embed cost on large existing indexes; binary size step
 (~+32 MB) becomes unconditional.

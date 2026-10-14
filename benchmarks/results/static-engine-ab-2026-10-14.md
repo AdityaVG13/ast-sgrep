@@ -59,3 +59,32 @@ caused by these levers. They become the Phase-2 acceptance target under
 the static backend. `numerical_fusion` contract suite: 8/8 pass,
 including the new magnitude-vote contract (zero-magnitude mutant fails
 it, as required).
+
+## Phase 2A/2B verification (2026-10-14)
+
+2A flipped the default (`EmbedPreference::Auto` → Static; chain terminal
+fallback → static engine). 2B added model-identity migration: an Auto
+`index` run over a legacy store performs the proven-complete rewrite
+with an explicit log line; Auto search refuses a stale-model store
+until then.
+
+Frozen-suite arm, **no `ASGREP_EMBED_BACKEND` in the environment**,
+checked-in driver `benchmarks/sgrep_suite/run_asgrep_arm.py`
+(reindexes each corpus repo, asserts the stored backend from meta):
+
+- stored backend: `static` (asserted)
+- RepoQA MRR@10: **.494**, CoSQA MRR@10: **.197** (both match the
+  Phase-1 static best), p50 19 ms / 16 ms
+
+Driver caveat recorded for future runs: an earlier scratch driver passed
+`--index-path` at index time while `run_suite` searches via default
+`.asgrep` discovery (parent walk) — the searched index was silently not
+the indexed one, producing a spurious .304. `run_asgrep_arm.py` never
+uses `--index-path` and asserts `.asgrep/index.db` exists per repo.
+
+`self_gold_has_no_loss` with the static default: **2/17 misses**
+(was 5/17 hashed). Residuals: `conceptual-snapshot-consistency`
+(misses the `crates/ast-sgrep-core/src/search/types.rs` leg in top-20)
+and `conceptual-follow-up-derivation` (misses
+`crates/ast-sgrep-core/src/search/planner.rs`). Ranking-quality
+residuals owned by Phase 2D/3; not tuned against.
