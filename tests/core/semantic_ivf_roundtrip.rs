@@ -293,25 +293,33 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
     let mut matches = 0usize;
     let mut expected = 0usize;
+    let mut exact_ns = Vec::new();
+    let mut adaptive_ns = Vec::new();
+    let mut candidate_counts = Vec::new();
     for qi in (0..vector_count).step_by(8) {
         let query = &flat[qi * dim..(qi + 1) * dim];
+        let started = std::time::Instant::now();
         let exact: HashSet<_> = index
             .search_flat_with_probes(&flat, dim, query, limit, Some(usize::MAX))
             .into_iter()
             .map(|(idx, _)| idx)
             .collect();
+        exact_ns.push(started.elapsed().as_nanos());
         let candidates = index.candidate_indices(query, None);
+        candidate_counts.push(candidates.len());
         let candidate_ceiling = (vector_count * 95).div_ceil(100);
         assert!(
             candidates.len() <= candidate_ceiling,
             "adaptive probing scanned {} of {vector_count} candidates, above the 95% ceiling",
             candidates.len()
         );
+        let started = std::time::Instant::now();
         let adaptive: HashSet<_> = index
             .search_flat(&flat, dim, query, limit)
             .into_iter()
             .map(|(idx, _)| idx)
             .collect();
+        adaptive_ns.push(started.elapsed().as_nanos());
         matches += exact.intersection(&adaptive).count();
         expected += exact.len();
     }
@@ -320,6 +328,15 @@ fn adaptive_ivf_recall_at_10_stays_within_quality_error_budget() {
     let burn_rate = miss_rate / (1.0 - RECALL_SLO);
     eprintln!(
         "adaptive IVF recall@10={recall:.6}, miss_rate={miss_rate:.6}, burn_rate={burn_rate:.3}"
+    );
+    eprintln!(
+        "ivf_measurement={}",
+        serde_json::json!({
+            "vectors": vector_count, "dimension": dim, "limit": limit,
+            "seed": "0x5D0_036", "recall_at_10": recall,
+            "candidate_counts": candidate_counts, "exact_ns": exact_ns,
+            "adaptive_ns": adaptive_ns,
+        })
     );
     assert!(burn_rate <= 1.0 + f64::EPSILON, "adaptive IVF quality error budget exceeded: recall@10={recall:.6}, burn_rate={burn_rate:.3}");
 }

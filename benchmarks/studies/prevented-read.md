@@ -1,6 +1,10 @@
 # Prevented-read study
 
-> **Published record** of measured results. No runnable harnesses ship in this tree.
+> **Historical / UNREPRODUCIBLE.** The 2.6.0 refresh could not recover
+> the original 20-query ripgrep gold, pinned corpus or study writer/results JSON.
+> Retry only after those exact inputs are recovered. Current stdout-byte totals
+> are not prevented reads or agent-task savings. See the
+> [canonical disposition](../results/baselines.md#260-candidate-refresh-2026-10-11).
 
 Date: 2026-07-11  
 Corpus: ripgrep 14.1.1 fixture in `benchmarks/corpora/ripgrep`  

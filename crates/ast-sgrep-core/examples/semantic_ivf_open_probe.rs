@@ -38,13 +38,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         "open" => {
-            let started = Instant::now();
-            let sidecar = load_semantic_ivf(path, fingerprint())?.ok_or("sidecar rejected")?;
-            if !sidecar.is_mapped() {
-                return Err("sidecar vectors are not mapped".into());
+            // An explicit count measures repeated opens in one process, not
+            // fresh-process opens of an already page-cached file.
+            let samples = arguments
+                .next()
+                .map(|value| value.parse::<usize>())
+                .transpose()?
+                .unwrap_or(1);
+            let mut nanos = Vec::with_capacity(samples);
+            for _ in 0..samples {
+                let started = Instant::now();
+                let sidecar = load_semantic_ivf(path, fingerprint())?.ok_or("sidecar rejected")?;
+                if !sidecar.is_mapped() {
+                    return Err("sidecar vectors are not mapped".into());
+                }
+                black_box(sidecar.chunk_count());
+                nanos.push(started.elapsed().as_nanos());
             }
-            black_box(sidecar.chunk_count());
-            println!("{}", started.elapsed().as_nanos());
+            if samples == 1 {
+                println!("{}", nanos[0]);
+            } else {
+                println!("{}", serde_json::to_string(&nanos)?);
+            }
         }
         _ => return Err("expected prepare or open".into()),
     }

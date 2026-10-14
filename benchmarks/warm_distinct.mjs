@@ -14,19 +14,24 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const positional = args.filter((a) => !a.startsWith("--"));
 const flags = args.filter((a) => a.startsWith("--"));
 const binary = positional[0];
 const rounds = Number(positional[1] ?? 1);
+const root = process.env.ASGREP_BENCH_ROOT ?? process.cwd();
+const jsonOutput = process.env.ASGREP_BENCH_JSON === "1";
 if (!binary) {
   console.error("usage: node benchmarks/warm_distinct.mjs <asgrep-binary> [rounds] [--no-embed]");
   process.exit(2);
 }
 
 function battery() {
-  const listed = spawnSync("git", ["ls-files", "crates"], { encoding: "utf8" });
+  const listed = process.env.ASGREP_BENCH_MANIFEST
+    ? { status: 0, stdout: JSON.parse(readFileSync(process.env.ASGREP_BENCH_MANIFEST, "utf8")).map((file) => file.path).filter((path) => path.startsWith("crates/")).join("\n") }
+    : spawnSync("git", ["ls-files", "crates"], { cwd: root, encoding: "utf8" });
   if (listed.status !== 0) throw new Error("git ls-files crates failed: " + listed.stderr);
   const names = [];
   const seen = new Set();
@@ -34,7 +39,7 @@ function battery() {
     if (!rel.endsWith(".rs") || names.length >= 240) continue;
     let text;
     try {
-      text = readFileSync(rel, "utf8");
+      text = readFileSync(join(root, rel), "utf8");
     } catch {
       continue;
     }
@@ -50,8 +55,9 @@ function battery() {
 }
 
 function startServe() {
-  const child = spawn(binary, ["--root", ".", ...flags, "codemode-serve"], {
-    cwd: process.cwd(),
+  const indexFlags = process.env.ASGREP_BENCH_INDEX_PATH ? ["--index-path", process.env.ASGREP_BENCH_INDEX_PATH] : [];
+  const child = spawn(binary, ["--root", root, ...indexFlags, ...flags, "codemode-serve"], {
+    cwd: root,
     env: { ...process.env, NO_COLOR: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -73,16 +79,27 @@ function startServe() {
       const waiter = waiters.get(message.id);
       if (waiter) {
         waiters.delete(message.id);
-        waiter(message);
+        waiter.resolve(message);
       }
     }
   });
-  child.stderr.on("data", () => {});
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+  const fail = (error) => {
+    for (const waiter of waiters.values()) waiter.reject(error);
+    waiters.clear();
+  };
+  child.on("error", fail);
+  child.on("close", (code) => fail(new Error(`worker closed (${code}): ${stderr}`)));
   let nextId = 0;
   const call = (tool, callArgs) =>
     new Promise((resolve, reject) => {
       const id = String(nextId++);
-      waiters.set(id, resolve);
+      const timer = setTimeout(() => { waiters.delete(id); child.kill(); reject(new Error("worker response timeout")); }, 30000);
+      waiters.set(id, {
+        resolve: (message) => { clearTimeout(timer); message.error || message.ok === false ? reject(new Error(JSON.stringify(message))) : resolve(message); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       child.stdin.write(JSON.stringify({ id, type: "call", tool, args: callArgs }) + "\n", (error) => {
         if (error) reject(error);
       });
@@ -99,7 +116,7 @@ const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0,
 
 const { child, call } = startServe();
 for (const term of terms.slice(0, 10)) await call("search", { query: term, limit: 8 });
-console.log("battery: " + terms.length + " distinct identifiers" + (flags.length ? " " + flags.join(" ") : ""));
+if (!jsonOutput) console.log("battery: " + terms.length + " distinct identifiers" + (flags.length ? " " + flags.join(" ") : ""));
 for (let round = 1; round <= rounds; round += 1) {
   const samples = [];
   for (const term of terms) {
@@ -109,6 +126,10 @@ for (let round = 1; round <= rounds; round += 1) {
   }
   const sorted = [...samples].sort((a, b) => a - b);
   const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+  if (jsonOutput) {
+    console.log(JSON.stringify({ round, terms, samples_ms: samples, p50_ms: percentile(sorted, 50), p95_ms: percentile(sorted, 95), p99_ms: percentile(sorted, 99), max_ms: sorted.at(-1), mean_ms: mean }));
+    continue;
+  }
   console.log(
     "round " + round,
     "n=" + samples.length,

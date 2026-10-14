@@ -3,18 +3,433 @@
 > **Ledger mix:** section tags below (`canonical` / `historical` /
 > `UNREPRODUCIBLE` / `reproducible-in-tree`). Vocabulary:
 > [`benchmarks/README.md`](../README.md). A section tagged
-> `UNREPRODUCIBLE` cannot be regenerated from this tree. The candidate
-> `./benchmarks/run_eval.sh` pack is **not** a live quality fingerprint.
+> `UNREPRODUCIBLE` cannot be regenerated from this tree. The latest measured
+> prerelease fingerprint is the 2026-10-11 section below; historical sections
+> do not certify the current candidate.
 
 > External artifact location (historical dumps, not proof of regeneration):
 > [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
 
 Single source of truth for every MRR / recall / latency claim in this
 repository. Any number quoted in docs, commit messages, or bead close reasons
-must trace back to a row here or carry its own reproduce command. Scores were
-produced by the harness, twice, on the machine below — no hand-edited figures.
+must trace back to a row here or carry its own reproduce command. Each dated
+fingerprint owns its machine, corpus, configuration and sample-count limits.
 
-## Current-tree optimization baseline (2026-10-06, br-mcm)
+## sgrep head-to-head on sgrep's published suite (2026-10-14)
+
+**Status: measured, reproducible-in-tree; not a release certificate.**
+Full report, rows, and provenance:
+[`sgrep-suite-2026-10-14.md`](sgrep-suite-2026-10-14.md) (harness
+`benchmarks/sgrep_suite/run_suite.py`). Non-cloud arms only; the paid
+SWE-bench agent arm was not run. asgrep arm = unpublished local
+release-ship build of this tree (`545ee9bc…`, reports 2.5.4); sgrep arm =
+source build of their benchmarked commit `0fbe8e5`. Corpus/query hashes
+60/60 and 120/120 equal theirs; my sgrep ranks match their published rows
+on 600/600 RepoQA queries.
+
+| RepoQA-600 | MRR@10 | Hit@1 | ≥50%@8k | panel p50 |
+|---|---:|---:|---:|---:|
+| sgrep | .757 | .662 | .895 | 57.3 ms |
+| asgrep | .304 | .198 | .340 | 15.8 ms |
+
+| CoSQA-500 | MRR@10 | Hit@1 | panel p50 |
+|---|---:|---:|---:|
+| sgrep | .417 | .292 | 181.3 ms |
+| asgrep | .096 | .038 | 12.6 ms |
+
+Setup/storage also favor sgrep (133.5 ms median first search, 173 MB vs
+1,039.9 ms median index, 2,582 MB). asgrep wins only warm per-query latency,
+which is not quality-adjusted. Any citation of these numbers must carry the
+report's limits (one host, unpublished asgrep build, CoSQA file-naming
+reconstruction, SWE-bench unmeasured).
+
+## 2.6.0 regression investigation (br-smf, 2026-10-11)
+
+**Status: measured partial repair; not a nonregression keep or release certificate.**
+Raw samples, source hashes, focused-test command, binary hashes and warm per-query
+observations are retained in `2.6.0-20261011.json` under `regression_investigation`.
+The original candidate refresh below remains unchanged, including its failures.
+
+Parent-run stage profiles and cross-index controls locate the dominant slowdown
+in distinct-file lexical discovery. Cold CI discovery scanned ordered indexed
+lines for every term; warm discovery scanned residual records and repeatedly
+lowercased non-ASCII text. The repair uses bounded ASCII trigram preimage queries
+with full Rust verification and generation-cached record-local lowercase bytes.
+The combined source/folded-byte cache stays within the existing packed-byte cap.
+Neither candidate quotas nor gold nor fusion/ranking coefficients changed.
+
+| Fresh-process, page-cached query | Published 2.5.4 p50 | Partial repair p50 |
+|---|---:|---:|
+| `how does hybrid search work` | 7.228 ms | 7.500 ms |
+| `semantic:credential renewal` | 7.588 ms | 8.788 ms |
+| `literal:SearchHit` | 6.162 ms | 6.137 ms |
+
+Twenty interleaved observations per arm after three warmups, same frozen corpus
+and each arm's preserved index. Ordinary release control and partial-repair
+release-ship builds were measured separately. This still is **not** a rebuilt
+same-toolchain 2.5.4 source control. Semantic-expression latency remains worse;
+hybrid repair CV also exceeds the keep envelope. No nonregression claim.
+
+Warm distinct-query rounds: published p50 range **0.753–0.767 ms**, partial
+repair **1.060–1.140 ms**, across four rounds per arm. This is still a regression.
+Exact hit-for-hit comparisons of all **17** self-gold queries between unfixed
+and repaired candidates with identical `--limit20` arguments pass. That preserves,
+**not fixes**, the candidate's previously documented ranking regression. A first
+comparison against saved `--limit10` previews was invalid; its mismatch and the
+matched-argument correction remain in the JSON evidence.
+
+Focused remote verification: **26 passes**, zero failures, across `literal_unit`,
+`line_corpus_unit`, `literal_warm_cold_parity` and `cascade_planner`. The `edİ` →
+`edi` mutation fails without Unicode preimage alternatives, then passes with them;
+a scalar-table proof pins Rust's non-ASCII-to-ASCII lowercase preimages.
+
+Actual tested release-ship SHA256:
+`50ed19427c8bf3f09905e120ea428e60babd1bd34b9c40b3894426e3995670d1`.
+DSR's isolated custom-profile build succeeded but its collector packaged the stale
+ordinary-release binary; the actual tested executable was copied from the declared
+Cargo target's `release-ship/asgrep` and separately hashed. No DSR upstream edit.
+Build receipt: `/Users/aditya/.hermes/cache/scratch/wf_astsgrep_regression_c1cd79568c/dsr-candidate-two-anchors/ast-sgrep-v2.5.4-manifest.json`.
+
+### Ranking repair and file-filter follow-up
+
+Declaration-only lexical hits and their multi-line AST definitions double-voted
+in weighted RRF. The focused fusion contract detects that defect, including lazy
+definition excerpts. The repair preserves candidates/provenance and independent
+body evidence without changing channel weights, gold or quotas.
+
+On all 17 frozen self-gold queries, identical `--limit20` arguments and the same
+preserved candidate index, common-scored aggregates are:
+
+| Runtime | MRR | nDCG | Recall |
+|---|---:|---:|---:|
+| Published 2.5.4 | 0.847059 | 0.853016 | 0.941176 |
+| Unrepaired candidate | 0.812325 | 0.834978 | 0.941176 |
+| Ranking + discovery repair | 0.864706 | 0.865792 | 0.941176 |
+
+Aggregate ranking recovered, not every ordinal: the secondary snapshot target
+is rank5 versus published rank4; the primary snapshot target is restored to rank1.
+The previously absent follow-up target remains absent. No gold was changed.
+
+A conservative, generation-owned lowercase byte-trigram file filter skips only
+impossible residual substring scans; collisions still require exact verification.
+Its 512 bytes/file are charged against the existing packed-corpus cap. Full
+reused-worker responses for 240 distinct identifiers and all 17 cold gold-query
+hit arrays are identical with versus without this filter.
+
+| Warm navigation, median of eight round p50s | Latency |
+|---|---:|
+| Published 2.5.4 | 0.763354 ms |
+| Ranking repair, without file filter | 1.100459 ms |
+| Ranking repair, with file filter | 0.845479 ms |
+
+Four order-swapped batches, two 240-query rounds per arm, ten unmeasured warmups;
+same corpus, manifest, index, limit8 and worker surface. Fresh-process shared-index
+controls, 40 observations/arm, still miss published parity: hybrid p50
+7.766041/8.290583 ms, prefixed semantic 8.153187/9.739250 ms, literal
+6.582625/6.870167 ms (published/repaired). These are page-cached process-inclusive
+measurements, not cold-storage latency. All samples/tails, source/native hashes
+and per-query scores are in `regression_investigation.ranking_and_filter_repair`.
+
+Focused remote verification on spark-1672: **60 passes**, zero failures, one
+pre-existing ignored self-index test, across seven named core suites. Inverting
+the file certificate fails four existing corpus tests; misclassifying declaration
+spans fails the fusion contract. Both mutants were restored before the passing run.
+
+DSR command: `dsr build ast-sgrep --target darwin/arm64 --allow-dirty --no-sync
+--jobs 1 --output-dir <scratch>/dsr-ranking-filter-candidate`, with the recorded
+scratch config selecting `release-ship`: build **PASS**, collector still packaged
+the ordinary-release artifact. Actual measured profile executable SHA256:
+`622cd1f7266f9f7c13cb0ecad6b8f9059d6ea3c07876db9910109a457222d30d`.
+Receipt: `/Users/aditya/.hermes/cache/scratch/wf_astsgrep_regression_c1cd79568c/dsr-ranking-filter-candidate/ast-sgrep-v2.5.4-manifest.json`.
+
+**Release remains blocked.** Remaining cold/warm latency, a rebuilt same-toolchain
+old-source control and the complete prerelease/Pi refresh are not cleared by this
+bounded repair. Earlier partial measurements above remain historical observations.
+
+## 2.6.0 candidate refresh (2026-10-11)
+
+**Status: canonical measured prerelease snapshot, not an optimization keep or
+release certificate.** Machine-readable observations, command argument templates,
+corpus hashes and compiler/tool pins: [2.6.0-20261011.json](2.6.0-20261011.json).
+Older dated sections below remain historical evidence, not current release numbers.
+
+### Fingerprint and measurement limits
+
+- Frozen corpus: all 740 tracked files at `f2bbc3d2768db3d54658b0be4f15d14777b18505`,
+  12,579,244 source bytes. Every frozen file matches its Git blob. Manifest SHA256:
+  `f6597eef9a4d93c616f67f69754cc9d05ddcd7f49ae5acbb5ad047c55c9a0a86`.
+- Baseline: published npm `@ast-sgrep/darwin-arm64@2.5.4`; executable SHA256
+  `f476335298a6af293c35163c3a1143a9beea8941debd183331fcd71b05aa8ccb`.
+- Candidate: prerelease native production bytes from `a2e66f22`, unchanged by
+  `f2bbc3d2`'s release-script repair; executable SHA256
+  `9786bbf48fc572675efafc5199ed46185efb985e59968e12ee05e23acda541aa`.
+  Embedded version is still **2.5.4**: this is a 2.6.0 candidate, not a published release.
+- Host: Apple M5 Max, 18 logical CPUs, 48 GiB RAM, macOS 26.6.2, APFS/internal SSD.
+  Candidate uses Rust 1.97.1, release profile, no default features; Node 22.23.3.
+  Runtime `RAYON_NUM_THREADS=2`; no governor, CPU-affinity or global cache changes.
+- This is **published binary versus prerelease binary**, not a matched-toolchain,
+  one-lever source A/B. No neural model or reranker is active.
+- Twenty alternating observations/arm for pristine indexing and CLI queries;
+  CLI queries discard two warmups. OS pages are warm; fresh processes are **not**
+  disk-cold runs. p50 is the sample median; p95/p99 are empirical nearest-rank
+  percentiles. Twenty samples do not establish a tail SLA. CVs are retained;
+  several exceed the 5% keep envelope. Do not certify small differences as wins.
+
+### Pristine indexing and size
+
+| Metric | Published 2.5.4 | Candidate |
+|---|---:|---:|
+| Index wall p50 | 19.172 s | 12.699 s |
+| Index wall p95 | 21.293 s | 15.251 s |
+| Indexed files | 678 | 678 |
+| Extracted symbols | 6,691 | 6,691 |
+| index.db bytes | 293,654,528 | 293,662,720 |
+| semantic.ivf bytes | 13,405,184 | 13,405,184 |
+
+Pristine index p50 is 33.8% lower in this comparison;
+index size is essentially unchanged. This does not erase the search regressions.
+
+### Fresh-process CLI queries
+
+All cells are milliseconds, indexed corpus, limit 20, `--no-auto-index`.
+
+| Query | 2.5.4 p50 / p95 | Candidate p50 / p95 |
+|---|---:|---:|
+| `literal:SearchHit` | 6.294 / 7.057 | 6.545 / 6.947 |
+| `pattern:SearchHit` | 7.289 / 8.383 | 7.517 / 7.915 |
+| `semantic:credential renewal` | 7.926 / 11.425 | 377.366 / 402.818 |
+| `how does hybrid search work` | 7.125 / 11.115 | 263.541 / 267.402 |
+| `defs:dedup_hits` | 7.379 / 8.010 | 6.792 / 8.242 |
+| `defs:compute_ann_fingerprint` | 4.526 / 5.254 | 4.639 / 5.059 |
+| `defs:begin_bulk_tx` | 4.643 / 5.205 | 4.718 / 5.468 |
+| `defs:index_generation` | 5.012 / 5.449 | 5.005 / 5.494 |
+| `defs:to_compact_json` | 5.107 / 5.531 | 5.167 / 5.894 |
+| `literal:PRAGMA synchronous` | 5.892 / 6.364 | 5.954 / 6.655 |
+| `literal:BEGIN DEFERRED` | 5.636 / 6.147 | 5.634 / 6.367 |
+| `callers:integrity_check` | 4.926 / 6.429 | 5.104 / 6.685 |
+| `word:SnapshotStamp` | 5.680 / 6.105 | 5.783 / 6.248 |
+| `index write durability profile` | 7.476 / 8.203 | 311.533 / 322.662 |
+| `compact output path interning` | 7.777 / 8.239 | 362.449 / 375.502 |
+| `consistent search snapshot generation` | 8.303 / 8.968 | 315.888 / 318.644 |
+| `penalize misleading identifier collisions when ranking results` | 8.661 / 9.796 | 386.886 / 396.800 |
+| `derive the next command to run from the best result` | 8.192 / 8.697 | 255.226 / 260.264 |
+| `combine two search channels in a single query` | 7.788 / 8.737 | 313.434 / 317.182 |
+| `reciprocal rank fusion across evidence channels` | 9.889 / 10.903 | 349.794 / 381.644 |
+| `remember query embeddings between searches` | 10.238 / 10.796 | 295.243 / 305.706 |
+| `asgrep semantic "credential renewal"` (pure subcommand) | 12.186 / 13.051 | 12.431 / 13.087 |
+
+`semantic:credential renewal` is the prefixed search expression; `asgrep semantic`
+is the pure semantic subcommand. They are not interchangeable benchmark paths.
+The first untimed pure-subcommand observations were 202.269 / 193.007 ms;
+those single initialization observations are not cold-latency percentiles.
+The candidate's full-repository conceptual discovery is substantially slower.
+This refresh does **not** approve that regression or attribute it to one source lever.
+
+### Scan/server references
+
+Tools: ripgrep 15.2.0, ast-grep 0.50.0, tgrep 1.1.0,
+fff-mcp 0.11.0 (`95fd777c2529fc7b4d7572dabff64cc07268f2c5`),
+Semgrep native core 1.180.0. Twenty measured observations/reference.
+
+| Reference | p50 ms | p95 ms | Scope |
+|---|---:|---:|---|
+| rg | 16.260 | 17.624 | `rg -n SearchHit .`, scan |
+| grep | 64.058 | 71.036 | `grep -rn --exclude-dir=.git SearchHit .`, scan |
+| ast-grep-full | 272.353 | 284.613 | Rust `SearchHit` pattern, generated file included |
+| ast-grep-handwritten | 72.382 | 80.182 | Same pattern, `trigram_static_data.rs` excluded |
+| tgrep-warm-server | 6.721 | 8.673 | Warm prepared server; client process wall time |
+| fff warm MCP | 0.226 | 0.340 | Ranked 20/50 shown, latency-only |
+| Semgrep native core | 571.919 | 609.370 | One explicit Rust `SearchHit` rule, 381 targets, 206 matches, zero reported errors |
+
+These compare indexed ranked retrieval with scan/parse-per-query or prepared
+servers, **not match-set or quality parity**. The generated-file control matters.
+Semgrep's Python CLI fails importing `mcp.server.fastmcp`; the native core
+reference bypasses it without changing the installation. This is **not** a
+refresh of the missing historical 29-pattern Semgrep suite.
+
+### Warm Code Mode and Pi
+
+`warm_distinct.mjs`: 20 alternating blocks/arm, 240 distinct source-derived
+identifiers/block, ten warmup calls, reused NDJSON worker. Values below are
+medians of the 20 per-block percentiles, not fresh CLI timings or a pooled SLA.
+
+| Code Mode metric | 2.5.4 | Candidate |
+|---|---:|---:|
+| Round p50 | 0.715 ms | 10.914 ms |
+| Round p99 | 1.941 ms | 29.064 ms |
+
+Pi: the existing `p100-bench.mjs` generator, fake Pi host, actual old/new
+extension and matching native addon; 20 alternating blocks/arm. Baseline is
+published `pi-ast-sgrep@2.5.4` with `typebox@1.0.0`. The 3,000-file fixture is
+synthetic and is **not** the full-repository Code Mode workload above. Startup
+search follows a 600 ms session-start wait; first calls returned hits, but the
+old/new hit counts differ, so these timings do not establish rank parity.
+
+| Pi metric | 2.5.4 p50 ms | Candidate p50 ms |
+|---|---:|---:|
+| First search, no index, 3,000 files | 341.805 | 329.955 |
+| Second search | 0.353 | 0.391 |
+| Full reindex, 3,000 files | 14522.522 | 14629.103 |
+| Session-start first search, 300 files | 5.173 | 4.817 |
+| Session-start first search, 3,000 files | 10.559 | 10.336 |
+| Warm distinct calls (600 observations/arm) | 0.402 | 1.007 |
+| Calls during reindex (160 observations/arm) | 0.464 | 0.803 |
+
+All four sample/default and self identity-suite runs pass their named hit-count
+and identity checks. Their per-case first-query and warmed means/CVs are retained
+separately in the bundle; an in-process mean is not a CLI percentile. The self
+suite's conceptual cases also expose the candidate slowdown.
+
+### Retrieval quality and ablations
+
+Same existing 17-query self gold, same frozen corpus, primary cutoff per query.
+Common one-to-one gold scoring of saved native top-20 hit lists agrees with
+both executables' `eval` aggregates. No replacement gold was authored.
+
+| Self metric | 2.5.4 | Candidate |
+|---|---:|---:|
+| MRR | 0.847 | 0.812 |
+| nDCG@k | 0.853 | 0.835 |
+| Recall@k | 0.941 | 0.941 |
+| Recall@1 | 0.706 | 0.676 |
+| Recall@5 | 0.941 | 0.853 |
+| Recall@20 | 0.941 | 0.941 |
+
+The ranking regression is not a changed scoring formula: saved first-rank
+observations agree with the common scorer. `conceptual-follow-up-derivation`
+remains a miss in both arms. `no-embed` and `concat-embed` ablations have zero
+aggregate deltas in both arms. This gold does not demonstrate an embedding win.
+
+- Native-semantic vocabulary fixture: three queries; both releases MRR/nDCG
+  1.000, Recall@1 0.500 and Recall@5/20 1.000. Removing repository vocabulary
+  lowers nDCG by 0.258 and Recall@5/20 by 0.333 in both releases; MRR is unchanged.
+- Invent-path fixture: six queries; both releases MRR/nDCG/Recall@1/5/20 1.000.
+  Small authored fixtures are not foreign-repository or neural-quality evidence.
+- Graph fixture: all four labeled edges correct in both arms; each of
+  file-local-unique, repository-unique, name-only and SCIP-occurrence has one
+  prediction. Compiler-exact, import-resolved, ambiguous and unresolved tiers
+  have no observations and remain `null`, not synthetic precision scores.
+
+### Complete stdout bytes and budget check
+
+Seventeen self queries, limit 10, same ranked response within each arm. UTF-8
+stdout bytes include framing, whitespace and the final newline; no tokenizer.
+Old/new rankings differ, so cross-version byte differences are not a
+serialization-only optimization claim.
+
+| Format | 2.5.4 bytes | Candidate bytes |
+|---|---:|---:|
+| native | 111,795 | 105,896 |
+| agent | 125,358 | 118,270 |
+| agent-capsule | 78,302 | 74,164 |
+| compact | 20,292 | 19,306 |
+| compact-budget300 | 17,874 | 17,056 |
+
+Budgeted/unbudgeted compact output preserves the ranked hit identities for all
+17 queries in both arms. Re-exercising `run_eval.sh` against the frozen corpus
+reproduces the candidate byte totals and budget check. That measurement-only
+pack explicitly records `dirty_worktree=true`, `reliability_tests_run=false`;
+it is not an assertion that reliability tests or a release certificate passed.
+
+### Adaptive IVF and mmap
+
+Existing adaptive fixture: 2,048 vectors, dimension 32, seed `0x5D0_036`,
+256 queries, recall@10 0.9984375 against all-cluster retrieval. Candidate
+counts range 1,784..1,855 (mean 1,821.305), below the existing 95% ceiling;
+recall passes the 0.99 error-budget gate. Timed exact/adaptive calls include
+HashSet result materialization, not only the ANN microkernel.
+
+The existing ignored tradeoff test ran 20 times at each size/probe setting.
+Recall and candidate fractions are deterministic; latency is the median of
+20 run-level average microseconds/query, **not a query tail percentile**.
+
+| Vectors | Probe fraction | Recall@10 | Candidate fraction | Median average us/query |
+|---:|---:|---:|---:|---:|
+| 2048 | 50% | 0.931250 | 0.511459 | 34.544 |
+| 2048 | 75% | 0.989062 | 0.754547 | 46.688 |
+| 2048 | 90% | 0.998437 | 0.888893 | 52.904 |
+| 2048 | 100% | 1.000000 | 1.000000 | 56.422 |
+| 10000 | 50% | 0.982812 | 0.499580 | 161.861 |
+| 10000 | 75% | 0.996875 | 0.749023 | 225.989 |
+| 10000 | 90% | 1.000000 | 0.899686 | 259.245 |
+| 10000 | 100% | 1.000000 | 1.000000 | 280.399 |
+
+Mmap fixture: 10,000 vectors, dimension 8, sidecar 365,056 bytes including
+320,000 vector bytes; 100 observations/mode. All opens require mapped vectors.
+The writer uses `F_NOCACHE` plus fsync for the cold-policy case, outside timing;
+no global cache purge was performed, so this is not guaranteed physical disk-cold.
+
+| Opening mode | p50 ms | p99 ms | Definition |
+|---|---:|---:|---|
+| cold | 0.269188 | 0.752667 | Unique inode, writer F_NOCACHE, fresh process |
+| fresh-inode | 0.086896 | 0.100750 | Unique inode, ordinary page-cache policy, fresh process |
+| warm | 0.094104 | 0.129250 | Same page-cached inode, fresh process |
+| In-process warm | 0.037542 | 0.095333 | Same process/inode, one untimed opening |
+
+The bundle pins both probe executable hashes: the new repeated-opening argument
+is measurement support, not a production mmap change. Current in-process warm
+p99 remains below 1 ms; this does not certify other machines or storage policies.
+
+### Unavailable historical measurements
+
+Git history and tracked-tree inspection did not recover the missing originals.
+Do not replace them with invented gold, synthetic scale corpora or proxy claims.
+
+| Surface | Current disposition / retry condition |
+|---|---|
+| foreign-corpus self18/ripgrep/flask/redis quality, neural/rerank bakeoff | **Historical / UNREPRODUCIBLE**: Original gold, pinned corpora, competitor patterns and bakeoff evaluator are absent; named ripgrep gold/corpus paths have no Git history. Retry only when: Recover the exact original gold, corpus pins, competitor rules and evaluator. |
+| 23k/100k lexical and structural scale, 29-pattern Semgrep scale suite | **Historical / UNREPRODUCIBLE**: Original generator, query battery, corpus snapshots and hand-pattern rules are absent. Retry only when: Recover the original scale generator, complete query/pattern suite and corpus fingerprints. |
+| watch CPU/latency/idle-memory speed study | **Historical / UNREPRODUCIBLE**: Behavior tests exist; original timing workload, transcript, machine fingerprint and sampler are missing. Retry only when: Recover the original timing workload, sampler and machine fingerprint; passing behavior tests are not speed evidence. |
+| intent confusion and routing-weight grid | **Historical / UNREPRODUCIBLE**: intent-calibrate.py plus the historical multi-corpus gold/corpus inputs are missing. Retry only when: Recover the original classifier labels, corpus/gold pins and intent-calibrate.py. |
+| foreign-corpus prevented-read study | **Historical / UNREPRODUCIBLE**: The 20-query ripgrep gold, pinned corpus and original study writer/results JSON are missing. Retry only when: Recover the exact 20-query gold, corpus and writer; do not substitute current output byte totals. |
+| 54,732-chunk idx_big 85-query semantic/hybrid run | **Historical / UNREPRODUCIBLE**: idx_big, 85-query battery and original corpus fingerprint are missing. Retry only when: Recover idx_big/corpus and the original 85 queries plus command/config pins. |
+| CASS 60-day negative-history exclusion | **Historical / UNREPRODUCIBLE**: CASS code 5: searchable lexical metadata unavailable, archive exceeds automatic-repair budget. Retry only when: Lexical metadata must become searchable; do not run a second rebuild while the CASS-owned detached rebuild runs. |
+
+Semgrep's native one-rule timing does not restore the foreign-quality bakeoff.
+Watch behavior checks and Pi reindex timings do not restore a watch speed study.
+This is a complete disposition of the existing matrix, **not** a claim that
+unavailable historical cells were rerun successfully.
+
+### Regeneration
+
+Use the JSON bundle's exact command templates, gold/configs, corpus file hashes
+and release pins. `$CORPUS` must be a materialization of the pinned Git blobs,
+not a copy of a later dirty working tree. Avoid `git archive`: this repository's
+export-ignore attributes omit benchmark inputs. Build the candidate from its
+pinned production inputs, not from an arbitrarily newer checkout.
+
+- CLI: each template query has two warmups and 20 measured fresh processes;
+  rotate old/new order on each observation. Indexing uses a new database/iteration.
+- Suites: `asgrep --json --index-path <new-index> bench <root> --suite
+  default|self --fixture sample|self --iterations 20 --warmed`.
+- Quality/output pack: `ASGREP_EVAL_BIN`, `ASGREP_EVAL_ROOT` and
+  `ASGREP_EVAL_OUT` select a prebuilt binary, frozen root and retained output.
+  `ASGREP_EVAL_SKIP_RELIABILITY=1` is measurement-only and is recorded as such.
+  Default working-tree runs still refuse dirty inputs. No temporary index is deleted.
+- Warm sessions: `ASGREP_BENCH_ROOT`, `ASGREP_BENCH_MANIFEST`,
+  `ASGREP_BENCH_INDEX_PATH`, `ASGREP_BENCH_JSON=1` with
+  `node benchmarks/warm_distinct.mjs <binary> 1`; repeat 20 alternating blocks.
+- Pi: `ASGREP_BIN`, `ASGREP_CODEMODE_NAPI_PATH`, optional baseline
+  `ASGREP_BENCH_EXTENSION_DIR`, `ASGREP_BENCH_KEEP_FIXTURES=1`,
+  `ASGREP_BENCH_JSON_PATH` with `node packages/pi/extension/scripts/p100-bench.mjs`.
+- fff: `ASGREP_BENCH_JSON=1 node benchmarks/fff_grep_leg.mjs <root> SearchHit 20`.
+- Semgrep native reference: `semgrep-core -json -rules <rule-file> -targets
+  <targets-file> -j 2`. The bundle includes the exact one-rule definition; targets
+  are its 381 `.rs` corpus paths as `CodeTarget`/Rust/SAST. Preserve progress-dot
+  framing when retaining raw output; parse the JSON object following those dots.
+- IVF: named `adaptive_ivf_recall_at_10_stays_within_quality_error_budget` and
+  `adaptive_ivf_tradeoff_at_2048_and_10000_vectors` tests in
+  `ast-sgrep-core --test semantic_ivf_roundtrip` (tradeoff requires `--ignored`).
+- Mmap: `semantic_ivf_open_probe prepare <path>` then `open <path>`; repeated
+  same-process control is `open <page-cached-path> 101`, discarding only the first
+  opening. Unique-file preparation/fsync/cache policy is outside the timed region.
+
+Unabridged local command receipts, failed attempts, stdout/stderr, databases and
+fixtures are retained under gitignored `benchmarks/results/raw/2.6.0-20261011/`.
+Only the curated bundle is a public results artifact. No release/tag/push follows
+from this benchmark refresh.
+
+## Historical optimization baseline (2026-10-06, br-mcm)
 
 **Status: measured current baseline and stage attribution, not an optimization
 keep.** Frozen native SHA256

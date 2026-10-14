@@ -214,7 +214,9 @@ fn scan_trigram_matches(
 }
 /// Ordered cold candidates share the warm lane's acceptance predicate.
 /// The cap counts accepted lines (or distinct files), never substring rejects.
-/// CI scans cannot prefilter via LIKE/FTS without losing Unicode matches.
+/// Whole-needle LIKE/FTS is not a superset of Unicode lowercase matching.
+/// An ASCII trigram plus its Unicode lowercase preimages narrows candidates
+/// without dropping Rust-lowercase matches. Every candidate is reverified.
 fn literal_sql(
     store: &IndexStore,
     options: &SearchOptions,
@@ -231,44 +233,23 @@ fn literal_sql(
         return Ok(Vec::new());
     }
     let lang = options.lang_filter.as_deref();
-    let mut excluded = Vec::new();
-    if options.case_insensitive {
-        if let Some(already) = distinct_files {
-            if let Some(frontier) = already.iter().max() {
-                // Earlier successful discovery scans fully decoded every path
-                // before this frontier in the same read snapshot. The frontier
-                // file itself may have stopped at its first matching line.
-                excluded.extend(
-                    already
-                        .iter()
-                        .filter(|path| *path < frontier)
-                        .map(String::as_str),
-                );
-            }
-        }
-    }
-    excluded.sort_unstable();
-    let excluded_sql = if excluded.is_empty() {
-        None
+    // Keep the full scan for short, non-ASCII, punctuation-only and NUL needles.
+    // ASCII trigrams query every non-ASCII ASCII-lowercase preimage as well.
+    let anchor = if options.case_insensitive {
+        ascii_trigrams(needle)
     } else {
-        // Bucket statement shapes without changing the excluded set.
-        excluded.resize(
-            excluded.len().next_power_of_two(),
-            *excluded.last().unwrap(),
-        );
-        Some(format!(
-            "SELECT f.path, f.language, l.line_no, l.content \
-             FROM lines l JOIN files f ON f.id = l.file_id \
-             WHERE f.path NOT IN ({}) ORDER BY f.path, l.line_no",
-            vec!["?"; excluded.len()].join(",")
-        ))
+        None
     };
-    let sql = match (options.case_insensitive, lang.is_some()) {
-        (true, _) => excluded_sql.as_deref().unwrap_or("SELECT f.path, f.language, l.line_no, l.content
-            FROM lines l JOIN files f ON f.id = l.file_id ORDER BY f.path, l.line_no"),
-        (false, false) => "SELECT f.path, f.language, l.line_no, l.content
+    let sql = match (anchor.is_some(), options.case_insensitive, lang.is_some()) {
+        (true, _, _) => "SELECT f.path, f.language, l.line_no, l.content \
+            FROM lines_trigram JOIN lines l ON l.rowid = lines_trigram.rowid \
+            JOIN files f ON f.id = l.file_id WHERE lines_trigram MATCH ?1 \
+            ORDER BY f.path, l.line_no",
+        (false, true, _) => "SELECT f.path, f.language, l.line_no, l.content
+            FROM lines l JOIN files f ON f.id = l.file_id ORDER BY f.path, l.line_no",
+        (false, false, false) => "SELECT f.path, f.language, l.line_no, l.content
             FROM lines l JOIN files f ON f.id = l.file_id WHERE instr(CAST(l.content AS BLOB), CAST(?1 AS BLOB)) > 0 ORDER BY f.path, l.line_no LIMIT ?2",
-        (false, true) => "SELECT f.path, f.language, l.line_no, l.content
+        (false, false, true) => "SELECT f.path, f.language, l.line_no, l.content
             FROM lines l JOIN files f ON f.id = l.file_id WHERE instr(CAST(l.content AS BLOB), CAST(?1 AS BLOB)) > 0 AND f.language = ?3 ORDER BY f.path, l.line_no LIMIT ?2",
     };
     let mut stmt = store.connection().prepare_cached(sql)?;
@@ -279,9 +260,17 @@ fn literal_sql(
     } else {
         limit as i64
     };
-    let mut rows = match (options.case_insensitive, lang) {
-        (true, _) => stmt.query(rusqlite::params_from_iter(excluded.iter().copied()))?,
-        (false, lang) => match lang {
+    let query = anchor.map(|trigrams| {
+        trigrams
+            .iter()
+            .map(|tri| format!("({})", trigram_preimage_query(tri)))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    });
+    let mut rows = match (query.as_deref(), options.case_insensitive, lang) {
+        (Some(query), _, _) => stmt.query(params![query])?,
+        (None, true, _) => stmt.query([])?,
+        (None, false, lang) => match lang {
             Some(lang) => stmt.query(params![needle, sql_limit, lang])?,
             None => stmt.query(params![needle, sql_limit])?,
         },
@@ -339,6 +328,53 @@ fn literal_sql(
     }
     attach_context(store, options, &mut hits)?;
     Ok(hits)
+}
+
+fn ascii_trigrams(needle: &str) -> Option<Vec<String>> {
+    if !needle.is_ascii() || needle.contains('\0') {
+        return None;
+    }
+    let lower = needle.to_ascii_lowercase();
+    let mut trigrams: Vec<&str> = lower
+        .as_bytes()
+        .windows(3)
+        .filter(|tri| tri.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_'))
+        .map(|tri| std::str::from_utf8(tri).expect("ASCII anchor"))
+        .collect();
+    trigrams.sort_unstable_by_key(|tri| (crate::store::trigram_df::bake_count(tri), *tri));
+    trigrams.dedup();
+    (!trigrams.is_empty()).then(|| trigrams.into_iter().take(2).map(str::to_owned).collect())
+}
+
+fn trigram_preimage_query(trigram: &str) -> String {
+    // Rust's non-ASCII lowercase scalars introducing ASCII are İ (i + dot)
+    // and K (k). Enumerating them is a superset even where the combining dot
+    // prevents a whole-needle match. Three positions bound this to eight terms.
+    let mut variants = vec![String::new()];
+    for c in trigram.chars() {
+        let alternate = match c {
+            'i' => Some('İ'),
+            'k' => Some('K'),
+            _ => None,
+        };
+        let mut next = Vec::new();
+        for prefix in variants {
+            if let Some(alt) = alternate {
+                let mut v = prefix.clone();
+                v.push(alt);
+                next.push(v);
+            }
+            let mut v = prefix;
+            v.push(c);
+            next.push(v);
+        }
+        variants = next;
+    }
+    variants
+        .iter()
+        .map(|v| crate::fts::escape_fts_term(v))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 /// Shared case-fold + word/substring gate used by both trigram and SQL residual paths.

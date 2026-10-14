@@ -197,6 +197,8 @@ pub enum EmbedBackend {
     Auto,
     Neural,
     Semantic,
+    /// Native trained static table baked into the binary.
+    Static,
 }
 impl EmbedBackend {
     pub fn to_preference(self) -> ast_sgrep_embed::EmbedPreference {
@@ -204,6 +206,7 @@ impl EmbedBackend {
             Self::Auto => ast_sgrep_embed::EmbedPreference::Auto,
             Self::Neural => ast_sgrep_embed::EmbedPreference::Neural,
             Self::Semantic => ast_sgrep_embed::EmbedPreference::Semantic,
+            Self::Static => ast_sgrep_embed::EmbedPreference::Static,
         }
     }
     pub fn to_preference_str(self) -> &'static str {
@@ -213,12 +216,14 @@ impl EmbedBackend {
             // Unversioned "semantic" is a legacy marker
             // (needs_legacy_semantic_rewrite); the stored identity is semantic-v2.
             Self::Semantic => "semantic-v2",
+            Self::Static => "static",
         }
     }
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "neural" | "fastembed" => Self::Neural,
             "semantic" | "semantic-v2" | "local" => Self::Semantic,
+            "static" | "native" => Self::Static,
             _ => Self::Auto,
         }
     }
@@ -238,6 +243,10 @@ impl EmbedBackend {
         match self {
             Self::Neural => (true, false),
             Self::Semantic => (false, true),
+            // Static is neither neural nor hashed-semantic; query-time
+            // embedding resolves through the store's embed_backend meta,
+            // which takes priority over the preference (`embed_query`).
+            Self::Static => (false, false),
             Self::Auto => (false, false),
         }
     }

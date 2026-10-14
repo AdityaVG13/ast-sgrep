@@ -14,7 +14,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+eval_root="${ASGREP_EVAL_ROOT:-$repo_root}"
+dirty_worktree=false
 if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  dirty_worktree=true
+fi
+if [[ "$dirty_worktree" == true && "$eval_root" == "$repo_root" ]]; then
   echo "error: evaluation requires a clean worktree so results identify one commit" >&2
   exit 1
 fi
@@ -23,11 +28,13 @@ gold="benchmarks/gold/self.json"
 graph_gold="benchmarks/gold/graph_precision.json"
 graph_root="benchmarks/fixtures/graph_precision"
 graph_scip="$graph_root/index.scip.json"
-out="benchmarks/results/raw"
+out="${ASGREP_EVAL_OUT:-benchmarks/results/raw}"
 mkdir -p "$out"
 
-bin="target/release/asgrep"
-if [[ "${ASGREP_EVAL_DEBUG:-0}" == "1" ]]; then
+bin="${ASGREP_EVAL_BIN:-target/release/asgrep}"
+if [[ -n "${ASGREP_EVAL_BIN:-}" ]]; then
+  test -x "$bin"
+elif [[ "${ASGREP_EVAL_DEBUG:-0}" == "1" ]]; then
   bin="target/debug/asgrep"
   cargo build -p ast-sgrep-cli
 else
@@ -37,15 +44,15 @@ fi
 commit="$(git rev-parse HEAD)"
 
 echo "== provenance =="
-echo "commit=$commit dirty=false"
+echo "producer_commit=$commit dirty=$dirty_worktree corpus=$eval_root binary=$bin"
 "$bin" version --json > "$out/version.json"
 
 # 1. Retrieval quality, and the hybrid vs no-embed A/B in one run.
 echo "== retrieval quality (self corpus) =="
-"$bin" eval --gold "$gold" . --json > "$out/self-quality.json"
-"$bin" eval --gold "$gold" . --json --ab no-embed > "$out/self-ab-no-embed.json"
+"$bin" eval --gold "$gold" "$eval_root" --json > "$out/self-quality.json"
+"$bin" eval --gold "$gold" "$eval_root" --json --ab no-embed > "$out/self-ab-no-embed.json"
 # Intent-weighted per-field rescoring vs the concatenated chunk vector.
-"$bin" eval --gold "$gold" . --json --ab concat-embed > "$out/self-ab-concat-embed.json"
+"$bin" eval --gold "$gold" "$eval_root" --json --ab concat-embed > "$out/self-ab-concat-embed.json"
 
 # 2. Graph-edge precision by resolution tier over a fixed, completely labeled
 #    corpus. Zero-sample tiers remain explicit `null`, never synthetic 0.000.
@@ -59,13 +66,13 @@ echo "== output bytes (self corpus) =="
 # A dedicated, freshly built index keeps the measurement deterministic: the
 # native/agent envelopes embed the snapshot generation, so reusing a repo index
 # whose generation keeps incrementing would change the byte totals run to run.
-token_work="$(mktemp -d)"
-trap 'rm -rf -- "$token_work"' EXIT
+token_work="$(mktemp -d "$out/output-index.XXXXXX")"
+echo "retained output-byte index=$token_work"
 token_index="$token_work/index.db"
-"$bin" --index-path "$token_index" index . >/dev/null
-python3 - "$bin" "$gold" "$out" "$token_index" <<'PY'
+"$bin" --index-path "$token_index" index "$eval_root" >/dev/null
+python3 - "$bin" "$gold" "$out" "$token_index" "$eval_root" <<'PY'
 import json, subprocess, sys
-binary, gold_path, out_dir, index_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+binary, gold_path, out_dir, index_path, root = sys.argv[1:]
 gold = json.load(open(gold_path))
 rows = []
 for query in gold["queries"]:
@@ -73,14 +80,14 @@ for query in gold["queries"]:
     for fmt in ("native", "agent", "agent-capsule", "compact"):
         proc = subprocess.run(
             [binary, "--index-path", index_path, "--json", "--format", fmt,
-             "--limit", "10", query["query"], "."],
+             "--limit", "10", query["query"], root],
             capture_output=True, check=True,
         )
         row[fmt] = len(proc.stdout)
     # m38g: budgeted compact picks per-result detail under one ceiling.
     proc = subprocess.run(
         [binary, "--index-path", index_path, "--json", "--format", "compact",
-         "--budget-tokens", "300", "--limit", "10", query["query"], "."],
+         "--budget-tokens", "300", "--limit", "10", query["query"], root],
         capture_output=True, check=True,
     )
     row["compact-budget300"] = len(proc.stdout)
@@ -102,16 +109,16 @@ PY
 
 # 4. Reliability invariants, as executable gates rather than prose claims.
 echo "== budget non-inferiority (m38g) =="
-python3 - "$bin" "$gold" "$out" "$token_index" <<'BUDGETPY'
+python3 - "$bin" "$gold" "$out" "$token_index" "$eval_root" <<'BUDGETPY'
 import json, subprocess, sys
-binary, gold_path, out_dir, index_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+binary, gold_path, out_dir, index_path, root = sys.argv[1:]
 gold = json.load(open(gold_path))
 
 
 def result_ids(query_text, extra):
     proc = subprocess.run(
         [binary, "--index-path", index_path, "--json", "--format", "compact",
-         "--limit", "10", *extra, query_text, "."],
+         "--limit", "10", *extra, query_text, root],
         capture_output=True, text=True, check=True,
     )
     body = json.loads(proc.stdout)
@@ -142,19 +149,25 @@ if mismatches:
 BUDGETPY
 
 echo "== reliability invariants =="
-cargo test -p ast-sgrep-core --test snapshot_generation --test store_pragmas \
-  2>&1 | tee "$out/reliability-tests.txt" | tail -5
+if [[ "${ASGREP_EVAL_SKIP_RELIABILITY:-0}" == "1" ]]; then
+  echo "measurement-only run: reliability tests explicitly not run"
+else
+  cargo test -p ast-sgrep-core --test snapshot_generation --test store_pragmas \
+    2>&1 | tee "$out/reliability-tests.txt"
+fi
 
-python3 - "$out" "$commit" <<'PY'
+python3 - "$out" "$commit" "$dirty_worktree" "${ASGREP_EVAL_SKIP_RELIABILITY:-0}" "$eval_root" <<'PY'
 import json, sys
-out_dir, commit = sys.argv[1], sys.argv[2]
+out_dir, commit, dirty, skip_reliability, root = sys.argv[1:]
 quality = json.load(open(f"{out_dir}/self-quality.json"))
 ab = json.load(open(f"{out_dir}/self-ab-no-embed.json"))
 tokens = json.load(open(f"{out_dir}/self-token-efficiency.json"))
 graph = json.load(open(f"{out_dir}/graph-resolution-precision.json"))
 summary = {
     "commit": commit,
-    "dirty_worktree": False,
+    "dirty_worktree": dirty == "true",
+    "reliability_tests_run": skip_reliability != "1",
+    "corpus_root": root,
     "corpus": "self",
     "gold_queries": quality["aggregate"]["n_queries"],
     "retrieval": quality["aggregate"],

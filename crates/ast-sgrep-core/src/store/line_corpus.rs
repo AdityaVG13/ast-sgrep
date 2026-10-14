@@ -10,10 +10,20 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Skip the RAM corpus when packed source exceeds this. Callers fall back to
+/// Skip the RAM corpus when packed source, lowercase bytes and file filters
+/// exceed this. Callers fall back to
 /// SQLite. 256 MiB covers typical agent worktrees; 100k-file monorepos that
 /// overflow keep the FTS path instead of ballooning RSS.
 pub const MAX_CORPUS_BYTES: usize = 256 * 1024 * 1024;
+
+// Conservative file-local byte-trigram certificate. Collisions only admit
+// extra scans; exact record verification always owns positive answers.
+const FILTER_WORDS: usize = 64;
+fn trigram_bit(bytes: &[u8]) -> (usize, u64) {
+    let key = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+    let bit = (key.wrapping_mul(0x9e37_79b1) >> 20) as usize;
+    (bit / 64, 1u64 << (bit % 64))
+}
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -109,6 +119,7 @@ pub struct CorpusFile {
     pub path: String,
     pub language: Option<String>,
     preferred: bool,
+    trigrams: [u64; FILTER_WORDS],
 }
 
 /// Packed `lines` table: path-sorted, one record per indexed line.
@@ -118,6 +129,9 @@ pub struct LineCorpus {
     pub pragma_data_version: i64,
     bytes: Vec<u8>,
     starts: Vec<u32>,
+    /// Record-local Unicode lowercase, cached under the same generation as source.
+    folded_bytes: Vec<u8>,
+    folded_starts: Vec<u32>,
     line_nos: Vec<u32>,
     file_idx: Vec<u32>,
     files: Vec<CorpusFile>,
@@ -157,6 +171,8 @@ impl LineCorpus {
 
         let mut bytes = Vec::new();
         let mut starts = Vec::new();
+        let mut folded_bytes = Vec::new();
+        let mut folded_starts = Vec::new();
         let mut line_nos = Vec::new();
         let mut file_idx = Vec::new();
         let mut files = Vec::new();
@@ -165,7 +181,21 @@ impl LineCorpus {
 
         for row in rows {
             let (path, language, line_no, content) = row?;
-            if bytes.len().saturating_add(content.len()).saturating_add(1) > MAX_CORPUS_BYTES {
+            let folded = content.to_lowercase();
+            if bytes
+                .len()
+                .saturating_add(folded_bytes.len())
+                .saturating_add(content.len())
+                .saturating_add(folded.len())
+                .saturating_add(2)
+                .saturating_add(
+                    files
+                        .len()
+                        .saturating_add(1)
+                        .saturating_mul(FILTER_WORDS * 8),
+                )
+                > MAX_CORPUS_BYTES
+            {
                 return Ok(None);
             }
             if current_path.as_deref() != Some(path.as_str()) {
@@ -175,11 +205,19 @@ impl LineCorpus {
                     path,
                     language,
                     preferred,
+                    trigrams: [0; FILTER_WORDS],
                 });
             }
             let idx = (files.len() - 1) as u32;
+            for tri in folded.as_bytes().windows(3) {
+                let (word, bit) = trigram_bit(tri);
+                files[idx as usize].trigrams[word] |= bit;
+            }
             push_ascii_tokens(&mut token_files, &content, idx);
             starts.push(bytes.len() as u32);
+            folded_starts.push(folded_bytes.len() as u32);
+            folded_bytes.extend_from_slice(folded.as_bytes());
+            folded_bytes.push(b'\n');
             bytes.extend_from_slice(content.as_bytes());
             bytes.push(b'\n');
             line_nos.push(line_no);
@@ -193,6 +231,8 @@ impl LineCorpus {
             pragma_data_version,
             bytes,
             starts,
+            folded_bytes,
+            folded_starts,
             line_nos,
             file_idx,
             files,
@@ -350,6 +390,16 @@ impl LineCorpus {
             return Vec::new();
         }
         let key = needle.to_ascii_lowercase();
+        let lower = needle.to_lowercase();
+        let finder = memchr::memmem::Finder::new(lower.as_bytes());
+        // Any absent gram proves there is no lowercase substring in this file.
+        // Short needles have no certificate and use the exact path unchanged.
+        let required: Vec<_> = lower
+            .as_bytes()
+            .windows(3)
+            .take(32)
+            .map(trigram_bit)
+            .collect();
         let postings = self
             .token_files
             .get(&key)
@@ -365,16 +415,18 @@ impl LineCorpus {
             {
                 let file = &self.files[fi];
                 if file.preferred != preferred
+                    || required
+                        .iter()
+                        .any(|&(word, bit)| file.trigrams[word] & bit == 0)
                     || already.contains(&file.path)
                     || !lang_ok(file.language.as_deref(), lang_filter)
-                    || seen.contains(&fi)
+                    || !seen.insert(fi)
                 {
                     continue;
                 }
-                let Some(line) = self.first_matching_line(fi, &matches) else {
+                let Some(line) = self.first_matching_line(fi, &finder, &matches) else {
                     continue;
                 };
-                seen.insert(fi);
                 hits.push(self.hit(line));
                 if hits.len() >= file_cap {
                     return hits;
@@ -384,13 +436,38 @@ impl LineCorpus {
         hits
     }
 
-    fn first_matching_line(&self, fi: usize, matches: &impl Fn(&str) -> bool) -> Option<usize> {
+    fn first_matching_line(
+        &self,
+        fi: usize,
+        finder: &memchr::memmem::Finder<'_>,
+        matches: &impl Fn(&str) -> bool,
+    ) -> Option<usize> {
         let start = *self.file_first_line.get(fi)? as usize;
         let end = self
             .file_first_line
             .get(fi + 1)
             .copied()
             .unwrap_or(self.len() as u32) as usize;
-        (start..end).find(|&line| matches(self.line_content(line)))
+        let bytes_end = self
+            .folded_starts
+            .get(end)
+            .copied()
+            .unwrap_or(self.folded_bytes.len() as u32) as usize;
+        let mut pos = self.folded_starts[start] as usize;
+        while let Some(offset) = finder.find(&self.folded_bytes[pos..bytes_end]) {
+            let abs = pos + offset;
+            let line = self.folded_starts.partition_point(|&s| s as usize <= abs) - 1;
+            // Reverify the original record: folds change byte offsets and packed
+            // newlines are not evidence. One verification covers its occurrences.
+            if matches(self.line_content(line)) {
+                return Some(line);
+            }
+            pos = self
+                .folded_starts
+                .get(line + 1)
+                .copied()
+                .unwrap_or(self.folded_bytes.len() as u32) as usize;
+        }
+        None
     }
 }

@@ -18,26 +18,30 @@ For **searching an indexed repo**, ast-sgrep replaces the scan tools. Identifier
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
-| **One-shot CLI latency** | 8.5 ms p95 (`literal:`, indexed) | 61.3 ms p95 (pattern, hand-written code) | 13.1 ms p95 (scan) |
+| **One-shot CLI latency** | 6.947 ms p95 (`literal:`, indexed) | 80.182 ms p95 (pattern, hand-written code) | 17.624 ms p95 (scan) |
 | **Index required** | Yes (`.asgrep/`) | No | No |
 | **API key for semantic** | No (offline default) | N/A | N/A |
 
-Latency cells are the 2.5.0 re-pin (self corpus, 650 indexed files,
-`release-perf`): [head-to-head](../benchmarks/results/head-to-head.md).
-Warm-server tools are compared separately below. A cold one-shot
-process and a warm server are different contests.
+Latency cells are the 2026-10-11 **2.6.0 candidate** on a frozen 740-file
+corpus (678 indexed), versus published 2.5.4 and pinned scan/server references.
+[Canonical results and limitations](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11).
+The candidate is unreleased and still reports 2.5.4. It has major conceptual
+search and warm-navigation regressions; earlier speedups are not current claims.
+A fresh process, warm source pages and a reused server are different contests.
 
 ### Also in the arena: tgrep and fff
 
-**tgrep** (warm trigram server,
-1.0.9) answers the same `SearchHit` query in **5.8 ms p95**. It leads
-asgrep's 8.5 ms cold one-shot. asgrep's own warm path (`codemode-serve`,
-0.75 ms p50) is the apples-to-apples contest, not the one-shot CLI.
+**tgrep 1.1.0**: warm prepared server, client wall p95
+**8.673 ms** for `SearchHit`.
+**fff-mcp 0.11.0**: warm MCP p95 **0.340 ms**, ranked
+20/50 shown. These are latency references, not ranked/exhaustive match-set parity.
 
-**fff** (warm ranked file-finder, fff-mcp 0.10.6) answers in **0.4 ms
-p95** but surfaces ~50 ranked matches where exhaustive tools find ~300
-lines. It owns sub-ms ranked file-finding, not exhaustive grep. Compare
-latency only, never match sets.
+The candidate's own full-repository Code Mode battery (240 identifiers, 20
+blocks) has median round p50 **10.914 ms**, versus published
+2.5.4 **0.715 ms**. That distinct-query workload is not the
+single-needle tgrep/fff workload and must not be presented as an equal-work
+cross-tool race. Semgrep native core has a separate one-rule reference in the
+canonical matrix; its Python CLI is broken on this host.
 
 ## When to use which
 
@@ -161,17 +165,20 @@ This does **not** require the ast-grep CLI. Unsupported shapes return no hits ra
 
 ## Performance expectations
 
-Measured cells (2.5.0 re-pin, self corpus, 650 indexed files;
-see [head-to-head](../benchmarks/results/head-to-head.md)):
+Measured candidate cells (2026-10-11, same frozen corpus and host;
+see [the canonical fingerprint](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11)):
 
 | Scenario | ast-sgrep | ripgrep | ast-grep |
 |----------|-----------|---------|----------|
-| Cold index the repo | 14.9 s p95 (one-time) | No index | No index |
-| One-shot token query | 8.5 ms p95 (`literal:`, indexed) | 13.1 ms p95 (scan) | N/A |
-| One-shot structural query | 9.5 ms p95 (`pattern:`, indexed) | N/A | 61.3 ms p95 (hand-written code) |
-| Warm-server query | 0.75 ms p50 (`codemode-serve`) | N/A (no server) | N/A (no server) |
+| Pristine index the repo | 15.251 s p95 (warm source pages, new database) | No index | No index |
+| One-shot token query | 6.947 ms p95 (`literal:`, indexed) | 17.624 ms p95 (scan) | N/A |
+| One-shot structural query | 7.915 ms p95 (`pattern:`, indexed) | N/A | 80.182 ms p95 (hand-written code) |
+| Warm distinct-query round | 10.914 ms median round p50 (`codemode-serve`); regression | N/A (no server) | N/A (no server) |
 
-ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Choose based on query frequency and whether you need graph/semantic ranking. On trees with large generated files, scan/parse-per-query tools pay per query while the index does not (ast-grep 279.8 ms with the generated file included vs 61.3 ms without, while asgrep stays at 9.5 ms).
+ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Generated-file
+parse cost is isolated by the ast-grep control in the canonical matrix. The
+candidate's natural-language latency and self-gold ranking regressions remain
+visible there; literal/pattern timings do not establish general superiority.
 
 ## Migration mental model
 

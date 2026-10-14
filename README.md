@@ -75,7 +75,7 @@ Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
 | You can now... | How |
 |----------------|-----|
 | Search Dart and MoonBit | `.dart` / `.mbt` indexing with symbol/call/import extraction and native structural patterns. 15 languages total. |
-| Get one-shot literal answers in ~8 ms | Cold queries take the trigram/SQL path instead of loading the full RAM line corpus: `literal:SearchHit` dropped from 171 ms to 8.5 ms p95 (beats ripgrep 13.1 ms on the same tree). |
+| Indexed literal answers | `literal:SearchHit`: 6.947 ms fresh-process p95 on the pinned candidate corpus; see the [benchmark limits and regressions](#benchmarks-honest-summary). |
 | Search without touching the index | Search opens the index read-only and no longer auto-indexes. `--auto-index` opts back in; `index` / `reindex` / `watch` remain the write path. |
 | Run MCP on official rmcp | `asgrep-mcp` speaks stdio through `rmcp` instead of a hand-rolled loop. `notifications/cancelled` aborts in-flight indexing; `ping` stays live. |
 | Trust the ranking more | Exact-case definitions rank first, conceptual queries prefer code over docs that repeat them, and fanout seeds concept-related defs instead of flooding `callers:main`. |
@@ -179,20 +179,33 @@ After fusion, the critic reviews the shortlist in-process. Agent envelopes expos
 
 These are **checked-in run summaries**, not portable guarantees. Hardware, corpus, cache state, and flags all matter. Status vocabulary: [benchmarks/README.md](benchmarks/README.md).
 
-| Recorded comparison | Status | Published result | Evidence |
-|---------------------|--------|------------------|----------|
-| 2.5.0 re-pin, self corpus (702 tracked / 650 indexed) | `reproducible-in-tree` | Warm literal 8.5 ms vs rg 13.1 ms; `pattern:SearchHit` 9.5 ms vs ast-grep 61.3 ms hand-written (279.8 with generated file); semantic NL 15.5 ms; fff warm 0.4 ms (ranked, latency-only) | [speed.md](benchmarks/results/speed.md) |
-| 2026-09-20 one-shot fix row (~650 tracked files) | `reproducible-in-tree` | Warm literal 7.9 ms vs rg 13.0 ms; `pattern:SearchHit` 10.2 ms vs ast-grep 63.3 ms; semantic NL 18.5 ms | [speed.md](benchmarks/results/speed.md) |
-| 2026-08-28 self corpus (445 tracked files) | `reproducible-in-tree` | Cold index 4.58 s p95; warm literal 19.0 ms vs rg 11.1 ms; `pattern:SearchHit` 129 ms vs ast-grep 26.5 ms; semantic NL 20.3 ms | [speed.md](benchmarks/results/speed.md) |
-| Warm lexical / structural at 23k–100k | `historical` / `UNREPRODUCIBLE` | Large speedups in that dump; latency-only for structural | [head-to-head.md](benchmarks/results/head-to-head.md) |
-| Cross-tool bake-off | `UNREPRODUCIBLE` | Mixed; inspect every row | [bakeoff.md](benchmarks/results/bakeoff.md) |
-| Known regressions | `UNREPRODUCIBLE` | Published without suppression | [losses.md](benchmarks/results/losses.md) |
+**Latest: 2.6.0 candidate, measured 2026-10-11**, against published 2.5.4 on
+one frozen 740-file repository snapshot (678 indexed), Apple M5 Max, two Rayon
+threads. The candidate still reports version 2.5.4; it has not been released.
 
-Measured 2026-09-20 on Apple M5 Max from the 2.5.0 tree atop `b23a2454` (`release-perf`, rustc 1.98.0): a `git ls-files` copy of this tree (650 files indexed, schema 16, `index.db` 292 MiB). Warm `literal:SearchHit` **8.5 ms p95** vs ripgrep **13.1 ms** (asgrep 1.54×); warm-tgrep server leads at 5.8 ms; `grep -rn` 58.1 ms. Warm `pattern:SearchHit` **9.5 ms p95** vs ast-grep **61.3 ms** on hand-written code (**6.5×**, latency-only, not match-set) — 279.8 ms with the generated 1 MB+ file included, which ast-grep parses per query and the index does not. Semantic NL **15.5 ms p95**. fff-mcp warm `grep` answers in **0.4 ms p95** but surfaces ranked matches where exhaustive tools find ~300 lines (latency-only by design). Older rows are kept in [speed.md](benchmarks/results/speed.md) for history. Full protocol there.
+| Surface | Published 2.5.4 | Candidate | Measurement |
+|---|---:|---:|---|
+| Pristine index | 19.172 s | 12.699 s | p50, warm source pages, new database |
+| Indexed `literal:SearchHit` | 7.057 ms | 6.947 ms | Fresh-process p95; ripgrep 17.624 ms |
+| Indexed `pattern:SearchHit` | 8.383 ms | 7.915 ms | Fresh-process p95; ast-grep 80.182 ms excluding generated file, latency-only |
+| `how does hybrid search work` | 7.125 ms | 263.541 ms | Fresh-process p50; regression |
+| Warm Code Mode, 240 identifiers | 0.715 ms | 10.914 ms | Median of 20 round p50s; regression |
+| Self-gold MRR / nDCG | 0.847 / 0.853 | 0.812 / 0.835 | Same 17 queries and common scorer; ranking regression |
 
-Canonical table: [head-to-head.md](benchmarks/results/head-to-head.md). Index: [benchmarks/README.md](benchmarks/README.md).
+**Not a performance keep or release certificate.** Faster indexing and small
+literal/structural timings do not erase the conceptual-search, warm-navigation
+and ranking regressions. This compares shipped and prerelease binaries, not a
+matched-toolchain source-only A/B. No neural model or reranker is active.
 
-**Quality snapshot (UNREPRODUCIBLE):** cite only fingerprint `self-hybrid-d3eab74` in [baselines.md](benchmarks/results/baselines.md#retrieval-quality--self-corpus-18-gold-queries) -- hybrid MRR **0.712**, Recall@k **0.889**, nDCG@k **0.751**. The gold harness is absent. Do not quote the superseded ≈0.75 / 0.94 row (`self-hist-pre-29129bd`) as current. On some foreign corpora the offline embedder currently adds little over lexical + AST.
+Canonical fingerprint, full matrix, raw sample bundle and regeneration protocol:
+[baselines.md](benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11).
+Previous speedups remain [dated historical rows](benchmarks/results/speed.md).
+Foreign-corpus/neural bakeoffs, 23k/100k scale, watch-speed, intent-routing,
+prevented-read and `idx_big` studies could not be refreshed because original
+inputs are missing; their records remain explicitly historical/UNREPRODUCIBLE.
+The current self gold has zero no-embed/concat-embed ablation deltas; it does not
+prove an embedding-quality gain. Its 17-query score does not replace the old,
+different 18-query historical fingerprint.
 
 ---
 

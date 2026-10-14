@@ -8,6 +8,62 @@ its evidence and a retry-condition predicate in plain measurable language
 Ledger created 2026-09-20. It did not exist before; the seed below is
 reconstructed from verifiable repo evidence only (git log, `benchmarks/`).
 
+## Open: 2.6.0 candidate refresh
+
+The 2026-10-11 complete available-matrix refresh is measured, not a keep.
+Canonical numbers, individual samples and immutable corpus/native pins are in
+`benchmarks/results/baselines.md` (2.6.0 candidate refresh) and its public JSON
+bundle. Published 2.5.4 and the candidate have faster pristine candidate indexing
+but substantially slower full-repository conceptual CLI and warm distinct-query
+Code Mode retrieval. Pi simple-identifier warm calls also regress. Existing
+short literal/pattern timings and small authored fixtures do not erase those
+countermetrics. This binary comparison is not a one-lever, same-toolchain A/B.
+Retry a speed keep only after profiling identifies a concrete dominant operation
+and matched-input, same-build-policy paired runs preserve ranked outputs and
+pass the existing CV/ordinary-control gates; do not change caps or gold to win.
+
+CASS 60-day negative-history lookup remains OPEN: `benchmark rejected` returns
+exit 5 (searchable lexical metadata unavailable, archive over repair budget).
+Its detached-rebuild hint is not a successful search. Retry historical exclusions
+only when repository-scoped lexical searches return usable results without
+maintenance errors; no second/manual CASS rebuild is authorized here.
+
+Missing original foreign-quality, 23k/100k scale, watch-speed, intent-routing,
+prevented-read and `idx_big` inputs have explicit per-surface recovery predicates
+in the canonical refresh. Native Semgrep's measured one-rule reference does not
+restore the original 29-pattern suite. Preserve all earlier rejected/kept rows.
+
+## Open: br-smf correctness-preserving discovery repair
+
+Parent-run cold/warm discovery repairs retain all 17 matched-argument self-gold
+candidate replies and pass 26 focused remote tests. Canonical measured rows and
+samples: `benchmarks/results/baselines.md`, regression investigation section, and
+`2.6.0-20261011.json.regression_investigation`. The catastrophic scan cost is
+reduced, but warm navigation and semantic-expression latency still regress;
+ranking remains unchanged from the unrepaired candidate, not from 2.5.4.
+This is a partial candidate, **not a keep**. Two Muse worker waves failed before
+completed findings; six partial notes do not count as completed review evidence.
+
+Retry/acceptance predicate (measured-contract): accept only after matched-build
+paired controls reach query-latency parity and unchanged-gold quality is no worse
+than 2.5.4 while preserving Unicode/NUL/record-boundary matching, distinct-file
+quotas, filters and typed errors. Do not remove correctness coverage, change gold,
+or compensate with indexing wins. Prove the suspected duplicated declaration
+vote before changing ranking. DSR custom-profile collection returned a stale
+release artifact despite a successful release-ship compile; inspect and hash the
+actual profile-specific executable before any further profile comparison.
+
+Follow-up: the duplicate-declaration hypothesis is now reproduced and repaired
+with a discriminating fusion contract. Unchanged-gold aggregate ranking recovers;
+one secondary snapshot ordinal still worsens. A bounded file-local lowercase
+trigram certificate preserves all 240 full warm responses and 17 cold hit arrays,
+and reduces residual scan cost. Canonical follow-up numbers, tails, hashes and
+mutation evidence: `benchmarks/results/baselines.md`, ranking/file-filter follow-up,
+and `2.6.0-20261011.json.regression_investigation.ranking_and_filter_repair`.
+Sixty focused remote passes; both deliberate faults are detected and restored.
+Warm navigation and prefixed-semantic process latency still miss published parity.
+The acceptance predicate above is unchanged; this is not a release speed keep.
+
 ## Rejected
 
 - **Call-kind-first ancestor gate RETAINED (br-mcm).** Fresh real-call stacks

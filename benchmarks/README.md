@@ -34,6 +34,14 @@ benchmarks/
 
 ## Start here
 
+The latest measured prerelease snapshot is the
+[2.6.0 candidate refresh](results/baselines.md#260-candidate-refresh-2026-10-11):
+all available CLI/server/quality/fixture/output/Pi/IVF/mmap measurements plus
+explicit unavailable historical cells. [The curated JSON](results/2.6.0-20261011.json)
+pins the frozen corpus, executables, tool versions, individual samples and commands.
+It includes regressions; **it is not a performance keep or release certificate**.
+Older dates remain historical records, not current-facing numbers.
+
 | Doc | What it answers |
 |-----|-----------------|
 | [results/speed.md](results/speed.md) | Current self-corpus CLI latency |
@@ -61,14 +69,20 @@ ASGREP_BENCH_RATCHET=0 cargo run --locked --release -p ast-sgrep-cli --bin asgre
   --json bench tests/fixtures/sample --suite default --fixture sample --iterations 20
 
 ASGREP_BENCH_RATCHET=0 cargo run --locked --release -p ast-sgrep-cli --bin asgrep -- \
-  --json bench . --suite self --fixture self --iterations 10
+  --json bench . --suite self --fixture self --iterations 20 --warmed
 ```
 
-Quality pack (writes gitignored `results/raw/`):
+Quality pack (writes gitignored `results/raw/`; retains its dedicated output-byte index):
 
 ```bash
 ./benchmarks/run_eval.sh
 ```
+
+For a prebuilt executable and independently frozen corpus, set `ASGREP_EVAL_BIN`,
+`ASGREP_EVAL_ROOT` and `ASGREP_EVAL_OUT`. The default live-worktree mode refuses
+dirty inputs. `ASGREP_EVAL_SKIP_RELIABILITY=1` explicitly marks a measurement-only
+run; it must not be reported as passing the reliability lane. Source-producer
+commit/dirty state and the external corpus are distinct provenance fields.
 
 ### Measurement semantics
 
@@ -94,9 +108,9 @@ cold-index budget was set against a 110-file tree (SHA unrecorded) and is
 
 | Surface | Status | Notes |
 |---------|--------|-------|
-| cold self-index CLI | `reproducible-in-tree` | 14.9 s p95 on 2026-09-20 re-pin (650 files, working tree atop `b23a2454`); 4.58 s p95 on 2026-08-28 (`2285ce29`, 445 files) |
-| warm literal / pattern / semantic CLI | `reproducible-in-tree` | see [speed.md](results/speed.md) |
-| in-process Searcher | `reproducible-in-tree` | `asgrep bench`; sub-millisecond warm path, high first-query CV |
+| pristine self-index CLI | measured candidate | See the pinned [current matrix](results/baselines.md#260-candidate-refresh-2026-10-11); new database, warm source pages, not disk-cold |
+| fresh-process literal / pattern / semantic CLI | measured candidate | Current matrix separates `semantic:` from pure `asgrep semantic` |
+| in-process Searcher / Code Mode | measured candidate | Identity suites and warm distinct-query blocks are separate; full-repository navigation regresses |
 
 ## ANN quality error budget
 

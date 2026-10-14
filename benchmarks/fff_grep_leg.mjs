@@ -57,14 +57,16 @@ const w0 = process.hrtime.bigint();
 const warm = await call(needle);
 const coldMs = Number(process.hrtime.bigint() - tSpawn) / 1e6;
 const warmMs = Number(process.hrtime.bigint() - w0) / 1e6;
-const txt = warm.result?.content?.[0]?.text ?? JSON.stringify(warm.error);
+if (warm.error || warm.result?.isError) throw new Error(JSON.stringify(warm));
+const txt = warm.result?.content?.[0]?.text ?? "";
 console.log(`spawn-to-first-result: ${coldMs.toFixed(0)}ms (first call itself ${warmMs.toFixed(1)}ms)`);
 console.log('coverage:', (txt.match(/\d+\/\d+ matches shown/) ?? ['?'])[0]);
 
 const ts = [];
 for (let i = 0; i < N; i++) {
   const t0 = process.hrtime.bigint();
-  await call(needle);
+  const response = await call(needle);
+  if (response.error || response.result?.isError) throw new Error(JSON.stringify(response));
   ts.push(Number(process.hrtime.bigint() - t0) / 1e6);
 }
 ts.sort((a, b) => a - b);
@@ -72,4 +74,5 @@ const q = (p) => ts[Math.floor(((ts.length - 1) * p) / 100)];
 console.log(
   `warm grep n=${N} p50=${q(50).toFixed(1)}ms p95=${q(95).toFixed(1)}ms min=${ts[0].toFixed(1)} max=${ts[N - 1].toFixed(1)}`
 );
+if (process.env.ASGREP_BENCH_JSON === '1') console.log(JSON.stringify({ spawn_to_first_ms: coldMs, first_call_ms: warmMs, coverage: txt, samples_ms: ts }));
 child.kill();

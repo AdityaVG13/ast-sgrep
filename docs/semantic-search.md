@@ -156,15 +156,25 @@ The version-2 IVF sidecar stores a bounded cluster index followed by 4096-byte-a
 
 Delta `asgrep index` after a file edit reassigns every current vector to the existing IVF centroids and rewrites cluster postings. It does not rerun k-means. Centroids stay frozen until `asgrep reindex` (or an embedding-identity rewrite) rebuilds them. Search still refuses a sidecar whose fingerprint no longer matches the store.
 
-On a 10,000-vector medium fixture, measured p99 was 0.963 ms cold, 0.135 ms for a fresh inode under normal cache policy, and 0.037 ms warm. Methodology and byte accounting are recorded in [semantic IVF mmap validation](validation/semantic-ivf-mmap.md).
+The 2026-10-11 candidate refresh separates writer-no-cache/fresh-process,
+fresh-inode/fresh-process, page-cached/fresh-process and in-process warm opens
+on the existing 10,000-vector fixture. Current numbers and probe hashes are in
+[the canonical matrix](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11);
+[semantic IVF mmap validation](validation/semantic-ivf-mmap.md) retains the old
+protocol for history. Fresh-process opens are not in-process warm opens.
 
-On a 54,732-chunk hashed corpus (`idx_big`), unique-query `asgrep semantic` is
+**Historical / UNREPRODUCIBLE (`idx_big`, not the current candidate):** the
+54,732-chunk corpus, original 85-query battery and fingerprint are unavailable;
+[the current refresh](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11)
+does not replace them with invented inputs. In that historical run, unique-query
+`asgrep semantic` was
 **p50 0.51 ms / p90 0.74 ms** (n=85, `codemode-serve`, limit 8). Default hybrid
 on the same unique-query set is **p50 1.27 ms / p90 8.4 ms**: the IVF mmap path
 is tens of microseconds; remaining hybrid time is lexical discovery plus
 finish/fanout, not nprobe. High-df conceptual terms (for example `encode
 payload`) still sit in the p90 tail. `pi-ast-sgrep` Code Mode `asgrep.search`
-is this hybrid path; `asgrep.semantic` is the sub-1 ms unique path.
+uses the hybrid path; `asgrep.semantic` uses the pure semantic path. The
+historical sub-millisecond figure is not a current latency guarantee.
 
 LSP `initializationOptions` also accepts `annThreshold`, see [use-cases.md](use-cases.md).
 

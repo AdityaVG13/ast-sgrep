@@ -25,3 +25,14 @@ fn ascii_ci_matches_unicode_lowercase_on_ascii_inputs() {
         }
     }
 }
+
+#[test]
+fn ascii_trigram_unicode_preimages_match_the_rust_unicode_table() {
+    // The cold FTS superset enumerates these preimages. A Unicode-table change
+    // must fail this proof, not silently drop matches behind the shortcut.
+    let actual: Vec<_> = (128..=char::MAX as u32)
+        .filter_map(char::from_u32)
+        .filter(|c| c.to_lowercase().any(|lower| lower.is_ascii()))
+        .collect();
+    assert_eq!(actual, vec!['İ', 'K']);
+}

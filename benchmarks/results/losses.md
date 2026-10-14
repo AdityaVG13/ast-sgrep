@@ -1,5 +1,15 @@
 # Known losses
 
+## Current candidate losses (2026-10-11)
+
+[The canonical 2.6.0 refresh](baselines.md#260-candidate-refresh-2026-10-11)
+records self-gold MRR **0.847 -> 0.812**, nDCG **0.853 -> 0.835** and
+Recall@5 **0.941 -> 0.853** versus published 2.5.4 on the same 17 queries.
+Full-repository natural-language CLI and warm distinct-query navigation also
+regress substantially. Pristine indexing improves, but that is not approval of
+these losses. Neither the neural foreign-corpus bakeoff nor missing historical
+studies were rerun. The records below remain historical, different configurations.
+
 > **Status: `historical` + `UNREPRODUCIBLE`.** Cite fingerprints in
 > [`baselines.md`](baselines.md). The incomplete `--bin` reproduce fragment
 > was removed (`eval-bakeoff.py` / writer is not in this tree).

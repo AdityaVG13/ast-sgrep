@@ -594,7 +594,7 @@ fn unicode_case_insensitive_literal_matches_in_cold_and_warm_lanes() {
     for filler_lines in [0, 1000] {
         let session = ast_sgrep_testkit::isolated_index_session();
         let body = format!(
-            "let value = \"ÄPFEL KELVIN İX\";\n{}",
+            "let value = \"ÄPFEL KELVIN İX edİ\";\n{}",
             "// unrelated filler\n".repeat(filler_lines)
         );
         session.write("unicode.rs", &body);
@@ -613,7 +613,7 @@ fn unicode_case_insensitive_literal_matches_in_cold_and_warm_lanes() {
         let cold = session.searcher(options.clone());
         let warm = session.searcher(options);
         warm.warm_search_path().unwrap();
-        for needle in ["äpfel", "kelvin", "i\u{307}x"] {
+        for needle in ["äpfel", "kelvin", "i\u{307}x", "edi"] {
             for (lane, searcher) in [("cold", &cold), ("warm", &warm)] {
                 for (mode, response) in [
                     ("literal", searcher.search_literal(needle).unwrap()),

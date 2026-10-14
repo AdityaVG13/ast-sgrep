@@ -1,6 +1,10 @@
 # Intent confusion study
 
-> **Published record** of measured results. No runnable harnesses ship in this tree.
+> **Historical / UNREPRODUCIBLE.** The 2.6.0 refresh could not recover
+> `intent-calibrate.py`, the original labels or multi-corpus gold/corpus pins.
+> Retry only after those exact inputs are recovered. Current self-gold scores
+> do not replace this routing-weight experiment. See the
+> [canonical disposition](../results/baselines.md#260-candidate-refresh-2026-10-11).
 
 Produced by `intent-calibrate.py` on 2026-07-10 (asgrep release-perf,
 gold sets: self 18q, ripgrep 14q, flask 15q; aggregate = mean of the three

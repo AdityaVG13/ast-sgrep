@@ -7,6 +7,16 @@
 This file reports only measurements already recorded in repository artifacts.
 It does not combine or extrapolate runs. Lower latency is better.
 
+## Latest comparison (2026-10-11, 2.6.0 candidate)
+
+Current indexed literal/pattern and rg/grep/ast-grep/tgrep/fff references are in
+[the canonical refresh](baselines.md#260-candidate-refresh-2026-10-11), with
+pins and individual samples in [the bundle](2.6.0-20261011.json). Semgrep native
+core supplies an explicitly labeled one-rule timing despite the broken Python
+CLI; it is not the missing 29-pattern suite or a foreign-corpus quality score.
+The candidate has major conceptual-search/warm-navigation regressions. Older
+"win class" tables below are **historical**, not candidate release claims.
+
 ## 2026-09-20 2.5.0 re-pin (self corpus, 702 tracked / 650 indexed files, working tree)
 
 **Status: `reproducible-in-tree`.** Same protocol as the September fix

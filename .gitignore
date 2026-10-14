@@ -89,12 +89,13 @@ SYNC_STRATEGY.md
 # Cargo package metadata
 **/.cargo_vcs_info.json
 
-# Benchmark: only markdown docs are tracked under benchmarks/
+# Benchmark: curated reports and the pinned measurement bundle are tracked
 # Keep any accidental local harness/scratch out of git
 benchmarks/**/__pycache__/
 benchmarks/corpora/
 benchmarks/results/*
 !benchmarks/results/*.md
+!benchmarks/results/2.6.0-20261011.json
 benchmarks/tmp-idx/
 benchmarks/cold-start-work/
 benchmarks/query-path-work/

@@ -6,6 +6,16 @@ trace back to a dated row here or carry its own reproduce command.
 
 Status tags: [`benchmarks/README.md`](../README.md).
 
+## Latest measured candidate (2026-10-11)
+
+The **2.6.0 candidate** CLI, indexing, warm Code Mode, Pi, IVF and mmap numbers
+now cite [the canonical refresh](baselines.md#260-candidate-refresh-2026-10-11)
+and its [sample bundle](2.6.0-20261011.json). It includes the conceptual-search
+and warm-navigation regressions against published 2.5.4. Earlier dated blocks
+below are retained **historical protocols**, not the current performance bar.
+A warm OS page cache, a reused server and a warm in-process mmap opening are
+three different states; do not merge their timings.
+
 ## 2026-09-20 2.5.0 re-pin (self corpus, working tree)
 
 **Status: `reproducible-in-tree`.** Same workdir protocol as the one-shot
