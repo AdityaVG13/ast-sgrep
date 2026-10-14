@@ -16,6 +16,11 @@ Anti-cheat contract (mirrors their protocol.json failure_contract):
   from query latency. Fresh CLI process per query.
 - Raw stdout/stderr for every call is retained (records/) so any row can be
   re-scored without rerunning a tool.
+- WARNING: retrieve() RESUMES from an existing retrieval-rows.jsonl in the
+  bench dir and skips those queries without executing the tool. Reusing a
+  bench dir for a new measurement without deleting retrieval-rows.jsonl
+  (and records/) silently re-scores the previous run's rows. Fresh bench
+  dir per arm, or delete both first.
 
 Scoring (their definitions, from protocol.json + verify.py):
 - rank: 1-based position of the gold file among distinct result files

@@ -74,6 +74,17 @@ fn static_mid() -> String {
     )
     .expect("native static model always has an identity")
 }
+/// Model id for an explicit `ASGREP_EMBED_BACKEND` selection, parsed the
+/// same way `chain_kinds` parses it so stored identity and the embed chain
+/// can never disagree about which backend Auto resolved to.
+fn env_backend_mid() -> Option<String> {
+    let v = std::env::var("ASGREP_EMBED_BACKEND").ok()?;
+    match ast_sgrep_embed::EmbedBackendKind::parse(v.trim().to_ascii_lowercase().as_str())? {
+        ast_sgrep_embed::EmbedBackendKind::Semantic => Some(semantic_mid()),
+        ast_sgrep_embed::EmbedBackendKind::Neural => Some(neural_mid()),
+        ast_sgrep_embed::EmbedBackendKind::Static => Some(static_mid()),
+    }
+}
 fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
     use ast_sgrep_embed::EmbedPreference::*;
     match p {
@@ -81,14 +92,11 @@ fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String
         Neural => Some(neural_mid()),
         Static => Some(static_mid()),
         Auto => {
-            // ASGREP_EMBED_BACKEND=static under Auto (see chain_kinds).
-            if std::env::var("ASGREP_EMBED_BACKEND")
-                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("static"))
-            {
-                return Some(static_mid());
+            if let Some(mid) = env_backend_mid() {
+                return Some(mid);
             }
             let skip = crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
-            (!skip).then(semantic_mid)
+            (!skip).then(static_mid)
         }
     }
 }
@@ -106,14 +114,12 @@ pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPrefere
         EmbedPreference::Semantic => semantic_mid(),
         EmbedPreference::Static => static_mid(),
         EmbedPreference::Auto => {
-            if std::env::var("ASGREP_EMBED_BACKEND")
-                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("static"))
-            {
-                return static_mid();
+            if let Some(mid) = env_backend_mid() {
+                return mid;
             }
             crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
                 .then(neural_mid)
-                .unwrap_or_else(semantic_mid)
+                .unwrap_or_else(static_mid)
         }
     }
 }

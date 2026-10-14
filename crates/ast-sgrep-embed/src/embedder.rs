@@ -246,7 +246,10 @@ fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
             if crate::neural::NeuralEmbeddingConfig::from_env().is_some() {
                 vec![EmbedBackendKind::Neural]
             } else {
-                vec![]
+                // Phase 2A: the native static engine is the default.
+                // ASGREP_EMBED_BACKEND above remains the explicit escape
+                // hatch to the legacy backends until their removal (2C).
+                vec![EmbedBackendKind::Static]
             }
         }
     }
