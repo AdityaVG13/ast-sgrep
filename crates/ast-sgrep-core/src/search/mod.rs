@@ -1337,16 +1337,23 @@ impl Searcher {
         lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
-        // Semantic evidence is a fallback, not a co-equal voter. The local
-        // hashed backend re-encodes the same text, so it cannot outvote
-        // structural evidence, and its *presence* measurably displaced
-        // structurally exact hits: embed-on gold MRR 0.850 vs 1.000 with the
-        // channel off, unchanged at semantic weight 0.001 (presence, not
-        // weight, was the lever) and unchanged when the vocabulary left the
-        // cascade. It still runs when structural + lexical evidence leaves the
-        // page thin -- the zero-overlap case it exists for.
+        // Hashed-era compensation kept semantic evidence a thin-page,
+        // known-files-only fallback: the hashed backend re-encodes the same
+        // text, and its mere presence displaced structurally exact hits
+        // (embed-on gold MRR 0.850 vs 1.000 off). With a learned backend
+        // that rationale inverts for conceptual queries: the embed pass
+        // runs unconstrained as a permanent candidate generator so it can
+        // discover files the lexical cascade never surfaced. The hashed
+        // backend and identifier/literal intents keep the fallback.
         let structural_evidence_is_thin = hits.len() < self.options.limit;
-        if self.options.use_embed && structural_evidence_is_thin {
+        let learned_backend = self
+            .store
+            .get_meta("embed_backend")?
+            .as_deref()
+            .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
+            .is_some_and(ast_sgrep_embed::EmbedBackendKind::is_learned);
+        let embed_as_generator = conceptual && self.options.use_embed && learned_backend;
+        if self.options.use_embed && (embed_as_generator || structural_evidence_is_thin) {
             let semantic = {
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_embed_pass",
@@ -1354,15 +1361,26 @@ impl Searcher {
                     "embed_pass_for_files_with_rescoring",
                 );
                 let trust_snapshot = self.snapshot_is_held();
-                passes::embed::embed_pass_for_files_cached(
-                    &self.store,
-                    &self.options,
-                    semantic_query,
-                    &working_files,
-                    Some(&self.semantic_cache),
-                    trust_snapshot,
-                    self.use_field_rescoring,
-                )?
+                if embed_as_generator {
+                    run_embed_pass_cached(
+                        &self.store,
+                        &self.options,
+                        semantic_query,
+                        &self.semantic_cache,
+                        trust_snapshot,
+                        self.use_field_rescoring,
+                    )?
+                } else {
+                    passes::embed::embed_pass_for_files_cached(
+                        &self.store,
+                        &self.options,
+                        semantic_query,
+                        &working_files,
+                        Some(&self.semantic_cache),
+                        trust_snapshot,
+                        self.use_field_rescoring,
+                    )?
+                }
             };
             // Fan-out is unconditional for conceptual queries: it is the sole
             // source of caller/graph/pattern contributor evidence, so skipping

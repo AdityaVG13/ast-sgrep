@@ -67,28 +67,54 @@ fn semantic_mid() -> String {
 fn neural_mid() -> String {
     format!("neural:{}", ast_sgrep_embed::neural_configured_model_id())
 }
+fn static_mid() -> String {
+    ast_sgrep_embed::configured_backend_model_id(
+        ast_sgrep_embed::EmbedBackendKind::Static,
+        ast_sgrep_embed::STATIC_DIM,
+    )
+    .expect("native static model always has an identity")
+}
 fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
     use ast_sgrep_embed::EmbedPreference::*;
     match p {
         Semantic => Some(semantic_mid()),
         Neural => Some(neural_mid()),
+        Static => Some(static_mid()),
         Auto => {
+            // ASGREP_EMBED_BACKEND=static under Auto (see chain_kinds).
+            if std::env::var("ASGREP_EMBED_BACKEND")
+                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("static"))
+            {
+                return Some(static_mid());
+            }
             let skip = crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
             (!skip).then(semantic_mid)
         }
     }
 }
 fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Option<String> {
-    ast_sgrep_embed::configured_backend_model_id(backend, ast_sgrep_embed::default_semantic_dim())
+    let dim = match backend {
+        ast_sgrep_embed::EmbedBackendKind::Static => ast_sgrep_embed::STATIC_DIM,
+        _ => ast_sgrep_embed::default_semantic_dim(),
+    };
+    ast_sgrep_embed::configured_backend_model_id(backend, dim)
 }
 pub(super) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
     use ast_sgrep_embed::EmbedPreference;
     match preference {
         EmbedPreference::Neural => neural_mid(),
         EmbedPreference::Semantic => semantic_mid(),
-        EmbedPreference::Auto => crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
-            .then(neural_mid)
-            .unwrap_or_else(semantic_mid),
+        EmbedPreference::Static => static_mid(),
+        EmbedPreference::Auto => {
+            if std::env::var("ASGREP_EMBED_BACKEND")
+                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("static"))
+            {
+                return static_mid();
+            }
+            crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
+                .then(neural_mid)
+                .unwrap_or_else(semantic_mid)
+        }
     }
 }
 pub(super) fn init_cache_seq(conn: &Connection, seq: &Cell<i64>) -> Result<()> {

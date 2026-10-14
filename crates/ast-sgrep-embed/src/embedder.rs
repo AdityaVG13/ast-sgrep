@@ -73,6 +73,7 @@ pub fn embedder_for(kind: EmbedBackendKind) -> Option<Box<dyn Embedder>> {
     match kind {
         EmbedBackendKind::Neural => neural_embedder(),
         EmbedBackendKind::Semantic => Some(Box::new(HashedEmbedder::default())),
+        EmbedBackendKind::Static => Some(Box::new(crate::static_engine::StaticEmbedder::new())),
     }
 }
 
@@ -134,6 +135,9 @@ fn neural_embedder() -> Option<Box<dyn Embedder>> {
 pub enum EmbedBackendKind {
     Neural,
     Semantic,
+    /// Native trained static table baked into the binary (see
+    /// `static_engine`). Always available, no download or feature flag.
+    Static,
 }
 
 impl EmbedBackendKind {
@@ -141,14 +145,24 @@ impl EmbedBackendKind {
         match self {
             Self::Neural => "neural",
             Self::Semantic => "semantic-v2",
+            Self::Static => "static",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "neural" | "fastembed" => Some(Self::Neural),
             "semantic-v2" | "semantic" | "local" => Some(Self::Semantic),
+            "static" | "native" => Some(Self::Static),
             _ => None,
         }
+    }
+    /// True when vectors come from trained weights (neural network or the
+    /// native static table) rather than re-encoding surface text. Search
+    /// admits only learned backends as unconstrained candidate generators;
+    /// the hashed backend stays a rescore fallback (its presence in fusion
+    /// measurably displaced exact hits).
+    pub fn is_learned(self) -> bool {
+        matches!(self, Self::Neural | Self::Static)
     }
 }
 
@@ -158,6 +172,7 @@ pub enum EmbedPreference {
     Auto,
     Neural,
     Semantic,
+    Static,
 }
 
 #[derive(Debug, Clone)]
@@ -216,8 +231,18 @@ pub fn embed_batch_with_chain(texts: &[&str], preference: EmbedPreference) -> Ve
 fn chain_kinds(preference: EmbedPreference) -> Vec<EmbedBackendKind> {
     match preference {
         EmbedPreference::Neural => vec![EmbedBackendKind::Neural],
+        EmbedPreference::Static => vec![EmbedBackendKind::Static],
         EmbedPreference::Semantic => vec![],
         EmbedPreference::Auto => {
+            // Explicit backend selection without a CLI/config preference,
+            // e.g. ASGREP_EMBED_BACKEND=static.
+            if let Ok(v) = std::env::var("ASGREP_EMBED_BACKEND") {
+                if let Some(kind) =
+                    EmbedBackendKind::parse(v.trim().to_ascii_lowercase().as_str())
+                {
+                    return vec![kind];
+                }
+            }
             if crate::neural::NeuralEmbeddingConfig::from_env().is_some() {
                 vec![EmbedBackendKind::Neural]
             } else {
@@ -266,6 +291,7 @@ fn pref_str(p: EmbedPreference) -> &'static str {
         EmbedPreference::Auto => "auto",
         EmbedPreference::Neural => "neural",
         EmbedPreference::Semantic => "semantic",
+        EmbedPreference::Static => "static",
     }
 }
 
@@ -280,6 +306,7 @@ fn try_backend_batch(kind: EmbedBackendKind, texts: &[&str]) -> Option<Vec<Vec<f
 pub fn configured_backend_model_id(kind: EmbedBackendKind, dim: usize) -> Option<String> {
     match kind {
         EmbedBackendKind::Semantic => Some(format!("semantic:hashed-v2:{dim}")),
+        EmbedBackendKind::Static => Some(format!("static:potion-code-16M-v2:{dim}")),
         EmbedBackendKind::Neural => {
             Some(format!("neural:{}", crate::neural::configured_model_id()))
         }

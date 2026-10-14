@@ -49,3 +49,7 @@ ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, fea
 [[test]]
 name = "semantic_unit"
 path = "../../tests/embed/semantic_unit.rs"
+
+[[test]]
+name = "static_engine"
+path = "../../tests/embed/static_engine.rs"

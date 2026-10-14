@@ -210,6 +210,11 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
     }
     let mut channels: [Vec<usize>; 8] = std::array::from_fn(|_| Vec::new());
     let mut members_by_result = HashMap::<(&str, u32), Vec<usize>>::new();
+    // Best semantic magnitude per result key, for the magnitude vote below.
+    // Embed scores reach fusion as cosine-scaled values (route_hits
+    // normalizes by the channel ceiling); only their ratio to the query's
+    // best is used, so the vote is invariant to that scaling.
+    let mut semantic_score_by_result = HashMap::<(&str, u32), f64>::new();
     for (index, hit) in hits.iter().enumerate() {
         if hit.score.is_finite() && hit.score > 0.0 {
             channels[channel_for_kind(hit.kind).index()].push(index);
@@ -217,8 +222,47 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
                 .entry((hit.file.as_str(), hit.line_start))
                 .or_default()
                 .push(index);
+            if hit.kind == HitKind::Embed {
+                let slot = semantic_score_by_result
+                    .entry((hit.file.as_str(), hit.line_start))
+                    .or_insert(0.0);
+                if hit.score > *slot {
+                    *slot = hit.score;
+                }
+            }
         }
     }
+    let semantic_top = semantic_score_by_result
+        .values()
+        .copied()
+        .fold(0.0f64, f64::max);
+    // A lexical declaration record and its multi-line definition describe
+    // one observation, not independent corroboration. Keep the lexical member
+    // for provenance, but do not let it vote or spend a lexical rank slot.
+    // Indexed AST span/name suffice when definition excerpts are lazy. Unknown
+    // lexical text, inline bodies and nonidentical loaded records stay independent.
+    let declaration_lexical: HashSet<usize> = channels[FusionChannel::Lexical.index()]
+        .iter()
+        .copied()
+        .filter(|&index| {
+            let lexical = &hits[index];
+            let line = lexical.excerpt.trim();
+            (line.ends_with('{') || line.ends_with(':'))
+                && members_by_result[&(lexical.file.as_str(), lexical.line_start)]
+                    .iter()
+                    .any(|&member| {
+                        let definition = &hits[member];
+                        definition.kind == HitKind::Def
+                            && definition.line_end > definition.line_start
+                            && definition
+                                .symbol
+                                .as_deref()
+                                .is_some_and(|name| !name.is_empty() && line.contains(name))
+                            && (definition.excerpt.is_empty()
+                                || definition.excerpt.lines().next().map(str::trim) == Some(line))
+                    })
+        })
+        .collect();
     let mut ranks_by_result = HashMap::<(&str, u32), ChannelRanks>::new();
     for channel in FusionChannel::ALL {
         let members = &mut channels[channel.index()];
@@ -233,6 +277,9 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
         let mut seen_results = HashSet::<(&str, u32)>::new();
         let mut rank = 0usize;
         for index in members.iter().copied() {
+            if declaration_lexical.contains(&index) {
+                continue;
+            }
             let hit = &hits[index];
             let key = (hit.file.as_str(), hit.line_start);
             if seen_results.insert(key) {
@@ -294,7 +341,24 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
                 .find_map(|index| hits[*index].embed_fields.clone());
         }
         result.contributors = contributors;
-        result.score = weighted_rrf_score(&ranks_by_result[&key], weights);
+        // Rank-only RRF (K=60) is nearly flat across the top ranks, so a
+        // result corroborated by several weak lexical channels outvotes a
+        // decisive semantic match that only the embed channel found. The
+        // semantic channel therefore casts a second, magnitude vote worth
+        // up to one extra rank-0 vote, scaled by this result's cosine
+        // relative to the query's best. Monotonic in cosine, so
+        // within-channel order is unchanged; non-semantic results are
+        // bit-identical to pure weighted RRF.
+        let ranks = &ranks_by_result[&key];
+        let mut score = weighted_rrf_score(ranks, weights);
+        if ranks.semantic.is_some() && semantic_top > 0.0 {
+            if let Some(&magnitude) = semantic_score_by_result.get(&key) {
+                score += weight(weights, FusionChannel::Semantic)
+                    * rrf_score(0, RRF_K)
+                    * (magnitude / semantic_top);
+            }
+        }
+        result.score = score;
         fused.push(result);
     }
     *hits = fused;

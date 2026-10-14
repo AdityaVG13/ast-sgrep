@@ -533,6 +533,121 @@ fn apply_weighted_rrf_contract() {
     let mut sorted = keys.clone();
     sorted.sort_unstable();
     assert_eq!(keys, sorted, "fused emission must be in sorted key order");
+
+    // A declaration discovered lexically is the SAME record as the definition,
+    // not an independent vote. Keep both provenance tags and the candidate,
+    // but award one channel contribution. Body/unknown text still votes.
+    for declaration in [
+        "pub fn snapshot() {",
+        "def snapshot():",
+        "function snapshot() {",
+    ] {
+        let mut definition = mk_hit(HitKind::Def, "declaration.rs", 7, 3.0);
+        definition.symbol = Some("snapshot".into());
+        definition.line_end = 9;
+        definition.excerpt = format!("{declaration}\n    generation\n}}");
+        let mut lexical = mk_hit(HitKind::Asgrep, "declaration.rs", 7, 1.0);
+        lexical.excerpt = declaration.into();
+        let mut declaration_only = vec![definition.clone(), lexical.clone()];
+        apply_weighted_rrf(&mut declaration_only, &weights);
+        assert_eq!(declaration_only.len(), 1);
+        assert_eq!(
+            declaration_only[0].score,
+            1.0 / 61.0,
+            "a declaration must not receive a duplicate lexical vote: {declaration}"
+        );
+        assert_eq!(
+            declaration_only[0].contributors,
+            vec![HitKind::Asgrep, HitKind::Def]
+        );
+        // Real structural search attaches definition excerpts after fusion.
+        // The indexed declaration line plus AST span/name still identifies
+        // the repeated record without eagerly loading the whole body.
+        let mut lazy = vec![definition.clone(), lexical.clone()];
+        lazy[0].excerpt.clear();
+        apply_weighted_rrf(&mut lazy, &weights);
+        assert_eq!(
+            lazy[0].score,
+            1.0 / 61.0,
+            "lazy declaration evidence must not double-vote"
+        );
+
+        // A one-line implementation and a nonidentical lexical record may
+        // carry body evidence. Do not infer redundancy from location alone.
+        for inline in [false, true] {
+            let mut distinct = vec![definition.clone(), lexical.clone()];
+            if inline {
+                distinct[0].line_end = 7;
+            } else {
+                distinct[1].excerpt = "generation += 1".into();
+            }
+            apply_weighted_rrf(&mut distinct, &weights);
+            assert_eq!(distinct[0].score, 1.0 / 61.0 + 1.0 / 61.0);
+        }
+    }
+}
+
+/// INTENT: semantic magnitude vote — the embed channel adds
+/// `w_embed * rrf(0) * (s / s_top)` on top of its rank vote, so a decisive
+/// cosine is not outvoted by weak multi-channel corroboration, while
+/// non-semantic results stay bit-identical to pure weighted RRF.
+/// KILLS: magnitude-drop-mutant (rank-only fusion), absolute-scale-mutant
+/// (vote must be ratio-based, invariant to uniform embed score scaling).
+#[test]
+fn semantic_magnitude_vote_contract() {
+    let weights = ChannelWeights::default(); // all 1.0 -> weight is identity
+
+    // Exactness, hand-derived: embed scores 0.9 (rank 0) and 0.3 (rank 1);
+    // s_top = 0.9. Rank votes: 1/61 and 1/62. Magnitude votes:
+    // (1/61)*(0.9/0.9) = 1/61 and (1/61)*(0.3/0.9). Emission is sorted by
+    // (file, line): [g.rs, n.rs].
+    let mut hits = vec![
+        mk_hit(HitKind::Embed, "n.rs", 1, 0.3),
+        mk_hit(HitKind::Embed, "g.rs", 1, 0.9),
+    ];
+    apply_weighted_rrf(&mut hits, &weights);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].file, "g.rs");
+    assert_eq!(hits[0].score, 1.0 / 61.0 + (1.0 * (1.0 / 61.0)) * (0.9 / 0.9));
+    assert_eq!(hits[1].file, "n.rs");
+    assert_eq!(hits[1].score, 1.0 / 62.0 + (1.0 * (1.0 / 61.0)) * (0.3 / 0.9));
+
+    // Scale invariance: multiplying every embed score by 4 (the raw
+    // SCORE_EMBED scaling route_hits later removes) changes nothing.
+    let mut scaled = vec![
+        mk_hit(HitKind::Embed, "n.rs", 1, 1.2),
+        mk_hit(HitKind::Embed, "g.rs", 1, 3.6),
+    ];
+    apply_weighted_rrf(&mut scaled, &weights);
+    assert_eq!(scaled[0].score.to_bits(), hits[0].score.to_bits());
+    assert_eq!(scaled[1].score.to_bits(), hits[1].score.to_bits());
+
+    // Outvote property at conceptual weights: a lone decisive embed hit
+    // (rank vote + full magnitude vote = 2 * 1.45/61) beats a wrong result
+    // corroborated by lexical+def rank-0 votes (0.75/61 + 1.35/61). Under
+    // rank-only fusion the embed hit would score 1.45/61 < 2.10/61 and lose.
+    let conceptual = ChannelWeights {
+        lexical: 0.75,
+        def: 1.35,
+        embed: 1.45,
+        ..ChannelWeights::default()
+    };
+    let mut hits = vec![
+        mk_hit(HitKind::Asgrep, "w.rs", 1, 3.0),
+        mk_hit(HitKind::Def, "w.rs", 1, 5.0),
+        mk_hit(HitKind::Embed, "g.rs", 1, 0.9),
+    ];
+    apply_weighted_rrf(&mut hits, &conceptual);
+    let gold = hits.iter().find(|h| h.file == "g.rs").expect("gold kept");
+    let wrong = hits.iter().find(|h| h.file == "w.rs").expect("wrong kept");
+    assert!(
+        gold.score > wrong.score,
+        "decisive embed hit must outvote weak corroboration: {} vs {}",
+        gold.score,
+        wrong.score
+    );
+    // The non-semantic result is untouched by the magnitude vote.
+    assert_eq!(wrong.score, 0.75 * (1.0 / 61.0) + 1.35 * (1.0 / 61.0));
 }
 
 /// INTENT: `learn_fusion_weights` softplus loss + rail convergence + degenerate
