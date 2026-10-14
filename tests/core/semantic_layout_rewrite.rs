@@ -348,7 +348,12 @@ fn auto_index_migrates_legacy_semantic_store_to_static() {
     assert_eq!(dead, 0, "embed_cache must not retain retired-model rows");
     drop(conn);
 
-    // Search works over the migrated store.
+    // Search works over the migrated store. The query shares no tokens
+    // with either fixture file ("refresh_credentials" / "rotate the
+    // access token" / "compute_invoice" / "sum the line items"), so only
+    // the embed channel can surface the target — this leg discriminates
+    // real migrated vectors from a store that merely relabeled its meta
+    // (a zeroed query-vector mutant fails here).
     let searcher = Searcher::new(SearchOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path),
@@ -356,6 +361,11 @@ fn auto_index_migrates_legacy_semantic_store_to_static() {
         ..SearchOptions::default()
     })
     .unwrap();
-    let resp = searcher.search("rotate credentials").unwrap();
+    let resp = searcher.search("renew an expiring login session").unwrap();
     assert!(!resp.hits.is_empty(), "migrated store must serve hits");
+    assert!(
+        resp.hits[0].file.ends_with("a.py"),
+        "conceptual query must rank the credentials function first: {:?}",
+        resp.hits.iter().map(|h| &h.file).collect::<Vec<_>>()
+    );
 }
