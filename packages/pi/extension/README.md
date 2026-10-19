@@ -16,7 +16,7 @@ Native Code Mode, structural, graph, and semantic code search for [Pi](https://g
 
 | Change | What you get |
 |--------|----------------|
-| Local-first embeddings | No `ASGREP_EMBED_API_KEY` / Ollama URL. Hashed semantic is default; optional ONNX stays in-process. |
+| Local-first embeddings | No `ASGREP_EMBED_API_KEY` / Ollama URL. One static engine compiled into the native binary; no model download. |
 | Results on the model path | `asgrep_search` and Code Mode serialize hits into `content`. |
 | Two-channel queries | `asgrep.search({ query: 'callers:process_request AND pattern:fn $NAME($$$)' })` joins by span; `AND NOT` subtracts. Plain English `and` stays hybrid. |
 | Critic + follow-ups | Agent envelopes include `why` (`critic:` notes) and causal `follow_up_queries` from the actual top hit. |
@@ -194,7 +194,7 @@ The agent chooses the retrieval granularity; these methods never auto-fuse chann
 
 The default semantic backend works offline. It needs no credential, sends no telemetry, and downloads no model on first use. Search data stays under the project's `.asgrep/` directory.
 
-In-process neural embeddings are optional (`--features neural-embed`). They never send source text to a remote embedding API. Hashed local search remains the default.
+Embeddings come from one deterministic static engine compiled into the native binary; there is no neural runtime, and source text never goes to a remote embedding API.
 
 Pi packages are trusted code. Installation grants this JavaScript extension and its native code the permissions of the OS user running Pi. Project-root confinement is a package policy, not an operating-system security boundary.
 

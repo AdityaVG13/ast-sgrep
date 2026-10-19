@@ -53,7 +53,7 @@ Published result tables live under [`../benchmarks/results/`](../benchmarks/resu
 ```text
 ast-sgrep-lang   → extract symbols / calls / imports
 ast-sgrep-core   → index + hybrid search + critic + planner
-ast-sgrep-embed  → in-process embedding providers (+ optional neural/rerank)
+ast-sgrep-embed  → in-process embedding (single static engine; retired backends fail closed)
 ast-sgrep-mmap   → memory-map helpers
 ast-sgrep-cli    → asgrep / ast-sgrep binaries
 ast-sgrep-lsp    → language server

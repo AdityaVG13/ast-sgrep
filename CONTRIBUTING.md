@@ -78,7 +78,7 @@ Do not treat `benchmarks/results/baselines.md` as a golden.
 | `ast-sgrep-core` | Index, search, SQLite store, chain, semantic ANN |
 | `ast-sgrep-cli` | `asgrep` / `ast-sgrep` binaries, supervisor |
 | `ast-sgrep-lang` | Tree-sitter extraction |
-| `ast-sgrep-embed` | Embeddings (+ optional neural/rerank features) |
+| `ast-sgrep-embed` | Embeddings (static engine; retired backends fail closed) |
 | `ast-sgrep-lsp` | Language server |
 | `ast-sgrep-mcp` | MCP server for agents |
 | `ast-sgrep-watch` | `asgrep-watch` helper (`watch` loop; owns the `notify` link) |

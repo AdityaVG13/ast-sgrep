@@ -68,7 +68,7 @@ Each hit includes `follow_up_queries` so agents can drill into defs/callers with
 
 ### No API key required
 
-Default offline semantic path is fully functional (hashed vectors). Optional neural is in-process ONNX, see [semantic-search.md](semantic-search.md).
+Default offline semantic path is fully functional: a static embedding engine compiled into the binary (no download, no API key). See [semantic-search.md](semantic-search.md).
 
 ---
 
@@ -89,10 +89,9 @@ cargo install --path crates/ast-sgrep-lsp  # from a cloned checkout
     "transport": "stdio",
     "initializationOptions": {
       "asgrep": {
-        "neuralEmbed": false,
+        "noEmbed": false,
         "semanticOnly": false,
-        "annThreshold": 2000,
-        "embedBackend": "auto"
+        "annThreshold": 2000
       }
     }
   }
@@ -106,10 +105,13 @@ Settings may be nested under `"asgrep"` or at the top level of `initializationOp
 | Key | Type | Description |
 |-----|------|-------------|
 | `noEmbed` | bool | Disable semantic indexing and search |
-| `neuralEmbed` | bool | Prefer in-process neural embeddings (feature-gated) |
-| `semanticOnly` | bool | Offline hashed semantic only |
+| `semanticOnly` | bool | Semantic channel only (skip lexical/structural channels) |
 | `annThreshold` | number | Symbol count before IVF-ANN (default 2000) |
-| `embedBackend` | string | `auto`, `neural`, `semantic` |
+| `indexPath` | string | Explicit index database path |
+
+There is one compiled-in static embedding engine, so no backend selection
+exists. The retired keys `neuralEmbed` and `embedBackend` are rejected with an
+explicit error naming the removal.
 | `indexPath` | string | Trusted custom `index.db` path. Disabled unless the operator sets `ASGREP_ALLOW_EXTERNAL_INDEX=1`; otherwise LSP indexes use the private user cache. |
 
 ### Capabilities
