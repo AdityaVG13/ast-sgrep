@@ -405,7 +405,10 @@ bounded repair. Earlier partial measurements above remain historical observation
 
 ## 2.6.0 candidate refresh (2026-10-11)
 
-**Status: canonical measured prerelease snapshot, not an optimization keep or
+**Status: historical prerelease snapshot; superseded for released-binary
+claims by the [2026-10-19 release-paired benchmark](#260-release-paired-benchmark-254-vs-260-vs-sgrep-2026-10-19)
+(same published-2.5.4 bytes, released 2.6.0 build, ranking regression
+repaired). Not an optimization keep or
 release certificate.** Machine-readable observations, command argument templates,
 corpus hashes and compiler/tool pins: [2.6.0-20261011.json](2.6.0-20261011.json).
 Older dated sections below remain historical evidence, not current release numbers.
