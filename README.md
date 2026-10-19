@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v2.5.4** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
+**v2.6.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
 
 > **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
@@ -26,7 +26,7 @@ It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `
 
 **Current embedding engine:** a single static (Model2Vec-style) engine compiled into the binary — deterministic 256-d vectors, no model download, no ONNX runtime. The hashed and neural backends are retired; `--neural-embed` / `ASGREP_EMBED_BACKEND` now error explicitly, and old indexes re-embed automatically on the next index run. See [semantic search](docs/semantic-search.md).
 
-Standalone CLI binaries are on the [v2.5.4 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.5.4) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
+Standalone CLI binaries are on the [v2.6.0 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.6.0) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`) once the release is published; until then, build from source. The npm family (`ast-sgrep` launcher + platform packages) carries the same version. Rust crates.io publication is a separate, explicitly approved step in [`docs/RELEASING.md`](docs/RELEASING.md) and has not happened for prior releases.
 
 To build from source:
 
@@ -77,7 +77,7 @@ Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
 | You can now... | How |
 |----------------|-----|
 | Search Dart and MoonBit | `.dart` / `.mbt` indexing with symbol/call/import extraction and native structural patterns. 15 languages total. |
-| Indexed literal answers | `literal:SearchHit`: 6.947 ms fresh-process p95 on the pinned candidate corpus; see the [benchmark limits and regressions](#benchmarks-honest-summary). |
+| Indexed literal answers | `literal:SearchHit`: ~5–6 ms fresh-process p50/p95 on the pinned self corpus across 2.5.4/2.6.0; see the [benchmark summary](#benchmarks-honest-summary). |
 | Search without touching the index | Search opens the index read-only and no longer auto-indexes. `--auto-index` opts back in; `index` / `reindex` / `watch` remain the write path. |
 | Run MCP on official rmcp | `asgrep-mcp` speaks stdio through `rmcp` instead of a hand-rolled loop. `notifications/cancelled` aborts in-flight indexing; `ping` stays live. |
 | Trust the ranking more | Exact-case definitions rank first, conceptual queries prefer code over docs that repeat them, and fanout seeds concept-related defs instead of flooding `callers:main`. |
@@ -181,33 +181,52 @@ After fusion, the critic reviews the shortlist in-process. Agent envelopes expos
 
 These are **checked-in run summaries**, not portable guarantees. Hardware, corpus, cache state, and flags all matter. Status vocabulary: [benchmarks/README.md](benchmarks/README.md).
 
-**Latest: 2.6.0 candidate, measured 2026-10-11**, against published 2.5.4 on
-one frozen 740-file repository snapshot (678 indexed), Apple M5 Max, two Rayon
-threads. The candidate still reports version 2.5.4; it has not been released.
+**Latest: 2.6.0 release-paired measurement, 2026-10-19**, against published
+2.5.4 on frozen RepoQA-600 / CoSQA-500 corpora: identical harness, one idle
+host (Apple M5 Max), fresh indexes per arm, 0 errors across 4,400 query runs.
+The sgrep reference is the calibrated 2026-10-14 row, not the in-pair control.
 
-| Surface | Published 2.5.4 | Candidate | Measurement |
-|---|---:|---:|---|
-| Pristine index | 19.172 s | 12.699 s | p50, warm source pages, new database |
-| Indexed `literal:SearchHit` | 7.057 ms | 6.947 ms | Fresh-process p95; ripgrep 17.624 ms |
-| Indexed `pattern:SearchHit` | 8.383 ms | 7.915 ms | Fresh-process p95; ast-grep 80.182 ms excluding generated file, latency-only |
-| `how does hybrid search work` | 7.125 ms | 263.541 ms | Fresh-process p50; regression |
-| Warm Code Mode, 240 identifiers | 0.715 ms | 10.914 ms | Median of 20 round p50s; regression |
-| Self-gold MRR / nDCG | 0.847 / 0.853 | 0.812 / 0.835 | Same 17 queries and common scorer; ranking regression |
+| RepoQA-600 | MRR@10 | Hit@1 | Hit@10 | ≥50%@8k | panel p50 |
+|---|---:|---:|---:|---:|---:|
+| asgrep 2.5.4 | .297 | .190 | .563 | .340 | 16.6 ms |
+| asgrep 2.6.0 | **.719** | .608 | .928 | .790 | 22.2 ms |
+| sgrep (calibrated) | **.757** | **.662** | **.943** | **.895** | 59.6 ms |
 
-**Not a performance keep or release certificate.** Faster indexing and small
-literal/structural timings do not erase the conceptual-search, warm-navigation
-and ranking regressions. This compares shipped and prerelease binaries, not a
-matched-toolchain source-only A/B. No neural model or reranker is active.
+| CoSQA-500 | MRR@10 | Hit@1 | Hit@10 | panel p50 |
+|---|---:|---:|---:|---:|
+| asgrep 2.5.4 | .104 | .054 | .240 | 13.8 ms |
+| asgrep 2.6.0 | **.327** | .234 | .588 | 22.1 ms |
+| sgrep (calibrated) | **.417** | **.292** | **.702** | 185.0 ms |
 
-Canonical fingerprint, full matrix, raw sample bundle and regeneration protocol:
-[baselines.md](benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11).
+Honest summary: 2.6.0 more than doubles 2.5.4's MRR (2.4×/3.1×) with fully
+offline operation, and remains **behind sgrep on every quality metric** while
+2.7×/8.4× faster warm. RepoQA index gets 37% faster (817 vs 1,296 ms median);
+the flat CoSQA corpus pays the embed cost (7.4 vs 5.5 s); storage 2.58→3.35 GB.
+
+Self-corpus surfaces (same-day companion on the frozen 740-file bundle corpus):
+
+| Surface | Published 2.5.4 | 2.6.0 |
+|---|---:|---:|
+| Pristine index p50 | 18.0 s | 13.5 s |
+| `literal:` / `pattern:` / `defs:` p50 | 3.8–6.5 ms | 4.2–6.6 ms (flat) |
+| Conceptual hybrid NL p50 | 6.3–9.5 ms | 24.9–33.7 ms |
+| Warm Code Mode round p50 (240 ids) | 0.67–0.76 ms | 4.27–4.84 ms |
+| Self-gold MRR / nDCG (17 q) | .847 / .853 | .882 / .881 |
+
+The 2026-10-11 candidate's conceptual-latency disasters (263+ ms) and ranking
+regression (.812 MRR) are repaired; the remaining always-on embed-channel cost
+on conceptual and warm-navigation queries is disclosed, not hidden. On this
+symbol-heavy self fixture the embed channel alone is mildly negative (no-embed
+.924 vs hybrid .882); on the external NL suites it is the whole gain. Neither
+corpus alone describes the product.
+
+Canonical fingerprints, full matrices, raw sample bundles and regeneration
+protocol:
+[baselines.md](benchmarks/results/baselines.md#260-release-paired-benchmark-254-vs-260-vs-sgrep-2026-10-19).
 Previous speedups remain [dated historical rows](benchmarks/results/speed.md).
 Foreign-corpus/neural bakeoffs, 23k/100k scale, watch-speed, intent-routing,
 prevented-read and `idx_big` studies could not be refreshed because original
 inputs are missing; their records remain explicitly historical/UNREPRODUCIBLE.
-The current self gold has zero no-embed/concat-embed ablation deltas; it does not
-prove an embedding-quality gain. Its 17-query score does not replace the old,
-different 18-query historical fingerprint.
 
 ---
 

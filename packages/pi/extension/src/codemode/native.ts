@@ -19,7 +19,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CODEMODE_BINDING_VERSION = "2.5.4";
+export const CODEMODE_BINDING_VERSION = "2.6.0";
 
 export type NativeSessionConfig = {
   root?: string;

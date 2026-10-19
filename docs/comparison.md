@@ -18,16 +18,21 @@ For **searching an indexed repo**, ast-sgrep replaces the scan tools. Identifier
 | **CI / platform JSON** | GitHub & GitLab shapes | No | `--json` (ripgrep format) |
 | **LSP** | `asgrep-lsp` | Separate ecosystem | No |
 | **Agent-oriented JSON** | `--format agent` + follow-ups | Limited | Line-based JSON |
-| **One-shot CLI latency** | 6.947 ms p95 (`literal:`, indexed) | 80.182 ms p95 (pattern, hand-written code) | 17.624 ms p95 (scan) |
+| **One-shot CLI latency** | 6.7 ms p95 (`literal:`, indexed) | 80.182 ms p95 (pattern, hand-written code) | 17.624 ms p95 (scan) |
 | **Index required** | Yes (`.asgrep/`) | No | No |
 | **API key for semantic** | No (offline default) | N/A | N/A |
 
-Latency cells are the 2026-10-11 **2.6.0 candidate** on a frozen 740-file
-corpus (678 indexed), versus published 2.5.4 and pinned scan/server references.
-[Canonical results and limitations](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11).
-The candidate is unreleased and still reports 2.5.4. It has major conceptual
-search and warm-navigation regressions; earlier speedups are not current claims.
-A fresh process, warm source pages and a reused server are different contests.
+Latency cells are the released **2.6.0** (2026-10-19 release-paired
+measurement) on a frozen 740-file corpus (678 indexed), versus published 2.5.4
+and pinned scan/server references.
+[Canonical results and limitations](../benchmarks/results/baselines.md#self-corpus-surfaces-2026-10-19-published-254-bytes-vs-260).
+2.6.0 keeps exact-token, structural, and defs surfaces flat, indexes faster,
+and repairs the 2026-10-11 candidate's ranking regression (self-gold MRR
+.847→.882). It deliberately pays an always-on embed channel on conceptual
+queries (~25–34 ms vs 6–9 ms) and warm navigation (~4.3–4.8 ms vs ~0.7 ms
+rounds); the frozen external suite shows what that buys (RepoQA/CoSQA MRR
+2.4×/3.1× over 2.5.4). A fresh process, warm source pages and a reused server
+are different contests.
 
 ### Also in the arena: tgrep and fff
 
@@ -36,9 +41,10 @@ A fresh process, warm source pages and a reused server are different contests.
 **fff-mcp 0.11.0**: warm MCP p95 **0.340 ms**, ranked
 20/50 shown. These are latency references, not ranked/exhaustive match-set parity.
 
-The candidate's own full-repository Code Mode battery (240 identifiers, 20
-blocks) has median round p50 **10.914 ms**, versus published
-2.5.4 **0.715 ms**. That distinct-query workload is not the
+The released 2.6.0's full-repository Code Mode battery (240 identifiers, 4
+rounds) has round p50s **4.27–4.84 ms**, versus published 2.5.4
+**0.67–0.76 ms** — the per-query cost of the always-on embed channel, bought
+for the external-suite quality gains. That distinct-query workload is not the
 single-needle tgrep/fff workload and must not be presented as an equal-work
 cross-tool race. Semgrep native core has a separate one-rule reference in the
 canonical matrix; its Python CLI is broken on this host.
@@ -165,20 +171,22 @@ This does **not** require the ast-grep CLI. Unsupported shapes return no hits ra
 
 ## Performance expectations
 
-Measured candidate cells (2026-10-11, same frozen corpus and host;
-see [the canonical fingerprint](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11)):
+Measured 2.6.0 cells (2026-10-19 release-paired run, same frozen corpus and
+host; see
+[the canonical fingerprints](../benchmarks/results/baselines.md#self-corpus-surfaces-2026-10-19-published-254-bytes-vs-260)):
 
-| Scenario | ast-sgrep | ripgrep | ast-grep |
-|----------|-----------|---------|----------|
-| Pristine index the repo | 15.251 s p95 (warm source pages, new database) | No index | No index |
-| One-shot token query | 6.947 ms p95 (`literal:`, indexed) | 17.624 ms p95 (scan) | N/A |
-| One-shot structural query | 7.915 ms p95 (`pattern:`, indexed) | N/A | 80.182 ms p95 (hand-written code) |
-| Warm distinct-query round | 10.914 ms median round p50 (`codemode-serve`); regression | N/A (no server) | N/A (no server) |
+| Scenario | ast-sgrep 2.6.0 | published 2.5.4 | ripgrep | ast-grep |
+|----------|-----------|---------|---------|----------|
+| Pristine index the repo (p50, new database) | 13.485 s | 17.998 s | No index | No index |
+| One-shot token query | 6.7 ms p95 (`literal:`, indexed) | 6.1 ms p95 | 17.624 ms p95 (scan) | N/A |
+| One-shot structural query | 7.6 ms p95 (`pattern:`, indexed) | 6.9 ms p95 | N/A | 80.182 ms p95 (hand-written code) |
+| Conceptual NL query (p50) | 24.9–33.7 ms | 6.3–9.5 ms | N/A | N/A |
+| Warm distinct-query round | 4.27–4.84 ms round p50 (`codemode-serve`) | 0.67–0.76 ms | N/A (no server) | N/A (no server) |
 
 ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Generated-file
 parse cost is isolated by the ast-grep control in the canonical matrix. The
-candidate's natural-language latency and self-gold ranking regressions remain
-visible there; literal/pattern timings do not establish general superiority.
+conceptual/warm premiums are the disclosed price of default-on semantic
+ranking; literal/pattern timings do not establish general superiority.
 
 ## Migration mental model
 

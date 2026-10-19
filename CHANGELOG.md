@@ -7,10 +7,21 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
-## [Unreleased]
+## [2.6.0] - 2026-10-19
+
+Local-first semantic search: a native static embed engine ships as the default
+backend, the hybrid channel mix is re-tuned for it, and retrieval quality is
+measured on a frozen RepoQA/CoSQA suite against the previous release (canonical
+rows and harness in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md)):
+RepoQA-600 MRR@10 .297→.719 and CoSQA-500 .104→.327 over 2.5.4, still behind
+the sgrep-calibrated references (.757/.417) while 2.7×/8.4× faster warm.
 
 ### Added
 
+- Native static embed engine: deterministic 256-d static (Model2Vec-style) embeddings compiled into the binary from a vendored MIT table. No model download, no ONNX runtime, no API key; the embed channel is ungated in hybrid fusion with magnitude fusion, so offline semantic ranking is part of every default search.
+- Model-identity index migration: indexes record their embedding model identity and re-embed automatically on the next index run when it changes. Retired engines (`hashed`, `neural`) fail closed; `--neural-embed` / `ASGREP_EMBED_BACKEND` error explicitly instead of silently switching.
+- Hybrid retrieval quality pass, measured per lever on the frozen suite with a held-out set: short natural-language questions drop boilerplate before embedding (kept: CoSQA MRR@10 +.0102, holdout clean). Rejected levers and their retry conditions are recorded in the negative ledgers under `docs/progress/`.
+- Frozen-suite measurement harness additions under `benchmarks/sgrep_suite/` (fusion capture, paired arm drivers) so quality claims are reproducible from the tree.
 - Bound graph-chain exploration with `max_work` and expose work/truncation diagnostics; retain disambiguated call-path evidence without claiming value flow.
 
 ### Fixed
@@ -28,7 +39,8 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 ### Changed
 
 - Retain scoped search, indexing, and structural-matcher optimizations with frozen-response evidence. Measurements and tradeoffs remain in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md); no universal speedup is claimed.
-- Public Rust `ChainConfig` and `ChainResponse` gained required fields. Existing exhaustive struct literals need updating. The planned 2.6.0 release includes this Rust source-compatibility break; downstream users must update those literals. No version has been bumped or publication approved.
+- Public Rust `ChainConfig` and `ChainResponse` gained required fields. Existing exhaustive struct literals need updating. This release includes the planned Rust source-compatibility break; downstream users must update those literals. 2.6.0 is not fully Rust source-compatible with 2.5.x.
+- The Pi extension (`pi-ast-sgrep`) rides lockstep at 2.6.0. `launcherRange` stays `>=2.5.4 <3` by judgment: the extension degrades gracefully on 2.5.4 launchers via runtime schema guards and no 2.6-only native surface is required, so no floor raise is warranted.
 
 ## [2.5.4] - 2026-09-22
 

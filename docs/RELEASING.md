@@ -48,9 +48,9 @@ The `pi-ast-sgrep` extension rides the lockstep family: `release:prepare` bumps 
 Rules for the extension lane:
 
 - The extension version lives in two places that MUST agree: `packages/pi/extension/package.json` and `packages/pi/release-contract.json` at `packages.extension.version`. Bump both together.
-- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.5.4`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.5.4`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment. The npm trusted-publisher registration is shared with the family workflow file.
+- Extension releases require a signed annotated tag in the `pi-v<version>` namespace (for example `pi-v2.6.0`) on the intended commit, then a manual `pi-npm-release.yml` dispatch with `layer: extension`, `release_tag: pi-v2.6.0`, `publish: true`. The lane builds the committed `dist` of that tag (check:pi-dist), packs exactly one tarball, attests it, preserves it as a GitHub Release asset, and publishes via the same protected `npm-production` OIDC environment. The npm trusted-publisher registration is shared with the family workflow file.
 - Features that need newer native envelope fields must degrade gracefully on older launchers; when a feature genuinely requires a new native floor, raise `launcherRange` and `compatibility.layers.extension.minLauncherVersion` in the contract and ship a family release first.
-- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.5.4 --commit <sha> --ref-type tag` against a real signed tag.
+- Local dry-run of the lane: `node packages/pi/scripts/release-acceptance.mjs pack --lane extension --output <empty-dir> --commit $(git rev-parse HEAD)` then `... verify --artifacts <dir>`. Gate locally: `... gate --lane extension --tag pi-v2.6.0 --commit <sha> --ref-type tag` against a real signed tag.
 
 ### Dogfood publish (one command)
 
@@ -107,18 +107,20 @@ Recorded 2.5.0 sizes (unpacked MiB from `release-manifest.json`; packed decimal 
 
 ## Preparation
 
-### Planned 2.6.0 scope
+### 2.6.0 scope (release prepared 2026-10-19)
 
-The unreleased checkpoint adds graph work controls and repairs search, matcher,
-codemod, protocol, and Pi behavior; see the Unreleased changelog. Do not label the
-whole checkpoint a patch. The selected release version is **2.6.0**.
+The checkpoint adds graph work controls, ships the native static embed
+engine as the default backend with model-identity index migration, and
+repairs search, matcher, codemod, protocol, and Pi behavior; see the 2.6.0
+changelog. Do not label the whole checkpoint a patch. The workspace and npm
+family are mechanically bumped to 2.6.0 in the release-preparation commit;
+tag, dispatch, and publication still require the human release approval below.
 The public `ast_sgrep_core::chain::ChainConfig` gained `max_work`, and
 `ChainResponse` gained `truncated`, `truncation_reasons`, and `work`. These
 structs are not `non_exhaustive`: old exhaustive struct literals no longer
 compile and downstream callers must update them. This release-specific
 exception to the general major-bump policy must remain explicit in the release
-notes; 2.6.0 is not fully Rust source-compatible with 2.5.x. No compatibility
-shim, version change, tag, or publication is implied by this preparation note.
+notes; 2.6.0 is not fully Rust source-compatible with 2.5.x.
 
 Pre-approval checks exercised named Rust targets, all five real native targets,
 packed CLI/watch installs, and the real Pi 0.80.6/1.1.0 loaders under Node
@@ -193,7 +195,7 @@ Only a human release operator may run this block. It is noninteractive and publi
 
 ```bash
 set -euo pipefail
-release_version='2.5.4'
+release_version='2.6.0'
 release_crates=(
   ast-sgrep-lang
   ast-sgrep-embed
@@ -237,7 +239,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.4'
+   release_version='2.6.0'
    release_crates=(ast-sgrep-lang ast-sgrep-embed ast-sgrep-mmap ast-sgrep-core ast-sgrep-plugins ast-sgrep-codemode ast-sgrep-lsp ast-sgrep-cli ast-sgrep-mcp ast-sgrep-watch)
    for crate in "${release_crates[@]}"; do
      cargo info --registry crates-io "${crate}@${release_version}" >/dev/null
@@ -250,7 +252,7 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
 
    ```bash
    set -euo pipefail
-   release_version='2.5.4'
+   release_version='2.6.0'
    install_root="$(mktemp -d)"
    cargo install ast-sgrep-cli --version "=${release_version}" --locked --root "$install_root"
    cargo install ast-sgrep-watch --version "=${release_version}" --locked --root "$install_root"
@@ -263,14 +265,14 @@ Do not publish `ast-sgrep-testkit`. A transient failure before a crate is accept
    [[ "$watch_version" == *" ${release_version}" ]]
    ```
 
-3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.5.4`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
+3. Run the GitHub Actions `Post-publish install and docs smoke` workflow manually with `version` set to `2.6.0`. It installs the exact crates.io CLI version into an empty temporary root on Linux and macOS, checks both binaries, and verifies the exact-version docs.rs page for every published crate. Save the successful workflow URL with the release record. This workflow is post-publish evidence only; do not run it before the release is visible on crates.io.
 
 ## Homebrew formula
 
 The standalone source formula lives at `packaging/homebrew/ast-sgrep.rb`. It remains pinned to the latest verified archive until the new GitHub tag is published and its digest is known. After publishing the tag, calculate the archive digest and update both the formula URL/version and checksum:
 
 ```sh
-version="2.5.4"
+version="2.6.0"
 url="https://github.com/AdityaVG13/ast-sgrep/archive/refs/tags/v${version}.tar.gz"
 curl --fail --location --silent --show-error "$url" --output "ast-sgrep-v${version}.tar.gz"
 shasum -a 256 "ast-sgrep-v${version}.tar.gz"

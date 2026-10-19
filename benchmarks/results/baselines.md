@@ -3,9 +3,10 @@
 > **Ledger mix:** section tags below (`canonical` / `historical` /
 > `UNREPRODUCIBLE` / `reproducible-in-tree`). Vocabulary:
 > [`benchmarks/README.md`](../README.md). A section tagged
-> `UNREPRODUCIBLE` cannot be regenerated from this tree. The latest measured
-> prerelease fingerprint is the 2026-10-11 section below; historical sections
-> do not certify the current candidate.
+> `UNREPRODUCIBLE` cannot be regenerated from this tree. The latest release
+> comparison fingerprint is the 2026-10-19 paired benchmark section; historical
+> sections below are their own dated fingerprints and do not certify the
+> current candidate.
 
 > External artifact location (historical dumps, not proof of regeneration):
 > [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
@@ -211,6 +212,93 @@ Setup/storage also favor sgrep (133.5 ms median first search, 173 MB vs
 which is not quality-adjusted. Any citation of these numbers must carry the
 report's limits (one host, unpublished asgrep build, CoSQA file-naming
 reconstruction, SWE-bench unmeasured).
+
+## 2.6.0 release paired benchmark: 2.5.4 vs 2.6.0 vs sgrep (2026-10-19)
+
+**Status: measured, reproducible-in-tree; the release-comparison fingerprint
+behind the 2.6.0 README/docs tables.** Protocol:
+`benchmarks/sgrep_suite/run_suite.py` phases setup/retrieve/latency/report, two
+asgrep arms run identically and sequentially on one idle host (Apple M5 Max,
+macOS 26.6.2), frozen 60-repo RepoQA + flat CoSQA corpora/queries hardlink-
+copied unchanged from the 2026-10-14 bench root, each arm with its own fresh
+`.asgrep` indexes and its own copy of the warm sgrep cache. The sgrep arm is
+the same pinned binary in both runs (in-pair context, not a new head-to-head).
+
+| Fingerprint | Value |
+|---|---|
+| asgrep 2.5.4 arm | tag build of `v2.5.4` (d456bb39), SHA256 `6c178ae779125c0fd9af0446e92992ca607425f3048a9fa4990ae5607beb8f8a`, reports 2.5.4 / index_schema 16 |
+| asgrep 2.6.0 arm | release tree at the 2.6.0 mechanical bump, SHA256 `60f591f0b288cb03a2d8114bd6d7c96c54bc35be3915fea5fd0037da0b442cbd`, reports 2.6.0 / index_schema 17 |
+| sgrep (both arms) | source build of commit `0fbe8e5`, SHA256 `743950b84b32b9c5bf1182980f909d94d2d659a2e298074f9bc8b1461347391e` |
+| Harness | `benchmarks/sgrep_suite/run_suite.py` @ `9ceec783` |
+| Errors/timeouts | 0/0 across all 4,400 asgrep+sgrep query runs |
+
+| RepoQA-600 | MRR@10 | Hit@1 | Hit@5 | Hit@10 | ≥50%@8k | panel p50 |
+|---|---:|---:|---:|---:|---:|---:|
+| asgrep 2.5.4 (this run) | .297 | .190 | .442 | .563 | .340 | 16.6 ms |
+| asgrep 2.6.0 (this run) | **.719** | .608 | .870 | .928 | .790 | 22.2 ms |
+| sgrep (calibrated 2026-10-14 row) | **.757** | **.662** | **.897** | **.943** | **.895** | 59.6 ms |
+
+| CoSQA-500 | MRR@10 | Hit@1 | Hit@5 | Hit@10 | panel p50 |
+|---|---:|---:|---:|---:|---:|
+| asgrep 2.5.4 (this run) | .104 | .054 | .156 | .240 | 13.8 ms |
+| asgrep 2.6.0 (this run) | **.327** | .234 | .452 | .588 | 22.1 ms |
+| sgrep (calibrated 2026-10-14 row) | **.417** | **.292** | **.574** | **.702** | 185.0 ms |
+
+Cold setup per arm (suite `setup` phase, fresh indexes):
+
+| | 2.5.4 | 2.6.0 |
+|---|---:|---:|
+| RepoQA index median (60 scopes) | 1,296 ms | 817 ms |
+| RepoQA index p95 | 12,195 ms | 4,310 ms |
+| CoSQA index (flat corpus) | 5,518 ms | 7,383 ms |
+| First query after index (RepoQA median) | 13.8 ms | 21.7 ms |
+| Storage, both datasets | 2.58 GB | 3.35 GB |
+
+Notes. **The sgrep reference row is the calibrated 2026-10-14 head-to-head**
+(same corpus bytes, same pinned binary, 600/600 RepoQA rank agreement with
+sgrep's published rows), not this run's in-pair sgrep control: rerunning sgrep
+against hardlink corpus copies at new paths broke its cache lineage and
+under-measured it (.7227/.3763 MRR, only 366/600 published-row agreement).
+Those in-pair sgrep numbers, identical across both arms, are retained only as
+an arm-stability control and must not be cited as sgrep's quality. Against the
+calibrated row, 2.6.0 is **behind sgrep on every quality metric** (RepoQA
+−.038 MRR / −.015 Hit@10 / −.105 coverage; CoSQA −.090 MRR / −.114 Hit@10)
+while leading every latency metric (2.7×/8.4× faster warm) with fully offline
+operation. Warm p50 rises ~6-8 ms over 2.5.4 (always-on embed channel) and
+storage grows ~30% (vectors) — priced, not hidden. 2.6.0's index is faster per
+RepoQA scope despite embedding everything; the flat CoSQA corpus pays the
+embedding cost.
+
+### Self-corpus surfaces (2026-10-19, published 2.5.4 bytes vs 2.6.0)
+
+Same-day companion measurement mirroring the 2026-10-11 self-corpus protocol:
+20 alternating pristine-index observations; 22-query battery at 20
+observations/arm after two discarded warmups; fresh processes; `RAYON_NUM_THREADS=2`;
+frozen corpus = the committed raw bundle corpus (`f2bbc3d2`, 740 tracked files,
+678 indexed). 2.5.4 arm = published npm `@ast-sgrep/darwin-arm64@2.5.4` bytes
+(SHA256 `f4763352…a8ccb`, byte-identical to the 2026-10-11 baseline); 2.6.0 arm
+= release tree SHA256 `60f591f0…42cbd`. Warm rounds via
+`benchmarks/warm_distinct.mjs` with the bundle's frozen `corpus-manifest.json`
+(240 identifiers), four rounds per arm.
+
+| Surface | Published 2.5.4 | 2.6.0 | Note |
+|---|---:|---:|---|
+| Pristine index p50 / p95 | 17.998 / 19.067 s | 13.485 / 14.830 s | index.db 293.7→352.9 MB (+20%), semantic.ivf 13.4→19.6 MB |
+| `literal:SearchHit` p50 / p95 | 5.079 / 6.1 ms | 5.998 / 6.7 ms | flat |
+| `pattern:SearchHit` p50 / p95 | 6.524 / 6.9 ms | 6.552 / 7.6 ms | flat |
+| `defs:*` battery (5 queries) p50 | 3.8–4.2 ms | 4.2–4.9 ms | flat |
+| Conceptual hybrid (11 NL queries) p50 | 6.3–9.5 ms | 24.9–33.7 ms | always-on embed channel, disclosed |
+| `semantic:` prefixed expression p50 | 6.654 ms | 27.958 ms | same cost class |
+| Pure `semantic` subcommand p50 | 13.073 ms | 16.814 ms | mild |
+| Warm Code Mode round p50 (240 ids, 4 rounds) | 0.67–0.76 ms | 4.27–4.84 ms | per-query embed cost |
+| Self-gold MRR / nDCG (17 q, hybrid) | 0.847 / 0.853 | 0.882 / 0.881 | Oct-11 ranking regression repaired, net improved; R@20 .941→1.0 |
+| Self-gold no-embed ablation MRR | 0.847 | 0.924 | embed mildly negative on this symbol-heavy self fixture; strongly positive on the frozen external suite (+.42/+.22 MRR above) |
+
+The 2026-10-11 candidate's 255–402 ms conceptual-latency disasters are gone
+(br-smf lexical-discovery repairs landed); the remaining hybrid-query cost
+(~3-4× fresh-process, ~6× warm-round) is the deliberately-bought static embed
+channel. Neither the self fixture nor the external suite alone describes the
+product; both are recorded here.
 
 ## 2.6.0 regression investigation (br-smf, 2026-10-11)
 
