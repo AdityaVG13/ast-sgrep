@@ -457,6 +457,18 @@ fn configure_connection_inner(
             "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000; PRAGMA journal_size_limit = 67108864;",
             durability.steady_pragma()
         ))?;
+        // One-shot writer CLIs (reindex, targeted updates) share the index db
+        // with long-lived in-process sessions (NAPI addon, JS health probes).
+        // SQLite's default last-close cleanup DELETES -wal/-shm once no other
+        // connection holds a lock at that instant — an idle-but-open session
+        // in another process does not hold one, so the files get unlinked and
+        // recreated under it, and its next statement can fail with
+        // SQLITE_CORRUPT ("database disk image is malformed"; observed on
+        // Linux via the pi release-gate e2e, strace-confirmed unlinks racing
+        // in-process connections). Persisting the WAL keeps the -wal/-shm
+        // inodes stable for the db's lifetime, which is the same
+        // keep-the-inode contract the extension's reindex already relies on.
+        persist_wal_on_close(conn)?;
     }
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         // A serve session's p99/p100 is cold-page btree I/O for each
@@ -466,6 +478,35 @@ fn configure_connection_inner(
         // tail to memory speed after one warm pass. Read-path only; mmap
         // stays on so anything beyond the cache is still syscall-free.
         conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
+    }
+    Ok(())
+}
+
+/// Auditable unsafe boundary (the workspace's only `allow(unsafe_code)`
+/// leaf): set SQLITE_FCNTL_PERSIST_WAL on this connection so SQLite's
+/// last-connection-close never deletes the shared `-wal`/`-shm` sidecars.
+///
+/// SAFETY contract: `conn.handle()` is a valid, open `sqlite3*` owned by the
+/// alive `Connection` wrapper; `zDbName` is a NUL-terminated "main"; the op
+/// is the flag-setting SQLITE_FCNTL_PERSIST_WAL with `pArg` pointing to an
+/// `int` whose value 1 means persist. The call only flips a per-connection
+/// flag — no memory of ours is retained by SQLite.
+#[allow(unsafe_code)]
+fn persist_wal_on_close(conn: &Connection) -> Result<()> {
+    let persist: std::os::raw::c_int = 1;
+    let rc = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            conn.handle(),
+            b"main\0".as_ptr().cast(),
+            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
+            &persist as *const std::os::raw::c_int as *mut std::os::raw::c_void,
+        )
+    };
+    if rc != rusqlite::ffi::SQLITE_OK {
+        return Err(crate::StoreError::Database(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rc),
+            None,
+        )));
     }
     Ok(())
 }

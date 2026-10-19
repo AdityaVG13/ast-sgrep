@@ -1,4 +1,7 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+// One audited exception lives in store/sql.rs (`persist_wal_on_close`):
+// the SQLITE_FCNTL_PERSIST_WAL file control, which rusqlite does not wrap.
+// Everything else remains deny-by-default; do not add unsafe leaves.
 
 //! L1 search kernel. L2/L3 consumers should prefer crate-root reexports
 //! (`HitKind`, `SearchHit`, `Durability`, `SymbolRow`, `hit_why`, and the

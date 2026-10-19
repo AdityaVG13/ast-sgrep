@@ -25,7 +25,7 @@ homepage = "https://github.com/AdityaVG13/ast-sgrep"
 authors = ["ast-sgrep contributors"]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 # Native release runners use this profile. Discard non-runtime symbols without
 # changing code generation; release-perf explicitly retains profiling symbols.

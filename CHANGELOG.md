@@ -35,6 +35,7 @@ the sgrep-calibrated references (.757/.417) while 2.7×/8.4× faster warm.
 - Anchor Pi startup warmups to the authoritative checkout and cancel late startup/index work when its host session retires. Keep tool-definition text within its existing budget.
 - Preserve large integers in native and CLI Pi results and nested tool output. Use the host-owned TypeBox peer and explicitly admit Pi 1.x; the peer range is not certification of future hosts.
 - Compare annotated release tags by their peeled commit, reject malformed tag lookups, and refuse lookup failures before authorizing release actions. Retry delayed npm metadata and reject versionless native lock entries.
+- Keep SQLite WAL sidecars alive: writer connections now set `SQLITE_FCNTL_PERSIST_WAL`, so one-shot writer CLIs (reindex, targeted updates) can no longer trigger SQLite's last-close deletion of the shared `-wal`/`-shm` underneath live in-process sessions — the Linux "database disk image is malformed" failure after `/asgrep-reindex` + edit (release-gate e2e, strace-confirmed).
 
 ### Changed
 
