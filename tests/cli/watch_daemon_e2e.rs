@@ -14,122 +14,6 @@ fn asgrep_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
 }
 
-fn helper_bin_name() -> &'static str {
-    if cfg!(windows) {
-        "asgrep-watch.exe"
-    } else {
-        "asgrep-watch"
-    }
-}
-
-/// Newest mtime under `dir` (helper/cli/core sources feed the helper
-/// binary; a sibling older than any of them is stale). Missing dirs and
-/// unreadable entries are ignored: the fallback build below is always safe.
-fn newest_source_mtime(dir: &Path) -> std::time::SystemTime {
-    let mut newest = std::time::SystemTime::UNIX_EPOCH;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(next) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if let Ok(meta) = entry.metadata() {
-                if let Ok(mtime) = meta.modified() {
-                    newest = newest.max(mtime);
-                }
-            }
-        }
-    }
-    newest
-}
-
-/// Guarantee a FRESH helper next to the under-test binary. Sibling-first
-/// when it is newer than every source that feeds it (workspace builds and
-/// prebuilt dev flows: zero overhead, production resolution path).
-/// Targeted `-p ast-sgrep-cli` runs never build the helper (separate
-/// package; stable cargo has no binary artifact deps), so a missing or stale
-/// sibling falls back to an isolated-target-dir `cargo build` plus a copy
-/// next to `asgrep` — isolated because the enclosing `cargo test` holds the
-/// shared target-dir lock, copied (not `ASGREP_WATCH_BIN`-injected) so every
-/// run exercises the production sibling-resolution path.
-///
-/// Serialized within the process: the tests in this binary run on parallel
-/// threads, and concurrent build+copy pairs corrupt the sibling (two
-/// writers) or exec a truncated copy. The install is atomic (copy to
-/// `*.tmp` + rename) so a concurrent cross-process spawn sees old or new,
-/// never partial.
-static ENSURE_HELPER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn ensure_watch_helper(bin: &Path) {
-    let _held = ENSURE_HELPER_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let sibling = bin
-        .parent()
-        .map(|dir| dir.join(helper_bin_name()))
-        .unwrap_or_else(|| PathBuf::from(helper_bin_name()));
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest_dir
-        .parent()
-        .and_then(|dir| dir.parent())
-        .expect("workspace root above crates/ast-sgrep-cli");
-    let sibling_fresh = sibling.is_file()
-        && fs::metadata(&sibling)
-            .and_then(|meta| meta.modified())
-            .map(|built| {
-                [
-                    "crates/ast-sgrep-watch",
-                    "crates/ast-sgrep-cli",
-                    "crates/ast-sgrep-core",
-                ]
-                .iter()
-                .all(|tree| newest_source_mtime(&root.join(tree)) <= built)
-            })
-            .unwrap_or(false);
-    if sibling_fresh {
-        return;
-    }
-    let target = root.join("target").join("watch-helper-test");
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    eprintln!(
-        "watch e2e: building asgrep-watch into {} …",
-        target.display()
-    );
-    let status = Command::new(cargo)
-        .args(["build", "--offline", "-p", "ast-sgrep-watch"])
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(root)
-        .status()
-        .expect("spawn cargo build for asgrep-watch");
-    assert!(
-        status.success(),
-        "cargo build -p ast-sgrep-watch failed; build it once or run cargo test --workspace"
-    );
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let helper = target.join(profile).join(helper_bin_name());
-    assert!(
-        helper.is_file(),
-        "asgrep-watch missing after build: {}",
-        helper.display()
-    );
-    // Atomic install: a concurrent spawn (another process) must see the old
-    // file or the new file, never a truncated copy.
-    let staging = sibling.with_extension("tmp");
-    fs::copy(&helper, &staging).expect("stage asgrep-watch next to asgrep");
-    // Windows rename cannot replace an existing file; drop the stale
-    // sibling first (the in-process mutex above is the real race guard).
-    #[cfg(windows)]
-    let _ = fs::remove_file(&sibling);
-    fs::rename(&staging, &sibling).expect("install asgrep-watch next to asgrep");
-}
-
 struct WatchProcess {
     child: Child,
     log: Arc<Mutex<String>>,
@@ -147,7 +31,7 @@ impl WatchProcess {
         debounce_ms: u64,
         envs: &[(&str, &str)],
     ) -> Self {
-        ensure_watch_helper(bin);
+        ast_sgrep_testkit::ensure_watch_helper(bin);
         let mut child = Command::new(bin)
             .args([
                 "--no-embed",
@@ -342,11 +226,9 @@ fn watch_failures_preserve_cli_exit_classes_and_machine_envelope() {
     fs::write(&blocked, "keep this file").unwrap();
     let index = blocked.join("index.db");
     let bin = asgrep_bin();
-    let helper = bin.parent().unwrap().join(helper_bin_name());
-    assert!(
-        helper.is_file(),
-        "build the current asgrep-watch helper first"
-    );
+    ast_sgrep_testkit::ensure_watch_helper(&bin);
+    let helper = ast_sgrep_testkit::watch_helper_path(&bin);
+    assert!(helper.is_file(), "ensure_watch_helper must install the helper");
     let helper_env = [("ASGREP_WATCH_BIN", helper.to_str().unwrap())];
     let mut failures = Vec::new();
     // The invalid index also bounds the pre-fix ambiguous-root path: it must
@@ -457,10 +339,8 @@ fn assert_supervised_watch_exits_after_parent_death(stop_before_kill: bool) {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("seed.rs"), "pub fn watch_lifecycle_seed() {}\n").unwrap();
     let bin = asgrep_bin();
-    let helper = bin
-        .parent()
-        .unwrap()
-        .join(helper_bin_name())
+    ast_sgrep_testkit::ensure_watch_helper(&bin);
+    let helper = ast_sgrep_testkit::watch_helper_path(&bin)
         .canonicalize()
         .unwrap();
     let mut watch = WatchProcess::spawn_env(

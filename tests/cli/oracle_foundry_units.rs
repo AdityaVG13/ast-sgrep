@@ -402,6 +402,62 @@ fn lsp_wire_errors_use_protocol_codes() {
     assert_eq!(server.process_exit_code(), 0);
 }
 
+/// INTENT: retired embedding selectors in `initializationOptions.asgrep`
+/// are rejected as invalid params (-32602) naming the key, never silently
+/// ignored — the LSP twin of the CLI's removed `--neural-embed` /
+/// `ASGREP_EMBED_BACKEND` hard errors.
+/// KILLS: silent-ignore mutants where a stale editor config believes it
+/// selected a backend that no longer exists.
+#[test]
+fn lsp_initialize_rejects_retired_embed_selectors() {
+    use ast_sgrep_lsp::transport::{read_message, write_message};
+    use serde_json::{json, Value};
+    use std::io::Cursor;
+
+    let dir = tempfile::tempdir().unwrap();
+    for (key, value) in [("neuralEmbed", json!(true)), ("embedBackend", json!("static"))] {
+        let mut options = json!({"noEmbed": true});
+        options
+            .as_object_mut()
+            .unwrap()
+            .insert(key.to_owned(), value);
+        let mut input = Vec::new();
+        for message in [
+            json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                "rootUri":path_to_file_uri(dir.path()),
+                "initializationOptions":{"asgrep":options}
+            }}),
+            json!({"jsonrpc":"2.0", "id":2, "method":"shutdown", "params":null}),
+            json!({"jsonrpc":"2.0", "method":"exit"}),
+        ] {
+            write_message(&mut input, &message.to_string()).unwrap();
+        }
+        let mut output = Vec::new();
+        let mut server = ast_sgrep_lsp::LspServer::new();
+        server
+            .run_with(&mut Cursor::new(input), &mut output)
+            .unwrap();
+        let mut reader = Cursor::new(output);
+        let mut init = None;
+        while let Some(body) = read_message(&mut reader).unwrap() {
+            let response: Value = serde_json::from_str(&body).unwrap();
+            if response["id"] == 1 {
+                init = Some(response);
+            }
+        }
+        let init = init.expect("initialize response");
+        assert_eq!(
+            init["error"]["code"], -32602,
+            "retired key {key} must fail initialize as invalid params: {init:#}"
+        );
+        let message = init["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains(key),
+            "the rejection must name the retired key {key}: {message}"
+        );
+    }
+}
+
 /// INTENT: rangeLength counts the exact open buffer, not normalized index EOLs.
 #[test]
 fn lsp_incremental_edit_uses_exact_mixed_eol_buffer() {

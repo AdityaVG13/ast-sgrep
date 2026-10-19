@@ -106,13 +106,10 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
 fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
     const SEARCH_TUNING: &[&str] = &[
         "--no-embed",
-        "--neural-embed",
         "--semantic-only",
         "--tantivy",
         "--ann-threshold",
         "--ann-probes",
-        "--rerank",
-        "--rerank-top-k",
         "--format",
         "--excerpt-lines",
         "--snippet-tokens",
@@ -124,6 +121,11 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
     let mut global_flags = Vec::new();
     let mut search_tuning_flags = Vec::new();
     for arg in command.get_arguments() {
+        // Hidden args are retired stubs (parse-only, rejected later); never
+        // advertise them to agents.
+        if arg.is_hide_set() {
+            continue;
+        }
         let Some(long) = arg.get_long() else { continue };
         let flag = format!("--{long}");
         if arg.is_global_set() {
@@ -153,6 +155,9 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
         let mut flags = Vec::new();
         for arg in sub.get_arguments() {
+            if arg.is_hide_set() {
+                continue;
+            }
             if let Some(long) = arg.get_long() {
                 flags.push(format!("--{long}"));
             }

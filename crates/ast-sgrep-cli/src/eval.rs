@@ -475,8 +475,6 @@ pub(crate) fn run_eval(cli: &Cli, args: &EvalArgs) -> anyhow::Result<()> {
     let mut idx_opts = index_options(&root, cli);
     idx_opts.index_path = Some(index_path.clone());
     idx_opts.embed_semantic = true;
-    let tuning = cli.active_tuning();
-    idx_opts.embed_backend = ast_sgrep_core::EmbedBackend::from_flags(tuning.neural_embed, false);
     let mut indexer = Indexer::new(idx_opts).context("failed to open index for eval")?;
     indexer.index_all().context("indexing failed for eval")?;
     let degraded_channels = crate::index_cmd::ingest_scip(&indexer, args.scip.as_deref())?;

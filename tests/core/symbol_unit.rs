@@ -64,3 +64,23 @@ fn quota_partition_is_noop_under_budget() {
     assert_eq!(kept[0].2, "qzz_b");
     assert_eq!(kept[1].2, "qzz_A");
 }
+
+// INTENT: a flooded term's matches must not spend the whole admission
+// window — round-robin across term groups keeps every term represented.
+#[test]
+fn term_fair_select_interleaves_term_groups() {
+    let items: Vec<(usize, usize)> = (0..10)
+        .map(|i| (0, i))
+        .chain([(1, 100), (1, 101)])
+        .collect();
+    let kept = term_fair_select(items, |item| item.0, 8);
+    let kept_terms: Vec<usize> = kept.iter().map(|item| item.0).collect();
+    assert_eq!(kept_terms, vec![0, 1, 0, 1, 0, 0, 0, 0]);
+}
+
+#[test]
+fn term_fair_select_is_identity_under_budget() {
+    let items = vec![(0usize, "a"), (1, "b"), (0, "c")];
+    let kept = term_fair_select(items.clone(), |item| item.0, 8);
+    assert_eq!(kept, items);
+}

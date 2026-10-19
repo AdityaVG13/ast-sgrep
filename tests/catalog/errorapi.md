@@ -1,5 +1,9 @@
 # errorapi catalog — every error-API test by intent
 
+> **Phase 2 (native embed engine) retired the neural/rerank feature gates.**
+> Rows describing per-build gate agreement are historical; the retired flags
+> now reject unconditionally with an explicit removal error.
+
 Scope: all 20 `tests/*/error_api_pass*.rs` files, 213 `#[test]`s. One line per test.
 CAT ∈ {taxonomy, propagation, negative-metamorphic, e2e-drill, other}.
 KILLS ∈ {mutant class | BEHAVIOR-ONLY | TAUTOLOGY-RISK + reason}.

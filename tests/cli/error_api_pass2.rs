@@ -166,46 +166,27 @@ fn in_scope_missing_propagates_operational() {
     }
 }
 
-/// INTENT: neural-embed/rerank lib-vs-CLI agree (both err or both ok per build).
-/// KILLS: feature-gate-drop, gate-only-on-one-side.
-/// ABSORBS: none (only cross-build agreement pin; success arm is BEHAVIOR-ONLY).
+/// INTENT: retired neural/rerank CLI flags fail closed with the operational
+/// envelope; the library has no such knobs and plain construction succeeds.
+/// KILLS: silent-no-op on removed flags.
 #[test]
-fn feature_gates_propagate_between_lib_and_cli() {
+fn retired_flags_fail_closed_on_cli() {
     let dir = kit::fixture_root();
     kit::index_root(dir.path());
     let root = dir.path().to_string_lossy().into_owned();
 
-    let neural_opts = SearchOptions {
+    let opts = SearchOptions {
         root: dir.path().to_path_buf(),
         use_embed: true,
-        use_neural_embed: true,
         ..SearchOptions::default()
     };
-    let neural_lib_err = Searcher::new(neural_opts).is_err();
-    let neural_machine = kit::run(&["search", "--json", "--neural-embed", "greet", root.as_str()]);
-    let neural_human = kit::run(&["search", "--neural-embed", "greet", root.as_str()]);
-    if neural_lib_err {
-        kit::assert_failure_envelope(&neural_machine, "search", 2, "operational");
-        kit::assert_human_error(&neural_human, 2);
-    } else {
-        assert_eq!(neural_machine.status.code(), Some(0));
-        assert_eq!(neural_human.status.code(), Some(0));
-    }
+    assert!(Searcher::new(opts).is_ok());
 
-    let rerank_opts = SearchOptions {
-        root: dir.path().to_path_buf(),
-        use_rerank: true,
-        ..SearchOptions::default()
-    };
-    let rerank_lib_err = Searcher::new(rerank_opts).is_err();
-    let rerank_machine = kit::run(&["search", "--json", "--rerank", "greet", root.as_str()]);
-    let rerank_human = kit::run(&["search", "--rerank", "greet", root.as_str()]);
-    if rerank_lib_err {
-        kit::assert_failure_envelope(&rerank_machine, "search", 2, "operational");
-        kit::assert_human_error(&rerank_human, 2);
-    } else {
-        assert_eq!(rerank_machine.status.code(), Some(0));
-        assert_eq!(rerank_human.status.code(), Some(0));
+    for flag in ["--neural-embed", "--rerank"] {
+        let machine = kit::run(&["search", "--json", flag, "greet", root.as_str()]);
+        kit::assert_failure_envelope(&machine, "search", 2, "operational");
+        let human = kit::run(&["search", flag, "greet", root.as_str()]);
+        kit::assert_human_error(&human, 2);
     }
 }
 

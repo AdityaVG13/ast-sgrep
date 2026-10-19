@@ -142,7 +142,16 @@ pub fn combine_field_scores(weights: FieldWeights, scores: &EmbedFieldScores) ->
     (den > 0.0).then_some(num / den)
 }
 
-/// Replace a primary similarity with the intent-weighted field mix when possible.
+/// Combine a primary similarity with the intent-weighted field mix.
+///
+/// The primary vector is the trained joint embedding of the chunk's
+/// name+docs+body text, so it already encodes the fields together; the
+/// per-field mix is an auxiliary estimate of the same pair. Replacing the
+/// primary with the mix let one weak field (a generic body, a sparse
+/// docstring) veto a strong joint match — a holdover from the hashed
+/// backend, where the primary was a hash projection and the name-field
+/// lift had to rescue it. Fields now only lift: the score is the stronger
+/// of the two estimates.
 pub fn rescore_similarity(
     primary: f32,
     query: &[f32],
@@ -152,7 +161,7 @@ pub fn rescore_similarity(
     let weights = field_weights(intent);
     let scores = score_fields(query, fields, weights);
     match combine_field_scores(weights, &scores) {
-        Some(mixed) => (mixed, Some(scores)),
+        Some(mixed) => (primary.max(mixed), Some(scores)),
         None => (
             primary,
             Some(scores).filter(|s| {

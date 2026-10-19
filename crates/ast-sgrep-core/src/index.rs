@@ -191,66 +191,6 @@ pub fn split_content_lines(content: &str) -> SplitLines {
             .collect(),
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EmbedBackend {
-    #[default]
-    Auto,
-    Neural,
-    Semantic,
-    /// Native trained static table baked into the binary.
-    Static,
-}
-impl EmbedBackend {
-    pub fn to_preference(self) -> ast_sgrep_embed::EmbedPreference {
-        match self {
-            Self::Auto => ast_sgrep_embed::EmbedPreference::Auto,
-            Self::Neural => ast_sgrep_embed::EmbedPreference::Neural,
-            Self::Semantic => ast_sgrep_embed::EmbedPreference::Semantic,
-            Self::Static => ast_sgrep_embed::EmbedPreference::Static,
-        }
-    }
-    pub fn to_preference_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Neural => "neural",
-            // Unversioned "semantic" is a legacy marker
-            // (needs_legacy_semantic_rewrite); the stored identity is semantic-v2.
-            Self::Semantic => "semantic-v2",
-            Self::Static => "static",
-        }
-    }
-    pub fn parse(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "neural" | "fastembed" => Self::Neural,
-            "semantic" | "semantic-v2" | "local" => Self::Semantic,
-            "static" | "native" => Self::Static,
-            _ => Self::Auto,
-        }
-    }
-    pub fn from_flags(neural: bool, semantic_only: bool) -> Self {
-        if neural {
-            Self::Neural
-        } else if semantic_only {
-            Self::Semantic
-        } else {
-            Self::Auto
-        }
-    }
-
-    /// Adapter flags for SearchOptions `use_*` fields. Exclusive:
-    /// Neural wins over Semantic over Auto.
-    pub fn to_flags(self) -> (bool, bool) {
-        match self {
-            Self::Neural => (true, false),
-            Self::Semantic => (false, true),
-            // Static is neither neural nor hashed-semantic; query-time
-            // embedding resolves through the store's embed_backend meta,
-            // which takes priority over the preference (`embed_query`).
-            Self::Static => (false, false),
-            Self::Auto => (false, false),
-        }
-    }
-}
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
     pub root: PathBuf,
@@ -259,7 +199,6 @@ pub struct IndexOptions {
     pub respect_gitignore: bool,
     pub use_tantivy: bool,
     pub embed_semantic: bool,
-    pub embed_backend: EmbedBackend,
     pub force_reindex: bool,
     pub ann_threshold: Option<usize>,
     /// Write-durability profile for the index database.
@@ -274,7 +213,6 @@ impl Default for IndexOptions {
             respect_gitignore: true,
             use_tantivy: false,
             embed_semantic: true,
-            embed_backend: EmbedBackend::Auto,
             force_reindex: false,
             ann_threshold: None,
             durability: crate::store::Durability::from_env(),
@@ -380,6 +318,9 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
 
 impl Indexer {
     pub fn new(mut options: IndexOptions) -> Result<Self> {
+        if let Some(msg) = crate::env_flag::retired_embed_request() {
+            return Err(crate::StoreError::Other(msg));
+        }
         options.root = options.root.canonicalize().unwrap_or(options.root.clone());
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
@@ -483,14 +424,10 @@ impl Indexer {
             let semantic_rewrite_required =
                 options.embed_semantic && !self.semantic_identity_matches()?;
             if semantic_rewrite_required {
-                // Explicit, never silent: a stored model differing from the
-                // active one means this run re-embeds every chunk.
                 if let Some(stored_model) = self.store.get_meta("embed_model")? {
+                    let active = crate::store::active_model_id();
                     eprintln!(
-                        "[asgrep] embedding model changed ({stored_model} -> {}); rewriting all semantic vectors (one-time migration)",
-                        crate::store::requested_model_identity(
-                            options.embed_backend.to_preference()
-                        )
+                        "[asgrep] embedding model changed ({stored_model} -> {active}); rewriting all semantic vectors (one-time migration)"
                     );
                 }
             }
@@ -579,10 +516,8 @@ impl Indexer {
                     ));
                 }
                 if complete_semantic_rewrite {
-                    let requested = crate::store::requested_model_identity(
-                        self.options.embed_backend.to_preference(),
-                    );
-                    self.store.reset_semantic_index_for_rewrite(&requested)?;
+                    self.store
+                        .reset_semantic_index_for_rewrite(crate::store::active_model_id())?;
                 }
                 self.commit_prepared_files(
                     &candidates,
@@ -676,7 +611,6 @@ impl Indexer {
                         depth_truncated,
                         semantic_chunks: &prep.semantic_chunks,
                         embed_semantic: self.options.embed_semantic,
-                        embed_backend: self.options.embed_backend.to_preference(),
                     })?;
                     // Same bulk_tx as upsert: fail + rollback if body meta cannot land
                     // (structure-skip must not use a stale body fingerprint).
@@ -1214,7 +1148,6 @@ impl Indexer {
                     depth_truncated,
                     semantic_chunks: &material.semantic_chunks,
                     embed_semantic: self.options.embed_semantic,
-                    embed_backend: self.options.embed_backend.to_preference(),
                 })?;
                 self.store.set_meta(&body_key, &material.body_hash)?;
                 Ok(())
@@ -1242,47 +1175,18 @@ impl Indexer {
         }
         Ok(true)
     }
-    /// Full semantic identity check (28vo/e2hc.13): the stored embed backend
-    /// must equal the active preference exactly, no legacy rewrite pending,
-    /// and the configured model must match what was recorded at index time.
+    /// Semantic identity check: stored vectors are reusable only if they
+    /// were produced by this build's one embedding model. Anything else
+    /// (retired backend, older model, unversioned legacy layout) forces
+    /// a full semantic rewrite — the Phase-2B migration path.
     fn semantic_identity_matches(&self) -> Result<bool> {
-        // Unversioned embed_backend="semantic" must force a full rewrite even
-        // under Auto. Otherwise Auto skips the backend mismatch check and a
-        // single-file update can flip meta to semantic-v2 while sibling
-        // chunks stay on the old layout.
         if self.store.needs_legacy_semantic_rewrite()? {
             return Ok(false);
         }
-        // Exact backend identity only: Auto is not a wildcard for concrete
-        // stored backends, and stored "auto" does not
-        // match a concrete active preference. Builds made under Auto record
-        // "embed_backend_pref=auto", so an Auto reopen over an Auto build
-        // stays a no-op (parity) while an Auto reopen over an explicit build
-        // reindexes.
-        let stored = self.store.get_meta("embed_backend")?;
-        let active = self.options.embed_backend.to_preference_str();
-        let stored_pref = self.store.get_meta("embed_backend_pref")?;
-        // Auto reopen: no-op only over an Auto build (parity idempotency);
-        // over an explicit build it reindexes. Explicit
-        // reopen: exact resolved-kind match (semantic-v2 round-trips).
-        let identity_ok = if active == "auto" {
-            stored_pref.as_deref() == Some("auto")
-        } else {
-            stored.as_deref() == Some(active)
-        };
-        if !identity_ok {
+        if self.store.get_meta("embed_backend")?.as_deref() != Some("static") {
             return Ok(false);
         }
-        // The stored model must equal the ACTIVE preference's model
-        // identity. The previous self-consistency check (stored model vs
-        // the model configured for the stored backend) let an Auto reopen
-        // keep serving vectors from a retired default backend forever.
-        // Comparing against the active identity turns any backend/model
-        // change — including a changed Auto resolution — into a full
-        // semantic rewrite, which is the Phase-2B migration path.
-        let requested =
-            crate::store::requested_model_identity(self.options.embed_backend.to_preference());
-        if self.store.get_meta("embed_model")?.as_deref() != Some(requested.as_str()) {
+        if self.store.get_meta("embed_model")?.as_deref() != Some(crate::store::active_model_id()) {
             return Ok(false);
         }
         Ok(true)

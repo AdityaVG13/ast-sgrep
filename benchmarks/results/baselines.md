@@ -15,6 +15,175 @@ repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Each dated
 fingerprint owns its machine, corpus, configuration and sample-count limits.
 
+## Engine-only campaign Stage 1: fusion capture + CoSQA loss attribution (2026-10-17)
+
+**Status: measured on the uncommitted worktree, reproducible-in-tree after
+frozen corpus preparation; not a release certificate.** Binary
+`63cdc851afce2b96478d782b79ce0001ded256279265534453437151b9bbdff2`
+(includes the env-gated `ASGREP_FUSION_DUMP` capture,
+`tests/core/fusion_capture.rs`). Harness:
+`benchmarks/sgrep_suite/fusion_capture.py`; full rows and dump under the
+scratch bench root in `bench-fusion-capture/` (capture on) and
+`bench-fusion-control/` (capture off). Capture proven rank-neutral: 0/1100
+rank mismatches capture-vs-control AND capture-vs-`bench-lever1-gate` rows.
+The current tree (including the morning's `intent.rs` edit) reconfirms the
+lever-1 arm exactly: RepoQA .719 / CoSQA .317 MRR@10, 0 errors/timeouts.
+
+Loss attribution over the frozen 1,100 (miss = rank > 10 or absent):
+
+| dataset | misses | upstream admission | fusion-buried (sem rank < final) | of which: semantic-led winner | of which: vote-stacking winner |
+|---|---:|---:|---:|---:|---:|
+| CoSQA-500 | 213 | 0 | 125 | 71 | 54 |
+| RepoQA-600 | 43 | 12 | 7 | — | — |
+
+- CoSQA gold's best channel is semantic in 133/213 misses; structural
+  channels are nearly absent on gold (lexical present 18/213). Gold's
+  semantic rank when present: median 13 over all misses, median 9 over the
+  fusion-buried subset (p25 3, p75 19).
+- **No winner is semantic-absent** (0/125): the fusion losses are vote
+  STACKING — a winner with comparable-or-better cosine plus multi-channel
+  corroboration outranks a semantic-only gold — not structure outvoting
+  semantics. 71 winners simply have the better cosine (semantic-depth
+  problem, P2); 54 are stacking (P1).
+- P2 budget: 159/213 CoSQA misses are semantic-depth (the cosine itself
+  prefers distractors) — query-side semantic shaping territory; this is
+  where most of the .100 CoSQA gap to sgrep (.417) lives.
+
+Refinement (same day, per-candidate winner ranks): the 54 "stacking"
+cases are mostly an artifact — 48/54 winners hold the BETTER semantic
+rank themselves (med −9); corroboration rides winners, it does not
+manufacture them. L-M1 (corroboration vote cap) was rejected pre-code on
+this evidence; see the conformance ledger entry with retry predicate.
+
+## Engine-only campaign: L-Q1c short-question rewrite — KEPT (2026-10-17)
+
+Binary `94a93997bed9b14e6a7c3cdc2fc28ecd29a7b943700c6aeb1bbe69f29e468480`
+(uncommitted worktree, includes the Stage-1 fusion capture). Paired frozen
+arm vs control `63cdc851…` (same tree minus the rewrite):
+
+| dataset | MRR@10 | Hit@1 | Hit@10 | Hit@100 | errors |
+|---|---|---|---|---|---|
+| RepoQA ctl | .7194 | .608 | .928 | .972 | 0 |
+| RepoQA arm | **.7194 — bit-identical, 0/600 rank deltas** | .608 | .928 | .972 | 0 |
+| CoSQA ctl | .3169 | .226 | .574 | .884 | 0 |
+| CoSQA arm | **.3271 (+.0102)** | .234 | .588 (+10/−3) | .880 (+2/−4) | 0 |
+
+Harness `benchmarks/sgrep_suite/fusion_capture.py --no-capture`; rows
+`bench-lq1-arm/` vs `bench-fusion-capture/` (control), scratch bench root.
+Mechanism: `rewrite_short_question` (`query.rs`) strips recognized
+short-question scaffolding (leading "how to / what('s| is) … way [to] /
+is there a way to", trailing "in|using|with|for python") from the raw
+query before any lane sees it, with the frozen sim stop list;
+mode-prefixed queries are never rewritten (pattern byte-fidelity);
+all-scaffolding queries keep the original. Fixture
+`tests/core/short_question_rewrite.rs` (red → green, mutant-killed).
+Offline genealogy on the same frozen probe lists (scratch `lq1-lists.json`,
+`lq1_sim.py`): uniform multi-probe RRF +.0174 CoSQA / −.0031 RepoQA
+(rejected — trades datasets); conditioned RRF fusion +.0076 / 0;
+conditioned replace +.0102 / 0 — implemented; the engine arm reproduced
+the sim exactly.
+
+Holdout v1 (engine-candidate gate): 0/120 queries match the rewrite
+pattern — the lever cannot fire; no regression by construction.
+Current-tree holdout refresh: **MRR@10 .5654**, Hit@1 .458, Hit@10 .817,
+Hit@100 .933, 0 errors (`bench-holdout-lq1-arm/summary.json`). Supersedes
+the recorded .531 placeholder row via intervening tree movement
+(boilerplate strip, cosine support, and other keeps since that binary) —
+identical ranks by construction, not a lever effect.
+
+## Phase 2D static-engine frozen suite (2026-10-15)
+
+**Status: measured, reproducible-in-tree after frozen corpus preparation;
+local uncommitted candidate, not a release certificate.** Detailed record:
+[`static-engine-ab-2026-10-14.md`](static-engine-ab-2026-10-14.md#phase-2d-ablation-verification-2026-10-15).
+Candidate: HEAD `56492b0e38d09420c62ed00c28d6e2afe0d71db3` plus the Phase
+2/2D worktree (binary SHA-256
+`bc8b0a34c076d22c6e2186012ddb2427bc0874c4daf6fe5084c92707bd911d0b`), run on
+an Apple M5 Max under macOS 26.6.2. The stored backend was asserted as
+`static` by `benchmarks/sgrep_suite/run_asgrep_arm.py`.
+
+| Dataset | MRR@10 | Hit@1 | Hit@10 | Hit@100 | p50 |
+|---|---:|---:|---:|---:|---:|
+| RepoQA-600 | .533 | .377 | .868 | .947 | 26.2 ms |
+| CoSQA-500 | .240 | .162 | .466 | .884 | 21.8 ms |
+
+This canonical 2D arm supersedes the Phase 2 final-tree arm (.521 / .240)
+after removal of the thin-page condition. The conceptual channel-weight
+shape was retained: the paired flat-weight arm scored .509 / .201 against a
+control that reproduced the .521 / .240 ranks exactly. Errors and timeouts
+were zero on both datasets. The arm's 61 per-root `index` invocations took
+253.9 s in aggregate. Index-content bytes were not re-baselined here because
+the 2D keep is query-time only; the prior fresh-index totals remain in the
+detailed record. This does **not** supersede the competitor comparison
+below: sgrep was not rerun.
+
+## br-dx0 lever-1 boilerplate strip (2026-10-17) — measured, not canonical
+
+**Status: measured on the uncommitted worktree, not canonical.** Query-time
+only (`tokenize_for_scoring` drops ~45 genre-boilerplate terms for queries
+over 15 tokens). Paired arms on the frozen 600/500 sets via
+`benchmarks/sgrep_suite/run_asgrep_arm.py`, Apple M5 Max, backend `static`,
+zero errors/timeouts both arms. Full rows:
+`bench-control/` (control) and `bench-lever1-gate/` (lever 1) under the
+scratch bench root.
+
+| Arm | Binary SHA-256 | RepoQA-600 | CoSQA-500 |
+|---|---|---:|---:|
+| Worktree control (no lever 1) | `823c2437…422c1` | .698 / .588 / .912 | .317 / .226 / .574 |
+| Worktree + lever 1 | `d366a635…7038` | .719 / .608 / .928 | .317 / .226 / .574 |
+
+Cells are MRR@10 / Hit@1 / Hit@10. Lever-1 delta: **+.022 RepoQA MRR**,
+CoSQA bit-identical (the length threshold never fires on short CoSQA
+queries). Per-language MRR control -> lever 1: cpp .547 -> .613,
+go .749 -> .759, java .681 -> .682, python .745 -> .755, rust .681 -> .727,
+typescript .782 -> .780 — no collapse (typescript -.002 is noise). Note: both
+arms score far above the 2D canonical row (.533 / .240) measured 2026-10-15
+on an earlier state of this worktree — the intervening tree movement, not
+lever 1, owns that gap; this section does not supersede the canonical row.
+
+## Round-2 lever R2-1: no-embed hybrid merges the full lexical pass (2026-10-17)
+
+**Status: measured on the uncommitted worktree (includes lever 1), not
+canonical.** Query-time only (`search_hybrid` extends the hit set with
+`lexical_pass` when `!use_embed`; same-line duplicates merge by max score
+in finish dedup; embed-on path unreachable by construction). Paired arms on
+the frozen 600/500 sets via `benchmarks/sgrep_suite/run_asgrep_arm.py` with
+`ASGREP_NO_EMBED=1`, Apple M5 Max, backend `<none>`, zero
+errors/timeouts both arms. Full rows: `bench-noembed/out/` (base) and
+`nocascade-fix/` (fix) under the scratch bench root.
+
+| Arm | Binary SHA-256 | RepoQA-600 | CoSQA-500 |
+|---|---|---:|---:|
+| Worktree, no-embed (base) | prior arm | .318 / .177 / .683 | .100 / .038 / .244 |
+| Worktree + R2-1, no-embed | `bb44013a…560069` | .337 / .188 / .715 | .108 / .038 / .284 |
+
+Cells are MRR@10 / Hit@1 / Hit@10. R2-1 delta: **+.020 RepoQA MRR, +.008
+CoSQA MRR**. The signature is admission recovery: RepoQA Hit@100
+.820 -> .908, CoSQA Hit@100 .350 -> .722 — the cascade's per-term caps plus
+flat prefilter scores stranded lexical evidence past the page; the merge
+restores it. Latency cost of the extra FTS pass: p50 19.7 -> 23.4ms
+(+19%), p95 44.7 -> 45.7ms. Failure-first test
+`noembed_hybrid_keeps_lexical_gold_past_prefilter_caps`
+(`tests/core/cascade_planner.rs`); flipped-condition mutant killed.
+
+## Phase 3 own-weights candidate (2026-10-15) — rejected
+
+**Status: measured, not canonical.** The shipped table is still the 2D
+placeholder. Full record:
+[`static-engine-ab-2026-10-14.md`](static-engine-ab-2026-10-14.md#phase-3-candidate--rejected-2026-10-15).
+One suite run of a Qwen3-Embedding-0.6B distillation, after a held-out
+pair gain (.571 vs .523) and with the frozen suite excluded from training.
+
+| Dataset | 2D placeholder | Candidate |
+|---|---:|---:|
+| RepoQA-600 | .533 | .449 |
+| CoSQA-500 | .240 | .233 |
+
+CoSQA candidate MRR@10 was .233 (placeholder .240). Every RepoQA language
+dropped. Candidate binary SHA-256
+`23355029090c9b540458cb43ed29bcb9fd4f911d15ef9a4ddfddd205e2763a3a`.
+Placeholder restored; restored binary matches the 2D hash above.
+
 ## sgrep head-to-head on sgrep's published suite (2026-10-14)
 
 **Status: measured, reproducible-in-tree; not a release certificate.**

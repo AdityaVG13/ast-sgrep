@@ -287,7 +287,7 @@ fn limit_parse_contract() {
     }
 }
 
-/// INTENT: Unbounded usize flags (--ann-probes, --rerank-top-k,
+/// INTENT: Unbounded usize flags (--ann-probes,
 /// --ann-threshold) accept 0 and reject usize-overflow as usage.
 /// KILLS: overflow-wrap-panic.
 /// ABSORBS: unclamped_usize_flags_accept_zero_reject_overflow.
@@ -297,8 +297,8 @@ fn zero_window_contract() {
     let bin = asgrep_bin();
     let root_arg = root.to_str().unwrap().to_owned();
     // Zero is accepted (--ann-probes 0 is documented adaptive;
-    // --rerank-top-k 0 is clamped downstream; --ann-threshold 0 disables).
-    for flag in ["--ann-probes", "--rerank-top-k", "--ann-threshold"] {
+    // --ann-threshold 0 disables).
+    for flag in ["--ann-probes", "--ann-threshold"] {
         let output = run(
             &bin,
             &[
@@ -319,7 +319,7 @@ fn zero_window_contract() {
         assert_eq!(parse_stdout(&output)["ok"], true);
     }
     // Values overflowing usize are usage errors, never wraps or panics.
-    for flag in ["--ann-threshold", "--rerank-top-k", "--ann-probes"] {
+    for flag in ["--ann-threshold", "--ann-probes"] {
         let output = run(
             &bin,
             &[

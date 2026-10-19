@@ -843,12 +843,14 @@ fn definition_boost_does_not_invent_case_sensitive_literal_or_word_matches() {
     }
 }
 
-/// Rerank pools must survive every producer's earlier admission cut. The
-/// ordinary budgets remain independent of an inert rerank_top_k setting.
+/// Each producer's candidate pool at limit=1 must match its admission
+/// policy exactly; a producer that silently widens or narrows its pool
+/// changes every downstream ranking. (Formerly also covered the deleted
+/// neural-rerank widening mode; that feature left the tree in Phase 2C.)
 #[test]
-fn rerank_pools_survive_connected_candidate_admission() {
+fn candidate_pools_survive_connected_admission() {
     use ast_sgrep_core::search::passes::{embed, lexical, literal, symbol};
-    use ast_sgrep_core::{EmbedBackend, HitKind, ParsedQuery, Searcher};
+    use ast_sgrep_core::{HitKind, ParsedQuery, Searcher};
     let session = ast_sgrep_testkit::isolated_index_session();
     for file in 0..250 {
         session.write(
@@ -858,77 +860,67 @@ fn rerank_pools_survive_connected_candidate_admission() {
     }
     session.index_all(IndexOptions {
         embed_semantic: true,
-        embed_backend: EmbedBackend::Semantic,
         ..session.index_options()
     });
     let store = session.open_store();
     let mut counts = Vec::new();
-    for rerank in [false, true] {
+    {
         let options = SearchOptions {
             limit: 1,
             use_embed: true,
-            use_rerank: rerank,
-            rerank_top_k: 250,
             ann_threshold: Some(usize::MAX),
             ..session.search_options()
         };
         let literal_query = ParsedQuery::parse("literal:probe()");
         counts.push((
             "cold literal",
-            rerank,
             literal::literal_pass(&store, &options, &literal_query)
                 .unwrap()
                 .len(),
-            if rerank { 250 } else { 1 },
+            1,
         ));
         let mut folded = options.clone();
         folded.case_insensitive = true;
         counts.push((
             "SQL literal",
-            rerank,
             literal::literal_pass(&store, &folded, &literal_query)
                 .unwrap()
                 .len(),
-            if rerank { 250 } else { 1 },
+            1,
         ));
         counts.push((
             "lexical",
-            rerank,
             lexical::lexical_pass(&store, &options, &ParsedQuery::parse("probe"))
                 .unwrap()
                 .len(),
-            if rerank { 250 } else { 100 },
+            100,
         ));
         counts.push((
             "defs",
-            rerank,
             symbol::search_defs(&store, &options, &ParsedQuery::parse("defs:needle"))
                 .unwrap()
                 .len(),
-            if rerank { 250 } else { 32 },
+            32,
         ));
         let callers =
             symbol::search_callers(&store, &options, &ParsedQuery::parse("callers:probe")).unwrap();
         counts.push((
             "callers",
-            rerank,
             callers
                 .iter()
                 .filter(|hit| hit.kind == HitKind::Caller)
                 .count(),
-            if rerank { 250 } else { 32 },
+            32,
         ));
         counts.push((
             "imports",
-            rerank,
             symbol::search_imports(&store, &options, &ParsedQuery::parse("imports:needle"))
                 .unwrap()
                 .len(),
-            if rerank { 250 } else { 200 },
+            200,
         ));
         counts.push((
             "embedding",
-            rerank,
             embed::embed_pass_with_context(
                 &store,
                 &options,
@@ -937,11 +929,10 @@ fn rerank_pools_survive_connected_candidate_admission() {
             )
             .unwrap()
             .len(),
-            if rerank { 250 } else { 50 },
+            50,
         ));
-        // Count-only exits before neural reranking. The public with_store
-        // seam exercises real pattern dispatch without a model or feature bypass
-        // claim for the validated Searcher::new constructor.
+        // The public with_store seam exercises real pattern dispatch without
+        // a feature-bypass claim for the validated Searcher::new constructor.
         let mut counted = options.clone();
         counted.use_embed = false;
         counted.count_only = true;
@@ -950,13 +941,12 @@ fn rerank_pools_survive_connected_candidate_admission() {
             .unwrap();
         counts.push((
             "pattern dispatch",
-            rerank,
             response
                 .counts
                 .iter()
                 .map(|(_, count)| *count as usize)
                 .sum(),
-            if rerank { 250 } else { 1 },
+            1,
         ));
     }
     // Explicitly warm a separate store only after the cold paths above.
@@ -968,17 +958,14 @@ fn rerank_pools_survive_connected_candidate_admission() {
         },
     );
     warm.warm_search_path().unwrap();
-    for rerank in [false, true] {
+    {
         let options = SearchOptions {
             limit: 1,
             use_embed: false,
-            use_rerank: rerank,
-            rerank_top_k: 250,
             ..session.search_options()
         };
         counts.push((
             "warm literal",
-            rerank,
             literal::literal_pass(
                 warm.store(),
                 &options,
@@ -986,12 +973,12 @@ fn rerank_pools_survive_connected_candidate_admission() {
             )
             .unwrap()
             .len(),
-            if rerank { 250 } else { 1 },
+            1,
         ));
     }
     let mismatches: Vec<_> = counts
         .into_iter()
-        .filter(|(_, _, actual, expected)| actual != expected)
+        .filter(|(_, actual, expected)| actual != expected)
         .collect();
     assert!(
         mismatches.is_empty(),

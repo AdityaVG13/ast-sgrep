@@ -23,7 +23,7 @@
   },
   "version": {
     "command": "version",
-    "index_schema_version": 16,
+    "index_schema_version": 17,
     "machine_schema_version": "1.0.0",
     "ok": true,
     "schema_version": "1.0.0",

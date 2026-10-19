@@ -34,10 +34,11 @@ mod verdict;
 pub use cli::{
     asgrep_bin, assert_failure_envelope, assert_finite_unit, assert_fixture_hits,
     assert_human_error, assert_human_success, assert_no_success_shape, assert_operational_envelope,
-    assert_success, assert_usage_envelope, envelope_shape, eval_project, f64_at, fixture_root,
-    indexed_project, indexed_project_n, parse_human_row, parse_human_summary, parse_stdout, run,
-    run_env, run_eval_ok, run_eval_raw, run_index_default, run_index_json_noembed, run_json,
-    run_json_full, run_search_json, usage_message, write_fixture, write_gold, CliSession,
+    assert_success, assert_usage_envelope, ensure_watch_helper, envelope_shape, eval_project,
+    f64_at, fixture_root, indexed_project, indexed_project_n, parse_human_row,
+    parse_human_summary, parse_stdout, run, run_env, run_eval_ok, run_eval_raw, run_index_default,
+    run_index_json_noembed, run_json, run_json_full, run_search_json, usage_message,
+    watch_helper_path, write_fixture, write_gold, CliSession,
 };
 pub use cli_oracle::{
     oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json,

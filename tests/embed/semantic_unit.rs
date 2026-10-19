@@ -1,71 +1,12 @@
-use ast_sgrep_embed::semantic::*;
+use ast_sgrep_embed::text::*;
 
-fn hash_feature_old(feature: &str, vec: &mut [f32], weight: f32) {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(feature.as_bytes());
-    let mut bytes = vec![0u8; vec.len()];
-    hasher.finalize_xof().fill(&mut bytes);
-    for (slot, &b) in vec.iter_mut().zip(bytes.iter()) {
-        *slot += if b & 1 == 0 { weight } else { -weight };
-    }
-}
-
-fn embed_text_old(text: &str) -> Vec<f32> {
-    let expanded = expand_concepts(text);
-    let mut vec = vec![0.0_f32; SEMANTIC_DIM];
-    for token in tokenize(&expanded) {
-        hash_feature_old(&format!("tok:{token}"), &mut vec, 1.0);
-    }
-    let compact: String = expanded
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect();
-    if compact.len() >= 3 {
-        for window in compact.as_bytes().windows(3) {
-            hash_feature_old(
-                &format!("tri:{}", String::from_utf8_lossy(window)),
-                &mut vec,
-                0.35,
-            );
-        }
-    }
-    normalize(&mut vec);
-    vec
-}
-
-#[test]
-fn alloc_free_hash_matches_format_concat_identity() {
-    let embedder = SemanticLocalEmbedding;
-    for q in [
-        "credential renewal",
-        "sanitize user input",
-        "FooBar_baz",
-        "a",
-        "ab",
-        "abc",
-    ] {
-        let fresh = embedder.embed_text(q);
-        let old = embed_text_old(q);
-        assert_eq!(fresh, old, "identity drift on {q:?}");
-    }
-}
-
-#[test]
-fn embed_text_short_query_timing() {
-    let embedder = SemanticLocalEmbedding;
-    let q = "credential renewal variant 42";
-    for _ in 0..20 {
-        let _ = embedder.embed_text(q);
-    }
-    let start = std::time::Instant::now();
-    const N: u32 = 200;
-    for _ in 0..N {
-        let _ = embedder.embed_text(q);
-    }
-    let us = start.elapsed().as_secs_f64() * 1.0e6 / f64::from(N);
-    eprintln!("embed_text mean {us:.1} us over {N} runs of {q:?}");
-}
+// The hashed-embedder identity/timing tests that used to live here
+// (alloc_free_hash_matches_format_concat_identity,
+// embed_text_short_query_timing) tested `SemanticLocalEmbedding`, deleted
+// in Phase 2C when the static engine became the only backend. Their
+// subject no longer exists; static-engine identity is pinned in
+// tests/embed/static_engine.rs. What remains below tests the concept
+// utilities that survived the rename into `text.rs`.
 
 #[test]
 fn eviction_expands_to_prune() {

@@ -31,7 +31,7 @@ mod handler;
 mod sandbox;
 
 use anyhow::Context;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{
     format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
     DetailLevel, MissContext, OutputBudget, OutputFormat,
@@ -186,7 +186,6 @@ struct SearcherKey {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
-    use_neural_embed: bool,
     use_semantic_only: bool,
     file_filter: Option<String>,
     lang_filter: Option<String>,
@@ -209,7 +208,6 @@ pub struct McpServer {
     index_path: Option<PathBuf>,
     limit: usize,
     use_embed: bool,
-    use_neural_embed: bool,
     use_semantic_only: bool,
     /// Reused across search-channel calls; cleared after index mutations.
     searcher_cache: Mutex<SearcherCache>,
@@ -243,7 +241,6 @@ impl McpServer {
                     ast_sgrep_core::clamp_agent_limit(None, SearchOptions::default_limit())
                 }),
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
-            use_neural_embed: ast_sgrep_core::env_flag::env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: ast_sgrep_core::env_flag::env_flag("ASGREP_SEMANTIC_ONLY"),
             searcher_cache: Mutex::new(SearcherCache::default()),
             index_lock: Mutex::new(()),
@@ -562,7 +559,6 @@ impl McpServer {
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
-            use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
             file_filter,
             lang_filter,
@@ -581,7 +577,6 @@ impl McpServer {
             index_path: self.index_path.clone(),
             limit,
             use_embed: self.use_embed,
-            use_neural_embed: self.use_neural_embed,
             use_semantic_only: self.use_semantic_only,
             file_filter,
             lang_filter,
@@ -726,15 +721,6 @@ impl McpServer {
                 }
                 Err(error) => return Err(error),
             };
-        if matches!(mode, AgentSearchMode::Semantic) {
-            if let Some(msg) = self
-                .search_options(root.clone(), limit, file_filter.clone(), lang.clone())
-                .unavailable_non_hashed_embed()
-            {
-                self.restore_searcher(root, limit, file_filter, lang, generation, searcher);
-                anyhow::bail!(msg);
-            }
-        }
         let response = match mode {
             AgentSearchMode::Hybrid => searcher.search(&query),
             AgentSearchMode::Keyword => searcher.search_lexical(&query),
@@ -925,11 +911,6 @@ impl McpServer {
         );
         let mut indexer = Indexer::new(IndexOptions {
             embed_semantic: self.use_embed,
-            embed_backend: if self.use_embed {
-                EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
-            } else {
-                EmbedBackend::Semantic
-            },
             ..self.base_index_options(root)
         })?;
         indexer.set_cancel(cancel);

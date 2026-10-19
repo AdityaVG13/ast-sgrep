@@ -1,7 +1,6 @@
 use super::super::embed_support::{
-    embed_cache_cap, embed_chunks, evict_embed_cache, insert_embed_cache_entries,
-    requested_model_identity, structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk,
-    EmbeddedChunks,
+    active_model_id, embed_cache_cap, embed_chunks, evict_embed_cache, insert_embed_cache_entries,
+    structure_fingerprint, touch_embed_cache_entries, EmbeddedChunk, EmbeddedChunks,
 };
 use super::super::sql::{delete_file_children, delete_file_lines, query_cached_map};
 use super::{
@@ -15,9 +14,7 @@ use std::collections::HashMap;
 
 impl IndexStore {
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
-        let requested_identity = input
-            .embed_semantic
-            .then(|| requested_model_identity(input.embed_backend));
+        let requested_identity = input.embed_semantic.then(active_model_id);
         let struct_fp = structure_fingerprint(
             input.symbols,
             input.callers,
@@ -52,7 +49,6 @@ impl IndexStore {
             input.semantic_chunks,
             input.rel_path,
             input.embed_semantic,
-            input.embed_backend,
         )?;
         let (cache_hits, cache_misses) = (
             emb.cache_hits.len(),
@@ -177,7 +173,6 @@ impl IndexStore {
             &symbol_ids,
             input.semantic_chunks,
             emb,
-            input.embed_backend,
         )?;
         self.insert_callers(file_id, input.callers)?;
         self.insert_imports(file_id, input.imports)?;
@@ -271,7 +266,6 @@ impl IndexStore {
         symbol_ids: &[i64],
         chunks: &[crate::semantic_chunk::SemanticChunkInput],
         emb: &[EmbeddedChunk],
-        preference: ast_sgrep_embed::EmbedPreference,
     ) -> Result<()> {
         if emb.is_empty() {
             // A re-upsert of an EXISTING file reaches here AFTER upsert_file_row's
@@ -290,21 +284,12 @@ impl IndexStore {
             )));
         }
         let first = &emb[0];
-        if emb
-            .iter()
-            .any(|entry| entry.backend != first.backend || entry.dim != first.dim)
-        {
+        if emb.iter().any(|entry| entry.dim != first.dim) {
             return Err(crate::StoreError::Other(
-                "embedding provider returned mixed backend or dimension identities".into(),
+                "embedding provider returned mixed dimension identities".into(),
             ));
         }
-        let model = ast_sgrep_embed::configured_backend_model_id(first.backend, first.dim)
-            .ok_or_else(|| {
-                crate::StoreError::Other(format!(
-                    "resolved {:?} embedding backend has no configured model identity",
-                    first.backend
-                ))
-            })?;
+        let model = active_model_id();
         let (siblings, stored_backend, stored_model, stored_dim): (
             bool,
             Option<String>,
@@ -320,16 +305,13 @@ impl IndexStore {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if siblings {
-            let backend_matches = stored_backend.as_deref().is_some_and(|stored| {
-                ast_sgrep_embed::EmbedBackendKind::parse(stored) == Some(first.backend)
-            });
-            if !backend_matches
+            if stored_backend.as_deref() != Some("static")
                 || stored_dim.as_deref().and_then(|dim| dim.parse().ok()) != Some(first.dim)
-                || stored_model.as_deref() != Some(model.as_str())
+                || stored_model.as_deref() != Some(model)
             {
                 return Err(crate::StoreError::Other(format!(
-                    "resolved embedding identity {:?}/{model}/{} does not match existing repository vectors; run `asgrep reindex`",
-                    first.backend, first.dim
+                    "embedding identity {model}/{} does not match existing repository vectors; run `asgrep index` to rebuild semantic vectors",
+                    first.dim
                 )));
             }
         }
@@ -360,33 +342,18 @@ impl IndexStore {
                 e.tests_examples.clone(),
             ])?;
         }
-        self.persist_embed_metadata(first.dim, first.backend, preference)
+        self.persist_embed_metadata(first.dim)
     }
-    fn persist_embed_metadata(
-        &self,
-        dim: usize,
-        kind: ast_sgrep_embed::EmbedBackendKind,
-        preference: ast_sgrep_embed::EmbedPreference,
-    ) -> Result<()> {
-        // embed_backend always stores the RESOLVED kind (search loads
-        // vectors by it). The build-time preference lives separately so
-        // identity checks can distinguish an Auto build (reopen no-ops
-        // under Auto) from an explicit one (28vo exactness) — parity.
+    fn persist_embed_metadata(&self, dim: usize) -> Result<()> {
         // e2hc.13: a partial (single-file) update must not promote a
-        // legacy v1 store (meta == "semantic") to v2 while sibling chunks
-        // remain v1 — only a full index_all rewrite may.
+        // legacy v1 store (meta == "semantic") while sibling chunks
+        // remain on the old layout — only a full index rewrite may.
+        // (The sibling-identity check above already refuses that case;
+        // this guard keeps meta honest if it is ever reached.)
         if self.get_meta("embed_backend")?.as_deref() != Some("semantic") {
-            self.set_meta("embed_backend", kind.as_meta_str())?;
-            if preference == ast_sgrep_embed::EmbedPreference::Auto {
-                self.set_meta("embed_backend_pref", "auto")?;
-            } else {
-                self.delete_meta("embed_backend_pref")?;
-            }
-        }
-        if let Some(model) = ast_sgrep_embed::configured_backend_model_id(kind, dim) {
-            self.set_meta("embed_model", &model)?;
-        } else {
-            self.delete_meta("embed_model")?;
+            self.set_meta("embed_backend", "static")?;
+            self.delete_meta("embed_backend_pref")?;
+            self.set_meta("embed_model", active_model_id())?;
         }
         self.set_meta("embed_dim", &dim.to_string())?;
         // Bump semantic_data_version on every chunk insertion so SemanticCache and

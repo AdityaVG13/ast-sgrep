@@ -96,7 +96,8 @@ pub(crate) struct SearchTuning {
         env = "ASGREP_NEURAL_EMBED",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Prefer local neural embeddings (needs neural-embed feature)"
+        hide = true,
+        help = "Removed: the static engine is the only embedding backend"
     )]
     pub(crate) neural_embed: bool,
     #[arg(
@@ -132,14 +133,16 @@ pub(crate) struct SearchTuning {
         env = "ASGREP_RERANK",
         action = clap::ArgAction::SetTrue,
         value_parser = clap::builder::BoolishValueParser::new(),
-        help = "Rerank top candidates with local cross-encoder"
+        hide = true,
+        help = "Removed: cross-encoder reranking was retired with the neural backends"
     )]
     pub(crate) rerank: bool,
     #[arg(
         long,
         env = "ASGREP_RERANK_TOP_K",
         default_value_t = 20,
-        help = "Candidates considered by --rerank"
+        hide = true,
+        help = "Removed: see --rerank"
     )]
     pub(crate) rerank_top_k: usize,
     #[arg(

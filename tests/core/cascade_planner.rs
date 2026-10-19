@@ -156,3 +156,84 @@ fn conceptual_empty_lexical_without_embed_stays_empty() {
         response.hits
     );
 }
+
+/// No-embed hybrid must not lose what the lexical channel already finds.
+///
+/// The cascade's per-term file caps strand lexical evidence past the page:
+/// distractor files fill the shortlist while the gold file's flat-scored
+/// prefilter hits tie-break to last place by path and truncate out, even
+/// though the unconstrained lexical pass ranks gold first. Hybrid without
+/// embeddings has no semantic budget to protect, so it must be a superset
+/// of lexical, never a subset. (Frozen RepoQA: 9/10 sampled no-embed misses
+/// show exactly this shape — lexical-only ranks gold top-32, hybrid buries
+/// it past 50.)
+#[test]
+fn noembed_hybrid_keeps_lexical_gold_past_prefilter_caps() {
+    use ast_sgrep_testkit::isolated_index_session;
+    let session = isolated_index_session();
+    for i in 0..60 {
+        session.write(
+            format!("d_{i:03}.rs"),
+            format!("/// zebracorn throttle requests mirror\npub fn mirror_{i}() {{}}\n"),
+        );
+    }
+    for i in 60..190 {
+        session.write(
+            format!("f_{i:03}.rs"),
+            format!("/// throttle requests filler\npub fn filler_{i}() {{}}\n"),
+        );
+    }
+    session.write(
+        "z_gold.rs",
+        "/// zebracorn throttle requests\n/// zebracorn throttle requests\n/// zebracorn throttle requests\n/// zebracorn throttle requests\n/// zebracorn throttle requests\n/// zebracorn throttle requests\npub fn answer() {}\n",
+    );
+    session.index_all(IndexOptions {
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let searcher = session.searcher(SearchOptions {
+        limit: 50,
+        use_embed: false,
+        ..session.search_options()
+    });
+    let query = "how does the zebracorn throttle requests";
+    let lexical_files: std::collections::HashSet<_> = searcher
+        .search_lexical(query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.file)
+        .collect();
+    session.index_all(IndexOptions {
+        embed_semantic: false,
+        ..session.index_options()
+    });
+    let searcher = session.searcher(SearchOptions {
+        limit: 50,
+        use_embed: false,
+        ..session.search_options()
+    });
+    let query = "how does the zebracorn throttle requests";
+    let lexical_files: std::collections::HashSet<_> = searcher
+        .search_lexical(query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.file)
+        .collect();
+    assert!(
+        lexical_files.iter().any(|f| f.ends_with("z_gold.rs")),
+        "fixture must admit gold lexically: {lexical_files:?}",
+    );
+    let hybrid_files: std::collections::HashSet<_> = searcher
+        .search(query)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.file)
+        .collect();
+    assert!(
+        hybrid_files.iter().any(|f| f.ends_with("z_gold.rs")),
+        "no-embed hybrid dropped lexical gold past the prefilter caps: {hybrid_files:?}",
+    );
+}

@@ -19,7 +19,7 @@ At search time, child vectors are compared by cosine similarity (or IVF-ANN at s
 
 Each chunk also stores separate vectors for its name metadata, documentation, body, graph neighborhood, and tests or usage examples. Test/example text is recognized from conventional test/example paths and symbols, plus example-bearing documentation. Conceptual queries weight docs, body, and examples; symbol queries weight names; structural behavior queries weight body, graph, and examples. Search ranks concatenated chunk vectors first (from the IVF mmap at scale), then fetches and rescores only the top-N survivors, and only the intent-weighted field columns. JSON embed hits expose those weighted similarities in `embed_fields`, and human-readable evidence includes `embed_field:<field>=<score>` for weighted fields only. Literal intent keeps the concatenated score and omits field terms.
 
-Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Backend model identity is persisted for hashed semantic and in-process neural vectors; indexing refreshes and search refuses stale vectors after a configured model change. Indexes that still record `cloud` or `ollama` hard-error until `asgrep reindex`.
+Schema version 6 clears legacy whole-symbol vectors, cached vectors, backend/model identity, and stored file fingerprints. The next index refresh rebuilds every file into the child-to-parent layout, so old and new layouts cannot mix. Model identity is persisted (`embed_backend=static`, `embed_model=static:...:256`); indexing refreshes and search refuses stale vectors after a model change. Indexes written by retired backends (hashed `semantic-v2`, neural, `cloud`, `ollama`) are detected on open: the next index run re-embeds every file from the stored chunk text, and search hard-errors until then rather than serving stale vectors.
 
 ## Concept expansion
 
@@ -35,47 +35,38 @@ Before embedding, chunks are expanded with **code-domain concept groups**, synon
 | Debounce / coalesce | debounce, coalesce, noisy, watch |
 | Retry / backoff | retry, backoff, transient, attempt |
 
-Expansion is applied in the offline **semantic local** embedder (char n-grams + concept tokens). In-process neural still indexes the enriched chunk text; the model supplies the similarity geometry.
+Expansion is applied to both chunk enrichment text at index time and the query at search time, so a query about “rate-limit inbound requests” also activates throttle/quota vocabulary in the embedding space.
 
-## Provider chain
+## The static engine
 
-At **index** and **search** time, the same in-process chain is used:
+There is exactly one embedding backend: a **static (Model2Vec-style) engine**
+compiled into the binary. No model download, no ONNX runtime, no network call.
+Source text never leaves the process for embeddings.
 
-```
-1. Neural, if built with --features neural-embed and ASGREP_NEURAL_EMBED is set
-2. Semantic local, always available (offline hashed embedder; see dimension note below)
-```
+- Vocab: 63k-entry WordPiece (BERT normalization + PascalCase/camelCase
+  segmentation pass tuned for code identifiers).
+- Embedding input per chunk field: enriched text (symbol name, docs, excerpt,
+  graph neighborhood) run through concept expansion, then WordPiece-tokenized
+  by the engine.
+- Pooling: token table lookup with SIF weighting, mean-pooled, L2-normalized
+  to 256-d `f32`. Deterministic bit-for-bit across machines; indexes are
+  portable without re-embedding.
+- Model identity: `static:potion-base-32m:256` (weights: MIT
+  `minishlab/potion-base-32M`, hash-pinned at build; provenance in
+  `crates/ast-sgrep-embed/assets/potion-base-32m.README.md`).
 
-There is no cloud or Ollama embed client. Source text never leaves the process for embeddings.
-
-| Backend | Flag | Env |
-|---------|------|-----|
-| Auto (chain) | (default) | |
-| Neural | `--neural-embed` | `ASGREP_NEURAL_EMBED=1` |
+| Mode | Flag | Env |
+|------|------|-----|
+| On (default) | (default) | |
 | Semantic only | `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` |
 | Disabled | `--no-embed` | `ASGREP_NO_EMBED=1` |
 
-Concurrent backend flags (CLI `--neural-embed --semantic-only`, LSP `neuralEmbed` + `semanticOnly`, or several `SearchOptions::use_*` trues) collapse to one backend: **Neural > Semantic > Auto**. Explicit Neural does not silently swap to hashed unless `ASGREP_NEURAL_FALLBACK=1`.
+`asgrep status` reports the stored `embed_backend` and `embed_dim`.
 
-`asgrep status` reports the stored `embed_backend` and `embed_dim`. For best results, query with the same backend used at index time.
-
-### Semantic local (default, no API key)
-
-- Vectors are stored as length-`SEMANTIC_DIM` (**256**) `f32` arrays
-- **Honesty note:** feature signs come from BLAKE3 XOF (`hashed-256-xof-cg5`). The historical period-32 `digest[i % 32]` tiling is gone. `-cg5` adds throttle/debounce/retry concept groups on top of cg4. This is still a hashed embedder, not a neural model: it does not beat Semgrep’s hand-authored patterns on conceptual MRR, and must not be cited as if it did. Reindex after upgrading past cg4 (`asgrep reindex`).
-- Char n-gram features + concept expansion
-- Deterministic, offline, fast
-- Regression-tested: zero token-overlap queries must rank the correct symbol on the fixture suite (not a statistical guarantee on arbitrary corpora)
-
-### Neural (optional, in-process)
-
-```bash
-# Requires a build with --features neural-embed
-export ASGREP_NEURAL_EMBED=1
-asgrep --neural-embed index .
-```
-
-ONNX MiniLM / BGE via `fastembed` (default `all-minilm-l6-v2-q`, 384-d). First load may download weights into `ASGREP_NEURAL_CACHE_DIR` unless the model is already cached. This is not an HTTP embedding API: inference stays in-process.
+Retired surface: `--neural-embed`, `--rerank`, `--rerank-top-k`,
+`ASGREP_EMBED_BACKEND`, and `ASGREP_NEURAL_EMBED` are rejected with an explicit
+error naming the removal (they are kept as hidden parse stubs so the error is
+actionable, not “unknown flag”).
 
 ## Search passes
 

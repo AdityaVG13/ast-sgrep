@@ -8,8 +8,7 @@ use crate::semantic_chunk::SemanticFieldVectors;
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{
-    cosine_similarity, embed_query, normalize_vec, top_k_similarity, SemanticChunkRow,
-    MIN_SIMILARITY,
+    cosine_similarity, normalize_vec, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -157,10 +156,13 @@ pub(crate) fn load_semantic_context(
 }
 
 /// Unconstrained embed. `trust_snapshot` is the Pi sticky unique path:
-/// warmed vectors stay in RAM and field-vector SQL is skipped. Exact RAM
+/// warmed vectors stay in RAM. Exact RAM
 /// rank is used up to [`SNAPSHOT_EXHAUSTIVE_CHUNK_CAP`] even above the ANN
 /// threshold (IVF cannot beat exhaustive on a held snapshot). Bigger
-/// corpora still use IVF. CLI gold still field-rescores.
+/// corpora still use IVF. Field rescoring honors the caller's request on
+/// this path too (field blobs for the rescore pool only), so held-snapshot
+/// ranking matches cold ranking; callers that need zero SQL opt out via
+/// `SearchOptions` field-rescoring controls.
 pub(crate) fn run_embed_pass_cached(
     store: &IndexStore,
     options: &SearchOptions,
@@ -169,10 +171,10 @@ pub(crate) fn run_embed_pass_cached(
     trust_snapshot: bool,
     use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
-    // Field rescoring follows the caller's request on every SQL-backed path —
+    // Field rescoring follows the caller's request on every path —
     // CLI gold ranking depends on the name-field lift (cli_smoke
-    // repository_vocabulary). Only the warmed-RAM early return below skips
-    // it (no field-vector SQL by construction there).
+    // repository_vocabulary), and held-snapshot ranking must not diverge
+    // from cold ranking for the same query.
     let field = use_field_rescoring;
     if trust_snapshot {
         if let Some(ctx) = peek_semantic_cache(cache) {
@@ -185,7 +187,7 @@ pub(crate) fn run_embed_pass_cached(
                     options,
                     parsed,
                     Some(ctx),
-                    false,
+                    field,
                 );
             }
         }
@@ -204,7 +206,7 @@ pub(crate) fn run_embed_pass_cached(
                     options,
                     parsed,
                     Some(ctx),
-                    false,
+                    field,
                 );
             }
             _ => {}
@@ -254,7 +256,7 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
         return Ok(None);
     }
     let query = parsed.terms.join(" ");
-    let query_vec = embed_query_vector(store, options, &query, Some(dim))?;
+    let query_vec = embed_query_vector(store, &query, Some(dim))?;
     let intent = classify(parsed);
     let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let pool = field_rescore_pool(hit_limit);
@@ -364,7 +366,7 @@ fn embed_pass_lazy_ivf_for_files(
         return Ok(Some(Vec::new()));
     }
     let query = parsed.terms.join(" ");
-    let query_vec = embed_query_vector(store, options, &query, Some(dim))?;
+    let query_vec = embed_query_vector(store, &query, Some(dim))?;
     let intent = classify(parsed);
     let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let pool = field_rescore_pool(hit_limit);
@@ -486,12 +488,8 @@ pub(crate) fn embed_pass_for_files_cached(
     if survivors.is_empty() {
         return Ok(Vec::new());
     }
-    let query_vec = embed_query_vector(
-        store,
-        options,
-        &query,
-        survivors.first().map(|chunk| chunk.5.len()),
-    )?;
+    let query_vec =
+        embed_query_vector(store, &query, survivors.first().map(|chunk| chunk.5.len()))?;
     embed_hits_from_concat_rank(
         store,
         &survivors,
@@ -549,13 +547,20 @@ fn try_warmed_file_embed(
             return Ok(Some(Vec::new()));
         }
         let query_vec = embed_query_vector_from_meta(
-            options,
             &query,
             Some(dim),
             Some(ctx.embed_backend.as_str()),
             ctx.embed_model.as_deref(),
         )?;
         let query_unit = normalize_vec(&query_vec);
+        // Rank the rescore pool (not just hit_limit) when field rescoring
+        // is on, mirroring the cold path: rescoring reorders the pool and
+        // embed_hits_from_pre_rank truncates to hit_limit afterwards.
+        let pool = if use_field_rescoring {
+            field_rescore_pool(hit_limit)
+        } else {
+            hit_limit
+        };
         let ranked = top_k_similarity(
             allowed_idx.into_iter().map(|i| {
                 let start = i * dim;
@@ -564,26 +569,19 @@ fn try_warmed_file_embed(
                     cosine_similarity(&query_unit, &ctx.flat_vectors[start..start + dim]),
                 )
             }),
-            hit_limit.max(1),
+            pool.max(1),
             Some(MIN_SIMILARITY),
         );
-        let pool_chunks: Vec<SemanticChunkRow> = ranked
-            .iter()
-            .map(|(idx, _)| ctx.chunks[*idx].clone())
-            .collect();
-        let remapped: Vec<(usize, f32)> = ranked
-            .into_iter()
-            .enumerate()
-            .map(|(i, (_, score))| (i, score))
-            .collect();
-        return Ok(Some(embed_hits_rescored(
-            &pool_chunks,
-            remapped,
+        return Ok(Some(embed_hits_from_pre_rank(
+            store,
+            &ctx.chunks,
+            &ctx.ids,
+            ranked,
             &query_vec,
-            &[],
             intent,
             hit_limit,
-        )));
+            use_field_rescoring,
+        )?));
     }
     let mut survivors = Vec::new();
     let mut survivor_ids = Vec::new();
@@ -611,7 +609,6 @@ fn try_warmed_file_embed(
         return Ok(Some(Vec::new()));
     }
     let query_vec = embed_query_vector_from_meta(
-        options,
         &query,
         survivors.first().map(|chunk| chunk.5.len()),
         Some(ctx.embed_backend.as_str()),
@@ -624,7 +621,7 @@ fn try_warmed_file_embed(
         &query_vec,
         intent,
         hit_limit,
-        hit_limit,
+        field_rescore_pool(hit_limit),
         use_field_rescoring,
     )?))
 }
@@ -663,17 +660,18 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
     let flat = ctx.as_ref().map(|c| c.flat_vectors.as_slice());
     let query_vec = match ctx.as_ref() {
         Some(ctx) => embed_query_vector_from_meta(
-            options,
             &query,
             chunks.first().map(|c| c.5.len()),
             Some(ctx.embed_backend.as_str()),
             ctx.embed_model.as_deref(),
         )?,
-        None => embed_query_vector(store, options, &query, chunks.first().map(|c| c.5.len()))?,
+        None => embed_query_vector(store, &query, chunks.first().map(|c| c.5.len()))?,
     };
-    let ann_threshold = if options.lang_filter.is_some() || (ctx.is_some() && !use_field_rescoring)
+    let ann_threshold = if options.lang_filter.is_some()
+        || (ctx.is_some() && chunks.len() <= SNAPSHOT_EXHAUSTIVE_CHUNK_CAP)
     {
-        // Lang-filter and Pi snapshot unique: exact RAM rank, never IVF.
+        // Lang-filter and held-snapshot RAM: exact rank under the exhaustive
+        // cap, never IVF (independent of field rescoring).
         Some(usize::MAX)
     } else {
         options.ann_threshold
@@ -870,13 +868,11 @@ fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String
 
 fn embed_query_vector(
     store: &IndexStore,
-    options: &SearchOptions,
     query: &str,
     stored_dim: Option<usize>,
 ) -> Result<Vec<f32>> {
     let (stored_backend, stored_model) = embed_store_meta(store)?;
     embed_query_vector_from_meta(
-        options,
         query,
         stored_dim,
         stored_backend.as_deref(),
@@ -885,57 +881,35 @@ fn embed_query_vector(
 }
 
 fn embed_query_vector_from_meta(
-    options: &SearchOptions,
     query: &str,
     stored_dim: Option<usize>,
     stored_backend: Option<&str>,
     stored_model: Option<&str>,
 ) -> Result<Vec<f32>> {
-    let dim = stored_dim.unwrap_or(ast_sgrep_embed::default_semantic_dim());
-    // An unversioned embed_backend="semantic" store must not serve results —
-    // only a full rewrite (index_all) may promote the layout.
-    if stored_backend == Some("semantic") {
-        return Err(crate::StoreError::Other(
-            "index advertises an unversioned semantic backend; run `asgrep reindex` to rewrite every chunk before semantic search"
-                .into(),
-        ));
+    if let Some(msg) = crate::env_flag::retired_embed_request() {
+        return Err(crate::StoreError::Other(msg));
     }
+    let dim = stored_dim.unwrap_or(ast_sgrep_embed::STATIC_DIM);
+    // Never serve vectors embedded by a retired engine or an older model:
+    // `asgrep index` performs the migration rewrite. The unversioned
+    // "semantic" layout gets the same refusal (only a full rewrite may
+    // promote it).
     if let Some(backend_name) = stored_backend {
-        let backend = ast_sgrep_embed::EmbedBackendKind::parse(backend_name).ok_or_else(|| {
-            crate::StoreError::Other(format!("unknown stored embedding backend {backend_name:?}"))
-        })?;
-        // Phase 2B: under the default (Auto) preference, never serve
-        // vectors embedded by a different model than the active default —
-        // that would silently serve the retired engine until the next
-        // index run; `asgrep index` performs the migration rewrite.
-        // Explicit preferences keep stored-wins semantics (the query is
-        // embedded in the store's own space by embed_query below).
-        let requested = crate::store::requested_model_identity(options.embed_preference());
-        if options.embed_preference() == ast_sgrep_embed::EmbedPreference::Auto
-            && stored_model != Some(requested.as_str())
-        {
+        let active = crate::store::active_model_id();
+        if backend_name != "static" || stored_model != Some(active) {
             return Err(crate::StoreError::Other(format!(
-                "index was embedded with model {:?}; active embedding model is {requested:?} — run `asgrep index` to migrate (one-time full re-embed)",
+                "index was embedded with model {:?} (backend {backend_name:?}); active embedding model is {active:?} — run `asgrep index` to migrate (one-time full re-embed)",
                 stored_model.unwrap_or("unknown")
             )));
         }
-        let active_model = ast_sgrep_embed::configured_backend_model_id(backend, dim);
-        if stored_model != active_model.as_deref() {
-            return Err(crate::StoreError::Other(format!(
-                "stored embedding model {:?} does not match active model {:?}; reindex with: asgrep reindex",
-                stored_model.unwrap_or("unknown"),
-                active_model.as_deref().unwrap_or("unavailable")
-            )));
-        }
     }
-    let cache_key = format!(
-        "{}|{}|{}|{}|{:?}",
-        query,
-        stored_backend.unwrap_or(""),
-        stored_model.unwrap_or(""),
-        dim,
-        options.embed_preference()
-    );
+    if dim != ast_sgrep_embed::STATIC_DIM {
+        return Err(crate::StoreError::Other(format!(
+            "stored embedding dimension {dim} does not match active dimension {}; run `asgrep index` to migrate",
+            ast_sgrep_embed::STATIC_DIM
+        )));
+    }
+    let cache_key = query.to_string();
     {
         let guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
         if let Some(v) = guard.get(&cache_key) {
@@ -945,11 +919,9 @@ fn embed_query_vector_from_meta(
     let _span = crate::perf_profile::Span::start(
         "embed_query",
         "semantic",
-        "hashed/neural query embed (cache miss)",
+        "static query embed (cache miss)",
     );
-    let vector = embed_query(query, stored_backend, dim, options.embed_preference())
-        .map_err(crate::StoreError::Other)?
-        .vector;
+    let vector = ast_sgrep_embed::embed_text(query);
     {
         let mut guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
         if guard.len() < QUERY_EMBED_CACHE_CAP {
@@ -961,8 +933,12 @@ fn embed_query_vector_from_meta(
 fn field_rescore_pool(hit_limit: usize) -> usize {
     // IVF mmap already ranked candidates. Fetching 8× hit_limit (400 at the
     // default embed cap of 50) from SQLite was the unique-query floor.
-    // Field-rescore among the concat top-N; N = returned hit cap, min 64.
-    hit_limit.max(64)
+    // Field-rescore among the concat top-N; N must reach past the zone
+    // where a diluted joint primary hides a chunk whose name/docs field
+    // matches strongly (measured: a whole-body primary at rank ~108 of
+    // 18.8k whose name field ranks ~29 pure). 192 keeps the masked
+    // by-ids fetch bounded while covering that rescue zone.
+    (hit_limit * 3).max(192)
 }
 
 fn rows_in_id_order_with_vectors(
@@ -1245,7 +1221,7 @@ fn embed_legacy_hits(
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
-    let query_vec = embed_query_vector(store, options, query, chunks.first().map(|c| c.5.len()))?;
+    let query_vec = embed_query_vector(store, query, chunks.first().map(|c| c.5.len()))?;
     Ok(embed_similarity_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),

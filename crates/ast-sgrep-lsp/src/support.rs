@@ -3,7 +3,7 @@ use crate::types::{
     SYMBOL_KIND_FUNCTION, SYMBOL_KIND_INTERFACE, SYMBOL_KIND_METHOD, SYMBOL_KIND_STRING,
     SYMBOL_KIND_STRUCT,
 };
-use ast_sgrep_core::{EmbedBackend, HitKind, IndexOptions, SearchHit, SearchOptions, SymbolRow};
+use ast_sgrep_core::{HitKind, IndexOptions, SearchHit, SearchOptions, SymbolRow};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -120,21 +120,32 @@ pub fn send_error(writer: &mut impl Write, id: &Value, code: i64, message: &str)
 #[serde(rename_all = "camelCase")]
 pub struct AsgrepSettings {
     pub no_embed: Option<bool>,
-    pub neural_embed: Option<bool>,
     pub semantic_only: Option<bool>,
     pub ann_threshold: Option<usize>,
-    pub embed_backend: Option<String>,
     pub index_path: Option<String>,
 }
 
 impl AsgrepSettings {
-    pub fn from_initialization_options(value: &Value) -> Self {
-        if let Some(nested) = value.get("asgrep") {
-            if let Ok(s) = serde_json::from_value(nested.clone()) {
-                return s;
+    pub fn from_initialization_options(value: &Value) -> anyhow::Result<Self> {
+        // Retired backend selectors must fail closed. Otherwise an editor
+        // configuration can keep claiming it selected an engine that no
+        // longer exists while the server silently uses the static engine.
+        for candidate in [value.get("asgrep"), Some(value)].into_iter().flatten() {
+            if let Some(settings) = candidate.as_object() {
+                for retired in ["neuralEmbed", "embedBackend"] {
+                    anyhow::ensure!(
+                        !settings.contains_key(retired),
+                        "initializationOptions key `{retired}` was removed: asgrep has one compiled-in static embedding engine; delete the key (no backend selection is needed)"
+                    );
+                }
             }
         }
-        serde_json::from_value(value.clone()).unwrap_or_default()
+        if let Some(nested) = value.get("asgrep") {
+            if let Ok(s) = serde_json::from_value(nested.clone()) {
+                return Ok(s);
+            }
+        }
+        Ok(serde_json::from_value(value.clone()).unwrap_or_default())
     }
 
     fn apply_ann(&self, ann: &mut Option<usize>) {
@@ -143,29 +154,10 @@ impl AsgrepSettings {
         }
     }
 
-    /// Neural > Semantic > Auto, matching CLI `from_flags`.
-    /// String `embedBackend` applies first; bool keys overlay when `Some`.
-    fn resolved_embed_backend(&self, current: EmbedBackend) -> EmbedBackend {
-        let backend = self
-            .embed_backend
-            .as_deref()
-            .map(EmbedBackend::parse)
-            .unwrap_or(current);
-        let (mut neural, mut semantic) = backend.to_flags();
-        if let Some(v) = self.neural_embed {
-            neural = v;
-        }
-        if let Some(v) = self.semantic_only {
-            semantic = v;
-        }
-        EmbedBackend::from_flags(neural, semantic)
-    }
-
     pub fn apply_to_index_options(&self, opts: &mut IndexOptions) {
         if let Some(no) = self.no_embed {
             opts.embed_semantic = !no;
         }
-        opts.embed_backend = self.resolved_embed_backend(opts.embed_backend);
         self.apply_ann(&mut opts.ann_threshold);
     }
 
@@ -173,7 +165,9 @@ impl AsgrepSettings {
         if let Some(no) = self.no_embed {
             opts.use_embed = !no;
         }
-        opts.set_embed_backend(self.resolved_embed_backend(opts.embed_backend()));
+        if let Some(semantic_only) = self.semantic_only {
+            opts.use_semantic_only = semantic_only;
+        }
         self.apply_ann(&mut opts.ann_threshold);
     }
 }
@@ -252,7 +246,18 @@ pub fn file_uri_to_path(uri: &str) -> anyhow::Result<PathBuf> {
 pub fn uri_to_rel_path(uri: &str, root: &Path) -> anyhow::Result<String> {
     let abs = file_uri_to_path(uri)?;
     let croots = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let cabs = abs.canonicalize().unwrap_or(abs);
+    // A not-yet-created document has no canonical path; canonicalize its
+    // parent and re-attach the file name so symlinked roots (macOS
+    // /var -> /private/var) still resolve inside the workspace.
+    let cabs = abs.canonicalize().unwrap_or_else(|_| {
+        match (abs.parent(), abs.file_name()) {
+            (Some(parent), Some(name)) => parent
+                .canonicalize()
+                .map(|cparent| cparent.join(name))
+                .unwrap_or_else(|_| abs.clone()),
+            _ => abs.clone(),
+        }
+    });
     if !cabs.starts_with(&croots) {
         anyhow::bail!("document URI outside workspace root");
     }

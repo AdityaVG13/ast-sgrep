@@ -46,11 +46,20 @@ pub fn build_semantic_chunks_with_patterns(
             (sym.line_start, sym.line_end),
             &parent_excerpt,
         );
-        if excerpts.is_empty() {
-            if parent_excerpt.trim().is_empty() {
-                continue;
-            }
+        // The whole body is always a chunk candidate. Child fragments only
+        // add focus; when they replaced the parent, every statement that
+        // was not itself an extracted pattern node vanished from the
+        // semantic index and the symbol ranked on scraps (`Vec::new()`)
+        // instead of what it does.
+        if !parent_excerpt.trim().is_empty()
+            && !excerpts
+                .iter()
+                .any(|excerpt| excerpt.trim() == parent_excerpt.trim())
+        {
             excerpts.push(parent_excerpt);
+        }
+        if excerpts.is_empty() {
+            continue;
         }
 
         let mut caller_names = callers

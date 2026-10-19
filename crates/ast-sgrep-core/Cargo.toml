@@ -16,10 +16,6 @@ workspace = true
 
 [features]
 default = []
-# Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
-# default in the workspace, enabled with --features neural-embed.
-neural-embed = ["ast-sgrep-embed/neural-embed"]
-rerank = ["ast-sgrep-embed/rerank"]
 
 [dependencies]
 ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "2.5.4" }
@@ -290,3 +286,12 @@ path = "../../tests/core/line_corpus_unit.rs"
 [[test]]
 name = "trigram_df_unit"
 path = "../../tests/core/trigram_df_unit.rs"
+[[test]]
+name = "fusion_capture"
+path = "../../tests/core/fusion_capture.rs"
+[[test]]
+name = "short_question_rewrite"
+path = "../../tests/core/short_question_rewrite.rs"
+[[test]]
+name = "query_bridge"
+path = "../../tests/core/query_bridge.rs"

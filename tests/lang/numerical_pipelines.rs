@@ -9,7 +9,7 @@
 
 use ast_sgrep_embed::{
     cosine_similarity, dot_similarity, normalize_vec, top_by_similarity, top_k_flat_similarity,
-    top_k_similarity, SemanticLocalEmbedding,
+    top_k_similarity, StaticEmbedder,
 };
 use ast_sgrep_testkit::{lcg_vec, ranked_indices};
 use std::thread;
@@ -44,7 +44,7 @@ fn determinism_across_threads() {
     let corpus: Vec<(usize, f32)> = (0..32)
         .map(|i| (i, cosine_similarity(&a[..2], &flat[i * 2..(i + 1) * 2])))
         .collect();
-    let emb = SemanticLocalEmbedding;
+    let emb = StaticEmbedder::new();
     let texts = ["credential renewal", "sanitize user input", "hello world"];
     let reference = (
         cosine_similarity(&a, &b),
@@ -53,7 +53,7 @@ fn determinism_across_threads() {
         top_k_flat_similarity(&a[..2], &flat, 2, 8, None),
         top_k_similarity(corpus.clone(), 8, None),
         top_by_similarity(corpus.clone(), 8, None),
-        texts.iter().map(|t| emb.embed_text(t)).collect::<Vec<_>>(),
+        texts.iter().map(|t| emb.embed(t)).collect::<Vec<_>>(),
     );
     // Flat corpus sized for the parallel path (n=70 >= 64).
     let big_flat: Vec<f32> = (0..70).flat_map(|_| lcg_vec(&mut seed, 2, 1.0)).collect();
@@ -69,7 +69,7 @@ fn determinism_across_threads() {
                     top_k_flat_similarity(&a[..2], &flat, 2, 8, None),
                     top_k_similarity(corpus.clone(), 8, None),
                     top_by_similarity(corpus.clone(), 8, None),
-                    texts.iter().map(|t| emb.embed_text(t)).collect::<Vec<_>>(),
+                    texts.iter().map(|t| emb.embed(t)).collect::<Vec<_>>(),
                 );
                 let got_big = top_k_flat_similarity(&a[..2], &big_flat, 2, 8, None);
                 (got, got_big)
@@ -103,7 +103,7 @@ fn text_embed_dot_rank_self_match_wins_deterministically() {
     // two independent runs agree bit-exactly on the whole order.
     // WEAKENED (catalog TAUTOLOGY-RISK): the exact-order assert on the
     // observed blake3 cross-scores is replaced by self-first + separation.
-    let emb = SemanticLocalEmbedding;
+    let emb = StaticEmbedder::new();
     let docs = [
         "credential renewal",
         "sanitize user input",
@@ -111,11 +111,11 @@ fn text_embed_dot_rank_self_match_wins_deterministically() {
         "hello world",
     ];
     let run = || {
-        let qv = emb.embed_text(docs[1]);
+        let qv = emb.embed(docs[1]);
         let scored: Vec<(usize, f32)> = docs
             .iter()
             .enumerate()
-            .map(|(i, d)| (i, emb.similarity(&qv, &emb.embed_text(d))))
+            .map(|(i, d)| (i, dot_similarity(&qv, &emb.embed(d))))
             .collect();
         top_k_similarity(scored, 4, None)
     };

@@ -6,7 +6,7 @@ export declare const RUNTIME_VERSION = "2.5.4";
 export declare const MACHINE_SCHEMA_VERSION = "1.0.0";
 export declare const CONFIG_SCHEMA_VERSION: 1;
 /** Index format this release ships. Must equal INDEX_SCHEMA_VERSION in crates/ast-sgrep-core (check-contract gates it). */
-export declare const INDEX_FORMAT_VERSION: 16;
+export declare const INDEX_FORMAT_VERSION: 17;
 export declare const DEFAULT_TIMEOUT_MS = 30000;
 export declare const DEFAULT_MAX_OUTPUT_BYTES: number;
 export declare const DEFAULT_REFRESH_INTERVAL_MS = 30000;

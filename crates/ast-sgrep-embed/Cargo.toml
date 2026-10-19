@@ -1,6 +1,6 @@
 [package]
 name = "ast-sgrep-embed"
-description = "Offline hashed and optional local-neural embedding plugins for ast-sgrep"
+description = "Native static embedding engine for ast-sgrep (trained token table baked into the binary)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,36 +14,9 @@ documentation = "https://docs.rs/ast-sgrep-embed"
 [lints]
 workspace = true
 
-[features]
-default = ["local"]
-local = []
-# Real neural embeddings via fastembed/ONNX Runtime. Heavy (ONNX Runtime,
-# tokenizers, HF Hub client) so it stays opt-in: off by default in the
-# workspace, enabled with `--features neural-embed`.
-neural-embed = ["dep:fastembed", "dep:ort"]
-# Query-time local cross-encoder reranking; independent of index embeddings.
-rerank = ["dep:fastembed"]
-
 [dependencies]
-anyhow.workspace = true
-blake3.workspace = true
 rayon.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 simsimd.workspace = true
-# Text-only: skip fastembed's `image-models` default feature (drags in the
-# `image` crate for CLIP-style models we don't use). rustls TLS variants
-# keep the optional neural download client on rustls.
-fastembed = { version = "5", optional = true, default-features = false, features = [
-    "ort-download-binaries-rustls-tls",
-    "hf-hub-rustls-tls",
-] }
-# Pinned to the exact version fastembed uses so Cargo's feature unification
-# applies the `coreml` feature to the single shared `ort` instance in the
-# graph -- we don't call `ort` APIs beyond building the CoreML EP dispatch.
-ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = [
-    "coreml",
-] }
 
 # Integration tests live in the repo-root tests/ tree.
 [[test]]

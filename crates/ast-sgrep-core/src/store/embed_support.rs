@@ -11,7 +11,6 @@ const DEFAULT_EMBED_CACHE_CAP: usize = 100_000;
 pub(super) struct EmbeddedChunk {
     pub vector_bytes: Vec<u8>,
     pub dim: usize,
-    pub backend: ast_sgrep_embed::EmbedBackendKind,
     pub name: Option<Vec<u8>>,
     pub docs: Option<Vec<u8>>,
     pub body: Option<Vec<u8>>,
@@ -21,14 +20,12 @@ pub(super) struct EmbeddedChunk {
 #[derive(Clone)]
 struct CacheRow {
     vector: Vec<u8>,
-    backend: ast_sgrep_embed::EmbedBackendKind,
     dim: usize,
 }
 #[derive(Clone)]
 pub(super) struct CacheEntry {
     pub chunk_hash: String,
     pub model_id: String,
-    pub backend: ast_sgrep_embed::EmbedBackendKind,
     pub dim: usize,
     pub vector: Vec<u8>,
 }
@@ -57,71 +54,11 @@ pub(super) fn embed_cache_cap() -> usize {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_EMBED_CACHE_CAP)
 }
-fn semantic_mid() -> String {
-    ast_sgrep_embed::configured_backend_model_id(
-        ast_sgrep_embed::EmbedBackendKind::Semantic,
-        ast_sgrep_embed::default_semantic_dim(),
-    )
-    .expect("local semantic model always has an identity")
-}
-fn neural_mid() -> String {
-    format!("neural:{}", ast_sgrep_embed::neural_configured_model_id())
-}
-fn static_mid() -> String {
-    ast_sgrep_embed::configured_backend_model_id(
-        ast_sgrep_embed::EmbedBackendKind::Static,
-        ast_sgrep_embed::STATIC_DIM,
-    )
-    .expect("native static model always has an identity")
-}
-/// Model id for an explicit `ASGREP_EMBED_BACKEND` selection, parsed the
-/// same way `chain_kinds` parses it so stored identity and the embed chain
-/// can never disagree about which backend Auto resolved to.
-fn env_backend_mid() -> Option<String> {
-    let v = std::env::var("ASGREP_EMBED_BACKEND").ok()?;
-    match ast_sgrep_embed::EmbedBackendKind::parse(v.trim().to_ascii_lowercase().as_str())? {
-        ast_sgrep_embed::EmbedBackendKind::Semantic => Some(semantic_mid()),
-        ast_sgrep_embed::EmbedBackendKind::Neural => Some(neural_mid()),
-        ast_sgrep_embed::EmbedBackendKind::Static => Some(static_mid()),
-    }
-}
-fn cache_model_id_for_pref(p: ast_sgrep_embed::EmbedPreference) -> Option<String> {
-    use ast_sgrep_embed::EmbedPreference::*;
-    match p {
-        Semantic => Some(semantic_mid()),
-        Neural => Some(neural_mid()),
-        Static => Some(static_mid()),
-        Auto => {
-            if let Some(mid) = env_backend_mid() {
-                return Some(mid);
-            }
-            let skip = crate::env_flag::env_flag("ASGREP_NEURAL_EMBED");
-            (!skip).then(static_mid)
-        }
-    }
-}
-fn cache_model_id_for_backend(backend: ast_sgrep_embed::EmbedBackendKind) -> Option<String> {
-    let dim = match backend {
-        ast_sgrep_embed::EmbedBackendKind::Static => ast_sgrep_embed::STATIC_DIM,
-        _ => ast_sgrep_embed::default_semantic_dim(),
-    };
-    ast_sgrep_embed::configured_backend_model_id(backend, dim)
-}
-pub(crate) fn requested_model_identity(preference: ast_sgrep_embed::EmbedPreference) -> String {
-    use ast_sgrep_embed::EmbedPreference;
-    match preference {
-        EmbedPreference::Neural => neural_mid(),
-        EmbedPreference::Semantic => semantic_mid(),
-        EmbedPreference::Static => static_mid(),
-        EmbedPreference::Auto => {
-            if let Some(mid) = env_backend_mid() {
-                return mid;
-            }
-            crate::env_flag::env_flag("ASGREP_NEURAL_EMBED")
-                .then(neural_mid)
-                .unwrap_or_else(static_mid)
-        }
-    }
+/// The one embedding identity this build can produce. Stored meta that
+/// names anything else belongs to a retired engine and must be refused
+/// or migrated, never served.
+pub(crate) fn active_model_id() -> &'static str {
+    ast_sgrep_embed::STATIC_MODEL_ID
 }
 pub(super) fn init_cache_seq(conn: &Connection, seq: &Cell<i64>) -> Result<()> {
     let max: i64 = conn.query_row(
@@ -153,10 +90,11 @@ fn lookup_embed_cache(conn: &Connection, h: &str, m: &str) -> Result<Option<Cach
     let Some((vector, backend_str, dim_i64)) = raw else {
         return Ok(None);
     };
-    let Some(backend) = ast_sgrep_embed::EmbedBackendKind::parse(&backend_str) else {
+    // Cache rows written by a retired engine are self-cleaning misses.
+    if backend_str != "static" {
         drop_cache(conn, h, m);
         return Ok(None);
-    };
+    }
     let Ok(dim) = usize::try_from(dim_i64) else {
         drop_cache(conn, h, m);
         return Ok(None);
@@ -168,11 +106,7 @@ fn lookup_embed_cache(conn: &Connection, h: &str, m: &str) -> Result<Option<Cach
         drop_cache(conn, h, m);
         return Ok(None);
     }
-    Ok(Some(CacheRow {
-        vector,
-        backend,
-        dim,
-    }))
+    Ok(Some(CacheRow { vector, dim }))
 }
 pub(super) fn insert_embed_cache_entries(
     conn: &Connection,
@@ -191,7 +125,7 @@ pub(super) fn insert_embed_cache_entries(
         st.execute(params![
             &e.chunk_hash,
             &e.model_id,
-            e.backend.as_meta_str(),
+            "static",
             e.dim as i64,
             &e.vector,
             at
@@ -238,14 +172,11 @@ pub(super) fn embed_chunks(
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
     source_path: &str,
     do_embed: bool,
-    backend: ast_sgrep_embed::EmbedPreference,
 ) -> Result<EmbeddedChunks> {
     if !do_embed || chunks.is_empty() {
         return Ok(EmbeddedChunks::empty());
     }
-    let mid = cache_model_id_for_pref(backend);
-    let (chunks, cache_entries, cache_hits) =
-        embed_parallel(conn, chunks, source_path, backend, &mid)?;
+    let (chunks, cache_entries, cache_hits) = embed_parallel(conn, chunks, source_path)?;
     Ok(EmbeddedChunks {
         chunks,
         cache_entries,
@@ -266,9 +197,8 @@ fn embed_parallel(
     conn: &Connection,
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
     source_path: &str,
-    backend: ast_sgrep_embed::EmbedPreference,
-    expected_mid: &Option<String>,
 ) -> Result<(Vec<EmbeddedChunk>, Vec<CacheEntry>, Vec<CacheHit>)> {
+    let mid = active_model_id();
     let mut jobs: Vec<(usize, EmbedSlot, String)> = Vec::new();
     for (i, chunk) in chunks.iter().enumerate() {
         jobs.push((
@@ -293,15 +223,13 @@ fn embed_parallel(
     let mut primary_hits = Vec::new();
     for (i, (_, slot, text)) in jobs.iter().enumerate() {
         let h = crate::index_prepare::hash_content(text);
-        if let Some(mid) = expected_mid {
-            if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
-                cached[i] = Some(row);
-                if matches!(slot, EmbedSlot::Primary) {
-                    primary_hits.push(CacheHit {
-                        chunk_hash: h,
-                        model_id: mid.clone(),
-                    });
-                }
+        if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
+            cached[i] = Some(row);
+            if matches!(slot, EmbedSlot::Primary) {
+                primary_hits.push(CacheHit {
+                    chunk_hash: h,
+                    model_id: mid.to_string(),
+                });
             }
         }
     }
@@ -309,36 +237,28 @@ fn embed_parallel(
     let mut entries = Vec::new();
     if !miss_idx.is_empty() {
         let miss_refs: Vec<&str> = miss_idx.iter().map(|&i| jobs[i].2.as_str()).collect();
-        let miss_res = ast_sgrep_embed::embed_batch_with_chain(&miss_refs, backend);
+        let miss_res = ast_sgrep_embed::embed_texts(&miss_refs);
         if miss_res.len() != miss_idx.len() {
             return Err(crate::StoreError::Other(
                 "embedding result length mismatch".into(),
             ));
         }
-        for (job_i, r) in miss_idx.into_iter().zip(miss_res) {
-            let vb = ast_sgrep_embed::embed_to_bytes(&r.vector);
-            let dim = r.vector.len();
-            if let Some(mid) = cache_model_id_for_backend(r.backend) {
-                entries.push(CacheEntry {
-                    chunk_hash: crate::index_prepare::hash_content(&jobs[job_i].2),
-                    model_id: mid,
-                    backend: r.backend,
-                    dim,
-                    vector: vb.clone(),
-                });
-            }
-            cached[job_i] = Some(CacheRow {
-                vector: vb,
-                backend: r.backend,
+        for (job_i, vector) in miss_idx.into_iter().zip(miss_res) {
+            let dim = vector.len();
+            let vb = ast_sgrep_embed::embed_to_bytes(&vector);
+            entries.push(CacheEntry {
+                chunk_hash: crate::index_prepare::hash_content(&jobs[job_i].2),
+                model_id: mid.to_string(),
                 dim,
+                vector: vb.clone(),
             });
+            cached[job_i] = Some(CacheRow { vector: vb, dim });
         }
     }
     let mut out: Vec<EmbeddedChunk> = (0..chunks.len())
         .map(|_| EmbeddedChunk {
             vector_bytes: Vec::new(),
             dim: 0,
-            backend: ast_sgrep_embed::EmbedBackendKind::Semantic,
             name: None,
             docs: None,
             body: None,
@@ -354,10 +274,9 @@ fn embed_parallel(
         let dest = &mut out[*chunk_idx];
         if dest.dim == 0 {
             dest.dim = row.dim;
-            dest.backend = row.backend;
-        } else if dest.backend != row.backend || dest.dim != row.dim {
+        } else if dest.dim != row.dim {
             return Err(crate::StoreError::Other(
-                "embedding provider returned mixed backend or dimension identities".into(),
+                "embedding provider returned mixed dimension identities".into(),
             ));
         }
         match slot {

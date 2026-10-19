@@ -206,12 +206,41 @@ fn run_cli(cli: &Cli) -> anyhow::Result<()> {
 }
 
 fn validate_cli(cli: &Cli) -> anyhow::Result<()> {
+    // Discovery commands must work in any environment: a stale retired env
+    // var in the shell cannot be allowed to break `capabilities`.
+    if matches!(
+        cli.command.as_ref(),
+        Some(Commands::Capabilities(_) | Commands::RobotDocs(_) | Commands::Version(_))
+    ) {
+        return Ok(());
+    }
+    // Retired flags fail loudly instead of silently no-op'ing: the static
+    // engine is the only embedding backend and reranking left with the
+    // neural stack.
+    let tuning = cli.active_tuning();
+    if tuning.neural_embed {
+        anyhow::bail!(
+            "--neural-embed / ASGREP_NEURAL_EMBED was removed: asgrep has one embedding engine (compiled-in static); unset it and re-run `asgrep index` once to migrate old indexes"
+        );
+    }
+    if tuning.rerank || tuning.rerank_top_k != 20 {
+        anyhow::bail!(
+            "--rerank / ASGREP_RERANK was removed with the neural backends; reranking is not available in this build"
+        );
+    }
+    if let Ok(backend) = std::env::var("ASGREP_EMBED_BACKEND") {
+        let backend = backend.trim();
+        if !backend.is_empty() && !backend.eq_ignore_ascii_case("static") {
+            anyhow::bail!(
+                "ASGREP_EMBED_BACKEND={backend} was removed: asgrep has one embedding engine (compiled-in static); unset it and re-run `asgrep index` once to migrate old indexes"
+            );
+        }
+    }
     // Search-only flags must fail on commands that cannot apply them.
     let search_command = matches!(
         cli.command.as_ref(),
         None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
     );
-    let tuning = cli.active_tuning();
     if tuning.semantic_only
         && matches!(cli.command.as_ref(), Some(Commands::Search(q)) if !q.pattern.is_empty())
     {

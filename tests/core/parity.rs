@@ -3,42 +3,24 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions};
-use ast_sgrep_embed::EmbedPreference;
+use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions};
 use ast_sgrep_testkit::{index_sample, reopen_indexer, searcher_from};
 use std::fs;
 
 #[test]
 fn parity_search_option_wiring() {
     let opts = SearchOptions {
-        use_neural_embed: true,
         ann_probes: Some(4),
-        use_rerank: true,
-        rerank_top_k: 5,
         ..SearchOptions::default()
     };
-    assert_eq!(opts.embed_preference(), EmbedPreference::Neural);
-    #[cfg(not(all(feature = "neural-embed", feature = "rerank")))]
-    {
-        let err = ast_sgrep_core::Searcher::new(SearchOptions {
-            root: std::path::PathBuf::from("."),
-            ..opts.clone()
-        });
-        assert!(
-            err.is_err(),
-            "neural/rerank flags must fail closed when features are off"
-        );
-    }
     let indexed = index_sample(IndexOptions {
         force_reindex: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     });
     let searcher = searcher_from(
         &indexed,
         SearchOptions {
             ann_probes: Some(4),
-            rerank_top_k: 5,
             ..SearchOptions::default()
         },
     );
@@ -64,7 +46,6 @@ fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {
     let options = IndexOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path.clone()),
-        embed_backend: EmbedBackend::Semantic,
         ann_threshold: Some(1),
         force_reindex: false,
         ..IndexOptions::default()

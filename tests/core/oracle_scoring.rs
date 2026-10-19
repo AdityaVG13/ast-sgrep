@@ -348,6 +348,31 @@ fn intent_classify_weights_routing_and_scoring() {
         classify(&ParsedQuery::parse("hello world foo")),
         QueryIntent::Conceptual
     );
+    // An English clause separator is not a pattern. A paragraph that
+    // contains ";" stays conceptual; a call terminator stays structural.
+    // A parenthetical ("error (if any); if empty") is not a call.
+    assert_eq!(
+        classify(&ParsedQuery::parse(
+            "raise an exception; if the line is unchanged, stop"
+        )),
+        QueryIntent::Conceptual
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse(
+            "returns `true`; otherwise the match fails and the caller stops"
+        )),
+        QueryIntent::Conceptual
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse(
+            "report the error (if any); if this object is empty, return"
+        )),
+        QueryIntent::Conceptual
+    );
+    assert_eq!(
+        classify(&ParsedQuery::parse("foo();")),
+        QueryIntent::Structural
+    );
     assert_eq!(
         classify(&ParsedQuery::parse("héllo wörld foo bar")),
         QueryIntent::Conceptual

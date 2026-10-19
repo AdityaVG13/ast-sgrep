@@ -8,8 +8,8 @@ use ast_sgrep_core::scip::{load_scip_index, ScipLoad, SCIP_CHANNEL};
 use ast_sgrep_core::search::DegradedChannel;
 use ast_sgrep_core::skip::should_skip_dir;
 use ast_sgrep_core::{
-    canonicalize_affected_path, index_db_path, EmbedBackend, IndexOptions, IndexStats, IndexStore,
-    Indexer, SearchOptions, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, index_db_path, IndexOptions, IndexStats, IndexStore, Indexer,
+    SearchOptions, MAX_INCREMENTAL_PATHS,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -132,7 +132,6 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         respect_gitignore: true,
         use_tantivy: t.tantivy,
         embed_semantic: !t.no_embed,
-        embed_backend: EmbedBackend::from_flags(t.neural_embed, t.semantic_only),
         force_reindex: false,
         ann_threshold: t.ann_threshold,
         // Explicit flag wins; otherwise the safe default.
@@ -528,7 +527,7 @@ fn open_searcher_raw(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::S
 pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
     let (root, index_path) = resolve_root_index(cli, root);
     let t = cli.active_tuning();
-    let mut opts = SearchOptions {
+    let opts = SearchOptions {
         root,
         index_path,
         // Remap 0 / oversize here so CLI envelope `limit` matches Searcher (docs: 0 → default).
@@ -538,12 +537,9 @@ pub(crate) fn search_options(root: &Path, cli: &Cli) -> SearchOptions {
         use_tantivy: t.tantivy,
         ann_threshold: t.ann_threshold,
         ann_probes: t.ann_probes,
-        use_rerank: t.rerank,
-        rerank_top_k: t.rerank_top_k.clamp(1, ast_sgrep_core::MAX_OUTPUT_RESULTS),
+        use_semantic_only: t.semantic_only,
         file_filter: t.file_filter,
         ..SearchOptions::default()
     };
-    // Exclusive collapse: Neural > Semantic > Auto.
-    opts.set_embed_backend(EmbedBackend::from_flags(t.neural_embed, t.semantic_only));
     opts
 }

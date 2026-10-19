@@ -1,5 +1,11 @@
 # Topology test catalog (feature-topology intent map)
 
+> **Phase 2 (native embed engine) retired the neural x rerank feature
+> matrix.** Rows below describing `neural-embed`/`rerank` feature cells are
+> historical: those tests were deleted with the features, and the surviving
+> topology suites now pin the single-engine surface (retired flags reject
+> with an explicit removal error). Do not read feature-cell rows as live.
+
 Scope: all 8 files `tests/cli/topology_pass{1,2,3,4}.rs`,
 `tests/core/topology_pass{1,2,3,4}.rs`. Read-only audit; this file is the only
 write. No commits.

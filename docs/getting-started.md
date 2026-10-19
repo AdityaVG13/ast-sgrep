@@ -191,12 +191,9 @@ Machine-oriented catalog: `asgrep capabilities --json` (clap-derived; preferred 
 | `--excerpt-lines` | | Extra excerpt lines in structured formats (capped) |
 | `--no-embed` | `ASGREP_NO_EMBED=1` | Disable semantic indexing + search |
 | `--tantivy` | `ASGREP_TANTIVY=1` | Force secondary FTS5 lexical DB (`.asgrep/lexical.db`; flag name is historical) |
-| `--neural-embed` | `ASGREP_NEURAL_EMBED=1` | Prefer local in-process neural embeddings (feature-gated) |
-| `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force offline hashed semantic only |
+| `--semantic-only` | `ASGREP_SEMANTIC_ONLY=1` | Force semantic-only channel |
 | `--ann-threshold` | `ASGREP_ANN_THRESHOLD` | Symbol count before IVF-ANN (default 2000) |
 | `--ann-probes` | `ASGREP_ANN_PROBES` | IVF clusters to probe |
-| `--rerank` | `ASGREP_RERANK` | Local cross-encoder rerank (feature-gated) |
-| `--rerank-top-k` | `ASGREP_RERANK_TOP_K` | Rerank candidate pool (default 20) |
 | `--lang` | | Filter by stored id or file extension: `ts`/`tsx`, `js`, `py`, `rs`, `h`/`hpp`, `go`, … |
 | `--index-path` | `ASGREP_INDEX_PATH` | Custom index DB path (**privileged sink**; pin disables gen reindex) |
 
@@ -229,17 +226,15 @@ GRAPH: src/main.rs: main calls auth_refresh
 ANCHOR: src/main.rs:19-22: fn auth_refresh() { ... }
 ```
 
-## Neural embeddings (optional, in-process)
+## Semantic embeddings
 
-Default workflow needs **no API key** and makes **no network calls**. To upgrade from hashed vectors to ONNX MiniLM/BGE:
-
-```bash
-# Build with the neural feature, then:
-export ASGREP_NEURAL_EMBED=1
-asgrep --neural-embed index .
-```
-
-Hashed (256-d) and neural (384-d) indexes are different model identities. Query with the same backend used at index time. `asgrep status` shows the stored backend and dimension. Indexes that still record `cloud` or `ollama` must be rebuilt (`asgrep reindex`).
+Semantic search uses a single static embedding engine compiled into the
+binary: **no API key**, **no network calls**, **no model download**. Vectors
+are deterministic 256-d `f32`; `asgrep status` shows the stored backend and
+dimension. Indexes written by retired backends (hashed `semantic-v2`, neural,
+`cloud`, `ollama`) are re-embedded automatically on the next index run; until
+then search errors rather than serving stale vectors. See
+[semantic-search.md](semantic-search.md).
 
 ## Large repos
 

@@ -22,7 +22,9 @@ pi install npm:pi-ast-sgrep
 
 It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `asgrep_status`, four `/asgrep-*` commands, and the `ast-sgrep` skill. The first search lazily creates `.asgrep/`; no Rust toolchain, PATH setup, MCP adapter, credential, or runtime download is required. See the [complete Pi package guide](docs/pi-package.md) and [Code Mode](docs/codemode.md).
 
-**Upgrading to 2.0:** this is a breaking semver release. Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Local hashed semantic search remains the default, optional neural embeddings remain in-process, and indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. Pi users can update the package normally.
+**Upgrading to 2.0:** this is a breaking semver release. Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone, and indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. Pi users can update the package normally.
+
+**Current embedding engine:** a single static (Model2Vec-style) engine compiled into the binary — deterministic 256-d vectors, no model download, no ONNX runtime. The hashed and neural backends are retired; `--neural-embed` / `ASGREP_EMBED_BACKEND` now error explicitly, and old indexes re-embed automatically on the next index run. See [semantic search](docs/semantic-search.md).
 
 Standalone CLI binaries are on the [v2.5.4 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.5.4) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`). This release is GitHub + npm only; it is not published to crates.io.
 
@@ -97,7 +99,7 @@ Most other code search is either **fast text** (ripgrep) or **pattern matching**
 
 **ast-sgrep** builds a **persistent index**: symbols, caller/callee edges, imports, lexical FTS, and **symbol-level semantic vectors** enriched with call-graph context. Query in natural language or with graph prefixes; get ranked hits with excerpts for humans or agents.
 
-**No API key required.** Offline hashed semantic search works out of the box. Optional in-process neural embeddings (ONNX / MiniLM) are a local upgrade, never a network call.
+**No API key required.** Semantic search works out of the box: a static embedding engine is compiled into the binary — no model download, no runtime, never a network call.
 
 | You need... | ast-sgrep gives you... |
 |-------------|------------------------|
@@ -167,7 +169,7 @@ Query: "credential renewal"
   → semantic pass ranks auth_refresh (zero token overlap)
 ```
 
-Provider chain: **neural** (optional `--features neural-embed` + `ASGREP_NEURAL_EMBED`) → **local hashed semantic** (always available). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`). There is no cloud or Ollama embed client.
+Embeddings come from one static engine compiled into the binary (256-d, deterministic). Large repos may use a persisted IVF-ANN sidecar (`.asgrep/semantic.ivf`). There is no cloud, Ollama, or ONNX embed client.
 
 After fusion, the critic reviews the shortlist in-process. Agent envelopes expose `why` (including `critic:` notes) and causal `follow_up_queries`.
 
@@ -247,7 +249,7 @@ different 18-query historical fingerprint.
 | `crates/ast-sgrep-core` | Index, SQLite store, hybrid search, critic, planner |
 | `crates/ast-sgrep-cli` | `asgrep` / `ast-sgrep` CLI + supervisor |
 | `crates/ast-sgrep-lang` | Tree-sitter extraction (15 languages) |
-| `crates/ast-sgrep-embed` | In-process embedding backends + optional rerank |
+| `crates/ast-sgrep-embed` | Static embedding engine (compiled-in table) |
 | `crates/ast-sgrep-mmap` | Memory-map helpers |
 | `crates/ast-sgrep-lsp` | Language server |
 | `crates/ast-sgrep-mcp` | MCP server |

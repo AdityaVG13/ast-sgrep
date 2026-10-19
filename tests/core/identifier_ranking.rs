@@ -801,8 +801,292 @@ __global__ void vt_lmhead_fp8_kernel() {}
             .hits
             .iter()
             .any(|h| h.file.replace(char::from(92), "/").ends_with("lmhead.cu")),
-        "exact-token query must surface the .cu source file; hits:
-{}",
+        "exact-token query must surface the .cu source file; hits:\n{}",
         autopsy(&response.hits)
     );
+}
+
+#[test]
+fn flooded_common_term_does_not_starve_rare_term_defs() {
+    // INTENT: hybrid symbol admission must not spend its whole row budget on
+    // one flooded query term ("run" matches 40 defs in an early path) before
+    // a rare term's only def ("next" in a later path) is even scored.
+    // Selection that truncates in path order starves the rare-term def;
+    // admission must be term-fair. Mirrors the self-gold
+    // conceptual-follow-up-derivation loss on this repo's own index.
+    let temp = TempDir::new().unwrap();
+    let mut flood = String::new();
+    for i in 0..40 {
+        flood.push_str(&format!("pub fn run_step_{i:02}() {{}}\n"));
+    }
+    write_src(temp.path(), "src/a_flood.rs", &flood);
+    write_src(
+        temp.path(),
+        "src/z_planner.rs",
+        r#"
+/// Derive the follow-up command suggested by the top search result.
+pub fn plan_suggested_next() {}
+pub fn follow_ups_for_hit() {}
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let assert_admitted = |searcher: &Searcher, lane: &str| {
+        let response = searcher
+            .search("derive the next command to run from the best result")
+            .expect("search");
+        let admitted = response.hits.iter().any(|hit| {
+            hit.kind == ast_sgrep_core::HitKind::Def
+                && hit.symbol.as_deref() == Some("plan_suggested_next")
+        });
+        assert!(
+            admitted,
+            "{lane} lane starved the rare-term def; hits:\n{}",
+            autopsy(&response.hits)
+        );
+    };
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 20,
+        use_embed: false,
+        ..SearchOptions::default()
+    };
+    let cold = Searcher::new(options.clone()).expect("cold searcher");
+    assert_admitted(&cold, "cold");
+    let warm = Searcher::new(options).expect("warm searcher");
+    warm.hold_read_snapshot().expect("hold snapshot");
+    warm.warm_search_path().expect("warm");
+    assert_admitted(&warm, "warm");
+}
+
+#[test]
+fn fragment_chunks_do_not_crowd_out_the_parent_symbol() {
+    // INTENT: the embed lane must always represent a function by its whole
+    // body, not only by extracted pattern-node child fragments. When child
+    // nodes exist, fragment-only chunking makes every non-call statement
+    // invisible to conceptual ranking: the function is represented by
+    // scraps like `Vec::new()` while the statements that carry its meaning
+    // never reach the semantic index. Mirrors the self-gold
+    // conceptual-follow-up-derivation loss, where `plan_suggested_next`'s
+    // body never became a chunk. The discriminative content below sits in
+    // a plain array literal (not a call), decoys own the query's generic
+    // vocabulary, and the target's name shares no token with the query.
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/z_workflow.rs",
+        r#"
+pub fn advance_workflow() {
+    if workflow_is_idle() {
+        return;
+    }
+    let steps = ["gather follow up commands", "execute them next"];
+    emit_steps(steps.len());
+}
+
+fn workflow_is_idle() -> bool { true }
+fn emit_steps(_count: usize) {}
+"#,
+    );
+    for i in 0..8 {
+        write_src(
+            temp.path(),
+            &format!("src/run_{i}.rs"),
+            &format!(
+                "pub fn run_task_{i}() {{\n    let started = clock_now();\n    if started < {i} {{\n        log_line(\"early\");\n    }}\n    execute_shell_command(\"task {i}\");\n    record_elapsed(started, {i});\n}}\nfn execute_shell_command(_cmd: &str) {{}}\nfn clock_now() -> u32 {{ 0 }}\nfn log_line(_m: &str) {{}}\nfn record_elapsed(_s: u32, _i: u32) {{}}\n"
+            ),
+        );
+    }
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 20,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    let response = searcher
+        .search_semantic("collect follow up commands to execute next")
+        .expect("semantic search");
+    // Asserted property = the INTENT above: whole-body representation must
+    // carry the parent above every real-body decoy (pre-fix it sat below
+    // all of them, represented only by fragments). The eight empty
+    // `execute_shell_command` stubs still outrank it — their name-only
+    // chunk text is a concentrated match for the query's generic tokens
+    // under the borrowed Phase-1 weights. That short-text purity effect is
+    // a representation-quality limitation owned by Phase 3/4, recorded in
+    // docs/progress/surface-deferrals.md; asserting past it here would
+    // demand score tuning, not representation.
+    let pos = |pred: &dyn Fn(&str) -> bool| {
+        response
+            .hits
+            .iter()
+            .position(|hit| hit.symbol.as_deref().is_some_and(pred))
+    };
+    let parent = pos(&|s| s == "advance_workflow");
+    let first_decoy = pos(&|s| s.starts_with("run_task_"));
+    assert!(
+        parent.is_some() && first_decoy.is_some() && parent < first_decoy,
+        "semantic lane starved the parent body behind its fragments \
+         (parent={parent:?}, first_decoy={first_decoy:?}); hits:\n{}",
+        autopsy(&response.hits)
+    );
+}
+
+#[test]
+fn rare_term_def_outranks_flooded_term_def() {
+    // INTENT: a def matching a RARE query token is stronger evidence than a
+    // def matching a flooded one. Coverage scoring that counts matching
+    // terms without regard to how many symbols each term matches lets the
+    // flooded term's defs (here `process`, 41 symbols) tie or beat the one
+    // def carrying the query's discriminative token (`quiesce`, 1 symbol),
+    // even when both match the same number of terms. Mirrors the self-gold
+    // conceptual-follow-up-derivation loss, where `run`/`command` defs
+    // outscored the `follow_up`/`next` defs. Vocabulary here is unrelated
+    // to the gold queries.
+    let temp = TempDir::new().unwrap();
+    let mut flood = String::from("pub fn process_pipeline_main() { let _ = 1; }\n");
+    for i in 0..40 {
+        flood.push_str(&format!("pub fn process_step_{i:02}() {{ let _ = 1; }}\n"));
+    }
+    write_src(temp.path(), "src/a_process.rs", &flood);
+    write_src(
+        temp.path(),
+        "src/z_quiesce.rs",
+        "pub fn quiesce_pipeline() { let _ = 1; }\n",
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let assert_order = |searcher: &Searcher, lane: &str| {
+        let response = searcher
+            .search("process the quiesce pipeline")
+            .expect("search");
+        let pos = |symbol: &str| {
+            response
+                .hits
+                .iter()
+                .position(|hit| hit.symbol.as_deref() == Some(symbol))
+        };
+        let (rare, common) = (pos("quiesce_pipeline"), pos("process_pipeline_main"));
+        assert!(
+            rare.is_some() && common.is_some() && rare < common,
+            "{lane} lane ranked the flooded-term def above the rare-term def \
+             (rare={rare:?}, common={common:?}); hits:\n{}",
+            autopsy(&response.hits)
+        );
+    };
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 20,
+        use_embed: false,
+        ..SearchOptions::default()
+    };
+    let cold = Searcher::new(options.clone()).expect("cold searcher");
+    assert_order(&cold, "cold");
+    let warm = Searcher::new(options).expect("warm searcher");
+    warm.hold_read_snapshot().expect("hold snapshot");
+    warm.warm_search_path().expect("warm");
+    assert_order(&warm, "warm");
+}
+
+#[test]
+fn full_structural_page_still_considers_semantic_evidence() {
+    // INTENT: on a non-conceptual hybrid query, semantic evidence must be
+    // considered even when structural hits already fill the result page.
+    // The hashed-era thin-page condition skipped the restricted embed pass
+    // whenever `hits.len() >= limit`, so a file admitted by weak structural
+    // evidence (one shared token) whose *meaning* is the real match could
+    // never be promoted by the learned backend — it fell off the page
+    // behind decoys that merely parrot the query's tokens. The query below
+    // carries a structural marker (`=>`) in prose, so it classifies
+    // Structural and takes the restricted pass; the target's vocabulary is
+    // synonymous, not token-identical, so only the embedding can carry it.
+    // 2D ablation, frozen suite 2026-10-14: removing the condition moved
+    // RepoQA MRR@10 .521 -> .533 with CoSQA byte-identical.
+    let temp = TempDir::new().unwrap();
+    for i in 0..16 {
+        write_src(
+            temp.path(),
+            &format!("src/decoy_{i}.rs"),
+            &format!(
+                "/// merge pending filesystem notifications callback merge pending\npub fn merge_pending_notifications_{i}() {{ let _ = 1; }}\n"
+            ),
+        );
+    }
+    write_src(
+        temp.path(),
+        "src/z_notify.rs",
+        r#"
+/// Coalesce a burst of queued file-change alerts and deliver a single
+/// notification to subscribers so watchers are not flooded by duplicates.
+pub fn flush_pending_alerts() { let _ = 1; }
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let assert_promoted = |searcher: &Searcher, lane: &str| {
+        let response = searcher
+            .search("merge pending filesystem notifications => one callback")
+            .expect("search");
+        let target = response
+            .hits
+            .iter()
+            .find(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts"));
+        let Some(target) = target else {
+            panic!(
+                "{lane} lane dropped the semantic match off a full structural page; hits:\n{}",
+                autopsy(&response.hits)
+            );
+        };
+        assert!(
+            target
+                .contributors
+                .contains(&ast_sgrep_core::HitKind::Embed),
+            "{lane} lane never considered semantic evidence for the target on a \
+             full structural page (contributors: {:?}); hits:\n{}",
+            target.contributors,
+            autopsy(&response.hits)
+        );
+    };
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 4,
+        use_embed: true,
+        ..SearchOptions::default()
+    };
+    let cold = Searcher::new(options.clone()).expect("cold searcher");
+    assert_promoted(&cold, "cold");
+    let warm = Searcher::new(options).expect("warm searcher");
+    warm.hold_read_snapshot().expect("hold snapshot");
+    warm.warm_search_path().expect("warm");
+    assert_promoted(&warm, "warm");
 }

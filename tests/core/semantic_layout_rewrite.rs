@@ -3,7 +3,7 @@
 //! A store advertising embed_backend="semantic" must not flip to the
 //! active backend after a single-file update under Auto — that opened the
 //! search gate while sibling chunks stayed on the old layout. Full index_all may promote.
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use std::fs;
 
 fn write_py(root: &std::path::Path, name: &str, body: &str) {
@@ -75,7 +75,7 @@ fn single_file_update_does_not_promote_unversioned_semantic_meta() {
             .unwrap()
             .as_deref(),
         Some("semantic"),
-        "partial update must not advertise semantic-v2 while siblings may still be unversioned"
+        "partial update must not advertise a new identity while siblings may still be unversioned"
     );
 
     let searcher = Searcher::new(SearchOptions {
@@ -91,7 +91,7 @@ fn single_file_update_does_not_promote_unversioned_semantic_meta() {
         .expect_err("search must refuse unversioned semantic meta");
     let msg = err.to_string();
     assert!(
-        msg.contains("unversioned semantic backend") || msg.contains("reindex"),
+        msg.contains("unversioned semantic backend") || msg.contains("to migrate"),
         "unexpected error: {msg}"
     );
 }
@@ -268,20 +268,25 @@ fn auto_index_migrates_legacy_semantic_store_to_static() {
         "def compute_invoice():\n    return 'sum the line items'\n",
     );
 
-    // Build a legacy hashed store (explicit Semantic preference).
+    // Build a store, then stamp it as a pre-Phase-2 legacy build did:
+    // hashed backend + model identity, embed_backend_pref="auto" (the
+    // common real-world store the migration must catch).
     let mut indexer = Indexer::new(IndexOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path.clone()),
         embed_semantic: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
-    // Stamp as a pre-2A default (Auto) build did: hashed vectors with
-    // embed_backend_pref="auto". This is the common real-world store the
-    // migration must catch — the backend-part identity check passes for
-    // it, so only the active-model comparison can trigger the rewrite.
+    indexer
+        .store()
+        .set_meta("embed_backend", "semantic-v2")
+        .unwrap();
+    indexer
+        .store()
+        .set_meta("embed_model", "semantic-v2:256")
+        .unwrap();
     indexer
         .store()
         .set_meta("embed_backend_pref", "auto")

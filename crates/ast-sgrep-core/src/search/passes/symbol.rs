@@ -1,14 +1,16 @@
 use crate::query::ParsedQuery;
 use crate::rank::{
-    best_symbol_score_normalized, normalize_query_terms, score_caller_normalized, score_def,
-    SCORE_ANCHOR, SCORE_GRAPH,
+    best_symbol_score_normalized, max_normalize_idf, normalize_query_terms, score_caller_weighted,
+    score_def, score_def_weighted, term_idf, SCORE_ANCHOR, SCORE_GRAPH,
 };
 use crate::search::types::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
-use crate::store::sql::{caller_terms_filter, like_terms_filter, query_limit_map};
+use crate::store::sql::{
+    caller_terms_filter, escape_like_term, like_terms_filter, query_limit_map,
+};
 use crate::store::IndexStore;
 use crate::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
@@ -88,10 +90,41 @@ impl WarmedSymbolTable {
         }
         let rows = &self.rows;
         matched.sort_by(|&left, &right| cmp_symbol_rows(&rows[left], &rows[right]));
-        quota_partition(matched, |&i| kind_rank(rows[i].3.as_str()), limit)
-            .into_iter()
-            .map(|i| rows[i].clone())
-            .collect()
+        // Quotas precede admission; term-fairness applies within each quota
+        // bucket (see `quota_term_fair_partition`). Mirrors the cold SQL
+        // lane's three fair arms.
+        let mut matched = quota_term_fair_partition(
+            matched,
+            |&i| kind_rank(rows[i].3.as_str()),
+            |&i| {
+                terms_lower
+                    .iter()
+                    .position(|term| self.names_lower[i].contains(term.as_str()))
+                    .unwrap_or(terms_lower.len())
+            },
+            limit,
+        );
+        matched.sort_by(|&left, &right| cmp_symbol_rows(&rows[left], &rows[right]));
+        matched.into_iter().map(|i| rows[i].clone()).collect()
+    }
+
+    /// Per-term IDF weights over the warmed table (the whole symbol table):
+    /// one pass counting, per normalized term, how many names contain it —
+    /// the same predicate as matching. Mirrors [`name_table_idf_weights`]
+    /// so warm and cold lanes score defs identically.
+    fn idf_weights(&self, normalized_terms: &[String]) -> Vec<f64> {
+        let mut dfs = vec![0u64; normalized_terms.len()];
+        for name in self.names_lower.iter() {
+            for (i, term) in normalized_terms.iter().enumerate() {
+                if name.contains(term.as_str()) {
+                    dfs[i] += 1;
+                }
+            }
+        }
+        let total = self.names_lower.len() as u64;
+        let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
+        max_normalize_idf(&mut weights);
+        weights
     }
 }
 
@@ -143,6 +176,137 @@ pub fn quota_partition<T>(items: Vec<T>, group_of: impl Fn(&T) -> u8, limit: usi
     others.truncate(leftover);
     fns.truncate(limit.saturating_sub(types.len() + others.len()));
     fns.into_iter().chain(types).chain(others).collect()
+}
+
+/// Combined admission for multi-source fairness: kind quotas partition the
+/// budget first — minorities are reserved from their full bucket, exactly
+/// as [`quota_partition`] — and each bucket then fills its budget
+/// term-fairly via [`term_fair_select`]. Running term-fair truncation over
+/// the whole list first would re-create the starvation quotas exist to
+/// prevent: canonical order is kind-first, so a flooded term's function
+/// rows would spend the window before any minority row is considered.
+/// Input must be in [`cmp_symbol_rows`] order; output is functions, then
+/// types, then others (round-robin order within each bucket; callers
+/// re-sort canonically). The cold SQL lane implements the same policy as
+/// three fair arms in `query_quota_symbol_spans`; keep them in lockstep.
+pub fn quota_term_fair_partition<T>(
+    items: Vec<T>,
+    group_of: impl Fn(&T) -> u8,
+    term_of: impl Fn(&T) -> usize,
+    limit: usize,
+) -> Vec<T> {
+    let other_keep = minority_slot_limit(limit);
+    let mut fns = Vec::new();
+    let mut types = Vec::new();
+    let mut others = Vec::new();
+    for item in items {
+        match group_of(&item) {
+            0 => fns.push(item),
+            1 => types.push(item),
+            _ => others.push(item),
+        }
+    }
+    let types = term_fair_select(types, |item| term_of(item), other_keep);
+    let leftover = other_keep.saturating_sub(types.len());
+    let others = term_fair_select(others, |item| term_of(item), leftover);
+    let fn_budget = limit.saturating_sub(types.len() + others.len());
+    let fns = term_fair_select(fns, |item| term_of(item), fn_budget);
+    fns.into_iter().chain(types).chain(others).collect()
+}
+
+/// Term-fair admission over a canonically sorted match list: when matches
+/// exceed the row budget, draw rows round-robin across per-term groups
+/// (`term_of` = index of the first query term the row matches) instead of
+/// truncating in canonical order. Path-order truncation lets one flooded
+/// term ("run" matching hundreds of defs in early paths) spend the whole
+/// window before a rare term's defs are ever scored; interleaving keeps
+/// every term represented while still filling the budget. Under budget
+/// this is the identity. Applied per kind-quota bucket by
+/// [`quota_term_fair_partition`]; the cold SQL lane implements the same
+/// policy with ROW_NUMBER partitioned by (kind bucket, term) (see
+/// `query_quota_symbol_spans`); the two must stay in lockstep or
+/// warm/cold results diverge.
+pub fn term_fair_select<T>(items: Vec<T>, term_of: impl Fn(&T) -> usize, limit: usize) -> Vec<T> {
+    if items.len() <= limit {
+        return items;
+    }
+    let mut groups: Vec<VecDeque<T>> = Vec::new();
+    for item in items {
+        let term = term_of(&item);
+        if groups.len() <= term {
+            groups.resize_with(term + 1, VecDeque::new);
+        }
+        groups[term].push_back(item);
+    }
+    let mut out = Vec::with_capacity(limit);
+    while out.len() < limit {
+        let mut progressed = false;
+        for group in &mut groups {
+            if out.len() == limit {
+                break;
+            }
+            if let Some(item) = group.pop_front() {
+                out.push(item);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    out
+}
+
+/// Per-term IDF weights over a name column (`symbols.name` for defs,
+/// distinct `callers.callee` for caller hits): one scan counts, per
+/// normalized term, how many names contain it under the same LIKE
+/// predicate as matching. The population is the name vocabulary — one
+/// entry per distinct name — so a callee called from 500 sites does not
+/// make its tokens 500x more common as name evidence (and the distinct
+/// scan stays ~2 ms where the raw callers scan is ~11 ms on this repo).
+/// `source`/`column` are internal constants, never user input. Mirrors
+/// `WarmedSymbolTable::idf_weights` so warm and cold lanes score
+/// identically.
+fn name_table_idf_weights(
+    store: &IndexStore,
+    source: &str,
+    column: &str,
+    normalized_terms: &[String],
+) -> Result<Vec<f64>> {
+    if normalized_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = String::from("SELECT count(*)");
+    for i in 0..normalized_terms.len() {
+        sql.push_str(&format!(
+            ", COALESCE(SUM(CASE WHEN {column} LIKE '%' || ?{} || '%' ESCAPE '\\' THEN 1 ELSE 0 END), 0)",
+            i + 1
+        ));
+    }
+    sql.push_str(&format!(" FROM {source}"));
+    let bound: Vec<String> = normalized_terms
+        .iter()
+        .map(|term| escape_like_term(term))
+        .collect();
+    let params: Vec<&dyn rusqlite::ToSql> =
+        bound.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let conn = store.connection();
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let n_terms = normalized_terms.len();
+    let (total, dfs) = stmt.query_row(params.as_slice(), |row| {
+        let total: i64 = row.get(0)?;
+        let mut dfs = Vec::with_capacity(n_terms);
+        for i in 0..n_terms {
+            dfs.push(row.get::<_, i64>(i + 1)?);
+        }
+        Ok((total, dfs))
+    })?;
+    let mut weights: Vec<f64> = dfs
+        .iter()
+        .map(|&df| term_idf(df.max(0) as u64, total.max(0) as u64))
+        .collect();
+    max_normalize_idf(&mut weights);
+    Ok(weights)
 }
 
 enum CallerMatchMode {
@@ -229,6 +393,20 @@ fn caller_rows_to_hits(
     let primary_lower = parsed.primary_symbol().map(|s| s.to_lowercase());
     // am6l: normalize query terms once per query, not once per scored row.
     let norm_terms = normalize_query_terms(&parsed.terms);
+    // Rarity weights over the distinct-callee vocabulary: a callee
+    // matching a term few callees carry is stronger evidence than one
+    // matching a flooded term. Same IDF policy as the def lane. Skipped
+    // when there is nothing to score.
+    let idf_weights = if rows.is_empty() {
+        Vec::new()
+    } else {
+        name_table_idf_weights(
+            excerpt_store,
+            "(SELECT DISTINCT callee FROM callers)",
+            "callee",
+            &norm_terms,
+        )?
+    };
     let mut caller_hits = Vec::new();
     let mut graph_hits = Vec::new();
     for (path, language, caller, callee, line_no) in rows {
@@ -252,7 +430,7 @@ fn caller_rows_to_hits(
             callee.clone(),
             line_no,
             String::new(),
-            score_caller_normalized(&norm_terms, &callee),
+            score_caller_weighted(&norm_terms, &idf_weights, &callee),
         ));
         let graph = match mode {
             CallerMatchMode::CalleeOnly => Some(SCORE_GRAPH),
@@ -377,31 +555,88 @@ fn query_symbol_spans(
     );
     query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)
 }
+/// Bare-column within-bucket order for CTEs that already materialized
+/// aliased columns (no `s.`/`f.` prefixes available). Kind precedence is
+/// carried by the bucket partition, so only path order remains.
+const FAIR_WITHIN_ORDER: &str = " ORDER BY path, line_start, name";
+
 /// Admit minorities before functions in one SQLite snapshot, rather than
 /// cutting a function-first global window before the quota can see them.
 fn query_quota_symbol_spans(
     store: &IndexStore,
+    terms: &[String],
     where_clause: &str,
     mut bind: Vec<String>,
     limit: usize,
 ) -> Result<Vec<SymbolSpanRow>> {
     let other_keep = minority_slot_limit(limit);
-    // Each generated filter contains only anonymous placeholders. Repeat its
-    // bound values for the two arms; the final numbered parameter is the
-    // shared row budget. Only the typed, bounded quota is interpolated.
-    let budget_param = bind.len() * 2 + 1;
-    bind.extend_from_within(..);
+    if terms.len() < 2 {
+        // Each generated filter contains only anonymous placeholders. Repeat
+        // its bound values for the two arms; the final numbered parameter is
+        // the shared row budget. Only the typed, bounded quota is interpolated.
+        let budget_param = bind.len() * 2 + 1;
+        bind.extend_from_within(..);
+        let sql = format!(
+            "WITH minority AS MATERIALIZED (
+                 {SYMBOL_SELECT}{where_clause} AND s.kind NOT IN ('function','method')
+                 {SYMBOL_PATH_ORDER} LIMIT {other_keep}
+             ), functions AS (
+                 {SYMBOL_SELECT}{where_clause} AND s.kind IN ('function','method')
+                 {SYMBOL_PATH_ORDER} LIMIT (?{budget_param} - (SELECT count(*) FROM minority))
+             )
+             SELECT * FROM functions UNION ALL SELECT * FROM minority"
+        );
+        return query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row);
+    }
+    // Quota-then-fair admission, mirroring `quota_term_fair_partition` on
+    // the warmed lane: each row carries its kind bucket and the index of
+    // the first query term it matches (the WHERE clause ORs the same
+    // patterns, so the CASE always fires); ROW_NUMBER ranks within each
+    // (bucket, term) group in path order; each bucket arm then picks by
+    // (rn, term_idx), interleaving its term groups round-robin within the
+    // bucket's quota budget. Term-fair truncation over the whole match set
+    // first would starve the minority quotas: canonical order is
+    // kind-first, so a flooded term's functions would spend the window
+    // before any type row is considered. The CASE binds precede the WHERE
+    // binds in statement order; the final numbered parameter is the shared
+    // row budget.
+    let case_arms: Vec<String> = terms
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| format!("WHEN s.name LIKE '%' || ? || '%' ESCAPE '\\' THEN {idx}"))
+        .collect();
+    let mut binds: Vec<String> = terms.iter().map(|term| escape_like_term(term)).collect();
+    let budget_param = binds.len() + bind.len() + 1;
+    binds.append(&mut bind);
     let sql = format!(
-        "WITH minority AS MATERIALIZED (
-             {SYMBOL_SELECT}{where_clause} AND s.kind NOT IN ('function','method')
-             {SYMBOL_PATH_ORDER} LIMIT {other_keep}
+        "WITH matched AS MATERIALIZED (
+             SELECT f.path AS path, f.language AS language, s.name AS name,
+                    s.kind AS kind, s.line_start AS line_start, s.line_end AS line_end,
+                    (CASE {} END) AS term_idx,
+                    (CASE WHEN s.kind IN ('function','method') THEN 0
+                          WHEN s.kind IN ('type','enum','class','interface','struct') THEN 1
+                          ELSE 2 END) AS kind_bucket
+             FROM symbols s JOIN files f ON f.id = s.file_id{where_clause}
+         ), fair AS MATERIALIZED (
+             SELECT path, language, name, kind, line_start, line_end, term_idx, kind_bucket,
+                    ROW_NUMBER() OVER (PARTITION BY kind_bucket, term_idx{FAIR_WITHIN_ORDER}) AS rn
+             FROM matched
+         ), types AS MATERIALIZED (
+             SELECT path, language, name, kind, line_start, line_end
+             FROM fair WHERE kind_bucket = 1 ORDER BY rn ASC, term_idx ASC LIMIT {other_keep}
+         ), others AS MATERIALIZED (
+             SELECT path, language, name, kind, line_start, line_end
+             FROM fair WHERE kind_bucket = 2 ORDER BY rn ASC, term_idx ASC
+             LIMIT ({other_keep} - (SELECT count(*) FROM types))
          ), functions AS (
-             {SYMBOL_SELECT}{where_clause} AND s.kind IN ('function','method')
-             {SYMBOL_PATH_ORDER} LIMIT (?{budget_param} - (SELECT count(*) FROM minority))
+             SELECT path, language, name, kind, line_start, line_end
+             FROM fair WHERE kind_bucket = 0 ORDER BY rn ASC, term_idx ASC
+             LIMIT (?{budget_param} - (SELECT count(*) FROM types) - (SELECT count(*) FROM others))
          )
-         SELECT * FROM functions UNION ALL SELECT * FROM minority"
+         SELECT * FROM functions UNION ALL SELECT * FROM types UNION ALL SELECT * FROM others",
+        case_arms.join(" ")
     );
-    query_limit_map(store.connection(), &sql, bind, limit, read_symbol_span_row)
+    query_limit_map(store.connection(), &sql, binds, limit, read_symbol_span_row)
 }
 
 fn kind_weight(kind: &str) -> f64 {
@@ -539,9 +774,15 @@ pub(crate) fn symbol_pass_for_files_warmed(
         // Quotas must precede admission: even a 500-row function-first
         // window can hide every minority kind. Fetch a bounded quota page in
         // one statement, then preserve the shared canonical selection policy.
-        let mut rows = query_quota_symbol_spans(store, &where_clause, bind, sql_limit)?;
+        let mut rows =
+            query_quota_symbol_spans(store, &parsed.terms, &where_clause, bind, sql_limit)?;
         rows.sort_by(cmp_symbol_rows);
         quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
+    };
+    let norm_terms = normalize_query_terms(&parsed.terms);
+    let idf_weights = match warmed {
+        Some(table) => table.idf_weights(&norm_terms),
+        None => name_table_idf_weights(store, "symbols", "name", &norm_terms)?,
     };
     let mut hits = symbol_span_rows_to_hits_opts(
         store,
@@ -549,7 +790,7 @@ pub(crate) fn symbol_pass_for_files_warmed(
         options,
         parsed,
         HitKind::Def,
-        |name| score_def(&parsed.terms, name),
+        |name| score_def_weighted(&norm_terms, &idf_weights, name),
         false,
     )?;
     if include_callers {
@@ -657,8 +898,10 @@ pub(crate) fn def_hits_for_terms(
     let (where_clause, bind) =
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_KIND_ORDER, limit)?;
+    let norm_terms = normalize_query_terms(&parsed.terms);
+    let idf_weights = name_table_idf_weights(store, "symbols", "name", &norm_terms)?;
     symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Def, |name| {
-        score_def(&parsed.terms, name)
+        score_def_weighted(&norm_terms, &idf_weights, name)
     })
 }
 fn exact_eq_filter(column: &str, value: &str, lang: Option<&str>) -> (String, Vec<String>) {

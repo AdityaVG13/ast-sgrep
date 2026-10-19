@@ -1,38 +1,23 @@
 //! Topology CORE runs: search goldens and end-to-end flow drills as intents.
 //!
-//! Consolidates the behavioral deltas of `topology_pass3.rs` (T3) and the
-//! flow drills of `topology_pass4.rs` (T4) into 7 tests, one intent each:
-//! single-file goldens, multi-file battery, fuse stage, mixed-flow
-//! sequencing (all universal), plus one RUN cell per heavy feature
-//! combination. T3's single-file RUN coverage is absorbed INTO the T4 cell
-//! drills as extra facets on the single-file corpus (the corpus contract
-//! differs, so the facet stays — same test, same cell).
-//!
-//! OFFLINE POLICY: every test RUNS under every feature set. Model-load paths
-//! are never reached, by one of: `use_embed = false` (every embed entry
-//! returns before embedding); rowless corpus (`semantic_sources_empty`
-//! asserted FIRST, embed entries return empty before the query is embedded);
-//! proven-empty shortlist (emptiness proven on the safe path FIRST, then the
-//! gated path runs where `maybe_rerank` early-returns). Stored neural
-//! backends are never probed here (that matrix lives in `topology_local`).
-//! Discriminant/value assertions only, never message text. All options are
-//! built field by field (no `..Default`) so ambient `ASGREP_*` env cannot
-//! perturb them.
+//! Single-file goldens, multi-file battery, fuse stage, and mixed-flow
+//! sequencing. Phase 2 (br-6oh) deleted the feature matrix and its per-cell
+//! drills; every test here is universal. All corpora are rowless
+//! (`embed_semantic: false`) and all searches run with `use_embed = false`
+//! unless noted, so nothing embeds. Discriminant/value assertions only,
+//! never message text. All options are built field by field (no
+//! `..Default`) so ambient `ASGREP_*` env cannot perturb them.
 
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher, StoreError};
+use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Active matrix cell, for failure messages on cross-set goldens.
+/// Build label for failure messages on cross-run goldens. Phase 2 (br-6oh)
+/// deleted the feature matrix; there is one build shape now.
 fn active_cell() -> &'static str {
-    match (cfg!(feature = "neural-embed"), cfg!(feature = "rerank")) {
-        (false, false) => "default",
-        (true, false) => "neural-only",
-        (false, true) => "rerank-only",
-        (true, true) => "all",
-    }
+    "single-engine"
 }
 
 /// Fully hermetic local options: every field explicit, no `..Default`, so no
@@ -46,13 +31,10 @@ fn hermetic_local_options() -> SearchOptions {
         lang_filter: None,
         use_embed: false,
         use_tantivy: false,
-        use_neural_embed: false,
         use_semantic_only: false,
         use_repository_vocabulary: true,
         ann_threshold: None,
         ann_probes: None,
-        use_rerank: false,
-        rerank_top_k: 20,
         case_insensitive: false,
         context_before: 0,
         context_after: 0,
@@ -61,22 +43,15 @@ fn hermetic_local_options() -> SearchOptions {
     }
 }
 
-fn neural_req() -> SearchOptions {
+fn embed_req() -> SearchOptions {
     let mut opts = hermetic_local_options();
     opts.use_embed = true;
-    opts.use_neural_embed = true;
     opts
 }
 
-fn rerank_req() -> SearchOptions {
-    let mut opts = hermetic_local_options();
-    opts.use_rerank = true;
-    opts
-}
-
-fn both_req() -> SearchOptions {
-    let mut opts = neural_req();
-    opts.use_rerank = true;
+fn semantic_only_req() -> SearchOptions {
+    let mut opts = embed_req();
+    opts.use_semantic_only = true;
     opts
 }
 
@@ -853,271 +828,42 @@ fn fuse_stage_explicit_rrf_deterministic_across_sets() {
     );
 }
 
-/// INTENT: local + gated requests interleaved on ONE shared index never
-/// poison the index or perturb local results, in any cell.
-/// Facets: local battery before == golden; interleaved gated constructions
-/// resolve per the ambient set with the `Other` discriminant on closed;
-/// local battery after == before == golden (post-failure integrity).
-/// Absorbs T4#3 (only sequencing pin) and the T4#4 default-cell construction
-/// plus post-failure atoms (its stored-backend matrix lives in
-/// `topology_local`, with a wider two-cell span).
-/// KILLS: index-poisoning, gate-inversion.
+/// INTENT: embed-enabled requests interleaved on ONE shared index never
+/// poison the index or perturb local results.
+/// Facets: local battery before == golden; interleaved embed/semantic-only
+/// constructions succeed; local battery after == before == golden.
+/// KILLS: index-poisoning.
 #[test]
-fn mixed_flow_local_unaffected_by_gated_requests() {
+fn mixed_flow_local_unaffected_by_embed_requests() {
     let (corpus, _index_dir, index_path) = indexed_corpus_2file();
     let local = searcher_for(corpus.path(), &index_path, hermetic_local_options());
     let before = run_battery(&local);
     assert_eq!(before, expected_battery());
 
-    // Interleaved gated constructions: verdict matches the ambient set
-    // (construction only — never `.search()` with open optional flags).
-    for (opts, open, name) in [
-        (neural_req(), cfg!(feature = "neural-embed"), "neural"),
-        (rerank_req(), cfg!(feature = "rerank"), "rerank"),
-        (
-            both_req(),
-            cfg!(all(feature = "neural-embed", feature = "rerank")),
-            "both",
-        ),
+    // Interleaved embed-enabled constructions on the same index.
+    for (opts, name) in [
+        (embed_req(), "embed"),
+        (semantic_only_req(), "semantic-only"),
     ] {
         let mut opts = opts;
         opts.root = corpus.path().to_path_buf();
         opts.index_path = Some(index_path.clone());
-        let result = Searcher::new(opts);
-        assert_eq!(
-            result.is_ok(),
-            open,
-            "{name} gate in cell {}",
-            active_cell()
+        assert!(
+            Searcher::new(opts).is_ok(),
+            "{name} construction must succeed"
         );
-        if let Err(e) = result {
-            assert!(
-                matches!(e, StoreError::Other(_)),
-                "{name} must fail closed with Other"
-            );
-        }
     }
 
-    // Local flow after the interleaved gated requests: byte-identical.
+    // Local flow after the interleaved requests: byte-identical.
     let after = run_battery(&local);
     assert_eq!(
         before, after,
-        "gated requests must not perturb local results"
+        "embed requests must not perturb local results"
     );
     assert_eq!(
         after,
         expected_battery(),
-        "post-failure golden in cell {}",
+        "post-interleave golden in cell {}",
         active_cell()
     );
-}
-
-// ---------------------------------------------------------------------------
-// Cell drills (one exact cell each, negative guards first)
-// ---------------------------------------------------------------------------
-
-/// INTENT: in the neural-only cell the neural request path RUNS offline with
-/// the local golden intact while the rerank half stays fail-closed.
-/// Facets: rowless precondition proven first; single-file 3-query goldens
-/// (T3 corpus contract) + multi-file 12-row battery (T4 corpus contract) on
-/// neural-open flows; semantic pass Ok + empty; rerank/both constructions
-/// fail closed with `Other`; local golden intact after the interleave.
-/// Absorbs T3#10 (single-file neural RUN) and T4#5 (neural-open battery RUN).
-/// No load: every embed entry returns empty on the rowless store before the
-/// query is embedded (preference/env moot past that point).
-/// KILLS: load-on-rowless, ranking-perturbation, gate-inversion.
-#[cfg(all(feature = "neural-embed", not(feature = "rerank")))]
-#[test]
-fn neural_cell_runs_local_rerank_closed() {
-    // Negative guards: exact cell — neural ON, rerank OFF.
-    assert!(
-        cfg!(feature = "neural-embed"),
-        "neural-only cell requires neural-embed ON"
-    );
-    assert!(
-        !cfg!(feature = "rerank"),
-        "neural-only cell requires rerank OFF"
-    );
-    // Single-file corpus facet (T3 contract): neural RUN offline, goldens intact.
-    let (corpus1, _i1, index1) = indexed_corpus_1file();
-    let probe1 = searcher_for(corpus1.path(), &index1, hermetic_local_options());
-    assert!(probe1.store().semantic_sources_empty().unwrap());
-    let neural1 = searcher_for(corpus1.path(), &index1, neural_req());
-    assert_eq!(hit_ids(&neural1, "defs:refresh_token"), expected_defs());
-    assert_eq!(
-        hit_ids(&neural1, "callers:refresh_token"),
-        expected_callers()
-    );
-    assert_eq!(hit_ids(&neural1, "refresh_token"), expected_hybrid());
-    // Auto preference on the rowless store agrees too (still no embed reached).
-    let mut auto_req = hermetic_local_options();
-    auto_req.use_embed = true;
-    let auto_searcher = searcher_for(corpus1.path(), &index1, auto_req);
-    assert_eq!(
-        hit_ids(&auto_searcher, "defs:refresh_token"),
-        expected_defs()
-    );
-    // Multi-file corpus facet (T4 contract): full battery on neural-open flow.
-    let (corpus, _index_dir, index_path) = indexed_corpus_2file();
-    let probe = searcher_for(corpus.path(), &index_path, hermetic_local_options());
-    assert!(probe.store().semantic_sources_empty().unwrap());
-    // Rerank misuse fails closed (both the single and conjunction flows).
-    for (mut opts, name) in [(rerank_req(), "rerank"), (both_req(), "both")] {
-        opts.root = corpus.path().to_path_buf();
-        opts.index_path = Some(index_path.clone());
-        let result = Searcher::new(opts);
-        assert!(result.is_err(), "{name} flow must fail closed");
-        if let Err(e) = result {
-            assert!(matches!(e, StoreError::Other(_)), "{name} discriminant");
-        }
-    }
-    // Neural-open flow RUNS the full battery offline: local golden intact.
-    let neural = searcher_for(corpus.path(), &index_path, neural_req());
-    assert_eq!(run_battery(&neural), expected_battery());
-    // Semantic pass on the rowless store: Ok + empty, no neural load.
-    let resp = neural.search_semantic("refresh token").unwrap();
-    assert!(resp.hits.is_empty());
-    // Mixed interleave: local golden intact after gated runs and failures.
-    assert_eq!(run_battery(&probe), expected_battery());
-}
-
-/// INTENT: in the rerank-only cell the rerank request path RUNS offline on
-/// proven-empty shortlists with full-response equality while neural stays
-/// fail-closed.
-/// Facets: safe path proves empty FIRST, ranked flow runs with query/limit/
-/// counts equality across dispatch + literal entries; empty-docs rerank
-/// query-independent + repeat-deterministic; neural/both constructions fail
-/// closed with `Other`; local battery golden intact after.
-/// Absorbs T3#11 (empty-shortlist RUN + direct empty-docs atoms) and T4#6
-/// (full-response equality drill). No load: `maybe_rerank` early-returns on
-/// empty hits before any model load; `rerank` only ever sees empty docs.
-/// KILLS: load-on-empty, nondeterminism, gate-inversion.
-#[cfg(all(feature = "rerank", not(feature = "neural-embed")))]
-#[test]
-fn rerank_cell_runs_empty_neural_closed() {
-    // Negative guards: exact cell — rerank ON, neural OFF.
-    assert!(
-        cfg!(feature = "rerank"),
-        "rerank-only cell requires rerank ON"
-    );
-    assert!(
-        !cfg!(feature = "neural-embed"),
-        "rerank-only cell requires neural-embed OFF"
-    );
-    let (corpus, _index_dir, index_path) = indexed_corpus_2file();
-    // Neural misuse fails closed (both the single and conjunction flows).
-    for (mut opts, name) in [(neural_req(), "neural"), (both_req(), "both")] {
-        opts.root = corpus.path().to_path_buf();
-        opts.index_path = Some(index_path.clone());
-        let result = Searcher::new(opts);
-        assert!(result.is_err(), "{name} flow must fail closed");
-        if let Err(e) = result {
-            assert!(matches!(e, StoreError::Other(_)), "{name} discriminant");
-        }
-    }
-    let safe = searcher_for(corpus.path(), &index_path, hermetic_local_options());
-    let ranked = searcher_for(corpus.path(), &index_path, rerank_req());
-    // Proven-empty shortlists across dispatch + literal entries: safe path
-    // proves empty FIRST, then the ranked flow runs offline with full
-    // response equality (rerank must not perturb an empty shortlist).
-    for query in [
-        "defs:zzz_no_such_symbol_7f3a",
-        "callers:zzz_no_such_symbol_7f3a",
-        // Bare-hybrid empty: no term may substring-match any fixture symbol
-        // ("token" would match "refresh_token" via substring scoring).
-        "zzzqqq_wwvxxx",
-    ] {
-        let safe_resp = safe.search(query).unwrap();
-        assert!(
-            safe_resp.hits.is_empty(),
-            "fixture must not match {query:?}"
-        );
-        let ranked_resp = ranked.search(query).unwrap();
-        assert_eq!(ranked_resp.query, safe_resp.query);
-        assert_eq!(ranked_resp.limit, safe_resp.limit);
-        assert_eq!(ranked_resp.hits.len(), safe_resp.hits.len());
-        assert_eq!(ranked_resp.counts, safe_resp.counts);
-    }
-    let safe_lit = safe.search_literal("zzz_no_such_literal_7f3a").unwrap();
-    assert!(safe_lit.hits.is_empty());
-    let ranked_lit = ranked.search_literal("zzz_no_such_literal_7f3a").unwrap();
-    assert_eq!(ranked_lit.query, safe_lit.query);
-    assert_eq!(ranked_lit.limit, safe_lit.limit);
-    assert!(ranked_lit.hits.is_empty());
-    // Empty-docs rerank: query-independent, repeat-deterministic, always Ok
-    // (early return before any model load).
-    for query in ["refresh token", "zzz nothing matches this", ""] {
-        let first = ast_sgrep_embed::rerank(query, &[]).unwrap();
-        let second = ast_sgrep_embed::rerank(query, &[]).unwrap();
-        assert!(first.is_empty() && second.is_empty());
-    }
-    // Mixed interleave: local golden intact after gated runs and failures.
-    assert_eq!(run_battery(&safe), expected_battery());
-}
-
-/// INTENT: in the all-features cell every gated flow opens and RUNS offline,
-/// with no leak in either direction.
-/// Facets: all three gated flows open at construction; neural-open flow
-/// serves the full battery golden (rowless); semantic pass Ok + empty;
-/// conjunction matches the safe path on proven-empty shortlists (full
-/// response equality); empty-docs rerank unperturbed by neural; local
-/// golden intact at the end.
-/// Absorbs T3#12 (conjunction RUN + no-leak atoms) and T4#7 (conjunction
-/// flow drill). No load: rowless store + proven-empty shortlists.
-/// KILLS: load-on-empty, leak-across-sets, gate-inversion.
-#[cfg(all(feature = "neural-embed", feature = "rerank"))]
-#[test]
-fn all_features_cell_conjunction_runs_offline() {
-    // Negative guards: exact cell — BOTH features ON.
-    assert!(
-        cfg!(feature = "neural-embed"),
-        "all-features cell requires neural-embed ON"
-    );
-    assert!(
-        cfg!(feature = "rerank"),
-        "all-features cell requires rerank ON"
-    );
-    let (corpus, _index_dir, index_path) = indexed_corpus_2file();
-    let probe = searcher_for(corpus.path(), &index_path, hermetic_local_options());
-    assert!(probe.store().semantic_sources_empty().unwrap());
-    // Every gated flow opens at construction.
-    for (mut opts, name) in [
-        (neural_req(), "neural"),
-        (rerank_req(), "rerank"),
-        (both_req(), "both"),
-    ] {
-        opts.root = corpus.path().to_path_buf();
-        opts.index_path = Some(index_path.clone());
-        assert!(Searcher::new(opts).is_ok(), "{name} flow must open");
-    }
-    // Neural-open flow: full battery golden intact (no neural load: rowless).
-    let neural = searcher_for(corpus.path(), &index_path, neural_req());
-    assert_eq!(run_battery(&neural), expected_battery());
-    // Semantic pass on the rowless store: Ok + empty, no neural load.
-    assert!(neural
-        .search_semantic("refresh token")
-        .unwrap()
-        .hits
-        .is_empty());
-    // Conjunction flow on proven-empty shortlists: full response equality.
-    let both = searcher_for(corpus.path(), &index_path, both_req());
-    for query in ["defs:zzz_no_such_symbol_7f3a", "zzzqqq_wwvxxx"] {
-        let safe_resp = probe.search(query).unwrap();
-        assert!(
-            safe_resp.hits.is_empty(),
-            "fixture must not match {query:?}"
-        );
-        let both_resp = both.search(query).unwrap();
-        assert_eq!(both_resp.query, safe_resp.query);
-        assert_eq!(both_resp.limit, safe_resp.limit);
-        assert_eq!(both_resp.hits.len(), safe_resp.hits.len());
-        assert_eq!(both_resp.counts, safe_resp.counts);
-    }
-    // Rerank empty path unperturbed by the neural feature (no-leak), and
-    // repeat-deterministic.
-    let first = ast_sgrep_embed::rerank("refresh token", &[]).unwrap();
-    let second = ast_sgrep_embed::rerank("refresh token", &[]).unwrap();
-    assert!(first.is_empty() && second.is_empty());
-    // Mixed interleave: local golden intact at the end.
-    assert_eq!(run_battery(&probe), expected_battery());
 }

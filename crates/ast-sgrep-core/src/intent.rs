@@ -56,8 +56,63 @@ fn title_case(token: &str) -> bool {
         && token.chars().all(|c| c.is_alphanumeric())
 }
 fn looks_structural(raw: &str) -> bool {
-    const MARKERS: &[&str] = &["{", ";", "=>", "->", "($", "$_", "$$"];
-    MARKERS.iter().any(|m| raw.contains(m))
+    // `;` is not in this list. A paragraph uses it as a clause separator
+    // ("raise an exception; if so"). Treating that as a pattern routed the
+    // query around the conceptual exclusion in finish's coverage sort and
+    // buried the cosine order. A semicolon counts only when it closes a
+    // call or a bracket (`foo();`, `items[i];`).
+    const MARKERS: &[&str] = &["{", "=>", "->", "($", "$_", "$$"];
+    MARKERS.iter().any(|m| raw.contains(m)) || semicolon_closes_code(raw)
+}
+
+fn semicolon_closes_code(raw: &str) -> bool {
+    let mut rest = raw;
+    while let Some(index) = rest.find(';') {
+        let at = raw.len() - rest.len() + index;
+        if code_token_before_semicolon(raw, at) {
+            return true;
+        }
+        rest = &rest[index + 1..];
+    }
+    false
+}
+
+fn code_token_before_semicolon(raw: &str, semi: usize) -> bool {
+    let Some(last) = raw[..semi].trim_end().chars().next_back() else {
+        return false;
+    };
+    match last {
+        ']' | '}' => true,
+        ')' => preceding_paren_is_call(raw[..semi].trim_end()),
+        _ => false,
+    }
+}
+
+/// `foo();` is a call. `error (if any);` is a parenthetical: the `(` is
+/// not glued to an identifier.
+fn preceding_paren_is_call(before_including_paren: &str) -> bool {
+    let mut depth = 0i32;
+    let mut open_at = None;
+    for (index, ch) in before_including_paren.char_indices().rev() {
+        match ch {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open_at = Some(index);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(open) = open_at else {
+        return false;
+    };
+    before_including_paren[..open]
+        .chars()
+        .next_back()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 fn ident_like(token: &str) -> bool {
     if token.contains("::") || token.contains('_') || token.ends_with("()") {

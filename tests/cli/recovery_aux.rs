@@ -648,7 +648,11 @@ fn killed_watch_resumes_via_next_index() {
     let root_s = root.to_str().unwrap().to_owned();
     let index_s = index.to_str().unwrap().to_owned();
 
-    let watch = Command::new(asgrep())
+    // A real `watch` re-execs the sibling helper; guarantee it is the
+    // current build, not a stale sibling from an earlier target state.
+    let bin = asgrep();
+    ast_sgrep_testkit::ensure_watch_helper(&bin);
+    let watch = Command::new(&bin)
         .args([
             "--index-path",
             &index_s,

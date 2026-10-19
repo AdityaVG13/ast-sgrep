@@ -29,6 +29,12 @@
 //! 6. **Implementation over tests on conceptual NL.** Relative `tests/` paths
 //!    (no leading slash) are demoted, and test-path scores are clamped below
 //!    the best non-test implementation. Identifier/`defs:` queries are unchanged.
+//! 7. **Description queries keep the best cosine.** A multi-sentence
+//!    description (a sentence boundary: newline or ". ") is embed evidence.
+//!    A hit below the decisive margin, or a hit the embed channel never
+//!    scored, cannot outrank the best embed after the critic. A phrase
+//!    query is not a description: an unconditional clamp drops short
+//!    concept queries, where the critic's symbol boost is the evidence.
 //!
 //! The critic adjusts scores and annotates hits before `finish_response`
 //! assigns margins and confidence, so downstream honesty fields reflect the
@@ -738,5 +744,59 @@ fn demote_test_paths_below_implementation(hits: &mut [SearchHit]) {
         if is_test_path(&hit.file) && hit.score >= best_impl {
             hit.score = ceiling;
         }
+    }
+}
+
+/// A query that states a sentence is a description, not a concept phrase.
+///
+/// The observable is a sentence boundary (a newline, or ". "), not a word
+/// count. Dotted identifiers (`foo.bar`) are not descriptions. An
+/// unconditional clamp of far-cosine hits drops short concept queries,
+/// where the critic's symbol boost is the evidence.
+pub fn query_is_description(raw: &str) -> bool {
+    raw.contains('\n') || raw.contains(". ") || raw.trim_end().ends_with('.')
+}
+
+/// After the critic, a description's best embed stays above hits that do
+/// not support it.
+///
+/// Fusion already drops extra-channel votes for a hit scored below the
+/// decisive margin. Agreement and concept boosts then put them back on
+/// top, and an embed-absent def was never in that cut. Both are capped
+/// under the best embed. Zeroing the embed-absent vote is a different
+/// rule and fails Hit@100; this only caps the score, and only on a
+/// description. `magnitudes` is the pre-critic embed score of each hit,
+/// aligned with `hits`. A phrase query returns the scores unchanged.
+pub fn clamp_far_cosine_on_description(
+    parsed: &ParsedQuery,
+    hits: &mut [SearchHit],
+    magnitudes: &[Option<f64>],
+) {
+    if hits.len() != magnitudes.len() || !query_is_description(&parsed.raw) {
+        return;
+    }
+    let top = magnitudes.iter().flatten().copied().fold(0.0, f64::max);
+    if top <= 0.0 {
+        return;
+    }
+    let cut = 1.0 - crate::search::planner::DECISIVE_MARGIN_RATIO;
+    let ceiling = hits
+        .iter()
+        .zip(magnitudes)
+        .filter_map(|(hit, magnitude)| magnitude.filter(|value| *value >= top).map(|_| hit.score))
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !ceiling.is_finite() || ceiling <= 0.0 {
+        return;
+    }
+    let floor = ceiling.next_down();
+    for (hit, magnitude) in hits.iter_mut().zip(magnitudes) {
+        let unsupported = match magnitude {
+            None => true,
+            Some(magnitude) => *magnitude < cut * top,
+        };
+        if !unsupported || hit.score < ceiling {
+            continue;
+        }
+        hit.score = floor;
     }
 }

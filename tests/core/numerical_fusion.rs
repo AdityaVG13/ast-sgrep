@@ -608,9 +608,15 @@ fn semantic_magnitude_vote_contract() {
     apply_weighted_rrf(&mut hits, &weights);
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].file, "g.rs");
-    assert_eq!(hits[0].score, 1.0 / 61.0 + (1.0 * (1.0 / 61.0)) * (0.9 / 0.9));
+    assert_eq!(
+        hits[0].score,
+        1.0 / 61.0 + (1.0 * (1.0 / 61.0)) * (0.9 / 0.9)
+    );
     assert_eq!(hits[1].file, "n.rs");
-    assert_eq!(hits[1].score, 1.0 / 62.0 + (1.0 * (1.0 / 61.0)) * (0.3 / 0.9));
+    assert_eq!(
+        hits[1].score,
+        1.0 / 62.0 + (1.0 * (1.0 / 61.0)) * (0.3 / 0.9)
+    );
 
     // Scale invariance: multiplying every embed score by 4 (the raw
     // SCORE_EMBED scaling route_hits later removes) changes nothing.
@@ -648,6 +654,69 @@ fn semantic_magnitude_vote_contract() {
     );
     // The non-semantic result is untouched by the magnitude vote.
     assert_eq!(wrong.score, 0.75 * (1.0 / 61.0) + 1.35 * (1.0 / 61.0));
+}
+
+/// INTENT: a cosine below 0.90 of the query's best loses its extra-channel
+/// votes; a result the embed channel never scored does not. The cut is
+/// `1 - DECISIVE_MARGIN_RATIO`, not a fitted threshold.
+/// KILLS: dropping the demotion, demoting embed-absent hits, and treating
+/// every non-top cosine as unsupported.
+#[test]
+fn weak_cosine_loses_extra_channel_votes() {
+    let weights = ChannelWeights {
+        lexical: 0.75,
+        def: 1.35,
+        pattern: 0.25,
+        embed: 1.45,
+        ..ChannelWeights::default()
+    };
+    // Hand-derived. g.rs embed 1.0 is semantic rank 0. w.rs embed 0.5 is
+    // semantic rank 1 and 0.5 < 0.90, so lexical/def/pattern rank-0 votes
+    // drop. Without that drop w.rs scores
+    // (0.75+1.35+0.25)/61 + 1.45/62 + 1.45/61*0.5 = 0.07379
+    // against g.rs 2*1.45/61 = 0.04754 and wins. With the drop w.rs is
+    // 1.45/62 + 1.45/61*0.5.
+    let mut hits = vec![
+        mk_hit(HitKind::Asgrep, "w.rs", 1, 3.0),
+        mk_hit(HitKind::Def, "w.rs", 1, 5.0),
+        mk_hit(HitKind::Pattern, "w.rs", 1, 7.0),
+        mk_hit(HitKind::Embed, "w.rs", 1, 0.5),
+        mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
+    ];
+    apply_weighted_rrf(&mut hits, &weights);
+    let gold = hits.iter().find(|h| h.file == "g.rs").expect("gold");
+    let weak = hits.iter().find(|h| h.file == "w.rs").expect("weak");
+    assert!(
+        gold.score > weak.score,
+        "cosine 0.5 of best must not outvote the best cosine: {} vs {}",
+        weak.score,
+        gold.score
+    );
+    assert_eq!(weak.score, 1.45 * (1.0 / 62.0) + 1.45 * (1.0 / 61.0) * 0.5);
+
+    // Embed-absent def keeps its rank-0 vote. Zeroing it is what dropped
+    // CoSQA Hit@100 under the stricter rule.
+    let mut absent = vec![
+        mk_hit(HitKind::Def, "d.rs", 1, 5.0),
+        mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
+    ];
+    apply_weighted_rrf(&mut absent, &weights);
+    let def_only = absent.iter().find(|h| h.file == "d.rs").expect("def");
+    assert_eq!(def_only.score, 1.35 * (1.0 / 61.0));
+
+    // 0.95 >= 0.90 * 1.0, so the def vote stays. A mutant that demotes every
+    // non-top cosine fails this equality.
+    let mut close = vec![
+        mk_hit(HitKind::Def, "c.rs", 1, 5.0),
+        mk_hit(HitKind::Embed, "c.rs", 1, 0.95),
+        mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
+    ];
+    apply_weighted_rrf(&mut close, &weights);
+    let close_hit = close.iter().find(|h| h.file == "c.rs").expect("close");
+    assert_eq!(
+        close_hit.score,
+        1.35 * (1.0 / 61.0) + 1.45 * (1.0 / 62.0) + 1.45 * (1.0 / 61.0) * 0.95
+    );
 }
 
 /// INTENT: `learn_fusion_weights` softplus loss + rail convergence + degenerate

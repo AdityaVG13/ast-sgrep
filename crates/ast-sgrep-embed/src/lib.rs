@@ -1,44 +1,23 @@
 #![forbid(unsafe_code)]
 
+//! Embedding for ast-sgrep: one native static engine (trained token
+//! table baked into the binary, WordPiece + mean-pool, 256-d), plus the
+//! text utilities and vector math the search layer shares. No backend
+//! selection, no model download, no feature flags.
+
 mod accent_table;
 mod embedder;
 mod math;
-mod neural;
-#[cfg(feature = "rerank")]
-mod rerank;
-pub mod semantic;
 mod static_engine;
-pub use embedder::{
-    configured_backend_model_id, default_semantic_dim, embed_batch_with_chain, embed_query,
-    embed_with_chain, embedder_for, CostHint, EmbedBackendKind, EmbedPreference, EmbedResult,
-    Embedder, HashedEmbedder,
-};
+pub mod text;
+
+pub use embedder::{embed_text, embed_texts};
 pub use math::{
     cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place, top_by_similarity,
     top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
-#[cfg(feature = "neural-embed")]
-pub use neural::NeuralEmbedder;
-pub use neural::{
-    configured_model_id as neural_configured_model_id,
-    default_cache_dir as neural_default_cache_dir, NeuralEmbeddingConfig, NeuralModel,
-};
-#[cfg(feature = "rerank")]
-pub use rerank::{rerank, RerankScore};
-pub use semantic::{expand_concepts, split_ident, tokenize, SemanticLocalEmbedding, SEMANTIC_DIM};
 pub use static_engine::{StaticEmbedder, STATIC_DIM, STATIC_MODEL_ID};
-pub trait EmbeddingProvider: Send + Sync {
-    fn embed_text(&self, text: &str) -> Vec<f32>;
-    fn similarity(&self, a: &[f32], b: &[f32]) -> f32;
-}
-impl EmbeddingProvider for SemanticLocalEmbedding {
-    fn embed_text(&self, text: &str) -> Vec<f32> {
-        SemanticLocalEmbedding::embed_text(self, text)
-    }
-    fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        SemanticLocalEmbedding::similarity(self, a, b)
-    }
-}
+pub use text::{expand_concepts, split_ident, tokenize};
 pub fn embed_to_bytes(vec: &[f32]) -> Vec<u8> {
     vec.iter().flat_map(|f| f.to_le_bytes()).collect()
 }

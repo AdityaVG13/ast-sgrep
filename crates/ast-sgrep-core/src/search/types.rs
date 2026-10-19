@@ -1,4 +1,3 @@
-use crate::EmbedBackend;
 use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -337,9 +336,7 @@ pub struct SearchOptions {
     pub lang_filter: Option<String>,
     pub use_embed: bool,
     pub use_tantivy: bool,
-    /// Adapter flags for `embed_backend()`. Concurrent trues collapse
-    /// Neural > Semantic > Auto.
-    pub use_neural_embed: bool,
+    /// Semantic-channel-only search (skip lexical/symbol candidates).
     pub use_semantic_only: bool,
     /// Use bounded repository-learned vocabulary to widen conceptual semantic
     /// work. On by default; the eval harness may disable it for an A/B arm.
@@ -347,8 +344,6 @@ pub struct SearchOptions {
     pub ann_threshold: Option<usize>,
     /// IVF clusters to probe (0/None = adaptive, at most 90% populated; ≥ n_clusters = exact).
     pub ann_probes: Option<usize>,
-    pub use_rerank: bool,
-    pub rerank_top_k: usize,
     pub case_insensitive: bool,
     pub context_before: usize,
     pub context_after: usize,
@@ -365,7 +360,6 @@ impl Default for SearchOptions {
             lang_filter: None,
             use_embed: !env_flag("ASGREP_NO_EMBED"),
             use_tantivy: env_flag("ASGREP_TANTIVY"),
-            use_neural_embed: env_flag("ASGREP_NEURAL_EMBED"),
             use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
             use_repository_vocabulary: true,
             ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
@@ -374,11 +368,6 @@ impl Default for SearchOptions {
             ann_probes: std::env::var("ASGREP_ANN_PROBES")
                 .ok()
                 .and_then(|v| v.parse().ok()),
-            use_rerank: env_flag("ASGREP_RERANK"),
-            rerank_top_k: std::env::var("ASGREP_RERANK_TOP_K")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(20),
             case_insensitive: false,
             context_before: 0,
             context_after: 0,
@@ -389,13 +378,8 @@ impl Default for SearchOptions {
 }
 impl SearchOptions {
     /// Candidate retention shared by search passes and the final result gates.
-    /// Reranking needs its full top-k pool before the output limit is applied.
     pub(crate) fn retained_limit(&self) -> usize {
-        if self.use_rerank {
-            self.limit.max(self.rerank_top_k)
-        } else {
-            self.limit
-        }
+        self.limit
     }
 
     pub fn default_limit() -> usize {
@@ -406,69 +390,20 @@ impl SearchOptions {
             16,
         )
     }
-    pub fn embed_preference(&self) -> ast_sgrep_embed::EmbedPreference {
-        self.embed_backend().to_preference()
-    }
-
-    /// Canonical embed backend for these options. `use_*` flags remain
-    /// public adapters (Neural > Semantic > Auto).
-    pub fn embed_backend(&self) -> EmbedBackend {
-        EmbedBackend::from_flags(self.use_neural_embed, self.use_semantic_only)
-    }
-
-    /// Set the backend and sync the `use_*` adapter flags.
-    pub fn set_embed_backend(&mut self, backend: EmbedBackend) {
-        let (neural, semantic_only) = backend.to_flags();
-        self.use_neural_embed = neural;
-        self.use_semantic_only = semantic_only;
-    }
-
-    /// Hard-error text when a non-hashed backend is requested but cannot run.
-    ///
-    /// Hashed (`Semantic`) and `Auto` stay available. Neural must not silently
-    /// swap to hashed hits unless `ASGREP_NEURAL_FALLBACK=1`.
-    pub fn unavailable_non_hashed_embed(&self) -> Option<String> {
-        match self.embed_preference() {
-            ast_sgrep_embed::EmbedPreference::Neural => {
-                #[cfg(not(feature = "neural-embed"))]
-                {
-                    Some(
-                        "semantic_search requested neural embed but this build has no neural-embed feature; refusing hashed fallback"
-                            .into(),
-                    )
-                }
-                #[cfg(feature = "neural-embed")]
-                {
-                    if ast_sgrep_embed::NeuralEmbeddingConfig::from_env().is_none() {
-                        Some(
-                            "semantic_search requested neural embed but it is not configured; refusing hashed fallback"
-                                .into(),
-                        )
-                    } else {
-                        None
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {
         format!(
-            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0neural={}\0sem={}\0rv={}\0ann_t={:?}\0ann_p={:?}\0rerank={}\0rk={}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
+            "root={}\0idx={:?}\0lim={}\0lang={:?}\0embed={}\0tantivy={}\0sem={}\0rv={}\0ann_t={:?}\0ann_p={:?}\0ci={}\0cb={}\0ca={}\0co={}\0ff={:?}",
             self.root.display(),
             self.index_path,
             self.limit,
             self.lang_filter,
             self.use_embed,
             self.use_tantivy,
-            self.use_neural_embed,
             self.use_semantic_only,
             self.use_repository_vocabulary,
             self.ann_threshold,
             self.ann_probes,
-            self.use_rerank,
-            self.rerank_top_k,
             self.case_insensitive,
             self.context_before,
             self.context_after,

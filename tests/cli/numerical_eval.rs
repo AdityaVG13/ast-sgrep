@@ -446,7 +446,7 @@ fn eval_pack_counts_complete_stdout_bytes() {
         String::from_utf8_lossy(&indexed.stderr)
     );
     let pack = include_str!("../../benchmarks/run_eval.sh");
-    let marker = "python3 - \"$bin\" \"$gold\" \"$out\" \"$token_index\" <<'PY'\n";
+    let marker = "python3 - \"$bin\" \"$gold\" \"$out\" \"$token_index\" \"$eval_root\" <<'PY'\n";
     let block = pack
         .split_once(marker)
         .unwrap()
@@ -460,6 +460,7 @@ fn eval_pack_counts_complete_stdout_bytes() {
         .arg(&gold)
         .arg(temp.path())
         .arg(&index)
+        .arg(&root)
         .current_dir(&root)
         .env("NO_COLOR", "1")
         .env("HF_HUB_OFFLINE", "1")

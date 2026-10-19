@@ -246,3 +246,56 @@ fn symbol_intent_keeps_exact_test_definition() {
         Some("hybrid_query_cascades_lexical_files_into_structural_and_semantic_stages")
     );
 }
+
+/// A description's best cosine is the evidence. The critic's boosts may not
+/// put a hit below the decisive margin above it. A phrase is not a
+/// description: the same scores stay in critic order, and a within-margin
+/// hit on a description is not clamped either.
+/// KILLS: dropping the sentence-boundary gate, or clamping every conceptual hit.
+#[test]
+fn description_keeps_best_cosine_above_a_far_hit() {
+    let far = vec![
+        hit(HitKind::Def, "ranges.py", Some("ranges"), 0.08),
+        hit(HitKind::Embed, "concurrency.py", Some("install"), 0.04),
+    ];
+    let far_mags = [Some(0.70), Some(1.0)];
+    let description =
+        ParsedQuery::parse("1. Purpose: replace the default event loop.\n2. Input: none.\n");
+    let mut described = far.clone();
+    clamp_far_cosine_on_description(&description, &mut described, &far_mags);
+    assert!(
+        described[1].score > described[0].score,
+        "description must keep the best cosine above a below-margin hit"
+    );
+
+    let phrase = ParsedQuery::parse("sort by a token in string python");
+    let mut phrased = far.clone();
+    clamp_far_cosine_on_description(&phrase, &mut phrased, &far_mags);
+    assert!(
+        phrased[0].score > phrased[1].score,
+        "a phrase query must not clamp; critic order stands"
+    );
+
+    let mut close = far.clone();
+    clamp_far_cosine_on_description(&description, &mut close, &[Some(0.95), Some(1.0)]);
+    assert!(
+        close[0].score > close[1].score,
+        "within the decisive margin, critic order stands"
+    );
+
+    // No embed magnitude: a def the embed channel never scored. Zeroing that
+    // vote failed Hit@100. Capping it under the best cosine is the description
+    // rule; a phrase leaves the def ahead.
+    let mut absent = far.clone();
+    clamp_far_cosine_on_description(&description, &mut absent, &[None, Some(1.0)]);
+    assert!(
+        absent[1].score > absent[0].score,
+        "description must keep the best cosine above an embed-absent def"
+    );
+    let mut absent_phrase = far.clone();
+    clamp_far_cosine_on_description(&phrase, &mut absent_phrase, &[None, Some(1.0)]);
+    assert!(
+        absent_phrase[0].score > absent_phrase[1].score,
+        "a phrase must not clamp an embed-absent def"
+    );
+}

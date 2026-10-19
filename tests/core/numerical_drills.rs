@@ -213,13 +213,17 @@ fn hostile_weights_fuse_on_rails() {
     assert_eq!(by_file("h_import.rs"), 2.0 * (1.0 / 61.0));
     assert_eq!(by_file("d_graph.rs"), 1.0 / 61.0);
     assert_eq!(by_file("e_anchor.rs"), 1.0 / 61.0);
-    for f in ["a_lex.rs", "b_def.rs", "f_embed.rs", "g_pattern.rs"] {
+    for f in ["a_lex.rs", "b_def.rs", "g_pattern.rs"] {
         assert_eq!(
             by_file(f),
             0.25 * (1.0 / 61.0),
             "{f} must fuse on the 0.25 rail"
         );
     }
+    // The semantic channel casts a second, magnitude vote (Phase 1c):
+    // f_embed is the only embed hit, so its ratio to the top is 1 and it
+    // gets rank vote + magnitude vote on the same 0.25 rail.
+    assert_eq!(by_file("f_embed.rs"), 0.5 * (1.0 / 61.0));
     // Score-desc ranking with file tiebreaks inside each rail cohort.
     assert_eq!(
         hit_files_in_order(&rank_fused(fused)),
@@ -228,9 +232,9 @@ fn hostile_weights_fuse_on_rails() {
             "h_import.rs",
             "d_graph.rs",
             "e_anchor.rs",
+            "f_embed.rs",
             "a_lex.rs",
             "b_def.rs",
-            "f_embed.rs",
             "g_pattern.rs",
         ]
     );
@@ -243,7 +247,9 @@ fn hostile_weights_fuse_on_rails() {
 #[test]
 fn empty_and_zeroed_channels_vanish() {
     // Only Embed carries signal: raws 4.0/2.0 -> routed 1.0/0.5 -> ranks
-    // 0/1 -> 1/61, 1/62. The Asgrep 0.0 and Def 0.0 hits route to exactly
+    // 0/1 -> 1/61, 1/62, plus the semantic magnitude vote (Phase 1c):
+    // e1 adds 1/61 * (4/4), e2 adds 1/61 * (2/4). The Asgrep 0.0 and Def
+    // 0.0 hits route to exactly
     // 0.0 and the Graph -3.0 clamps to 0.0, so the fuse gate (> 0.0) drops
     // all three before ranking; the other channels are simply absent.
     let parsed = ParsedQuery::parse("foo");
@@ -262,8 +268,8 @@ fn empty_and_zeroed_channels_vanish() {
     );
     assert_eq!(fused.len(), 2);
     let by_file = |fused: &[SearchHit], f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
-    assert_eq!(by_file(&fused, "e1.rs"), 1.0 / 61.0);
-    assert_eq!(by_file(&fused, "e2.rs"), 1.0 / 62.0);
+    assert_eq!(by_file(&fused, "e1.rs"), 2.0 / 61.0);
+    assert_eq!(by_file(&fused, "e2.rs"), 1.0 / 62.0 + 0.5 * (1.0 / 61.0));
     assert_eq!(
         hit_files_in_order(&rank_fused(fused)),
         vec!["e1.rs", "e2.rs"]
@@ -271,7 +277,8 @@ fn empty_and_zeroed_channels_vanish() {
 
     // Empty-terms query: all text channels (asgrep/def/graph/...) route to
     // 0.0 and vanish in fusion; the Embed 2.0/4 = 0.5 survivor is the sole
-    // hit in its channel -> rank 0 -> exactly 1/61.
+    // hit in its channel -> rank 0 -> 1/61, plus a full magnitude vote
+    // (sole semantic hit, ratio 1) -> 2/61.
     let empty = ParsedQuery::parse("");
     assert!(empty.terms.is_empty());
     let mut def = mk_hit(HitKind::Def, "t2.rs", 1, 99.0);
@@ -288,7 +295,7 @@ fn empty_and_zeroed_channels_vanish() {
     );
     assert_eq!(fused.len(), 1);
     assert_eq!(fused[0].file, "k.rs");
-    assert_eq!(fused[0].score, 1.0 / 61.0);
+    assert_eq!(fused[0].score, 2.0 / 61.0);
     assert_eq!(fused[0].contributors, vec![HitKind::Embed]);
 }
 
@@ -417,9 +424,10 @@ fn full_pipeline_through_finish_order_scores_margins() {
     // A: asgrep-only (3.0 -> 3/c, sole channel hit -> rank 0 -> 1/61),
     // canonical Asgrep (Exact). B: def 13.0 + caller 11.5 (both 1.0, rank
     // 0 in each -> 1/61+1/61), canonical Def (Structural). C: embed-only
-    // (4.0 -> 1.0 -> 1/61), canonical Embed (Semantic).
+    // (4.0 -> 1.0 -> 1/61 rank vote + 1/61 magnitude vote at ratio 1,
+    // Phase 1c), canonical Embed (Semantic).
     // Single-term query: finish sorts by score desc (coverage is 0 for all
-    // — no excerpt contains "foo"), tie A/C broken by file: [b, a, c].
+    // — no excerpt contains "foo"); B and C tie at 2/61, A trails: [b, c, a].
     // Finish never rewrites scores; each hit is alone in its signal group
     // so every margin is exactly 0.0. Limit 10 >> 3 hits: no prune, no
     // per-file cap, best-definition already retained, def-head no-op.
@@ -444,12 +452,12 @@ fn full_pipeline_through_finish_order_scores_margins() {
     assert_eq!(response.hits.len(), 3);
     assert_eq!(
         hit_files_in_order(&response.hits),
-        vec!["b_struct.rs", "a_exact.rs", "c_sem.rs"]
+        vec!["b_struct.rs", "c_sem.rs", "a_exact.rs"]
     );
     let by_file = |f: &str| response.hits.iter().find(|h| h.file == f).unwrap();
     assert_eq!(by_file("b_struct.rs").score, 1.0 / 61.0 + 1.0 / 61.0);
     assert_eq!(by_file("a_exact.rs").score, 1.0 / 61.0);
-    assert_eq!(by_file("c_sem.rs").score, 1.0 / 61.0);
+    assert_eq!(by_file("c_sem.rs").score, 1.0 / 61.0 + 1.0 / 61.0);
     for hit in &response.hits {
         assert_eq!(
             hit.margin, 0.0,

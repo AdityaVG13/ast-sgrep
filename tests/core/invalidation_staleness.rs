@@ -11,9 +11,11 @@
 //! intent below stands alongside its I2 counterpart in
 //! `invalidation_delta_matrix.rs`; nothing here was dropped as a duplicate.
 //!
-//! Hermeticity: every store/indexer open uses an explicit `index_path`, so no
-//! test depends on ambient `ASGREP_*` routing. The two cache tests that mutate
-//! process env serialize on a static mutex and restore via an RAII guard.
+//! Hermeticity: store/indexer opens use an explicit `index_path`. The
+//! writer-generation tests deliberately pass `None` (default routing is
+//! part of their intent), so they read ambient `ASGREP_*` env and must
+//! serialize on the same static mutex as the two cache tests that mutate
+//! process env (which restore via an RAII guard).
 //! No wall-clock sleeps: mtimes are forged whole-second stamps with read-back
 //! preconditions (`set_mtime_secs` from testkit; one nanos control below keeps
 //! a file-local exact forge).
@@ -51,7 +53,6 @@ fn plain_input<'a>(
         depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
-        embed_backend: ast_sgrep_embed::EmbedPreference::Semantic,
     }
 }
 
@@ -137,6 +138,9 @@ impl Drop for EnvRestore {
 /// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_absent_reads_zero_and_bump_roundtrips() {
+    // These tests pass `None`, so stamp routing reads ambient ASGREP_*
+    // env; serialize against the env-mutating cache tests below.
+    let _lock = env_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     assert_eq!(read_writer_generation(root, None), 0);
@@ -155,6 +159,7 @@ fn writer_generation_absent_reads_zero_and_bump_roundtrips() {
 /// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_bumps_are_unique_not_sequential() {
+    let _lock = env_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     // The stamp is a unique epoch (time + pid + sequence), explicitly NOT a
@@ -175,6 +180,7 @@ fn writer_generation_bumps_are_unique_not_sequential() {
 /// ABSORBS: none (KEEP — standalone intent).
 #[test]
 fn writer_generation_isolated_per_home_and_fail_open_on_corrupt_stamp() {
+    let _lock = env_lock().lock().unwrap();
     let temp_a = tempfile::tempdir().unwrap();
     let temp_b = tempfile::tempdir().unwrap();
     let (root_a, root_b) = (temp_a.path(), temp_b.path());

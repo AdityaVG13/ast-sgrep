@@ -66,8 +66,8 @@ pub use fusion::{
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{
-    canonicalize_affected_path, expand_incremental_path_list, indexed_rel_path, EmbedBackend,
-    FileIndexStats, IndexOptions, IndexStats, Indexer, INDEX_CANCELLED, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, expand_incremental_path_list, indexed_rel_path, FileIndexStats,
+    IndexOptions, IndexStats, Indexer, INDEX_CANCELLED, MAX_INCREMENTAL_PATHS,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{

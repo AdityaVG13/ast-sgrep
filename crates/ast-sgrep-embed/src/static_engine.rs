@@ -15,10 +15,7 @@
 //! no known tokens embeds to the zero vector. Startup cost is zero: the
 //! vocab blob is binary-searched in place, never materialized into a map.
 
-use anyhow::Result;
-
 use crate::accent_table::ACCENT_BASE;
-use crate::embedder::{CostHint, Embedder};
 
 pub const STATIC_DIM: usize = 256;
 pub const STATIC_MODEL_ID: &str = "static:potion-code-16M-v2:256";
@@ -232,9 +229,15 @@ impl StaticEmbedder {
     }
 }
 
-impl Embedder for StaticEmbedder {
-    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        Ok(texts
+impl StaticEmbedder {
+    /// Embed one text: mean-pool its token rows, L2-normalize.
+    /// Infallible; text with no known tokens yields the zero vector.
+    pub fn embed(&self, text: &str) -> Vec<f32> {
+        self.embed_batch(&[text]).pop().unwrap_or_default()
+    }
+
+    pub fn embed_batch(&self, texts: &[&str]) -> Vec<Vec<f32>> {
+        texts
             .iter()
             .map(|text| {
                 let ids = self.token_ids(text);
@@ -258,18 +261,6 @@ impl Embedder for StaticEmbedder {
                 }
                 v
             })
-            .collect())
-    }
-
-    fn dim(&self) -> usize {
-        STATIC_DIM
-    }
-
-    fn model_id(&self) -> &str {
-        STATIC_MODEL_ID
-    }
-
-    fn cost_hint(&self) -> CostHint {
-        CostHint::LocalCheap
+            .collect()
     }
 }

@@ -70,7 +70,6 @@ fn rescued_definition_is_independent_of_channel_order() {
     let options = SearchOptions {
         limit: 1,
         use_embed: false,
-        use_rerank: false,
         ..SearchOptions::default()
     };
     let definition = |line| {

@@ -944,10 +944,11 @@ fn compact_omits_native_hit_array_and_excerpt_blobs() {
     );
 }
 
-/// Public embed flags stay independently settable. Exclusive collapse
-/// is SearchOptions-side (`from_flags` / `set_embed_backend`), not a clap conflict.
+/// Retired `--neural-embed` fails closed with an operational error even
+/// alongside `--no-embed` — removed flags must be removed from the command
+/// line, not silently overridden.
 #[test]
-fn concurrent_neural_and_semantic_embed_flags_are_not_usage_errors() {
+fn retired_neural_flag_is_operational_error_not_usage() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
     let root = session.root.to_str().expect("root utf8");
@@ -964,7 +965,10 @@ fn concurrent_neural_and_semantic_embed_flags_are_not_usage_errors() {
             root,
         ],
     );
-    assert_success(&output, "search");
+    assert_eq!(output.status.code(), Some(2));
+    let value = parse_stdout(&output);
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["kind"], "operational");
 }
 
 #[test]

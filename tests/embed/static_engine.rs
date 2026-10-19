@@ -7,10 +7,7 @@
 //! code under test. Semantic thresholds come from the same reference over
 //! the pinned f16 table: cos(read,load)=0.514, cos(read,sort)=0.008.
 
-use ast_sgrep_embed::{
-    configured_backend_model_id, embedder_for, EmbedBackendKind, Embedder, StaticEmbedder,
-    STATIC_DIM,
-};
+use ast_sgrep_embed::{embed_text, StaticEmbedder, STATIC_DIM, STATIC_MODEL_ID};
 
 fn cos(a: &[f32], b: &[f32]) -> f32 {
     let num: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
@@ -46,14 +43,14 @@ fn wordpiece_matches_reference_tokenizations() {
 #[test]
 fn embed_is_deterministic_unit_norm_and_semantic() {
     let e = StaticEmbedder::new();
-    let read = e.embed("read a file from disk").unwrap();
+    let read = e.embed("read a file from disk");
     assert_eq!(read.len(), STATIC_DIM);
-    assert_eq!(read, e.embed("read a file from disk").unwrap());
+    assert_eq!(read, e.embed("read a file from disk"));
     let norm: f32 = read.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!((norm - 1.0).abs() < 1e-5, "norm={norm}");
 
-    let load = e.embed("load file contents into memory").unwrap();
-    let sort = e.embed("sort the array in ascending order").unwrap();
+    let load = e.embed("load file contents into memory");
+    let sort = e.embed("sort the array in ascending order");
     assert!(
         cos(&read, &load) > 0.35,
         "near paraphrase must be close: {}",
@@ -66,9 +63,7 @@ fn embed_is_deterministic_unit_norm_and_semantic() {
     );
 
     // Batch path must produce exactly the single-text vectors.
-    let batch = e
-        .embed_batch(&["read a file from disk", "sort the array in ascending order"])
-        .unwrap();
+    let batch = e.embed_batch(&["read a file from disk", "sort the array in ascending order"]);
     assert_eq!(batch.len(), 2);
     assert_eq!(batch[0], read);
     assert_eq!(batch[1], sort);
@@ -77,24 +72,18 @@ fn embed_is_deterministic_unit_norm_and_semantic() {
 #[test]
 fn unknown_only_text_embeds_to_zero_vector() {
     let e = StaticEmbedder::new();
-    let v = e.embed("🦀").unwrap();
+    let v = e.embed("🦀");
     assert_eq!(v.len(), STATIC_DIM);
     assert!(v.iter().all(|x| *x == 0.0));
 }
 
 #[test]
-fn static_backend_is_wired() {
-    assert_eq!(EmbedBackendKind::parse("static"), Some(EmbedBackendKind::Static));
-    assert_eq!(EmbedBackendKind::Static.as_meta_str(), "static");
-    let e = embedder_for(EmbedBackendKind::Static).expect("static embedder is always available");
-    assert_eq!(e.dim(), STATIC_DIM);
-    assert!(
-        e.model_id().contains("potion-code-16M-v2"),
-        "model_id={}",
-        e.model_id()
-    );
+fn static_identity_is_pinned() {
+    assert_eq!(STATIC_DIM, 256);
+    assert_eq!(STATIC_MODEL_ID, "static:potion-code-16M-v2:256");
+    // The free-function facade is the same engine.
     assert_eq!(
-        configured_backend_model_id(EmbedBackendKind::Static, STATIC_DIM).as_deref(),
-        Some("static:potion-code-16M-v2:256")
+        embed_text("refresh token"),
+        StaticEmbedder::new().embed("refresh token")
     );
 }

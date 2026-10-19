@@ -134,28 +134,6 @@ pub struct Searcher {
     /// lifetime (options are frozen in `with_store`).
     options_identity: String,
 }
-/// Fail closed when callers request optional neural/rerank paths that were
-pub fn validate_search_feature_flags(options: &SearchOptions) -> Result<()> {
-    if options.use_embed && options.use_neural_embed {
-        #[cfg(not(feature = "neural-embed"))]
-        {
-            return Err(crate::StoreError::Other(
-                "--neural-embed / use_neural_embed requested but this binary was built without the `neural-embed` feature; rebuild with --features neural-embed"
-                    .into(),
-            ));
-        }
-    }
-    if options.use_rerank {
-        #[cfg(not(feature = "rerank"))]
-        {
-            return Err(crate::StoreError::Other(
-                "--rerank / use_rerank requested but this binary was built without the `rerank` feature; rebuild with --features rerank"
-                    .into(),
-            ));
-        }
-    }
-    Ok(())
-}
 
 /// True when the store's stamped `meta.root` names a different project root
 /// than the query root (trailing slashes ignored). Unstamped stores are
@@ -170,9 +148,32 @@ fn foreign_root_bound(store: &IndexStore, root: &Path) -> Result<bool> {
     }))
 }
 
+/// L-Q3 (plan Phase 5): `ASGREP_QEMBED_EXPANDED=1` feeds the repo-PPMI
+/// expanded form to the embed lane. Paired frozen-suite measurement
+/// switch only — the default stays the query as written (measured:
+/// expanded embeds lost a structurally exact target; conformance ledger
+/// 2026-10-17 for the armed-run verdict).
+pub fn embed_query_expansion_enabled(env: Option<&str>) -> bool {
+    env == Some("1")
+}
+
+/// Pure selector for the hybrid embed lane's parsed form. Identity-
+/// returning on purpose (no clone): the embed path only reads terms.
+/// A repo with no expansion falls back to the written form even armed.
+pub fn choose_embed_query<'a>(
+    parsed: &'a ParsedQuery,
+    expanded: Option<&'a ParsedQuery>,
+    arm: bool,
+) -> &'a ParsedQuery {
+    if arm {
+        expanded.unwrap_or(parsed)
+    } else {
+        parsed
+    }
+}
+
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
-        validate_search_feature_flags(&options)?;
         // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
         options.root = options.root.canonicalize().map_err(|e| {
             crate::StoreError::Other(format!(
@@ -188,9 +189,6 @@ impl Searcher {
         }
         // Cross-surface input bounds: 0/`ASGREP_LIMIT=0` remaps; oversize clamps (CLI docs + LSP).
         options.limit = crate::limits::clamp_output_limit(Some(options.limit), 16);
-        options.rerank_top_k = options
-            .rerank_top_k
-            .clamp(1, crate::limits::MAX_OUTPUT_RESULTS);
         options.context_before = options.context_before.min(crate::limits::MAX_EXCERPT_LINES);
         options.context_after = options.context_after.min(crate::limits::MAX_EXCERPT_LINES);
         if let Some(ref filter) = options.file_filter {
@@ -887,12 +885,20 @@ impl Searcher {
                                 "search",
                                 "weighted RRF + critic",
                             );
-                            crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                            let magnitudes = crate::fusion::apply_weighted_rrf(&mut hits, &weights);
                             critic::apply_critic(
                                 &parsed,
                                 intent,
                                 &mut hits,
                                 critic_vocabulary.as_ref(),
+                            );
+                            // Fusion already dropped extra votes below the
+                            // decisive margin. The critic then reverses that
+                            // order. On a description, put it back.
+                            critic::clamp_far_cosine_on_description(
+                                &parsed,
+                                &mut hits,
+                                &magnitudes,
                             );
                         }
                         hits
@@ -980,8 +986,6 @@ impl Searcher {
             .max(1);
         let mut options = self.options.clone();
         options.limit = exhaustive_limit;
-        options.use_rerank = false;
-        options.rerank_top_k = exhaustive_limit;
         options.ann_probes = Some(usize::MAX);
         let mut hits = match channel {
             conjunction::ChannelQuery::Mode(_) => match parsed.mode {
@@ -1102,17 +1106,15 @@ impl Searcher {
             );
             self.repository_expanded_query(parsed)?
         };
-        // The local hashed backend re-encodes tokens, so feeding it a learned
-        // expansion makes it encode something the user did not ask for. Ask the
-        // derived backend for the query as written; a neural backend keeps the
-        // expansion (it is genuinely semantic). Measured with the expansion in
-        // the derived path: `derive the next command ...` lost its target from
+        // The static engine embeds the query as written; repository-vocab
+        // expansion feeds lexical discovery only. Measured under the
+        // expansion: `derive the next command ...` lost its target from
         // the page even after the cascade and lexical channels were cleaned.
-        let semantic_query = if self.options.use_neural_embed {
-            expanded.as_ref().unwrap_or(parsed)
-        } else {
-            parsed
-        };
+        let semantic_query = choose_embed_query(
+            parsed,
+            expanded.as_ref(),
+            embed_query_expansion_enabled(std::env::var("ASGREP_QEMBED_EXPANDED").ok().as_deref()),
+        );
         // Candidate discovery: original 3+ char terms, then a few concept
         // extras for zero-overlap paraphrases (throttle -> rate/limit).
         // Lexicon-expanded semantic terms stay on the embed path; stuffing
@@ -1255,9 +1257,22 @@ impl Searcher {
         // can rank `search_hybrid` instead of the query string in a bench
         // fixture. Empty structural falls through to lexical + embed (ht1h.3).
         let conceptual = intent == crate::intent::QueryIntent::Conceptual;
+        // Generic tokens (`command`, `next`, `run`) are dropped only when
+        // specific siblings carry the query: genericness is relative, not
+        // absolute. When fewer than two specific terms survive, the generics
+        // ARE the evidence — dropping them reduced "derive the next command
+        // to run" to "derive" alone and the feature named `suggested_next`
+        // became unreachable in every channel.
+        let drop_generics = conceptual
+            && parsed
+                .terms
+                .iter()
+                .filter(|term| term.chars().count() >= 3 && !critic::is_generic_concept_token(term))
+                .count()
+                >= 2;
         let mut stage_query = parsed.clone();
         stage_query.terms.retain(|term| {
-            term.chars().count() >= 3 && !(conceptual && critic::is_generic_concept_token(term))
+            term.chars().count() >= 3 && !(drop_generics && critic::is_generic_concept_token(term))
         });
         if conceptual {
             for tok in conceptual_def_terms(&parsed.raw) {
@@ -1337,23 +1352,25 @@ impl Searcher {
         lexical.retain(|hit| working_files.contains(&hit.file));
         let mut hits = lexical;
         hits.extend(structural);
-        // Hashed-era compensation kept semantic evidence a thin-page,
-        // known-files-only fallback: the hashed backend re-encodes the same
-        // text, and its mere presence displaced structurally exact hits
-        // (embed-on gold MRR 0.850 vs 1.000 off). With a learned backend
-        // that rationale inverts for conceptual queries: the embed pass
-        // runs unconstrained as a permanent candidate generator so it can
-        // discover files the lexical cascade never surfaced. The hashed
-        // backend and identifier/literal intents keep the fallback.
-        let structural_evidence_is_thin = hits.len() < self.options.limit;
-        let learned_backend = self
-            .store
-            .get_meta("embed_backend")?
-            .as_deref()
-            .and_then(ast_sgrep_embed::EmbedBackendKind::parse)
-            .is_some_and(ast_sgrep_embed::EmbedBackendKind::is_learned);
+        // Without embeddings the cascade has no semantic budget to protect:
+        // its per-term file caps plus flat prefilter scores strand lexical
+        // evidence past the page (bm25-first gold ties break by path and
+        // truncate out). Merge the full FTS lexical pass so no-embed hybrid
+        // is a superset of the lexical channel, never a subset. Same-line
+        // duplicates merge by max score in finish dedup; route, weighted
+        // RRF, and the critic below run unchanged. Embed-on path untouched.
+        if !self.options.use_embed {
+            hits.extend(lexical_pass(&self.store, &self.options, parsed)?);
+        }
+        // 2D ablation (thin-page condition): semantic evidence runs on
+        // every hybrid query when embeddings are enabled. Conceptual
+        // queries use it as an unconstrained candidate generator (below);
+        // identifier/literal/structural intents keep the known-files-only
+        // restricted pass, but no longer skip it just because the
+        // structural page is already full.
+        let learned_backend = self.store.get_meta("embed_backend")?.as_deref() == Some("static");
         let embed_as_generator = conceptual && self.options.use_embed && learned_backend;
-        if self.options.use_embed && (embed_as_generator || structural_evidence_is_thin) {
+        if self.options.use_embed {
             let semantic = {
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_embed_pass",
@@ -1602,13 +1619,31 @@ fn literal_prefilter_pass(
     // Trigram MATCH needs 3 chars. Shorter needles use literal_sql LIKE/GLOB
     // with ORDER BY over the whole `lines` table — ~22 ms on a 54k-file
     // corpus for a digit like "0". Cascade file discovery does not need them.
+    // Generic user terms survive when fewer than two specific user terms
+    // carry the query (same relative rule as the structural stage terms):
+    // "derive the next command to run" must still discover files via
+    // `command`. Generic extras (borrowed/concept tokens) stay dropped;
+    // the corpus-df filter below still bounds truly common terms.
+    let keep_user_generics = drop_common
+        && user_first.is_some_and(|user| {
+            user.iter()
+                .filter(|term| {
+                    term.chars().count() >= 3
+                        && !cascade_stopword(term)
+                        && !critic::is_generic_concept_token(term)
+                })
+                .count()
+                < 2
+        });
     let mut terms = parsed
         .terms
         .iter()
         .filter(|term| {
             term.chars().count() >= 3
                 && !cascade_stopword(term)
-                && !(drop_common && critic::is_generic_concept_token(term))
+                && !(drop_common
+                    && critic::is_generic_concept_token(term)
+                    && !(keep_user_generics && user_first.is_some_and(|user| user.contains(*term))))
         })
         .collect::<Vec<_>>();
     if drop_common {
@@ -1685,8 +1720,16 @@ fn literal_prefilter_pass(
         }
         // Known common leftovers can be skipped after a foothold. Cold df
         // remains unknown rather than paying an implicit vocabulary preload.
+        // The skip guards the SQL literal_pass cost only: with the line
+        // corpus resident, discovery is the cheap in-RAM scan the warm path
+        // exists for, and skipping a user term there starves the cascade —
+        // the term can be redundant for hit generation while being the only
+        // bridge to files the structural passes need (warm self-gold lost
+        // `search/types.rs` because "snapshot" was skipped after a
+        // "consistent" foothold; one-shot runs never skip, df unarmed).
         const CASCADE_FOOTHOLD_DF: i64 = 128;
-        if !files.is_empty()
+        if corpus.is_none()
+            && !files.is_empty()
             && !extra
             && store
                 .trigram_df()

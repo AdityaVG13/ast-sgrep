@@ -1,5 +1,5 @@
 use ast_sgrep_core::semantic_ivf::semantic_ivf_path;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, IndexStore, Indexer};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer};
 use rusqlite::params;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -69,13 +69,14 @@ fn schema_upgrade_invalidates_legacy_semantic_layouts() {
     assert_eq!(migrated.get_meta("embed_backend").unwrap(), None);
     assert_eq!(migrated.get_meta("embed_model").unwrap(), None);
     assert_eq!(migrated.get_meta("embed_dim").unwrap(), None);
-    // Legacy identity is rewritten twice on a sub-10 store: the schema-10
-    // semantic re-render wraps, and the schema-15 re-key invalidation
-    // (F74c-1) sits inside it. Both markers must be present and the original
-    // hash must survive as the suffix.
+    // Legacy identity is rewritten three times on a sub-10 store: the
+    // schema-15 re-key invalidation (F74c-1) innermost, the schema-10
+    // semantic re-render around it, and the schema-17 parent-chunk rebuild
+    // outermost. Every marker must be present and the original hash must
+    // survive as the suffix.
     assert_eq!(
         migrated.file_hash("legacy.rs").unwrap().as_deref(),
-        Some("semantic-layout-v3:schema15-rekey:original-hash")
+        Some("parent-chunk-v17:semantic-layout-v3:schema15-rekey:original-hash")
     );
     let version: i64 = migrated
         .connection()
@@ -152,7 +153,6 @@ fn enabling_embeddings_rebuilds_an_unchanged_file() {
     let mut enabled = Indexer::new(IndexOptions {
         root: temp.path().to_path_buf(),
         embed_semantic: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     })
     .unwrap();
@@ -241,8 +241,12 @@ fn schema_9_invalidates_legacy_semantic_state() {
         .connection()
         .query_row("SELECT content_hash FROM files", [], |row| row.get(0))
         .unwrap();
-    // Schema-10 re-render wraps the schema-15 re-key invalidation (F74c-1).
-    assert_eq!(content_hash, "semantic-layout-v3:schema15-rekey:keep-me");
+    // Schema-10 re-render wraps the schema-15 re-key invalidation (F74c-1);
+    // the schema-17 parent-chunk rebuild wraps both.
+    assert_eq!(
+        content_hash,
+        "parent-chunk-v17:semantic-layout-v3:schema15-rekey:keep-me"
+    );
     let cols: Vec<String> = {
         let mut stmt = migrated
             .connection()
@@ -272,7 +276,6 @@ fn persist_per_field_vectors_on_index() {
     let mut indexer = Indexer::new(IndexOptions {
         root: temp.path().to_path_buf(),
         embed_semantic: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     })
     .unwrap();
@@ -312,4 +315,77 @@ fn persist_per_field_vectors_on_index() {
             );
         }
     }
+}
+
+#[test]
+fn fragment_only_parent_chunks_are_rebuilt_on_schema_upgrade() {
+    // INTENT: schema <=16 chunking could represent a function only by
+    // extracted child fragments — the whole-body parent chunk never
+    // existed. A chunking change must reach indexes built before it: the
+    // content-hash/mtime fast paths key on file bytes, not on how chunks
+    // are derived, so without a schema-version wipe an unchanged file
+    // keeps its fragment-only rows forever.
+    let corpus = TempDir::new().unwrap();
+    let index_dir = TempDir::new().unwrap();
+    let index_path = index_dir.path().join("index.db");
+    std::fs::write(
+        corpus.path().join("workflow.rs"),
+        "pub fn advance_workflow() {\n    if workflow_is_idle() {\n        return;\n    }\n    let steps = [\"gather follow up commands\", \"execute them next\"];\n    emit_steps(steps.len());\n}\n\nfn workflow_is_idle() -> bool { true }\nfn emit_steps(_count: usize) {}\n",
+    )
+    .unwrap();
+    let opts = IndexOptions {
+        root: corpus.path().to_path_buf(),
+        index_path: Some(index_path),
+        embed_semantic: true,
+        ..IndexOptions::default()
+    };
+    let parent_chunk_count = |indexer: &Indexer| -> i64 {
+        indexer
+            .store()
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_chunks WHERE text LIKE '%gather follow up commands%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let mut indexer = Indexer::new(opts.clone()).unwrap();
+    indexer.index_all().unwrap();
+    assert!(
+        parent_chunk_count(&indexer) > 0,
+        "fresh index must store the whole-body parent chunk"
+    );
+    // Fabricate the pre-fix store: drop the parent chunk (the old chunker
+    // never wrote it) and roll the schema back to the last version that
+    // could have produced fragment-only parents.
+    indexer
+        .store()
+        .connection()
+        .execute(
+            "DELETE FROM semantic_chunks WHERE text LIKE '%gather follow up commands%'",
+            [],
+        )
+        .unwrap();
+    indexer
+        .store()
+        .connection()
+        .execute_batch("PRAGMA user_version = 16")
+        .unwrap();
+    assert_eq!(parent_chunk_count(&indexer), 0);
+    drop(indexer);
+
+    // Plain re-index of the unchanged file must restore the parent chunk.
+    let mut migrated = Indexer::new(opts).unwrap();
+    migrated.index_all().unwrap();
+    assert!(
+        parent_chunk_count(&migrated) > 0,
+        "schema upgrade must rebuild fragment-only parents on an unchanged file"
+    );
+    let version: i64 = migrated
+        .store()
+        .connection()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, ast_sgrep_core::INDEX_SCHEMA_VERSION);
 }

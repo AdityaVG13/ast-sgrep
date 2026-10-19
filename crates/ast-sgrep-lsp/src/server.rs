@@ -246,7 +246,9 @@ impl LspServer {
         let mut backend =
             LspBackend::new_cached(canonicalize_workspace_root(resolve_root(&params)))?;
         if let Some(ref opts) = params.initialization_options {
-            backend.apply_settings(AsgrepSettings::from_initialization_options(opts))?;
+            let settings = AsgrepSettings::from_initialization_options(opts)
+                .map_err(|error| request_error(-32602, error.to_string()))?;
+            backend.apply_settings(settings)?;
         }
         backend.start_background_index();
         let result = backend.initialize_result();

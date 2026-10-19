@@ -2,8 +2,7 @@
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::HitKind;
 use ast_sgrep_core::store::IndexStore;
-use ast_sgrep_core::{EmbedBackend, IndexOptions, Indexer, SearchOptions, Searcher};
-use ast_sgrep_embed::EmbedPreference;
+use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use ast_sgrep_testkit::{index_sample, reopen_indexer, searcher_from};
 use std::fs;
 use std::path::Path;
@@ -427,29 +426,14 @@ fn archived_pi_fixture_graph_modes_match_indexed_keys() {
 }
 
 #[test]
-fn parity_embed_backend_and_search_option_wiring() {
-    assert_eq!(EmbedBackend::from_flags(true, false), EmbedBackend::Neural);
-    assert_eq!(
-        EmbedBackend::Neural.to_preference(),
-        EmbedPreference::Neural
-    );
-    assert_eq!(EmbedBackend::Neural.to_preference_str(), "neural");
-    assert_eq!(EmbedBackend::parse("neural"), EmbedBackend::Neural);
-    assert_eq!(EmbedBackend::parse("fastembed"), EmbedBackend::Neural);
+fn parity_search_option_wiring() {
     let mut opts = SearchOptions {
-        use_neural_embed: true,
         ann_probes: Some(4),
-        use_rerank: true,
-        rerank_top_k: 5,
         ..SearchOptions::default()
     };
-    assert_eq!(opts.embed_preference(), EmbedPreference::Neural);
     assert_eq!(opts.ann_probes, Some(4));
-    assert!(opts.use_rerank);
-    assert_eq!(opts.rerank_top_k, 5);
     let indexed = index_sample(IndexOptions {
         force_reindex: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     });
     opts.root = indexed.indexer.store().root().to_path_buf();
@@ -468,45 +452,17 @@ fn parity_embed_backend_and_search_option_wiring() {
             .hits
             .iter()
             .any(|hit| { hit.symbol.as_deref() == Some("auth_refresh") }),
-        "the same indexed fixture must serve the non-neural control"
+        "the same indexed fixture must serve the non-embed control"
     );
-    // Fail-closed contract (parity_search_option_wiring): Searcher::new rejects
-    // the flags when the features are not compiled; with them, the wiring must
-    // still surface defs hits.
-    #[cfg(not(all(feature = "neural-embed", feature = "rerank")))]
-    for (feature, enabled) in [
-        ("neural-embed", cfg!(feature = "neural-embed")),
-        ("rerank", cfg!(feature = "rerank")),
-    ] {
-        if enabled {
-            continue;
-        }
-        let mut unavailable = opts.clone();
-        unavailable.use_neural_embed = feature == "neural-embed";
-        unavailable.use_rerank = feature == "rerank";
-        let error = match Searcher::new(unavailable) {
-            Ok(_) => panic!("unavailable {feature} must be rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("built without the `{feature}` feature")),
-            "must reject the unavailable feature, not an unrelated fixture error: {error}"
-        );
-    }
-    #[cfg(all(feature = "neural-embed", feature = "rerank"))]
-    {
-        let searcher = searcher_from(&indexed, opts.clone());
-        let resp = searcher.search("defs:auth_refresh").unwrap();
-        assert!(
-            resp.hits
-                .iter()
-                .any(|h| h.symbol.as_deref() == Some("auth_refresh")),
-            "wired options must still return defs hits; got {:#?}",
-            resp.hits
-        );
-    }
+    let searcher = searcher_from(&indexed, opts.clone());
+    let resp = searcher.search("defs:auth_refresh").unwrap();
+    assert!(
+        resp.hits
+            .iter()
+            .any(|h| h.symbol.as_deref() == Some("auth_refresh")),
+        "wired options must still return defs hits; got {:#?}",
+        resp.hits
+    );
 }
 #[test]
 fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {
@@ -521,7 +477,6 @@ fn index_all_preserves_semantic_ivf_on_noop_and_file_failure() {
     let options = IndexOptions {
         root: corpus.path().to_path_buf(),
         index_path: Some(index_path.clone()),
-        embed_backend: EmbedBackend::Semantic,
         ann_threshold: Some(1),
         force_reindex: false,
         ..IndexOptions::default()
@@ -683,7 +638,6 @@ fn parity_index_defs_hybrid_chain() {
     let mut again = reopen_indexer(
         &indexed,
         IndexOptions {
-            embed_backend: EmbedBackend::parse(&stored_backend),
             ..IndexOptions::default()
         },
     );

@@ -301,6 +301,7 @@ fn chain_decay_hostile_propagates_without_panic() {
                 top_n: 4,
                 limit: 8,
                 decay_factor: decay,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -352,6 +353,7 @@ fn chain_decay_hostile_propagates_without_panic() {
                 top_n: 4,
                 limit: 8,
                 decay_factor: f64::NAN,
+                ..Default::default()
             },
         )
         .unwrap()

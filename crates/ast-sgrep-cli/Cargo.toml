@@ -16,10 +16,6 @@ workspace = true
 
 [features]
 default = []
-# Real neural embeddings (fastembed/ONNX). Heavy dependency, opt-in: off by
-# default in the workspace, enabled with `--features neural-embed`.
-neural-embed = ["ast-sgrep-core/neural-embed"]
-rerank = ["ast-sgrep-core/rerank"]
 
 [lib]
 name = "ast_sgrep_cli"

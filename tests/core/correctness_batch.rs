@@ -1,7 +1,7 @@
 //! Hard evidence for PR20 P1 correctness beads: 28vo, kqhp (+ public-API coverage).
 use ast_sgrep_core::store::UpsertFileInput;
 use ast_sgrep_core::{
-    indexed_rel_path, EmbedBackend, IndexOptions, IndexStore, Indexer, SearchOptions, Searcher,
+    indexed_rel_path, IndexOptions, IndexStore, Indexer, SearchOptions, Searcher,
 };
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -24,7 +24,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
         depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
-        embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
     }
 }
 
@@ -69,43 +68,50 @@ fn clear_all_data_wipes_embed_meta_keeps_root_whitelist() {
     assert!(store.semantic_data_version().unwrap() >= 1);
 }
 
-/// ast-sgrep-28vo — Auto is not a wildcard for concrete stored backends.
+/// ast-sgrep-28vo — a store embedded by a foreign (retired) model is never
+/// treated as unchanged: the next index run rewrites it.
 #[test]
-fn is_unchanged_auto_does_not_match_concrete_backend() {
+fn is_unchanged_rejects_foreign_embed_model() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     write_src(root, "m.py", "def hello():\n    return 1\n");
-    let mut semantic = Indexer::new(IndexOptions {
+    let mut first_indexer = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
         embed_semantic: true,
-        embed_backend: EmbedBackend::Semantic,
         ..IndexOptions::default()
     })
     .unwrap();
-    let first = semantic.index_all().unwrap();
+    let first = first_indexer.index_all().unwrap();
     assert!(first.files_indexed >= 1);
     assert_eq!(
-        semantic
+        first_indexer
             .store()
             .get_meta("embed_backend")
             .unwrap()
             .as_deref(),
-        Some("semantic-v2")
+        Some("static")
     );
-    drop(semantic);
+    // Simulate a store written by a retired engine.
+    first_indexer
+        .store()
+        .set_meta("embed_backend", "semantic-v2")
+        .unwrap();
+    first_indexer
+        .store()
+        .set_meta("embed_model", "semantic-v2:256")
+        .unwrap();
+    drop(first_indexer);
 
-    // Same bytes, preference Auto ("auto") ≠ stored concrete "semantic-v2".
-    let mut auto = Indexer::new(IndexOptions {
+    let mut reopened = Indexer::new(IndexOptions {
         root: root.to_path_buf(),
         embed_semantic: true,
-        embed_backend: EmbedBackend::Auto,
         ..IndexOptions::default()
     })
     .unwrap();
-    let second = auto.index_all().unwrap();
+    let second = reopened.index_all().unwrap();
     assert!(
         second.files_indexed >= 1,
-        "Auto must not treat concrete embed_backend as unchanged wildcard; got skipped={}",
+        "foreign embed identity must force a rewrite, not an unchanged skip; got skipped={}",
         second.files_skipped
     );
 }

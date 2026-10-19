@@ -18,7 +18,6 @@ fn base<'a>(path: &'a str, lines: &'a [(u32, String)], hash: &'a str) -> UpsertF
         depth_truncated: false,
         semantic_chunks: &[],
         embed_semantic: false,
-        embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
     }
 }
 fn count(store: &IndexStore, sql: &str) -> i64 {
@@ -330,7 +329,6 @@ fn same_span_body_edit_refreshes_semantic_chunks() {
         input.pattern_nodes = pats;
         input.semantic_chunks = chunks;
         input.embed_semantic = true;
-        input.embed_backend = ast_sgrep_embed::EmbedPreference::Semantic;
         store.upsert_file(input).unwrap();
     };
     upsert(&lines_v1, &chunks_v1, &pat_v1, "hash_alpha");

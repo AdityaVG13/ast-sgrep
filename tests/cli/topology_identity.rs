@@ -198,10 +198,7 @@ fn machine_surfaces_identical_across_sets() {
             "--budget-tokens",
             "--excerpt-lines",
             "--format",
-            "--neural-embed",
             "--no-embed",
-            "--rerank",
-            "--rerank-top-k",
             "--response-snippet-tokens",
             "--semantic-only",
             "--snippet-tokens",
@@ -369,12 +366,9 @@ fn machine_surfaces_identical_across_sets() {
     );
 }
 
-/// INTENT: help carries exactly the documented feature markers in every build
-/// (exact occurrence counts; substring counts are clap-wrap independent) and
-/// help exits 0.
+/// INTENT: retired neural/rerank flags are hidden from every help surface
+/// (they parse only to be rejected loudly) and help exits 0.
 /// KILLS: BEHAVIOR-ONLY (drift pins).
-/// Absorbs: T3 search-help counts, T4 help census pair (merged ungated; the
-/// cfg split proved nothing the ungated run does not), T1 help-exit-0 atom.
 #[test]
 fn help_markers_identical_across_sets() {
     let bin = asgrep_bin();
@@ -384,55 +378,22 @@ fn help_markers_identical_across_sets() {
     let output = run_env(&bin, &["--help"], &[]);
     assert!(output.status.success());
 
-    let output = run_env(&bin, &["search", "--help"], &[]);
-    let help = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(!help.is_empty());
-    assert_eq!(help.matches("neural-embed").count(), 2, "help={help}");
-    assert_eq!(help.matches("--rerank").count(), 3, "help={help}");
-    assert_eq!(help.matches("--rerank-top-k").count(), 1, "help={help}");
-    assert_eq!(
-        help.matches("(needs neural-embed feature)").count(),
-        1,
-        "help={help}"
-    );
-
-    for sub in ["index", "keyword", "semantic"] {
-        let output = run_env(&bin, &[sub, "--help"], &[]);
+    for argv in [
+        &["search", "--help"][..],
+        &["index", "--help"][..],
+        &["keyword", "--help"][..],
+        &["semantic", "--help"][..],
+        &["outline", "--help"][..],
+        &["status", "--help"][..],
+        &["doctor", "--help"][..],
+        &["--help"][..],
+    ] {
+        let output = run_env(&bin, argv, &[]);
         assert!(output.status.success());
         let help = String::from_utf8_lossy(&output.stdout).into_owned();
-        assert!(!help.is_empty());
-        assert_eq!(help.matches("neural-embed").count(), 2, "{sub} help={help}");
-        assert_eq!(help.matches("--rerank").count(), 3, "{sub} help={help}");
-        assert_eq!(
-            help.matches("--rerank-top-k").count(),
-            1,
-            "{sub} help={help}"
-        );
-        assert_eq!(
-            help.matches("(needs neural-embed feature)").count(),
-            1,
-            "{sub} help={help}"
-        );
-    }
-
-    let output = run_env(&bin, &["--help"], &[]);
-    let top = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert_eq!(top.matches("neural-embed").count(), 2, "top help={top}");
-    assert_eq!(top.matches("--rerank").count(), 3, "top help={top}");
-    assert_eq!(top.matches("--rerank-top-k").count(), 1, "top help={top}");
-    assert_eq!(
-        top.matches("(needs neural-embed feature)").count(),
-        1,
-        "top help={top}"
-    );
-
-    for sub in ["outline", "status", "doctor"] {
-        let output = run_env(&bin, &[sub, "--help"], &[]);
-        assert!(output.status.success());
-        let help = String::from_utf8_lossy(&output.stdout).into_owned();
-        assert!(!help.is_empty());
-        assert_eq!(help.matches("neural-embed").count(), 0, "{sub} help={help}");
-        assert_eq!(help.matches("--rerank").count(), 0, "{sub} help={help}");
+        assert!(!help.is_empty(), "{argv:?} help empty");
+        assert_eq!(help.matches("neural-embed").count(), 0, "{argv:?} help={help}");
+        assert_eq!(help.matches("--rerank").count(), 0, "{argv:?} help={help}");
     }
 }
 
@@ -490,7 +451,7 @@ fn default_flows_exact_and_topk_inert() {
     assert_eq!(status["ok"], true);
     assert_eq!(status["embed_backend"], "static");
     assert_eq!(status["embed_dim"], 256);
-    assert_eq!(status["semantic_chunk_count"], 3);
+    assert_eq!(status["semantic_chunk_count"], 5);
     assert_eq!(status["symbol_count"], 2);
     assert_eq!(status["file_count"], 1);
     assert_eq!(status["caller_count"], 1);
@@ -514,20 +475,19 @@ fn default_flows_exact_and_topk_inert() {
     assert_eq!(kinds, ["caller", "def"]);
     assert!(hits.iter().all(|h| h["symbol"] == "alpha_query_target"));
 
+    // Retired rerank knob: fails closed, never a silent no-op.
     let (code, inert, stderr) = fx.search(&["--rerank-top-k", "5"], &[]);
-    assert_eq!(code, 0, "stderr={stderr} value={inert}");
-    assert!(stderr.is_empty());
-    assert_eq!(inert, base, "inert flag changed the envelope");
+    assert_eq!(code, 2, "stderr={stderr} value={inert}");
+    assert_eq!(inert["ok"], false);
+    assert_eq!(inert["error"]["kind"], "operational");
 }
 
-/// INTENT: with embeddings off the neural gate is fully skipped (flag and env
-/// forms deep-equal the plain embed-off envelope), and the `semantic` channel
-/// returns deep-equal hits to `search --semantic-only` — in every build.
+/// INTENT: retired neural entries fail closed even with embeddings off
+/// (flag and env forms), and the `semantic` channel returns deep-equal hits
+/// to `search --semantic-only`.
 /// KILLS: gate-ordering, channel-divergence.
-/// Absorbs: T1 no-embed success + semantic shape (looser pins subsumed), T3
-/// neural-ignore 3-way + semantic channel equivalence (kept verbatim).
 #[test]
-fn embed_off_inert_and_channel_equivalence() {
+fn embed_off_retired_rejects_and_channel_equivalence() {
     let fx = Fixture::one_file();
     let bin = asgrep_bin();
     let (code, base, stderr) = fx.search(&["--no-embed"], &[]);
@@ -535,15 +495,13 @@ fn embed_off_inert_and_channel_equivalence() {
     assert!(stderr.is_empty());
     assert_eq!(base["ok"], true);
 
-    let (code, flag, stderr) = fx.search(&["--neural-embed", "--no-embed"], &[]);
-    assert_eq!(code, 0, "stderr={stderr} value={flag}");
-    assert!(stderr.is_empty());
-    assert_eq!(flag, base, "flag form diverged");
+    let (code, flag, _) = fx.search(&["--neural-embed", "--no-embed"], &[]);
+    assert_eq!(code, 2, "value={flag}");
+    assert_eq!(flag["error"]["kind"], "operational");
 
-    let (code, env, stderr) = fx.search(&["--no-embed"], &[("ASGREP_NEURAL_EMBED", "1")]);
-    assert_eq!(code, 0, "stderr={stderr} value={env}");
-    assert!(stderr.is_empty());
-    assert_eq!(env, base, "env form diverged");
+    let (code, env, _) = fx.search(&["--no-embed"], &[("ASGREP_NEURAL_EMBED", "1")]);
+    assert_eq!(code, 2, "value={env}");
+    assert_eq!(env["error"]["kind"], "operational");
 
     let (code, via_search, stderr) = fx.search(&["--semantic-only"], &[]);
     assert_eq!(code, 0, "stderr={stderr} value={via_search}");
@@ -590,8 +548,8 @@ fn parse_diagnose_surfaces_identical() {
     let output = run_env(&bin, &["search", "--definitely-not-a-flag", "q", "."], &[]);
     assert_eq!(output.status.code(), Some(1));
 
-    // `--rerank-top-k` is parsed by clap in every build: an invalid value is a
-    // usage error (exit 1), never an unknown-flag or gate error.
+    // `--rerank-top-k` is retired (Phase 2C): it is not in the clap surface,
+    // so any use is a usage error (exit 1), same as an unknown flag.
     let (code, bad_value, stderr) = run_json_full(
         &bin,
         &[

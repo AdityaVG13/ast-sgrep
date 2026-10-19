@@ -414,14 +414,14 @@ fn dead_index_bytes_refuse_totally_without_quarantine() {
 fn schema_versions_refuse_future_and_migrate_stale_preserving_output() {
     // Tripwire: stale surgery below is relative to the live stamp, but the
     // suite pins the known-good version so a core bump fails loudly.
-    assert_eq!(ast_sgrep_core::INDEX_SCHEMA_VERSION, 16);
+    assert_eq!(ast_sgrep_core::INDEX_SCHEMA_VERSION, 17);
 
     // Facet 1 (future): a newer writer's index (user_version 9999) is
     // refused with `Other` on both paths, nonmutating: the stamp still
     // reads 9999 afterwards and peek survives, so a newer binary can open it.
     let (_temp1, config) = testkit::indexed_codemode_repo(TOKEN);
     let db = config.index_path.clone().expect("index path");
-    assert_eq!(testkit::db_user_version(&db), 16);
+    assert_eq!(testkit::db_user_version(&db), 17);
     testkit::set_db_user_version(&db, 9999);
     let mut session = CodeModeSession::new(config.clone());
     let err = session

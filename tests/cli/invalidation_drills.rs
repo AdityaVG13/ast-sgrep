@@ -418,6 +418,9 @@ struct WatchChild {
 
 impl WatchChild {
     fn spawn(bin: &Path, root: &str, index: &str) -> Self {
+        // A real `watch` re-execs the sibling helper; without a fresh one
+        // this suite would test whatever stale binary the target dir holds.
+        ast_sgrep_testkit::ensure_watch_helper(bin);
         let child = Command::new(bin)
             .args([
                 "--no-embed",

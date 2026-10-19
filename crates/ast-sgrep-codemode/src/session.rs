@@ -3,8 +3,8 @@
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::{
-    canonicalize_affected_path, expand_incremental_path_list, EmbedBackend, IndexOptions, Indexer,
-    Language, SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, expand_incremental_path_list, IndexOptions, Indexer, Language,
+    SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
 };
 use ast_sgrep_plugins::{format_response_with, OutputFormat};
 use serde_json::{json, Value};
@@ -561,7 +561,6 @@ impl CodeModeSession {
             root,
             index_path: self.config.index_path.clone(),
             embed_semantic: use_embed,
-            embed_backend: EmbedBackend::Auto,
             ..IndexOptions::default()
         })?;
         if let Some(cancel) = &self.cancel {

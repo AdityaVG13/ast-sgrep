@@ -763,7 +763,7 @@ fn sigkill_mid_rewrite_recovers_and_serves() {
         &tantivy,
     );
     assert_success(&output, "index");
-    assert!(temp_b.path().join("lexical.db").is_file());
+    assert!(index_b.with_extension("db.lexical.db").is_file());
     let root_s = root_b.to_str().unwrap().to_owned();
     let index_s = index_b.to_str().unwrap().to_owned();
     let baseline = capture_baseline(

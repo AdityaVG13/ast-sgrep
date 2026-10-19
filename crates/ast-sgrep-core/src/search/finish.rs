@@ -256,10 +256,6 @@ pub(crate) fn finish_response_checked_lazy(
         }
     }
     hits = enforce_result_gates(hits, parsed.mode, gate_limit);
-    if options.use_rerank {
-        hits = maybe_rerank(&parsed.raw, hits, options.rerank_top_k);
-        hits = enforce_result_gates(hits, parsed.mode, options.limit);
-    }
     let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
         if skip_fs_byte_estimates {
             let returned = hits.iter().map(|h| h.excerpt.len() as u64).sum();
@@ -281,70 +277,6 @@ pub(crate) fn finish_response_checked_lazy(
     };
     super::record_ledger_from_env(&response);
     Ok(response)
-}
-fn maybe_rerank(query: &str, hits: Vec<SearchHit>, top_k: usize) -> Vec<SearchHit> {
-    if hits.is_empty() {
-        return hits;
-    }
-    let k = top_k.max(1).min(hits.len());
-    let docs: Vec<String> = hits
-        .iter()
-        .take(k)
-        .map(|h| {
-            format!(
-                "{}:{} {}",
-                h.file,
-                h.line_start,
-                h.excerpt.lines().next().unwrap_or("")
-            )
-        })
-        .collect();
-    #[cfg(feature = "rerank")]
-    {
-        match ast_sgrep_embed::rerank(query, &docs) {
-            Ok(scores) => {
-                return apply_rerank_order(hits, k, scores.into_iter().map(|s| (s.index, s.score)))
-            }
-            Err(e) => eprintln!("[asgrep] rerank skipped: {e}"),
-        }
-    }
-    #[cfg(not(feature = "rerank"))]
-    {
-        let _ = (query, &docs);
-    }
-    hits
-}
-#[cfg(feature = "rerank")]
-pub(super) fn apply_rerank_order(
-    mut hits: Vec<SearchHit>,
-    top_k: usize,
-    scores: impl IntoIterator<Item = (usize, f32)>,
-) -> Vec<SearchHit> {
-    let k = top_k.min(hits.len());
-    let mut prefix: Vec<Option<SearchHit>> = hits.drain(..k).map(Some).collect();
-    let mut seen = vec![false; k];
-    let mut ranked: Vec<(f32, usize)> = scores
-        .into_iter()
-        .filter(|(index, score)| {
-            let valid =
-                *index < k && score.is_finite() && !seen.get(*index).copied().unwrap_or(true);
-            if valid {
-                seen[*index] = true;
-            }
-            valid
-        })
-        .map(|(index, score)| (score, index))
-        .collect();
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut out = Vec::with_capacity(prefix.len() + hits.len());
-    out.extend(
-        ranked
-            .into_iter()
-            .filter_map(|(_, index)| prefix[index].take()),
-    );
-    out.extend(prefix.into_iter().flatten());
-    out.append(&mut hits);
-    out
 }
 pub(super) fn enforce_result_gates(
     mut hits: Vec<SearchHit>,

@@ -351,7 +351,6 @@ fn interrupted_work_resumes_to_fresh_state() {
                     depth_truncated: false,
                     semantic_chunks: &[],
                     embed_semantic: false,
-                    embed_backend: ast_sgrep_embed::EmbedPreference::Auto,
                 })
                 .unwrap();
             // Abandoned: dropped without commit, must roll back.

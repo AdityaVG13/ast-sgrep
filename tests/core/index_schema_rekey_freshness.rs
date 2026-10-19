@@ -218,8 +218,10 @@ fn writable_open_migrates_then_reindex_rebuilds_scoped_call_rows_and_answers_fac
             .expect("file hash")
             .expect("row");
         assert!(
-            hash.starts_with("schema15-rekey:"),
-            "stored content identity must be prefixed so the hash fast path cannot skip: {hash}"
+            hash.starts_with("parent-chunk-v17:schema15-rekey:"),
+            "stored content identity must be prefixed (schema-15 re-key, wrapped \
+             by the schema-17 parent-chunk rebuild) so the hash fast path cannot \
+             skip: {hash}"
         );
         for key in ["body:probe.php", "struct:probe.php"] {
             assert!(

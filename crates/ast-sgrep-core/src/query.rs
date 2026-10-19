@@ -30,6 +30,17 @@ pub enum QueryMode {
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
+        // L-Q1c (2026-10-17): recognized short-question scaffolding is
+        // stripped from the raw query BEFORE any lane sees it — the sim
+        // measured whole-query replace, not a lexical-only strip.
+        let rewritten;
+        let trimmed = match rewrite_short_question(trimmed) {
+            Some(s) => {
+                rewritten = s;
+                rewritten.as_str()
+            }
+            None => trimmed,
+        };
         let (without_scope, path_scope, path_scope_error) = split_in_path_scope(trimmed);
         let mut parsed = Self::parse_mode(without_scope.trim());
         parsed.path_scope = path_scope;
@@ -173,13 +184,153 @@ const STOPWORDS: &[&str] = &[
     "is", "it", "of", "on", "or", "that", "the", "this", "to", "what", "when", "where", "which",
     "who", "why", "with",
 ];
+/// Genre boilerplate of long natural-language code-search queries: words
+/// that describe the question rather than the code ("purpose", "verify").
+/// Only applied to long queries (see `QUERY_BOILERPLATE_LEN_THRESHOLD`).
+/// Probe: stripping these from 20 embed-won/no-embed-lost RepoQA queries
+/// recovered 3 to top-10 and never meaningfully hurt; the full-query
+/// fallback below keeps the empty-strip case safe.
+const QUERY_BOILERPLATE: &[&str] = &[
+    "allow",
+    "allows",
+    "appropriate",
+    "attribute",
+    "attributes",
+    "certain",
+    "class",
+    "correct",
+    "correctly",
+    "described",
+    "design",
+    "designed",
+    "ensures",
+    "ensure",
+    "following",
+    "function",
+    "functions",
+    "given",
+    "input",
+    "intended",
+    "method",
+    "methods",
+    "object",
+    "output",
+    "particular",
+    "provide",
+    "provides",
+    "purpose",
+    "relevant",
+    "responsible",
+    "retrieve",
+    "retrieves",
+    "return",
+    "returns",
+    "specific",
+    "use",
+    "used",
+    "using",
+    "value",
+    "values",
+    "various",
+    "verify",
+    "verifies",
+];
+/// Minimum tokenized-query length before genre-boilerplate stripping
+/// applies. Short queries keep every term.
+const QUERY_BOILERPLATE_LEN_THRESHOLD: usize = 15;
+/// Frozen stop list of the L-Q1c sim (2026-10-17). Deliberately NOT the
+/// lexical `STOPWORDS` below: this exact list produced the measured
+/// CoSQA +.0102 / RepoQA bit-identical arm and is part of the lever's
+/// pre-declared contract; changing it is a new lever needing a new arm.
+const SHORT_QUESTION_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "of", "to", "in", "on", "for", "with", "without", "using", "and", "or", "is",
+    "are", "be", "been", "do", "does", "did", "can", "could", "should", "would", "will", "how",
+    "what", "why", "when", "where", "which", "who", "i", "you", "we", "they", "it", "its", "this",
+    "that", "these", "those", "my", "your", "our", "their", "there", "here", "best", "way",
+    "python", "code", "function", "method", "returns", "return", "get", "getting",
+];
+
+/// L-Q1c short-question boilerplate rewrite (pre-declared 2026-10-17,
+/// plan Phase 5; offline sim: CoSQA MRR@10 .3169 → .3271, RepoQA
+/// bit-identical, 0/600 RepoQA queries match). A bare natural-language
+/// question whose scaffolding is recognized — a leading
+/// "how to / how do i / what('s| is)[ the][ best| easiest| right] way [to]
+/// / is there a way to" or a trailing "in|using|with|for python" — is
+/// replaced by its stripped form (scaffolding + frozen sim stop list
+/// dropped, whitespace collapsed). Never touches mode-prefixed queries
+/// (pattern/literal text is byte-faithful by contract) and never yields
+/// an empty query (no rewrite instead).
+fn rewrite_short_question(trimmed: &str) -> Option<String> {
+    const MODE_PREFIXES: &[&str] = &[
+        "callers:", "defs:", "imports:", "pattern:", "literal:", "regex:", "word:",
+    ];
+    if MODE_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+        return None;
+    }
+    fn lead_pattern() -> &'static regex::Regex {
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        RE.get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)^(?:how (?:to|do i|can i|does one)|what(?:'s| is)(?: the)?(?: best| easiest| right)? way to?|is there a way to)\s+",
+            )
+            .expect("static lead pattern compiles")
+        })
+    }
+    fn tail_pattern() -> &'static regex::Regex {
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        RE.get_or_init(|| {
+            regex::Regex::new(r"(?i)\s+(?:in|using|with|for) python\s*$")
+                .expect("static tail pattern compiles")
+        })
+    }
+    let mut rest = trimmed;
+    let mut matched = false;
+    if let Some(m) = lead_pattern().find(rest) {
+        if m.start() == 0 {
+            rest = &rest[m.end()..];
+            matched = true;
+        }
+    }
+    if let Some(m) = tail_pattern().find(rest) {
+        rest = &rest[..m.start()];
+        matched = true;
+    }
+    if !matched {
+        return None;
+    }
+    let kept: Vec<&str> = rest
+        .split_whitespace()
+        .filter(|t| !SHORT_QUESTION_STOPWORDS.contains(&t.to_lowercase().as_str()))
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    Some(kept.join(" "))
+}
+
 fn tokenize_for_scoring(input: &str) -> Vec<String> {
     let terms = tokenize_words(input, true);
-    if terms.is_empty() {
+    let terms = if terms.is_empty() {
         tokenize_words(input, false)
     } else {
         terms
+    };
+    // Long natural-language queries carry genre boilerplate ("purpose",
+    // "designed to", "verify that ... correctly") that matches hundreds of
+    // files and drowns the discriminative terms. Drop it only when the
+    // query is long enough that dilution dominates; short queries keep
+    // every term. Never return empty: fall back to the full set.
+    if terms.len() > QUERY_BOILERPLATE_LEN_THRESHOLD {
+        let kept: Vec<String> = terms
+            .iter()
+            .filter(|t| !QUERY_BOILERPLATE.contains(&t.as_str()))
+            .cloned()
+            .collect();
+        if !kept.is_empty() {
+            return kept;
+        }
     }
+    terms
 }
 fn tokenize_words(input: &str, drop_stopwords: bool) -> Vec<String> {
     let mut terms = Vec::new();

@@ -204,9 +204,97 @@ fn canonical_priority(kind: HitKind) -> usize {
     CANONICAL_PRIORITY[hit_kind_idx(kind)]
 }
 
-pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
-    if hits.is_empty() {
+/// Drop extra-channel votes when an embed score is below
+/// `1 - DECISIVE_MARGIN_RATIO` of the query's best. A result the embed
+/// channel never scored keeps `baseline`: zeroing those votes is a
+/// different rule and fails Hit@100.
+fn score_below_cosine_support(
+    ranks: &ChannelRanks,
+    magnitude: Option<f64>,
+    semantic_top: f64,
+    weights: &ChannelWeights,
+    baseline: f64,
+) -> f64 {
+    let cut = 1.0 - crate::search::planner::DECISIVE_MARGIN_RATIO;
+    if semantic_top <= 0.0 || ranks.semantic.is_none() {
+        return baseline;
+    }
+    let Some(magnitude) = magnitude else {
+        return baseline;
+    };
+    if magnitude >= cut * semantic_top {
+        return baseline;
+    }
+    let mut score = weight(weights, FusionChannel::Semantic)
+        * rrf_score(ranks.semantic.expect("checked"), RRF_K);
+    score +=
+        weight(weights, FusionChannel::Semantic) * rrf_score(0, RRF_K) * (magnitude / semantic_top);
+    score
+}
+
+/// Fused scores, plus the pre-critic embed magnitude of each fused row
+/// (same order). The critic reads that vector to stop a far-cosine hit
+/// from outranking the best embed on a description query. Callers that
+/// only want the scores ignore the return.
+/// One result row of the `ASGREP_FUSION_DUMP` capture: the merged result key
+/// with its pre-fusion per-channel ranks, contributor kinds, semantic
+/// magnitude, and final fused score. Owned (not borrowed) so the row can
+/// outlive the `SearchHit` it describes.
+#[derive(serde::Serialize)]
+struct FusionDumpRow {
+    file: String,
+    line_start: u32,
+    line_end: u32,
+    kinds: Vec<&'static str>,
+    ranks: ChannelRanks,
+    /// Per-field embed cosines when this result entered the embed lane's
+    /// field-rescore pool (None outside it) — the record for field-
+    /// combination lever diagnostics.
+    embed_fields: Option<crate::search::field_weight::EmbedFieldScores>,
+    semantic_magnitude: Option<f64>,
+    score: f64,
+}
+
+/// Append one JSONL line for this fusion invocation to the env-named path.
+/// Exactly one line per `apply_weighted_rrf` call, empty input included, so a
+/// harness can join lines to queries by byte offset. Best-effort: IO errors
+/// are swallowed (a debug facility must not fail the query; a harness that
+/// points the env at a bad path notices the missing/short dump itself).
+fn write_fusion_dump(path: &std::path::Path, input_hits: usize, rows: &[FusionDumpRow]) {
+    #[derive(serde::Serialize)]
+    struct Line<'a> {
+        input_hits: usize,
+        results: &'a [FusionDumpRow],
+    }
+    let Ok(text) = serde_json::to_string(&Line {
+        input_hits,
+        results: rows,
+    }) else {
         return;
+    };
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{text}");
+    }
+}
+
+pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) -> Vec<Option<f64>> {
+    // ASGREP_FUSION_DUMP=<path> captures the pre-fusion channel-rank table
+    // this ledger's retry predicates demand (loss attribution + the
+    // confidence-scaled-fusion / rank-floor retry conditions). Unset → one
+    // `var_os` read and no other cost; ranking is untouched either way.
+    let dump_path = std::env::var_os("ASGREP_FUSION_DUMP").map(std::path::PathBuf::from);
+    let capture = dump_path.is_some();
+    let input_hits = hits.len();
+    if hits.is_empty() {
+        if let Some(path) = dump_path.as_deref() {
+            write_fusion_dump(path, 0, &[]);
+        }
+        return Vec::new();
     }
     let mut channels: [Vec<usize>; 8] = std::array::from_fn(|_| Vec::new());
     let mut members_by_result = HashMap::<(&str, u32), Vec<usize>>::new();
@@ -302,6 +390,8 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
     let mut fused_keys: Vec<(&str, u32)> = members_by_result.keys().copied().collect();
     fused_keys.sort_unstable();
     let mut fused = Vec::with_capacity(fused_keys.len());
+    let mut magnitudes = Vec::with_capacity(fused_keys.len());
+    let mut dump_rows = Vec::new();
     for key in fused_keys {
         let mut members = members_by_result.remove(&key).expect("key from same map");
         members.sort_by(|left, right| {
@@ -322,6 +412,14 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
             .collect::<Vec<_>>();
         contributors.sort_by_key(|kind| channel_for_kind(*kind).index());
         contributors.dedup();
+        let kinds = if capture {
+            contributors
+                .iter()
+                .map(|kind| kind.as_str())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         // Enrich identifying fields from members: a merged same-line result
         // keeps the canonical kind/priority but surfaces the symbol a semantic
         // chunk carries for that line (semantic_cache_version contract).
@@ -350,18 +448,37 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) {
         // within-channel order is unchanged; non-semantic results are
         // bit-identical to pure weighted RRF.
         let ranks = &ranks_by_result[&key];
+        let magnitude = semantic_score_by_result.get(&key).copied();
         let mut score = weighted_rrf_score(ranks, weights);
         if ranks.semantic.is_some() && semantic_top > 0.0 {
-            if let Some(&magnitude) = semantic_score_by_result.get(&key) {
+            if let Some(magnitude) = magnitude {
                 score += weight(weights, FusionChannel::Semantic)
                     * rrf_score(0, RRF_K)
                     * (magnitude / semantic_top);
             }
         }
+        score = score_below_cosine_support(ranks, magnitude, semantic_top, weights, score);
         result.score = score;
+        if capture {
+            dump_rows.push(FusionDumpRow {
+                file: result.file.clone(),
+                line_start: result.line_start,
+                line_end: result.line_end,
+                kinds,
+                ranks: ranks.clone(),
+                embed_fields: result.embed_fields.clone(),
+                semantic_magnitude: magnitude,
+                score,
+            });
+        }
         fused.push(result);
+        magnitudes.push(magnitude);
+    }
+    if let Some(path) = dump_path.as_deref() {
+        write_fusion_dump(path, input_hits, &dump_rows);
     }
     *hits = fused;
+    magnitudes
 }
 
 fn pairwise_loss(examples: &[FusionExample], weights: &ChannelWeights) -> f64 {

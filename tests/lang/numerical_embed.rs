@@ -3,26 +3,29 @@
 //! Holds embed_contract (five merged clauses) plus the expand_concepts KEEP,
 //! which is the sole test of its function and cannot live in the contract.
 //! Tolerance table: BIT-EXACT (`assert_eq!` / `to_bits`) for byte layout,
-//! token sets, order-sensitivity inequality, zero tables, degenerate zeros,
-//! delegation lanes, byte edges, expansion strings; 1e-5 inline for 256-lane
+//! token sets, order-invariance equality, case-fold equality, no-known-token
+//! zero, byte edges, expansion strings; 1e-5 inline for 256-lane
 //! embedding self-dots (f32 accumulation band); cross-sim Cauchy bound 1+1e-6.
 
 use ast_sgrep_embed::{
-    dot_similarity, embed_from_bytes, embed_to_bytes, expand_concepts, tokenize,
-    SemanticLocalEmbedding, SEMANTIC_DIM,
+    dot_similarity, embed_from_bytes, embed_to_bytes, expand_concepts, tokenize, StaticEmbedder,
+    STATIC_DIM,
 };
 
-/// INTENT: embedding total contract — little-endian byte layout, trigram-path
-/// order sensitivity with order-invariant token set, unit-norm self-dots with
-/// Cauchy-Schwarz cross bound, degenerate-input totality, provider similarity
-/// delegation with byte edges.
-/// KILLS: endianness/byte-layout, trigram-weight-removal (order-blind-embed),
-/// normalize-division-skipped, degenerate-input panic-or-NaN, nondeterminism,
-/// delegation-divergence, byte-edge mutants.
+/// INTENT: embedding total contract — little-endian byte layout, mean-pool
+/// order invariance with order-invariant token set, unit-norm self-dots with
+/// Cauchy-Schwarz cross bound, degenerate-input totality, similarity
+/// degenerate lanes with byte edges.
+/// KILLS: endianness/byte-layout, order-leaking pool, content-blind pool,
+/// normalize-division-skipped, case-fold-removal, UNK-pooled-not-dropped,
+/// degenerate-input panic-or-NaN, nondeterminism, byte-edge mutants.
 /// ABSORBS: embed_byte_layout_is_little_endian_exact (N1), embed_trigram_path_is_order_sensitive_while_tokens_static (N1),
 /// embed_unit_norm_and_cauchy_schwarz_table (N1), embed_text_degenerate_inputs_are_total (N2),
 /// similarity_delegation_and_byte_edges (N2).
-/// LINE-DROPS: none.
+/// LINE-DROPS: the absorbed trigram order-sensitivity arm and the sub-2-char
+/// zero table were hashed-engine mechanisms, deleted with that engine; the
+/// pooling clause pins the static engine's order invariance instead, and
+/// the zero fixed point is re-pinned at "no known tokens".
 #[test]
 fn embed_contract() {
     // ── Clause byte_layout (N1): LE layout, not just roundtrip ──
@@ -33,24 +36,25 @@ fn embed_contract() {
     assert_eq!(embed_to_bytes(&[-2.5]), vec![0x00, 0x00, 0x20, 0xC0]);
     assert_eq!(embed_to_bytes(&[0.0]), vec![0x00, 0x00, 0x00, 0x00]);
 
-    // ── Clause trigram (N1): order-sensitive embeds, static tokens ──
-    // Token features (weight 1.0) are a SET: order-invariant.
+    // ── Clause pooling (N1): order-invariant embeds, static tokens ──
+    // text::tokenize (lexical lane) features are a SET: order-invariant.
     assert_eq!(tokenize("ab cd"), tokenize("cd ab"));
     assert_eq!(tokenize("ab cd"), vec!["ab", "cd"]);
-    // Trigram features (weight 0.35) run over the ordered compact string:
-    // "ab cd ab cd" -> compact abcdabcd (windows abc,bcd,cda,dab,abc,bcd)
-    // vs "cd ab ab cd" -> compact cdababcd (windows cda,dab,aba,bab,abc,bcd).
-    // Different window multisets -> different blake3 signs -> the two
-    // embeddings MUST differ, isolating the trigram path. Both unit-norm
-    // (1e-5 band) and strictly below self-similarity.
-    let emb = SemanticLocalEmbedding;
-    let a = emb.embed_text("ab cd");
-    let b = emb.embed_text("cd ab");
-    assert_eq!(a.len(), SEMANTIC_DIM);
-    assert_ne!(a, b);
+    // The static engine mean-pools token rows, so word order cannot reach
+    // the vector: "ab cd" and "cd ab" sum the same two rows (f32 addition
+    // commutes) and divide by the same norm — BIT-EXACTLY equal. Content
+    // still discriminates: an unrelated phrase sits strictly below
+    // self-similarity. Both unit-norm (1e-5 band).
+    let emb = StaticEmbedder::new();
+    let a = emb.embed("ab cd");
+    let b = emb.embed("cd ab");
+    assert_eq!(a.len(), STATIC_DIM);
+    assert_eq!(a, b);
     assert!((dot_similarity(&a, &a) - 1.0).abs() < 1e-5);
     assert!((dot_similarity(&b, &b) - 1.0).abs() < 1e-5);
-    assert!(dot_similarity(&a, &b) < 1.0);
+    assert!((dot_similarity(&a, &b) - 1.0).abs() < 1e-5);
+    let other = emb.embed("credential renewal");
+    assert!(dot_similarity(&a, &other) < 1.0);
 
     // ── Clause unit_norm (N1): unit-norm + Cauchy-Schwarz table ──
     // Hand rule: embed_text divides by the L2 norm, so every NONZERO
@@ -64,12 +68,12 @@ fn embed_contract() {
         "throttle inbound",
         "a1B2",
         "HTTPStatusCode",
-        "x y z", // no 2+ char tokens, but compact "xyz" feeds one trigram
+        "x y z", // single-letter WordPiece tokens (x, y, z all in-vocab)
     ];
-    let emb = SemanticLocalEmbedding;
-    let vecs: Vec<Vec<f32>> = queries.iter().map(|q| emb.embed_text(q)).collect();
+    let emb = StaticEmbedder::new();
+    let vecs: Vec<Vec<f32>> = queries.iter().map(|q| emb.embed(q)).collect();
     for (q, v) in queries.iter().zip(vecs.iter()) {
-        assert_eq!(v.len(), SEMANTIC_DIM, "{q:?}");
+        assert_eq!(v.len(), STATIC_DIM, "{q:?}");
         assert!(v.iter().all(|x| x.is_finite()), "{q:?}");
         assert!(v.iter().any(|x| *x != 0.0), "{q:?} must be nonzero");
         assert!(
@@ -86,33 +90,44 @@ fn embed_contract() {
             }
         }
     }
-    // Zero table, BIT-EXACT: single alphanumerics yield no tokens
-    // (len < 2 split) and a compact shorter than one trigram window.
-    assert_eq!(emb.embed_text("a"), vec![0.0; SEMANTIC_DIM]);
-    assert_eq!(emb.embed_text("I"), vec![0.0; SEMANTIC_DIM]);
+    // Single letters are real WordPiece tokens: nonzero, unit-norm, and
+    // case-folded by the normalizer BIT-EXACTLY ("I" pools the "i" row).
+    let a1 = emb.embed("a");
+    assert!(a1.iter().any(|x| *x != 0.0));
+    assert!((dot_similarity(&a1, &a1) - 1.0).abs() < 1e-5);
+    assert_eq!(emb.embed("I"), emb.embed("i"));
+    // The zero fixed point is "no known tokens": unknown words pool nothing
+    // ([UNK] is dropped before pooling), so emoji-only text is the exact
+    // zero vector. BIT-EXACT.
+    assert_eq!(emb.embed("🦀🦀"), vec![0.0; STATIC_DIM]);
 
     // ── Clause embed_degenerate (N2): degenerate inputs are total ──
-    let emb = SemanticLocalEmbedding;
-    // Whitespace-only and punctuation-only yield no tokens and a compact
-    // shorter than one trigram window: exact zero vectors. BIT-EXACT.
-    assert_eq!(emb.embed_text("   "), vec![0.0; SEMANTIC_DIM]);
-    assert_eq!(emb.embed_text("!!!"), vec![0.0; SEMANTIC_DIM]);
+    let emb = StaticEmbedder::new();
+    // Whitespace-only yields no pre-tokens: exact zero vector. BIT-EXACT.
+    assert_eq!(emb.embed("   "), vec![0.0; STATIC_DIM]);
+    // Punctuation is isolated and looked up like any token: "!" is
+    // in-vocab, so "!!!" pools three copies of one row — nonzero and
+    // parallel to the single-token embedding (1e-5 band).
+    let bang = emb.embed("!");
+    let bangs = emb.embed("!!!");
+    assert!(bangs.iter().any(|x| *x != 0.0));
+    assert!((dot_similarity(&bang, &bangs) - 1.0).abs() < 1e-5);
     // Non-ASCII alphanumerics and very long inputs stay shaped, finite,
     // and deterministic (totality: no panic, no NaN poisoning).
     for text in ["日本語", &"credential renewal ".repeat(500)] {
-        let v = emb.embed_text(text);
-        assert_eq!(v.len(), SEMANTIC_DIM, "{text:?} shape");
+        let v = emb.embed(text);
+        assert_eq!(v.len(), STATIC_DIM, "{text:?} shape");
         assert!(v.iter().all(|x| x.is_finite()), "{text:?} finite");
-        assert_eq!(v, emb.embed_text(text), "{text:?} deterministic");
+        assert_eq!(v, emb.embed(text), "{text:?} deterministic");
     }
 
     // ── Clause similarity_delegation (N2): delegation + byte edges ──
-    let emb = SemanticLocalEmbedding;
+    let emb = StaticEmbedder::new();
     // similarity delegates to dot, including the degenerate lanes.
-    assert_eq!(emb.similarity(&[], &[]), 0.0);
-    assert_eq!(emb.similarity(&[1.0], &[1.0, 2.0]), 0.0);
-    assert_eq!(emb.similarity(&[f32::NAN], &[1.0]), 0.0);
-    assert_eq!(emb.similarity(&[f32::INFINITY], &[1.0]), 0.0);
+    assert_eq!(dot_similarity(&[], &[]), 0.0);
+    assert_eq!(dot_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    assert_eq!(dot_similarity(&[f32::NAN], &[1.0]), 0.0);
+    assert_eq!(dot_similarity(&[f32::INFINITY], &[1.0]), 0.0);
     // Byte edges: empty encodes to empty; aligned NaN payloads decode
     // Ok with bits preserved (never Err on aligned length). BIT-EXACT.
     assert!(embed_to_bytes(&[]).is_empty());

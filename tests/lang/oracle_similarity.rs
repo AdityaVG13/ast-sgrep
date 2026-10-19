@@ -5,8 +5,8 @@
 //! hand-computed; errors assert discriminants, never messages.
 
 use ast_sgrep_embed::{
-    cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place,
-    SemanticLocalEmbedding, SEMANTIC_DIM,
+    cosine_similarity, dot_similarity, embed_text, normalize_vec, normalize_vec_in_place,
+    StaticEmbedder, STATIC_DIM,
 };
 use ast_sgrep_testkit::approx_eq;
 
@@ -157,17 +157,17 @@ fn normalize_is_idempotent_zero_safe_map() {
 /// ABSORBS: pass3::embed_text_deterministic_zero_for_empty.
 #[test]
 fn embed_text_is_deterministic_unit_zero_for_empty() {
-    let embedder = SemanticLocalEmbedding;
+    let embedder = StaticEmbedder::new();
     // Empty text yields no tokens and no trigrams: the exact zero vector.
-    assert_eq!(embedder.embed_text(""), vec![0.0; SEMANTIC_DIM]);
+    assert_eq!(embedder.embed(""), vec![0.0; STATIC_DIM]);
     // Determinism and shape on a real query.
-    let a = embedder.embed_text("credential renewal");
-    assert_eq!(a.len(), SEMANTIC_DIM);
-    assert_eq!(a, embedder.embed_text("credential renewal"));
+    let a = embedder.embed("credential renewal");
+    assert_eq!(a.len(), STATIC_DIM);
+    assert_eq!(a, embedder.embed("credential renewal"));
     assert!(a.iter().all(|x| x.is_finite()));
     // Normalized embeddings have unit self-similarity (1e-5 band: 256 lanes).
     assert!((dot_similarity(&a, &a) - 1.0).abs() < 1e-5);
-    // Differential: the provider method agrees with the free function.
-    let b = embedder.embed_text("sanitize user input");
-    assert_eq!(embedder.similarity(&a, &b), dot_similarity(&a, &b));
+    // Differential: the crate-level free function agrees with the provider.
+    let b = embedder.embed("sanitize user input");
+    assert_eq!(b, embed_text("sanitize user input"));
 }

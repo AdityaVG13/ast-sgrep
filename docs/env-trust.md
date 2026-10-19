@@ -12,13 +12,12 @@ defaults use `env_flag` / the same spelling set.
 ## Embeddings (in-process only)
 
 Embeddings never leave the process. There is no `ASGREP_EMBED_API_URL`, no
-Ollama URL, no API key, and no SSRF allowlist. Stored indexes that still
-record `cloud` or `ollama` fail closed at query time until `asgrep reindex`.
-
-Neural (ONNX) is opt-in via `--features neural-embed` and `ASGREP_NEURAL_EMBED`.
-Explicit Neural does not silently swap to hashed hits unless
-`ASGREP_NEURAL_FALLBACK=1`. CoreML EP is opt-in via `ASGREP_NEURAL_COREML`.
-See `docs/validation/neural-trust.md`.
+Ollama URL, no API key, and no SSRF allowlist. The single static engine is
+compiled into the binary; no weights are downloaded. Stored indexes written
+by retired backends (`cloud`, `ollama`, hashed `semantic-v2`, neural) fail
+closed at query time until the next index run re-embeds them.
+`ASGREP_EMBED_BACKEND` and `ASGREP_NEURAL_EMBED` are rejected with an error
+naming the removal.
 
 ## External `ast-grep` (`ASGREP_AST_GREP`)
 

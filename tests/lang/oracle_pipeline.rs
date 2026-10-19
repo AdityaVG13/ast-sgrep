@@ -4,7 +4,7 @@
 //! Replaces `oracle_foundry_pass4.rs`. Expectations are hand-computed; errors
 //! assert discriminants (`is_err`/`is_ok`/emptiness), never message text.
 
-use ast_sgrep_embed::{dot_similarity, top_by_similarity, SemanticLocalEmbedding};
+use ast_sgrep_embed::{dot_similarity, top_by_similarity, StaticEmbedder};
 use ast_sgrep_lang::{
     detect_language, match_pattern, required_pattern_literal, Language, ParserRegistry,
 };
@@ -33,12 +33,12 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
         assert!(hit.excerpt.contains("fn "), "excerpt={:?}", hit.excerpt);
     }
     // Score each excerpt against the query embedding, then rank.
-    let emb = SemanticLocalEmbedding;
-    let query = emb.embed_text("greet");
+    let emb = StaticEmbedder::new();
+    let query = emb.embed("greet");
     let scored: Vec<(usize, f32)> = hits
         .iter()
         .enumerate()
-        .map(|(i, h)| (i, dot_similarity(&query, &emb.embed_text(&h.excerpt))))
+        .map(|(i, h)| (i, dot_similarity(&query, &emb.embed(&h.excerpt))))
         .collect();
     assert!(scored.iter().all(|(_, s)| s.is_finite()));
     let ranked = top_by_similarity(scored.clone(), 10, None);
@@ -50,7 +50,7 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
         .iter()
         .enumerate()
         .map(|(i, h)| {
-            let v = emb.embed_text(&h.excerpt);
+            let v = emb.embed(&h.excerpt);
             let sum: f64 = query
                 .iter()
                 .zip(v.iter())
@@ -66,7 +66,7 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
     // Repetition leg: the full pipeline is bit-identical across 3 runs.
     let rep_source = "fn greet() {}\nfn process_request() { greet(); }\n";
     let registry = ParserRegistry::new();
-    let rep_query = emb.embed_text("greet");
+    let rep_query = emb.embed("greet");
     let mut runs = Vec::new();
     for _ in 0..3 {
         let extracted = registry
@@ -76,7 +76,7 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
         let scored: Vec<(usize, f32)> = hits
             .iter()
             .enumerate()
-            .map(|(i, h)| (i, dot_similarity(&rep_query, &emb.embed_text(&h.excerpt))))
+            .map(|(i, h)| (i, dot_similarity(&rep_query, &emb.embed(&h.excerpt))))
             .collect();
         let ranked = top_by_similarity(scored, 10, None);
         runs.push((extracted, hits, ranked));
@@ -213,12 +213,12 @@ fn e2e_alpha_beta_scored_ranked_and_threshold_shaped() {
     let extracted = registry.parse(Language::Rust, source).expect("parse ok");
     let names: Vec<&str> = extracted.symbols.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "beta"]);
-    let emb = SemanticLocalEmbedding;
-    let query = emb.embed_text("alpha");
+    let emb = StaticEmbedder::new();
+    let query = emb.embed("alpha");
     let scored: Vec<(usize, f32)> = names
         .iter()
         .enumerate()
-        .map(|(i, n)| (i, dot_similarity(&query, &emb.embed_text(n))))
+        .map(|(i, n)| (i, dot_similarity(&query, &emb.embed(n))))
         .collect();
     // Hand: the exact match is the query embedding itself, so its
     // normalized self-similarity is 1.0 and it ranks first.

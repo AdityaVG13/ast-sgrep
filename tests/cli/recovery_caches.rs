@@ -23,6 +23,12 @@ fn asgrep() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
 }
 
+/// Seed indexes live at `idx.db`; the tantivy sidecar is named after the
+/// index file (`<file_name>.lexical.db`), matching `lexical_sidecar_path`.
+fn cache_path(temp: &tempfile::TempDir) -> PathBuf {
+    temp.path().join("idx.db.lexical.db")
+}
+
 /// INTENT: a corrupt lexical cache keeps its split contract (writer refuses exit
 /// 2, readers degrade exit 0 with answers intact), delete+index rebuilds it, and
 /// the rebuilt cache serves the pre-crash baseline identically — deterministically
@@ -56,7 +62,7 @@ fn lexical_cache_split_contract_recovers_and_serves() {
             &tantivy,
         );
         assert_success(&output, "index");
-        let cache = temp.path().join("lexical.db");
+        let cache = cache_path(&temp);
         assert!(cache.is_file(), "forced tantivy must build the sidecar");
         let baseline = capture_baseline(
             &asgrep(),
@@ -165,7 +171,7 @@ fn lexical_cache_split_contract_recovers_and_serves() {
             &tantivy,
         );
         assert_success(&output, "index");
-        let cache = temp.path().join("lexical.db");
+        let cache = cache_path(&temp);
         let baseline_status =
             status_snapshot(&run_status(&asgrep(), &temp, &root_s, &index_s, &[]));
         let baseline_answers = search_answer_keys(&run_search(
@@ -371,7 +377,7 @@ fn wiped_derived_state_converges_and_restores() {
             &envs,
         );
         assert_success(&output, "index");
-        let cache = temp.path().join("lexical.db");
+        let cache = cache_path(&temp);
         let ivf = temp.path().join("semantic.ivf");
         let stamp = temp.path().join("writer_generation");
         assert!(cache.is_file() && ivf.is_file() && stamp.is_file());
@@ -533,7 +539,7 @@ fn recovery_preserves_observables() {
             &envs,
         );
         assert_success(&output, "index");
-        let lexical = temp.path().join("lexical.db");
+        let lexical = cache_path(&temp);
         let ivf = temp.path().join("semantic.ivf");
         let stamp = temp.path().join("writer_generation");
         assert!(lexical.is_file() && ivf.is_file() && stamp.is_file());

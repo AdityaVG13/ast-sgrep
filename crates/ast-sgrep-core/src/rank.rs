@@ -111,6 +111,70 @@ pub fn score_def_normalized(normalized_terms: &[String], symbol: &str) -> f64 {
     let coverage = coverage_symbol_score_normalized(normalized_terms, symbol);
     score_scaled_coverage(coverage, SCORE_DEF_BASE)
 }
+/// BM25-style inverse document frequency for one query term over a name
+/// table: how much evidence a match on this term carries. Always positive —
+/// a term matching every name still counts, just barely. `df` = names
+/// matching the term under the same substring predicate as scoring;
+/// `total` = names in the table.
+pub fn term_idf(df: u64, total: u64) -> f64 {
+    let df = df as f64;
+    let total = total.max(1) as f64;
+    ((total - df + 0.5) / (df + 0.5) + 1.0).ln()
+}
+
+/// Scale raw IDF weights so the rarest query term weighs exactly 1.0.
+///
+/// The router ceiling (`intent::channel_ceiling`) assumes an exact match
+/// can reach full per-term coverage, so absolute IDF would deflate the
+/// whole Def/Caller channel against constant-scored channels whenever
+/// every query term is corpus-common. Only *relative* rarity may
+/// discriminate between hits of one query — a single-term query therefore
+/// scores bit-identically to unweighted coverage.
+pub fn max_normalize_idf(weights: &mut [f64]) {
+    let max = weights.iter().copied().fold(0.0f64, f64::max);
+    if max > 0.0 {
+        for w in weights.iter_mut() {
+            *w /= max;
+        }
+    }
+}
+
+/// IDF-weighted coverage: each matching term contributes its symbol score
+/// scaled by the term's rarity weight (aligned by index with
+/// `normalized_terms`). A def matching a rare query token is stronger
+/// evidence than one matching a token hundreds of symbols carry; unweighted
+/// coverage cannot tell them apart. Weights must be positive (see
+/// [`term_idf`]); a short weights slice treats missing terms as weight 1.
+pub fn coverage_symbol_score_weighted(
+    normalized_terms: &[String],
+    weights: &[f64],
+    symbol: &str,
+) -> f64 {
+    if normalized_terms.is_empty() {
+        return 0.0;
+    }
+    let symbol = normalized_symbol(symbol);
+    let symbol_can_substring = has_minimum_substring_chars(&symbol);
+    let mut sum = 0.0;
+    for (i, term) in normalized_terms.iter().enumerate() {
+        let score = score_pre_normalized_symbol(term, symbol.as_ref(), symbol_can_substring);
+        if score > 0.0 {
+            sum += score * weights.get(i).copied().unwrap_or(1.0);
+        }
+    }
+    sum
+}
+
+pub fn score_def_weighted(normalized_terms: &[String], weights: &[f64], symbol: &str) -> f64 {
+    let coverage = coverage_symbol_score_weighted(normalized_terms, weights, symbol);
+    score_scaled_coverage(coverage, SCORE_DEF_BASE)
+}
+
+pub fn score_caller_weighted(normalized_terms: &[String], weights: &[f64], callee: &str) -> f64 {
+    let coverage = coverage_symbol_score_weighted(normalized_terms, weights, callee);
+    score_scaled_coverage(coverage, SCORE_CALLER_BASE)
+}
+
 pub fn score_caller(terms: &[String], callee: &str) -> f64 {
     score_caller_normalized(&normalize_query_terms(terms), callee)
 }

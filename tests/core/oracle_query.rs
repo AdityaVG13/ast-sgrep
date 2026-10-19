@@ -84,3 +84,43 @@ fn parsed_query_modes_scopes_and_targets() {
     assert_eq!(path_scope_glob("a*b"), "a*b");
     assert_eq!(path_scope_glob("a?"), "a?");
 }
+
+/// INTENT: long NL queries drop genre boilerplate ("purpose", "verify",
+/// "correctly") so discriminative terms dominate; short queries keep every
+/// term; an all-boilerplate long query falls back to the full set (never empty).
+/// KILLS: strip-everything, strip-short-query, and empty-terms mutants.
+#[test]
+fn long_query_drops_genre_boilerplate() {
+    let long = ParsedQuery::parse(
+        "Purpose: to verify that the heartbeat data correctly retrieves the worker details \
+         from the master node given a specific configuration attribute, including the \
+         particular timing intervals used for the various scheduled health checks",
+    );
+    assert!(long.terms.len() > 5);
+    for dead in [
+        "purpose",
+        "verify",
+        "correctly",
+        "given",
+        "specific",
+        "attribute",
+    ] {
+        assert!(!long.terms.contains(&dead.to_string()), "kept {dead}");
+    }
+    for live in ["heartbeat", "worker", "master", "configuration"] {
+        assert!(long.terms.contains(&live.to_string()), "dropped {live}");
+    }
+    // Short queries keep every term, boilerplate or not.
+    let short = ParsedQuery::parse("verify function");
+    assert_eq!(
+        short.terms,
+        vec!["function".to_string(), "verify".to_string()]
+    );
+    // All-boilerplate long query falls back to the full set, never empty.
+    let all_dead = ParsedQuery::parse(
+        "purpose function verify correct given retrieve provide specific particular \
+         attribute used using various certain ensure appropriate relevant",
+    );
+    assert!(all_dead.terms.len() > 15);
+    assert!(all_dead.terms.contains(&"purpose".to_string()));
+}

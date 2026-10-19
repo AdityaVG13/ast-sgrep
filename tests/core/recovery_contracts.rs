@@ -18,6 +18,12 @@ use ast_sgrep_testkit::{
     err_of, home_names, isolated_index_session, truncate_file, write_garbage, IsolatedIndexSession,
 };
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+
+fn home_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// First N bytes of a real store: a torn write that kept a valid prefix.
 const TRUNCATED_LEN: u64 = 37;
@@ -638,4 +644,48 @@ fn only_the_checkout_own_index_blocks_a_second_one() {
         "same-checkout nesting must still refuse: {message}"
     );
     assert!(!nested.join(".asgrep").exists());
+}
+
+/// INTENT: the checkout bound must hold without git. An index rooted at the
+/// home directory itself is not a checkout and must not capture a git-less
+/// tree below it (benchmark corpora, tarball extracts), while a project
+/// index below home still blocks nesting inside that project.
+/// FACETS: home index ignored by a deep git-less project; the project's own
+/// index still refuses a nested second index.
+/// KILLS: home-index-capture, never-capture-without-git.
+#[test]
+fn a_home_directory_index_does_not_capture_gitless_projects() {
+    let _guard = home_env_lock().lock().unwrap();
+    let session = isolated_index_session();
+    let fake_home = session.corpus_root.join("home");
+    let home_db = fake_home.join(".asgrep").join("index.db");
+    // Explicit path: planting the home index must not itself trip the guard.
+    drop(IndexStore::open(&fake_home, Some(&home_db)).unwrap());
+
+    let old_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &fake_home);
+    let project = fake_home.join("cache").join("scratch").join("repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let project_db = project.join(".asgrep").join("index.db");
+    let project_open = IndexStore::open(&project, None).map(drop);
+    let project_db_exists = project_db.is_file();
+    let nested = project.join("crates").join("kernel");
+    std::fs::create_dir_all(&nested).unwrap();
+    let nested_message = IndexStore::open(&nested, None).err().map(|e| e.to_string());
+    match old_home {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+    }
+
+    assert!(
+        project_open.is_ok() && project_db_exists,
+        "a git-less project below an indexed home must index itself: {:?}",
+        project_open.err()
+    );
+    let nested_message = nested_message.expect("nesting inside the project must refuse");
+    assert!(
+        nested_message.contains("refusing to create a second index")
+            && nested_message.contains(&project_db.display().to_string()),
+        "the project's own index must block nesting: {nested_message}"
+    );
 }

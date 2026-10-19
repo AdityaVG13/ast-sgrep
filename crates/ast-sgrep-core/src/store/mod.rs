@@ -1,5 +1,5 @@
 mod embed_support;
-pub(crate) use embed_support::requested_model_identity;
+pub(crate) use embed_support::active_model_id;
 pub mod line_corpus;
 mod module_resolve;
 pub(crate) mod sql;

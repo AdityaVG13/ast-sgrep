@@ -25,7 +25,12 @@ use std::sync::Arc;
 //      files keep their complete rows. Changed/NEW files carry the flag
 //      from the budgeted extraction; the cached pattern lane refuses to
 //      serve flagged files as authoritative and walks them natively.
-pub const INDEX_SCHEMA_VERSION: i64 = 16;
+// 17 = whole-body parent chunk beside extracted child fragments. Chunk
+//      derivation is not part of the mtime/content-hash fast paths, so
+//      pre-17 fragment-only parents would never be rebuilt on unchanged
+//      files; 17 wipes derived semantic state and re-keys content hashes
+//      (same treatment as the 10 re-render). Never reuse a version.
+pub const INDEX_SCHEMA_VERSION: i64 = 17;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -37,7 +42,10 @@ pub type CallRow = (String, u32, String, String);
 /// Nearest ancestor (never the root itself) holding the default-layout index,
 /// searched only up to and including the git work tree root: a parent that
 /// merely happens to hold an index (a home directory, a shared scratch tree) is
-/// not this project's checkout and must not capture a new project.
+/// not this project's checkout and must not capture a new project. The home
+/// directory and anything above it never capture, git or no git — a git-less
+/// tree (benchmark corpus, tarball extract) below an indexed home is still
+/// its own project.
 /// Silent when an env override moves indexes elsewhere.
 fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
     if std::env::var_os("ASGREP_INDEX_PATH").is_some()
@@ -47,10 +55,12 @@ fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
     }
     let start = if root.is_file() { root.parent()? } else { root };
     let work_tree = start.ancestors().find(|dir| dir.join(".git").exists());
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     start
         .ancestors()
         .skip(1)
         .take_while(|dir| work_tree.is_none_or(|tree| dir.starts_with(tree)))
+        .take_while(|dir| home.as_deref().is_none_or(|h| !h.starts_with(dir)))
         .map(|dir| dir.join(super::INDEX_DIR).join(super::INDEX_DB))
         .find(|candidate| candidate.is_file())
 }
@@ -235,7 +245,6 @@ pub struct UpsertFileInput<'a> {
     pub depth_truncated: bool,
     pub semantic_chunks: &'a [crate::semantic_chunk::SemanticChunkInput],
     pub embed_semantic: bool,
-    pub embed_backend: ast_sgrep_embed::EmbedPreference,
 }
 pub struct RefreshLinesInput<'a> {
     pub file_id: i64,
@@ -550,6 +559,23 @@ impl IndexStore {
                        OR key IN ('embed_backend', 'embed_model', 'embed_dim');
                      UPDATE files SET content_hash = 'semantic-layout-v3:' || content_hash
                        WHERE content_hash NOT LIKE 'semantic-layout-v3:%';",
+                )?;
+            }
+            // Schema 17: chunking now always writes a whole-body parent
+            // chunk beside extracted child fragments. Pre-17 stores can
+            // represent a function by fragments alone, and neither the
+            // mtime shortcut nor the content-hash path can observe a
+            // chunk-derivation change, so rebuild derived semantic state
+            // and defeat both fast paths (hash re-key + identity drop).
+            if version < 17 {
+                self.conn.execute_batch(
+                    "DELETE FROM semantic_chunks;
+                     DELETE FROM embeddings;
+                     DELETE FROM embed_cache;
+                     DELETE FROM meta WHERE key LIKE 'body:%' OR key LIKE 'struct:%'
+                       OR key IN ('embed_backend', 'embed_model', 'embed_dim', 'mtime_identity_root');
+                     UPDATE files SET content_hash = 'parent-chunk-v17:' || content_hash
+                       WHERE content_hash NOT LIKE 'parent-chunk-v17:%';",
                 )?;
             }
             self.conn
