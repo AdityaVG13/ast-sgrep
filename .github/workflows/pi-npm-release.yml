@@ -177,12 +177,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: pi-e2e-debug
-      - name: Build debug CLI required by the packaged e2e
+      - name: Build debug CLI and NAPI addon required by the packaged e2e
         env:
           RUSTC_WRAPPER: ""
         run: |
           cargo build --locked -p ast-sgrep-cli --bin asgrep
           cargo build --locked -p ast-sgrep-watch --bin asgrep-watch
+          cargo build --locked -p ast-sgrep-codemode-napi
+          case "${RUNNER_OS}" in
+            Windows) cdylib=target/debug/ast_sgrep_codemode_napi.dll ;;
+            macOS)   cdylib=target/debug/libast_sgrep_codemode_napi.dylib ;;
+            *)       cdylib=target/debug/libast_sgrep_codemode_napi.so ;;
+          esac
+          cp "$cdylib" target/debug/ast-sgrep-codemode.node
       - name: Pack and verify all seven immutable artifacts
         run: |
           node packages/pi/scripts/release-acceptance.mjs pack --native-root dist/native --output npm-packs --commit "$GITHUB_SHA"
