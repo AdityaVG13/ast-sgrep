@@ -68,19 +68,41 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 
 ---
 
-## What's new in 2.5.0
+## What's new in 2.6.0
 
-2.5.0 is a speed + correctness release: two new languages, a 20× one-shot
-literal fix, read-only search by default, and a hardened MCP/Pi surface.
-Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
+2.6.0 is the static-engine release: offline semantic ranking in every
+default search, with the embedding table compiled into the binary.
+Full notes: [CHANGELOG](CHANGELOG.md#260---2026-10-19).
 
 | You can now... | How |
 |----------------|-----|
+| Search semantically with zero setup | A native static embed engine is compiled in — no model download, no ONNX runtime, no API key, never a network call. The embed channel runs ungated in hybrid fusion, so plain-language queries rank code without any flags. |
+| Trust NL→code ranking | On the frozen RepoQA-600 suite: MRR@10 .297 → **.719**, Hit@1 .190 → **.608** (release-paired against published 2.5.4; see the [benchmark summary](#benchmarks-honest-summary)). Still behind the sgrep-calibrated reference (.757) on every quality metric — no false parity claims. |
+| Upgrade indexes without rebuilding by hand | Indexes record their embedding model identity and re-embed automatically when it changes; retired engines fail closed instead of silently switching. |
+| Bound graph chains | `max_work` caps call-chain exploration with work/truncation diagnostics. |
+
+Honest tradeoffs, measured and disclosed: hybrid/conceptual queries pay the
+always-on embed channel (~3–4× fresh-process latency, ~6× warm rounds vs
+2.5.4 on the self corpus), index.db grows ~20–30%, and scoped-repo indexing
+got faster. Also fixed: the Linux `database disk image is malformed` failure
+after `/asgrep-reindex` + edit (SQLite last-close no longer deletes shared
+WAL sidecars under live sessions), large-integer preservation in native Pi
+results, and multilingual structural matching.
+
+---
+
+## What was new in 2.5.0
+
+2.5.0 was a speed + correctness release: two new languages, a 20× one-shot
+literal fix, read-only search by default, and a hardened MCP/Pi surface.
+Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
+
+| You could now... | How |
+|----------------|-----|
 | Search Dart and MoonBit | `.dart` / `.mbt` indexing with symbol/call/import extraction and native structural patterns. 15 languages total. |
-| Indexed literal answers | `literal:SearchHit`: ~5–6 ms fresh-process p50/p95 on the pinned self corpus across 2.5.4/2.6.0; see the [benchmark summary](#benchmarks-honest-summary). |
+| Get indexed literal answers | `literal:SearchHit`: ~5–6 ms fresh-process p50/p95 on the pinned self corpus across 2.5.4/2.6.0; see the [benchmark summary](#benchmarks-honest-summary). |
 | Search without touching the index | Search opens the index read-only and no longer auto-indexes. `--auto-index` opts back in; `index` / `reindex` / `watch` remain the write path. |
 | Run MCP on official rmcp | `asgrep-mcp` speaks stdio through `rmcp` instead of a hand-rolled loop. `notifications/cancelled` aborts in-flight indexing; `ping` stays live. |
-| Trust the ranking more | Exact-case definitions rank first, conceptual queries prefer code over docs that repeat them, and fanout seeds concept-related defs instead of flooding `callers:main`. |
 | Recover from schema drift | `asgrep version` prints `index_schema`; doctor reports on-disk vs binary schema and the exact recovery command. |
 
 Also in this release: SIGTERM/SIGHUP kills the worker in <100 ms;
