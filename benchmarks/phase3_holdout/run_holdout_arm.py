@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Holdout arm driver: index the phase-3 holdout corpus and score asgrep.
 
-Mirrors benchmarks/sgrep_suite/run_asgrep_arm.py but reads the holdout
+Mirrors benchmarks/frozen_suite/run_asgrep_arm.py but reads the holdout
 bench layout (corpus/holdout/<scope> + holdout-queries.json) and scores
 with the frozen RepoQA scorer (file rank + line coverage).
 
@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-SUITE = Path(__file__).resolve().parent.parent / "sgrep_suite"
+SUITE = Path(__file__).resolve().parent.parent / "frozen_suite"
 sys.path.insert(0, str(SUITE))
 
 
@@ -43,7 +43,7 @@ def main():
 
     import run_suite as rs
     rs.METHODS = ("asgrep",)
-    tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin, sgrep=None))
+    tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin))
     scorer = rs.Scorer(out)
 
     seen, rows = set(), []

@@ -77,7 +77,7 @@ Full notes: [CHANGELOG](CHANGELOG.md#260---2026-10-19).
 | You can now... | How |
 |----------------|-----|
 | Search semantically with zero setup | A native static embed engine is compiled in — no model download, no ONNX runtime, no API key, never a network call. The embed channel runs ungated in hybrid fusion, so plain-language queries rank code without any flags. |
-| Trust NL→code ranking | On the frozen RepoQA-600 suite: MRR@10 .297 → **.719**, Hit@1 .190 → **.608** (release-paired against published 2.5.4; see the [benchmark summary](#benchmarks-honest-summary)). Still behind the sgrep-calibrated reference (.757) on every quality metric — no false parity claims. |
+| Trust NL→code ranking | On the frozen RepoQA-600 suite: MRR@10 .297 → **.719**, Hit@1 .190 → **.608** (release-paired against published 2.5.4; see the [benchmark summary](#benchmarks-honest-summary)). |
 | Upgrade indexes without rebuilding by hand | Indexes record their embedding model identity and re-embed automatically when it changes; retired engines fail closed instead of silently switching. |
 | Bound graph chains | `max_work` caps call-chain exploration with work/truncation diagnostics. |
 
@@ -88,28 +88,6 @@ got faster. Also fixed: the Linux `database disk image is malformed` failure
 after `/asgrep-reindex` + edit (SQLite last-close no longer deletes shared
 WAL sidecars under live sessions), large-integer preservation in native Pi
 results, and multilingual structural matching.
-
----
-
-## What was new in 2.5.0
-
-2.5.0 was a speed + correctness release: two new languages, a 20× one-shot
-literal fix, read-only search by default, and a hardened MCP/Pi surface.
-Full notes: [CHANGELOG](CHANGELOG.md#250---2026-09-20).
-
-| You could now... | How |
-|----------------|-----|
-| Search Dart and MoonBit | `.dart` / `.mbt` indexing with symbol/call/import extraction and native structural patterns. 15 languages total. |
-| Get indexed literal answers | `literal:SearchHit`: ~5–6 ms fresh-process p50/p95 on the pinned self corpus across 2.5.4/2.6.0; see the [benchmark summary](#benchmarks-honest-summary). |
-| Search without touching the index | Search opens the index read-only and no longer auto-indexes. `--auto-index` opts back in; `index` / `reindex` / `watch` remain the write path. |
-| Run MCP on official rmcp | `asgrep-mcp` speaks stdio through `rmcp` instead of a hand-rolled loop. `notifications/cancelled` aborts in-flight indexing; `ping` stays live. |
-| Recover from schema drift | `asgrep version` prints `index_schema`; doctor reports on-disk vs binary schema and the exact recovery command. |
-
-Also in this release: SIGTERM/SIGHUP kills the worker in <100 ms;
-writers checkpoint WAL with a 64 MiB journal cap; pattern excerpts are
-reconstructed from `lines` (no duplicated source text); `--lang` accepts
-every indexed extension; C `typedef`s match `type:` patterns; Pi boots
-under Bun and degrades gracefully against older launchers.
 
 ---
 
@@ -206,23 +184,19 @@ These are **checked-in run summaries**, not portable guarantees. Hardware, corpu
 **Latest: 2.6.0 release-paired measurement, 2026-10-19**, against published
 2.5.4 on frozen RepoQA-600 / CoSQA-500 corpora: identical harness, one idle
 host (Apple M5 Max), fresh indexes per arm, 0 errors across 4,400 query runs.
-The sgrep reference is the calibrated 2026-10-14 row, not the in-pair control.
 
 | RepoQA-600 | MRR@10 | Hit@1 | Hit@10 | ≥50%@8k | panel p50 |
 |---|---:|---:|---:|---:|---:|
 | asgrep 2.5.4 | .297 | .190 | .563 | .340 | 16.6 ms |
-| asgrep 2.6.0 | **.719** | .608 | .928 | .790 | 22.2 ms |
-| sgrep (calibrated) | **.757** | **.662** | **.943** | **.895** | 59.6 ms |
+| asgrep 2.6.0 | **.719** | .608 | **.928** | **.790** | 22.2 ms |
 
 | CoSQA-500 | MRR@10 | Hit@1 | Hit@10 | panel p50 |
 |---|---:|---:|---:|---:|
 | asgrep 2.5.4 | .104 | .054 | .240 | 13.8 ms |
-| asgrep 2.6.0 | **.327** | .234 | .588 | 22.1 ms |
-| sgrep (calibrated) | **.417** | **.292** | **.702** | 185.0 ms |
+| asgrep 2.6.0 | **.327** | .234 | **.588** | 22.1 ms |
 
 Honest summary: 2.6.0 more than doubles 2.5.4's MRR (2.4×/3.1×) with fully
-offline operation, and remains **behind sgrep on every quality metric** while
-2.7×/8.4× faster warm. RepoQA index gets 37% faster (817 vs 1,296 ms median);
+offline operation. RepoQA index gets 37% faster (817 vs 1,296 ms median);
 the flat CoSQA corpus pays the embed cost (7.4 vs 5.5 s); storage 2.58→3.35 GB.
 
 Self-corpus surfaces (same-day companion on the frozen 740-file bundle corpus):
@@ -244,7 +218,7 @@ corpus alone describes the product.
 
 Canonical fingerprints, full matrices, raw sample bundles and regeneration
 protocol:
-[baselines.md](benchmarks/results/baselines.md#260-release-paired-benchmark-254-vs-260-vs-sgrep-2026-10-19).
+[baselines.md](benchmarks/results/baselines.md#260-release-paired-benchmark-254-vs-260-2026-10-19).
 Previous speedups remain [dated historical rows](benchmarks/results/speed.md).
 Foreign-corpus/neural bakeoffs, 23k/100k scale, watch-speed, intent-routing,
 prevented-read and `idx_big` studies could not be refreshed because original

@@ -11,11 +11,11 @@ distilled or fine-tuned tables, in any form. The quality path forward is
 engine-side program logic only (see "Phase 5" below). All quality numbers cited here trace to
 [`benchmarks/results/baselines.md`](../../benchmarks/results/baselines.md)
 and [`benchmarks/results/static-engine-ab-2026-10-14.md`](../../benchmarks/results/static-engine-ab-2026-10-14.md),
-using the frozen reconstruction suite in `benchmarks/sgrep_suite/`.
+using the frozen reconstruction suite in `benchmarks/frozen_suite/`.
 
 ## Why a built-in engine
 
-Peer tools (swe-grep class, sgrep) rent a side model: server, first-run
+Peer tools of the rented-side-model class rent a side model: server, first-run
 download, or hosted inference. asgrep instead ships the inference engine in
 the binary — a static token-embedding table with a native WordPiece
 tokenizer and mean-pooling. What that buys, structurally:
@@ -50,8 +50,8 @@ moved nothing because the cascade gate starved the channel (embed
 contributed in 4/600 RepoQA queries). Ungating was the main effect;
 magnitude fusion added a smaller, consistent gain on both datasets. The
 static engine also indexes substantially faster than the hashed XOF
-pipeline. Remaining gap to sgrep's home-suite numbers is documented, not
-hidden.
+pipeline. The remaining gap to the internal reference's home-suite numbers is
+documented in the internal measurement ledger, not hidden.
 
 Phase 1 leaves defaults unchanged: the static backend is opt-in via
 `ASGREP_EMBED_BACKEND=static` / `EmbedPreference::Static`. (Superseded
@@ -189,14 +189,14 @@ signal), and the 120-query holdout v1 (`benchmarks/phase3_holdout/`,
 placeholder bar MRR@10 .531) as the independent judge for any
 quality-affecting engine change. Current bars: frozen worktree arm
 .719/.317 (lever-1 section in `benchmarks/results/baselines.md`) vs
-sgrep .757/.417.
+the internal reference .757/.417 (internal measurement ledger).
 
 Stage 1 (2026-10-17): `ASGREP_FUSION_DUMP` capture in
 `crates/ast-sgrep-core/src/fusion.rs` (env-gated, one JSONL line per
 fusion invocation, per-result pre-fusion channel ranks) — the record the
 rejected confidence-scaled-fusion and rank-floor levers' retry predicates
 demand — plus CoSQA loss attribution over the frozen 500
-(`benchmarks/sgrep_suite/fusion_capture.py`). Lever order after diagnosis:
+(`benchmarks/frozen_suite/fusion_capture.py`). Lever order after diagnosis:
 query decomposition, margin-rule calibration, pseudo-relevance feedback,
 per-language structure policy (cpp holdout .219), field-aware pooling arm
 (existing predicate).

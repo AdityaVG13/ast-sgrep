@@ -113,7 +113,7 @@ def main() -> None:
     if not args.analyze_only:
         dump.unlink(missing_ok=True)
         rows_path.unlink(missing_ok=True)
-        tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin, sgrep=None))
+        tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin))
         scorer = rs.Scorer(bench)
         capture = not args.no_capture
         if capture:

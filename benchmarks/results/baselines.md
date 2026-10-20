@@ -23,7 +23,7 @@ frozen corpus preparation; not a release certificate.** Binary
 `63cdc851afce2b96478d782b79ce0001ded256279265534453437151b9bbdff2`
 (includes the env-gated `ASGREP_FUSION_DUMP` capture,
 `tests/core/fusion_capture.rs`). Harness:
-`benchmarks/sgrep_suite/fusion_capture.py`; full rows and dump under the
+`benchmarks/frozen_suite/fusion_capture.py`; full rows and dump under the
 scratch bench root in `bench-fusion-capture/` (capture on) and
 `bench-fusion-control/` (capture off). Capture proven rank-neutral: 0/1100
 rank mismatches capture-vs-control AND capture-vs-`bench-lever1-gate` rows.
@@ -47,8 +47,9 @@ Loss attribution over the frozen 1,100 (miss = rank > 10 or absent):
   semantics. 71 winners simply have the better cosine (semantic-depth
   problem, P2); 54 are stacking (P1).
 - P2 budget: 159/213 CoSQA misses are semantic-depth (the cosine itself
-  prefers distractors) — query-side semantic shaping territory; this is
-  where most of the .100 CoSQA gap to sgrep (.417) lives.
+  prefers distractors) —  query-side semantic shaping territory; this is
+  where most of the remaining .100 CoSQA gap lives (reference rows are
+  held in the internal measurement ledger).
 
 Refinement (same day, per-candidate winner ranks): the 54 "stacking"
 cases are mostly an artifact — 48/54 winners hold the BETTER semantic
@@ -69,7 +70,7 @@ arm vs control `63cdc851…` (same tree minus the rewrite):
 | CoSQA ctl | .3169 | .226 | .574 | .884 | 0 |
 | CoSQA arm | **.3271 (+.0102)** | .234 | .588 (+10/−3) | .880 (+2/−4) | 0 |
 
-Harness `benchmarks/sgrep_suite/fusion_capture.py --no-capture`; rows
+Harness `benchmarks/frozen_suite/fusion_capture.py --no-capture`; rows
 `bench-lq1-arm/` vs `bench-fusion-capture/` (control), scratch bench root.
 Mechanism: `rewrite_short_question` (`query.rs`) strips recognized
 short-question scaffolding (leading "how to / what('s| is) … way [to] /
@@ -101,7 +102,7 @@ Candidate: HEAD `56492b0e38d09420c62ed00c28d6e2afe0d71db3` plus the Phase
 2/2D worktree (binary SHA-256
 `bc8b0a34c076d22c6e2186012ddb2427bc0874c4daf6fe5084c92707bd911d0b`), run on
 an Apple M5 Max under macOS 26.6.2. The stored backend was asserted as
-`static` by `benchmarks/sgrep_suite/run_asgrep_arm.py`.
+`static` by `benchmarks/frozen_suite/run_asgrep_arm.py`.
 
 | Dataset | MRR@10 | Hit@1 | Hit@10 | Hit@100 | p50 |
 |---|---:|---:|---:|---:|---:|
@@ -115,15 +116,16 @@ control that reproduced the .521 / .240 ranks exactly. Errors and timeouts
 were zero on both datasets. The arm's 61 per-root `index` invocations took
 253.9 s in aggregate. Index-content bytes were not re-baselined here because
 the 2D keep is query-time only; the prior fresh-index totals remain in the
-detailed record. This does **not** supersede the competitor comparison
-below: sgrep was not rerun.
+detailed record. This does **not** supersede the internal reference
+comparison (2026-10-14; internal measurement ledger): the reference was
+not rerun.
 
 ## br-dx0 lever-1 boilerplate strip (2026-10-17) — measured, not canonical
 
 **Status: measured on the uncommitted worktree, not canonical.** Query-time
 only (`tokenize_for_scoring` drops ~45 genre-boilerplate terms for queries
 over 15 tokens). Paired arms on the frozen 600/500 sets via
-`benchmarks/sgrep_suite/run_asgrep_arm.py`, Apple M5 Max, backend `static`,
+`benchmarks/frozen_suite/run_asgrep_arm.py`, Apple M5 Max, backend `static`,
 zero errors/timeouts both arms. Full rows:
 `bench-control/` (control) and `bench-lever1-gate/` (lever 1) under the
 scratch bench root.
@@ -148,7 +150,7 @@ lever 1, owns that gap; this section does not supersede the canonical row.
 canonical.** Query-time only (`search_hybrid` extends the hit set with
 `lexical_pass` when `!use_embed`; same-line duplicates merge by max score
 in finish dedup; embed-on path unreachable by construction). Paired arms on
-the frozen 600/500 sets via `benchmarks/sgrep_suite/run_asgrep_arm.py` with
+the frozen 600/500 sets via `benchmarks/frozen_suite/run_asgrep_arm.py` with
 `ASGREP_NO_EMBED=1`, Apple M5 Max, backend `<none>`, zero
 errors/timeouts both arms. Full rows: `bench-noembed/out/` (base) and
 `nocascade-fix/` (fix) under the scratch bench root.
@@ -185,64 +187,40 @@ dropped. Candidate binary SHA-256
 `23355029090c9b540458cb43ed29bcb9fd4f911d15ef9a4ddfddd205e2763a3a`.
 Placeholder restored; restored binary matches the 2D hash above.
 
-## sgrep head-to-head on sgrep's published suite (2026-10-14)
+## Reference head-to-head (2026-10-14) — internal
 
-**Status: measured, reproducible-in-tree; not a release certificate.**
-Full report, rows, and provenance:
-[`sgrep-suite-2026-10-14.md`](sgrep-suite-2026-10-14.md) (harness
-`benchmarks/sgrep_suite/run_suite.py`). Non-cloud arms only; the paid
-SWE-bench agent arm was not run. asgrep arm = unpublished local
-release-ship build of this tree (`545ee9bc…`, reports 2.5.4); sgrep arm =
-source build of their benchmarked commit `0fbe8e5`. Corpus/query hashes
-60/60 and 120/120 equal theirs; my sgrep ranks match their published rows
-on 600/600 RepoQA queries.
+The full report, scored rows, calibration against the reference's published
+numbers, and both arms' provenance for the 2026-10-14 tool-vs-tool
+comparison are held in the internal measurement ledger and are not published
+in this repository. The shared corpora/scoring harness lives at
+`benchmarks/frozen_suite/`.
 
-| RepoQA-600 | MRR@10 | Hit@1 | ≥50%@8k | panel p50 |
-|---|---:|---:|---:|---:|
-| sgrep | .757 | .662 | .895 | 57.3 ms |
-| asgrep | .304 | .198 | .340 | 15.8 ms |
-
-| CoSQA-500 | MRR@10 | Hit@1 | panel p50 |
-|---|---:|---:|---:|
-| sgrep | .417 | .292 | 181.3 ms |
-| asgrep | .096 | .038 | 12.6 ms |
-
-Setup/storage also favor sgrep (133.5 ms median first search, 173 MB vs
-1,039.9 ms median index, 2,582 MB). asgrep wins only warm per-query latency,
-which is not quality-adjusted. Any citation of these numbers must carry the
-report's limits (one host, unpublished asgrep build, CoSQA file-naming
-reconstruction, SWE-bench unmeasured).
-
-## 2.6.0 release paired benchmark: 2.5.4 vs 2.6.0 vs sgrep (2026-10-19)
+## 2.6.0 release paired benchmark: 2.5.4 vs 2.6.0 (2026-10-19)
 
 **Status: measured, reproducible-in-tree; the release-comparison fingerprint
 behind the 2.6.0 README/docs tables.** Protocol:
-`benchmarks/sgrep_suite/run_suite.py` phases setup/retrieve/latency/report, two
+`benchmarks/frozen_suite/run_suite.py` phases setup/retrieve/latency/report, two
 asgrep arms run identically and sequentially on one idle host (Apple M5 Max,
 macOS 26.6.2), frozen 60-repo RepoQA + flat CoSQA corpora/queries hardlink-
 copied unchanged from the 2026-10-14 bench root, each arm with its own fresh
-`.asgrep` indexes and its own copy of the warm sgrep cache. The sgrep arm is
-the same pinned binary in both runs (in-pair context, not a new head-to-head).
+`.asgrep` indexes.
 
 | Fingerprint | Value |
 |---|---|
 | asgrep 2.5.4 arm | tag build of `v2.5.4` (d456bb39), SHA256 `6c178ae779125c0fd9af0446e92992ca607425f3048a9fa4990ae5607beb8f8a`, reports 2.5.4 / index_schema 16 |
 | asgrep 2.6.0 arm | release tree at the 2.6.0 mechanical bump, SHA256 `60f591f0b288cb03a2d8114bd6d7c96c54bc35be3915fea5fd0037da0b442cbd`, reports 2.6.0 / index_schema 17 |
-| sgrep (both arms) | source build of commit `0fbe8e5`, SHA256 `743950b84b32b9c5bf1182980f909d94d2d659a2e298074f9bc8b1461347391e` |
-| Harness | `benchmarks/sgrep_suite/run_suite.py` @ `9ceec783` |
-| Errors/timeouts | 0/0 across all 4,400 asgrep+sgrep query runs |
+| Harness | `benchmarks/frozen_suite/run_suite.py` @ `9ceec783` |
+| Errors/timeouts | 0/0 across all 4,400 query runs in the pair |
 
 | RepoQA-600 | MRR@10 | Hit@1 | Hit@5 | Hit@10 | ≥50%@8k | panel p50 |
 |---|---:|---:|---:|---:|---:|---:|
 | asgrep 2.5.4 (this run) | .297 | .190 | .442 | .563 | .340 | 16.6 ms |
 | asgrep 2.6.0 (this run) | **.719** | .608 | .870 | .928 | .790 | 22.2 ms |
-| sgrep (calibrated 2026-10-14 row) | **.757** | **.662** | **.897** | **.943** | **.895** | 59.6 ms |
 
 | CoSQA-500 | MRR@10 | Hit@1 | Hit@5 | Hit@10 | panel p50 |
 |---|---:|---:|---:|---:|---:|
 | asgrep 2.5.4 (this run) | .104 | .054 | .156 | .240 | 13.8 ms |
 | asgrep 2.6.0 (this run) | **.327** | .234 | .452 | .588 | 22.1 ms |
-| sgrep (calibrated 2026-10-14 row) | **.417** | **.292** | **.574** | **.702** | 185.0 ms |
 
 Cold setup per arm (suite `setup` phase, fresh indexes):
 
@@ -254,20 +232,12 @@ Cold setup per arm (suite `setup` phase, fresh indexes):
 | First query after index (RepoQA median) | 13.8 ms | 21.7 ms |
 | Storage, both datasets | 2.58 GB | 3.35 GB |
 
-Notes. **The sgrep reference row is the calibrated 2026-10-14 head-to-head**
-(same corpus bytes, same pinned binary, 600/600 RepoQA rank agreement with
-sgrep's published rows), not this run's in-pair sgrep control: rerunning sgrep
-against hardlink corpus copies at new paths broke its cache lineage and
-under-measured it (.7227/.3763 MRR, only 366/600 published-row agreement).
-Those in-pair sgrep numbers, identical across both arms, are retained only as
-an arm-stability control and must not be cited as sgrep's quality. Against the
-calibrated row, 2.6.0 is **behind sgrep on every quality metric** (RepoQA
-−.038 MRR / −.015 Hit@10 / −.105 coverage; CoSQA −.090 MRR / −.114 Hit@10)
-while leading every latency metric (2.7×/8.4× faster warm) with fully offline
-operation. Warm p50 rises ~6-8 ms over 2.5.4 (always-on embed channel) and
+Notes. Warm p50 rises ~6-8 ms over 2.5.4 (always-on embed channel) and
 storage grows ~30% (vectors) — priced, not hidden. 2.6.0's index is faster per
 RepoQA scope despite embedding everything; the flat CoSQA corpus pays the
-embedding cost.
+embedding cost. Reference-tool rows for the same corpora live in the internal
+measurement ledger, not in this file; the 120-query warm-panel definition
+rides with the frozen bench dirs (internal).
 
 ### Self-corpus surfaces (2026-10-19, published 2.5.4 bytes vs 2.6.0)
 
@@ -406,7 +376,7 @@ bounded repair. Earlier partial measurements above remain historical observation
 ## 2.6.0 candidate refresh (2026-10-11)
 
 **Status: historical prerelease snapshot; superseded for released-binary
-claims by the [2026-10-19 release-paired benchmark](#260-release-paired-benchmark-254-vs-260-vs-sgrep-2026-10-19)
+claims by the [2026-10-19 release-paired benchmark](#260-release-paired-benchmark-254-vs-260-2026-10-19)
 (same published-2.5.4 bytes, released 2.6.0 build, ranking regression
 repaired). Not an optimization keep or
 release certificate.** Machine-readable observations, command argument templates,

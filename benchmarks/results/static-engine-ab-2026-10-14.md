@@ -2,18 +2,17 @@
 
 Phase-1 evidence for the native static embedding engine
 (`docs/plans/native-embed-engine.md`). Frozen reconstruction suite:
-`benchmarks/sgrep_suite/run_suite.py`, 600 RepoQA + 500 CoSQA frozen
+`benchmarks/frozen_suite/run_suite.py`, 600 RepoQA + 500 CoSQA frozen
 queries, identical scorer for every arm, fresh process per query. Backend
 identity asserted from stored index meta (`embed_backend`), never from
 requested flags. Per-arm summaries are local evidence under
-`~/.hermes/cache/scratch/sgrep-bench/bench-<arm>/summary-*.json`
+`~/.hermes/cache/scratch/bench-root/bench-<arm>/summary-*.json`
 (ephemeral scratch; this file is the durable record).
 
 Provenance: tree at HEAD `f2bbc3d2` plus this effort's changes (committed
 with this file). Arms ran on successive `release-ship` builds of that tree,
 each containing exactly one more lever than the previous; the final (1c)
-binary sha256 `b3e858af…80530`. sgrep column is the competitor's pinned
-binary on the same suite, reference only (its home suite).
+binary sha256 `b3e858af…80530`.
 
 ## Results (MRR@10 / Hit@1 / Hit@10 / Hit@100, p50 ms)
 
@@ -24,7 +23,6 @@ binary on the same suite, reference only (its home suite).
 | static 1b (+ ungate) | .478 / .333 / .797 / .907, 18.8 | .177 / .102 / .384 / .806, 15.5 |
 | static 1c (+ magnitude fusion) | .494 / .345 / .825 / .907, 21.5 | .197 / .124 / .410 / .804, 17.2 |
 | semantic-only diagnostic | .522 / .365 / .847 / .892, 9.4 | .100 / .056 / .226 / .560, 12.6 |
-| sgrep (reference) | .757 / .662 / — / .973, 59.6 | .417 / — / — / .948, — |
 
 Index wall-time, same 61 corpus roots: hashed ~107 s → static ~63 s.
 
@@ -69,7 +67,7 @@ with an explicit log line; Auto search refuses a stale-model store
 until then.
 
 Frozen-suite arm, **no `ASGREP_EMBED_BACKEND` in the environment**,
-checked-in driver `benchmarks/sgrep_suite/run_asgrep_arm.py`
+checked-in driver `benchmarks/frozen_suite/run_asgrep_arm.py`
 (reindexes each corpus repo, asserts the stored backend from meta):
 
 - stored backend: `static` (asserted)
@@ -101,10 +99,10 @@ Command (prepared frozen corpus; release binary built with
 
 ```bash
 env -u ASGREP_EMBED_BACKEND -u ASGREP_NEURAL_EMBED \
-  python3 benchmarks/sgrep_suite/run_asgrep_arm.py \
+  python3 benchmarks/frozen_suite/run_asgrep_arm.py \
   --bin /Users/aditya/Developer/ast-sgrep/target/release/asgrep \
-  --bench-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench/bench-final \
-  --out-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench/bench-final/out \
+  --bench-dir /Users/aditya/.hermes/cache/scratch/bench-root/bench-final \
+  --out-dir /Users/aditya/.hermes/cache/scratch/bench-root/bench-final/out \
   --expect-backend static
 ```
 
@@ -171,10 +169,10 @@ release binary:
 
 ```bash
 cargo build --release -p ast-sgrep-cli
-python3 benchmarks/sgrep_suite/run_asgrep_arm.py \
+python3 benchmarks/frozen_suite/run_asgrep_arm.py \
   --bin /Users/aditya/Developer/ast-sgrep/target/release/asgrep \
-  --bench-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench \
-  --out-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench/bench-2d \
+  --bench-dir /Users/aditya/.hermes/cache/scratch/bench-root \
+  --out-dir /Users/aditya/.hermes/cache/scratch/bench-root/bench-2d \
   --expect-backend static
 ```
 
@@ -210,10 +208,10 @@ docstring against that function), not the suite task.
 
 ```bash
 cargo build --release -p ast-sgrep-cli
-python3 benchmarks/sgrep_suite/run_asgrep_arm.py \
+python3 benchmarks/frozen_suite/run_asgrep_arm.py \
   --bin /Users/aditya/Developer/ast-sgrep/target/release/asgrep \
-  --bench-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench \
-  --out-dir /Users/aditya/.hermes/cache/scratch/sgrep-bench/bench-phase3 \
+  --bench-dir /Users/aditya/.hermes/cache/scratch/bench-root \
+  --out-dir /Users/aditya/.hermes/cache/scratch/bench-root/bench-phase3 \
   --expect-backend static
 ```
 
@@ -248,7 +246,7 @@ the engine's existing 0.10 decisive-margin ratio, using semantic rank
 when separated and fused rank otherwise, scored .569 / .236. That is an
 upper bound on a query-level source switch, not a fusion formula, and
 it does not beat fused on both datasets. No fusion code changed.
-Records: `~/.hermes/cache/scratch/sgrep-bench/bench-sem-current/`.
+Records: `~/.hermes/cache/scratch/bench-root/bench-sem-current/`.
 
 ## English-semicolon intent fix (2026-10-15)
 
@@ -310,7 +308,7 @@ not tie-breaking; they are promoting a worse cosine.
 A hard floor that pins the best cosine to rank 1, leaving every other
 fused rank in place, scores RepoQA .654 and CoSQA .211. That beats
 fused RepoQA and loses CoSQA by .029. Rejected. Not a fusion code
-change. Records: `~/.hermes/cache/scratch/sgrep-bench/bench-sem-clause/`.
+change. Records: `~/.hermes/cache/scratch/bench-root/bench-sem-clause/`.
 
 The test-path penalty is not the aggregate cause. Eight of those 144
 golds sit on a path `is_test_path` marks, and one of those is a false
@@ -345,7 +343,7 @@ Hit@100 is unchanged on both (.968 / .884). Reciprocal-rank moves at
 gains / 20 losses (gain 43.72, loss 5.18). RepoQA by language: cpp
 .550, go .609, java .615, python .629, rust .668, typescript .753.
 Every language is above the fused control. Records:
-`~/.hermes/cache/scratch/sgrep-bench/bench-fusion-ship/`.
+`~/.hermes/cache/scratch/bench-root/bench-fusion-ship/`.
 
 ## Description clamp kept (2026-10-15)
 
@@ -376,7 +374,7 @@ on all 500 queries. RepoQA: 88 reciprocal-rank gains / 43 losses at
 only language that dropped, and it stays above semantic-only on this
 index (.511). Aggregate RepoQA now beats that semantic-only arm
 (.661). Records:
-`~/.hermes/cache/scratch/sgrep-bench/bench-desc-clamp/`.
+`~/.hermes/cache/scratch/bench-root/bench-desc-clamp/`.
 
 ## Embed-absent cap on descriptions kept (2026-10-15)
 
@@ -402,7 +400,7 @@ queries. RepoQA: 45 reciprocal-rank gains / 1 loss at @10
 unchanged. By language, all six up: cpp .547, go .749, java .681,
 python .745, rust .681, typescript .782. Python and go now beat
 semantic-only on this index (.718 and .693). Records:
-`~/.hermes/cache/scratch/sgrep-bench/bench-desc-absent/`.
+`~/.hermes/cache/scratch/bench-root/bench-desc-absent/`.
 
 ## Phase 3 second candidate rejected (2026-10-15)
 
@@ -420,7 +418,7 @@ Not shipped. Letter-bearing path tokens prepended to the primary embed
 text, with a recipe stamp so an unchanged index re-embeds. Release
 binary, fresh indexes, potion table (`static:potion-code-16M-v2:256`).
 Errors and timeouts: zero. Indexing 105.4 s across the 61 scopes.
-Records: `~/.hermes/cache/scratch/sgrep-bench/bench-path-words/out/`.
+Records: `~/.hermes/cache/scratch/bench-root/bench-path-words/out/`.
 
 | Dataset | Kept arm | Path words | Hit@1 / @10 / @100 |
 |---|---:|---:|---:|

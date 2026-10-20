@@ -68,7 +68,7 @@ def main() -> None:
 
     import run_suite as rs
     rs.METHODS = ("asgrep",)
-    tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin, sgrep=None))
+    tools = rs.Tools(out, argparse.Namespace(asgrep=args.bin))
     rows = rs.retrieve(out, tools)
 
     summary = {}

@@ -26,7 +26,7 @@ Each query: `id, scope, language, query, path, start_line, end_line,
 repoqa_start_line, repoqa_end_line, name` plus `provenance` (which
 usage evidence the query was written from: test path + symbol, call site,
 or issue URL). Same schema means the existing arm driver
-(`benchmarks/sgrep_suite/run_asgrep_arm.py`) and scorer
+(`benchmarks/frozen_suite/run_asgrep_arm.py`) and scorer
 (`run_suite.score_repoqa`) run unmodified against a holdout bench dir —
 only the directory contents differ.
 

@@ -170,3 +170,6 @@ crates/**/.bench-history/
 
 # Generated build marker (ast-sgrep pi extension)
 packages/pi/extension/custom-index/
+
+# internal (unpublished) measurement ledger — pristine pre-strip copies
+/benchmarks/results/internal/

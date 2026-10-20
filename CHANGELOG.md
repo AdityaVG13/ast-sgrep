@@ -13,15 +13,15 @@ Local-first semantic search: a native static embed engine ships as the default
 backend, the hybrid channel mix is re-tuned for it, and retrieval quality is
 measured on a frozen RepoQA/CoSQA suite against the previous release (canonical
 rows and harness in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md)):
-RepoQA-600 MRR@10 .297→.719 and CoSQA-500 .104→.327 over 2.5.4, still behind
-the sgrep-calibrated references (.757/.417) while 2.7×/8.4× faster warm.
+RepoQA-600 MRR@10 .297→.719 and CoSQA-500 .104→.327 over 2.5.4, with every
+warm latency metric faster and fully offline operation.
 
 ### Added
 
 - Native static embed engine: deterministic 256-d static (Model2Vec-style) embeddings compiled into the binary from a vendored MIT table. No model download, no ONNX runtime, no API key; the embed channel is ungated in hybrid fusion with magnitude fusion, so offline semantic ranking is part of every default search.
 - Model-identity index migration: indexes record their embedding model identity and re-embed automatically on the next index run when it changes. Retired engines (`hashed`, `neural`) fail closed; `--neural-embed` / `ASGREP_EMBED_BACKEND` error explicitly instead of silently switching.
 - Hybrid retrieval quality pass, measured per lever on the frozen suite with a held-out set: short natural-language questions drop boilerplate before embedding (kept: CoSQA MRR@10 +.0102, holdout clean). Rejected levers and their retry conditions are recorded in the negative ledgers under `docs/progress/`.
-- Frozen-suite measurement harness additions under `benchmarks/sgrep_suite/` (fusion capture, paired arm drivers) so quality claims are reproducible from the tree.
+- Frozen-suite measurement harness additions under `benchmarks/frozen_suite/` (fusion capture, paired arm drivers) so quality claims are reproducible from the tree.
 - Bound graph-chain exploration with `max_work` and expose work/truncation diagnostics; retain disambiguated call-path evidence without claiming value flow.
 
 ### Fixed

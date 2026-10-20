@@ -1,16 +1,15 @@
-"""Head-to-head: ast-sgrep vs context.dev sgrep on sgrep's published suite.
+"""Frozen RepoQA-600 / CoSQA-500 retrieval suite — shared harness for asgrep arms.
 
-Reimplements the retrieval/latency/setup arms of
-https://github.com/context-dot-dev/sgrep/blob/main/benchmarks/README.md
-(the SWE-bench agent arm needs paid Modal/OpenAI calls and is excluded).
+Materializes the frozen corpora/queries, runs a tool arm query-by-query in a
+fresh CLI process, scores everything with one fixed scorer, and aggregates.
+The arm drivers (`run_asgrep_arm.py`, `fusion_capture.py`) import this module
+for Tools/retrieve/scoring.
 
-Anti-cheat contract (mirrors their protocol.json failure_contract):
-- Corpora and queries are byte-frozen before any scored run. RepoQA corpus
-  hashes must equal the per-scope SHA-256 published in their
-  latency-replay.json; the 120 latency-panel query hashes must equal theirs.
-- No tuning of either tool against these datasets. Adapters use each tool's
-  default ranking with only --json and the same result cap sgrep used
-  (50 on RepoQA, 100 on CoSQA). Default flags otherwise.
+Anti-cheat contract (frozen-suite discipline):
+- Corpora and queries are byte-frozen before any scored run.
+- No tuning of the tool against these datasets. The adapter uses default
+  ranking with only --json and a fixed result cap (50 on RepoQA, 100 on
+  CoSQA). Default flags otherwise.
 - Every query counts: timeouts/errors stay in the denominator with rank=None.
 - No retries, no outlier removal. Setup (indexing) is measured separately
   from query latency. Fresh CLI process per query.
@@ -22,7 +21,7 @@ Anti-cheat contract (mirrors their protocol.json failure_contract):
   (and records/) silently re-scores the previous run's rows. Fresh bench
   dir per arm, or delete both first.
 
-Scoring (their definitions, from protocol.json + verify.py):
+Scoring:
 - rank: 1-based position of the gold file among distinct result files
   (RepoQA), or of the gold snippet among distinct snippet files (CoSQA).
 - hitK = fraction rank<=K; mrr10 = mean(1/rank for rank<=10).
@@ -30,17 +29,17 @@ Scoring (their definitions, from protocol.json + verify.py):
   union their source lines (overlaps counted once), charging o200k tokens
   per newly covered line, stopping at the first line that would exceed B.
   coverage = covered needle lines / total needle lines; half = >=0.5,
-  full = 1.0. (Reimplementation: their runner is not published. Calibrated
-  by re-scoring our own sgrep runs against their published sgrep rows.)
+  full = 1.0.
 
 Usage:
-  run_suite.py --bench DIR prep        # download + materialize + verify hashes
-  run_suite.py --bench DIR retrieve    # stage 2: 600 RepoQA + 500 CoSQA, both tools
-  run_suite.py --bench DIR latency     # stage 3: their 120-query panel, 6 repeats
-  run_suite.py --bench DIR setup       # stage 3: empty-index first use + storage
-  run_suite.py --bench DIR report      # aggregate to summary.json/csv (+calibration)
+  run_suite.py --bench DIR prep        # download + materialize corpora/queries
+  run_suite.py --bench DIR retrieve    # 600 RepoQA + 500 CoSQA, asgrep arm
+  run_suite.py --bench DIR latency     # warm panel, 6 repeats (needs latency-panel.json in the bench dir)
+  run_suite.py --bench DIR setup       # empty-index first use + storage
+  run_suite.py --bench DIR report      # aggregate to summary.json/csv
+  run_suite.py --bench DIR rescore     # re-score retained records/ rows
 
-Binaries come from --asgrep/--sgrep or $ASGREP_BIN/$SGREP_BIN.
+The binary comes from --asgrep or $ASGREP_BIN.
 """
 import argparse
 import csv
@@ -59,7 +58,7 @@ import time
 import urllib.request
 
 TIMEOUT_S = 180
-METHODS = ("asgrep", "sgrep")
+METHODS = ("asgrep",)
 REPOQA_N = 50
 COSQA_N = 100
 REPEATS = 6
@@ -102,20 +101,13 @@ def prep(bench: Path):
         subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin",
                         "14ebcacf9e9bc3e7109102632bc63047876f27d2"], cwd=coclr, check=True)
         subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=coclr, check=True)
-    theirs = bench / "theirs"
-    for f in ("results.json", "latency-replay.json"):
-        fetch(f"https://raw.githubusercontent.com/context-dot-dev/sgrep/main/benchmarks/full-suite/{f}",
-              theirs / f)
-    want = load(theirs / "latency-replay.json")["source_hashes"]
-    cases = {c["id"]: c["query_sha256"] for c in load(theirs / "latency-replay.json")["cases"]}
 
     corpus = bench / "corpus"
     d = load(data / "repoqa-2024-06-23.json")
-    queries, matched = [], 0
+    queries = []
     for lang, repos in d.items():
         for r in repos:
             scope = f"{lang}-" + r["repo"].replace("/", "__")
-            assert digest(json.dumps(r["content"], sort_keys=True).encode()) == want[scope], scope
             root = corpus / "repoqa" / scope
             for rel, text in r["content"].items():
                 p = root / rel
@@ -124,9 +116,6 @@ def prep(bench: Path):
                     p.write_text(text)
             for i, nd in enumerate(r["needles"]):
                 qid = f"{scope}-{i:02d}"
-                if qid in cases:
-                    assert digest(nd["description"].encode()) == cases[qid], qid
-                    matched += 1
                 # Gold lines derive from the needle BYTE span: RepoQA's
                 # start_line points at the blank line before the def, while
                 # start_byte points at the def itself.
@@ -139,7 +128,7 @@ def prep(bench: Path):
                                     path=nd["path"], start_line=g0, end_line=g1,
                                     repoqa_start_line=nd["start_line"], repoqa_end_line=nd["end_line"],
                                     name=nd["name"]))
-    assert len(queries) == 600 and matched == 60, (len(queries), matched)
+    assert len(queries) == 600, len(queries)
     save(bench / "repoqa-queries.json", queries)
 
     cm = json.loads((coclr / "data/search/code_idx_map.txt").read_text())
@@ -157,13 +146,9 @@ def prep(bench: Path):
     save(bench / "cosqa-manifest.json", man)
     t = load(coclr / "data/search/cosqa-retrieval-test-500.json")
     cq = [dict(id=x["idx"], query=x["doc"], gold_idx=x["retrieval_idx"]) for x in t]
-    cmatch = sum(1 for q in cq if digest(q["query"].encode()) == cases.get(q["id"]))
-    assert len(cq) == 500 and cmatch == 60, (len(cq), cmatch)
+    assert len(cq) == 500, len(cq)
     save(bench / "cosqa-queries.json", cq)
-    panel = [dict(dataset=c["dataset"], id=c["id"]) for c in load(theirs / "latency-replay.json")["cases"]]
-    save(bench / "latency-panel.json", panel)
-    print("prep OK: RepoQA 60/60 corpus hashes, 600 queries; CoSQA 6267 snippets, 500 queries; "
-          "120/120 panel query hashes match theirs")
+    print("prep OK: RepoQA 600 queries; CoSQA 6267 snippets, 500 queries")
 
 
 # ---------------------------------------------------------------- adapters
@@ -171,29 +156,19 @@ class Tools:
     def __init__(self, bench: Path, args):
         self.bench = bench
         self.asgrep = args.asgrep or os.environ.get("ASGREP_BIN")
-        self.sgrep = args.sgrep or os.environ.get("SGREP_BIN")
-        self.sgrep_cache = bench / "sgrep-cache"
 
     def argv(self, method: str, query: str, n: int):
-        if method == "sgrep":
-            return [self.sgrep, query, ".", "--model", "code", "--json", "-n", str(n)]
         # --index-path pins the per-scope index (asgrep otherwise resolves an
-        # ancestor index); sgrep's equivalent isolation is SGREP_CACHE_DIR.
+        # ancestor index).
         return [self.asgrep, query, ".", "--json", "--limit", str(n),
                 "--index-path", "./.asgrep/index.db"]
 
     def env(self, method: str):
-        e = dict(os.environ)
-        if method == "sgrep":
-            e["SGREP_CACHE_DIR"] = str(self.sgrep_cache)
-            e["HF_HUB_OFFLINE"] = "1"
-        return e
+        return dict(os.environ)
 
     def parse(self, method: str, stdout: bytes):
         """Return ordered [(relpath, start_line, end_line)] from native JSON."""
         out = json.loads(stdout.decode())
-        if method == "sgrep":
-            return [(x["path"].removeprefix("./"), int(x["start"]), int(x["end"])) for x in out]
         hits = out["hits"] if isinstance(out, dict) else out
         rows = []
         for x in hits:
@@ -414,28 +389,6 @@ def setup(bench: Path, tools: Tools):
     first_cq = next(q for q in cq if ("cosqa", q["id"]) in panel)
     out = {"repoqa": {}, "cosqa": {}}
 
-    # sgrep: fresh index cache (models/parsers already cached), first search per scope.
-    setup_cache = bench / "sgrep-setup-cache"
-    shutil.rmtree(setup_cache, ignore_errors=True)
-    saved = tools.sgrep_cache
-    tools.sgrep_cache = setup_cache
-    times = []
-    for scope, q in sorted(first_rq.items()):
-        rec = run_one(tools, "sgrep", q["query"], bench / "corpus/repoqa" / scope, REPOQA_N)
-        times.append(rec["seconds"] * 1000)
-        print("setup sgrep repoqa", scope, f"{times[-1]:.0f}ms", rec["status"], flush=True)
-    rec = run_one(tools, "sgrep", first_cq["query"], bench / "corpus/cosqa", COSQA_N)
-    tools.sgrep_cache = saved
-    st = sorted(times)
-    out["repoqa"]["sgrep"] = dict(scopes=60, median_ms=statistics.median(times),
-                                  p95_ms=st[math.ceil(.95 * len(st)) - 1],
-                                  total_seconds=sum(times) / 1000,
-                                  meaning="First search with empty dedicated index; assets cached")
-    out["cosqa"]["sgrep"] = dict(scopes=1, median_ms=rec["seconds"] * 1000,
-                                 p95_ms=rec["seconds"] * 1000, total_seconds=rec["seconds"],
-                                 meaning="First search with empty dedicated index; assets cached")
-    out["storage_bytes"] = {"sgrep_setup_cache_both_datasets": du_bytes(setup_cache)}
-
     # asgrep: explicit index build per scope from no index, then first query.
     times, qtimes, storage = [], [], {}
     for scope, q in sorted(first_rq.items()):
@@ -473,12 +426,11 @@ def setup(bench: Path, tools: Tools):
     out["cosqa"]["asgrep"] = dict(scopes=1, median_ms=cit * 1000, p95_ms=cit * 1000,
                                   total_seconds=cit, first_query_median_ms=rec["seconds"] * 1000,
                                   meaning="Explicit `asgrep index .` from no index (excl. first query)")
+    out["storage_bytes"] = {}
     out["storage_bytes"]["asgrep_repoqa_total"] = sum(storage.values())
     out["storage_bytes"]["asgrep_cosqa"] = du_bytes(idx)
     out["storage_bytes"]["asgrep_both_datasets"] = sum(storage.values()) + du_bytes(idx)
-    out["limits"] = ("sgrep setup includes its first query (index-on-first-search product model); "
-                     "asgrep setup is the explicit index command, first query reported separately. "
-                     "Model/parser caches excluded from storage for both.")
+    out["limits"] = ("asgrep setup is the explicit index command, first query reported separately.")
     save(bench / "setup-summary.json", out)
     print(json.dumps(out, indent=1)[:1200])
 
@@ -516,21 +468,6 @@ def report(bench: Path):
             g = [r for r in rows if r.get("language") == lang and r["method"] == m]
             if g:
                 by_lang[lang][m] = aggregate(g)
-    # calibration: our sgrep rows vs their published sgrep-main rows
-    theirs = load(bench / "theirs/results.json")["rows"]
-    cal = {}
-    for ds in ("repoqa", "cosqa"):
-        mine = {r["id"]: r for r in rows if r["dataset"] == ds and r["method"] == "sgrep"}
-        ref = {r["id"]: r for r in theirs if r["dataset"] == ds and r["method"] == "sgrep-main"}
-        both = set(mine) & set(ref)
-        rank_agree = sum(1 for i in both if mine[i]["rank"] == ref[i]["rank"])
-        entry = dict(queries=len(both), rank_exact_agreement=rank_agree)
-        if ds == "repoqa" and both:
-            for b in ("2000", "8000"):
-                for metric in ("half", "full"):
-                    entry[f"{metric}{b}_agreement"] = sum(
-                        1 for i in both if mine[i]["hits"][b][metric] == ref[i]["hits"][b][metric])
-        cal[ds] = entry
     lat = {}
     lp = bench / "latency-rows.json"
     if lp.exists():
@@ -551,29 +488,11 @@ def report(bench: Path):
                                   query_medians=medians,
                                   ranked_source_mismatches=sum(not r["same_ranked_source"] for r in g),
                                   errors=sum(r["status"] != "complete" for r in g))
-        # paired ratio asgrep/sgrep with query-level bootstrap (their analyze_latency shape)
-        import random
-        rng = random.Random(20261010)
-        paired = {}
-        for ds in ("repoqa", "cosqa"):
-            if ds in lat and all(m in lat[ds] for m in METHODS):
-                a, s = lat[ds]["asgrep"]["query_medians"], lat[ds]["sgrep"]["query_medians"]
-                ids = sorted(set(a) & set(s))
-                ratios = [a[i] / s[i] for i in ids]
-                boots = []
-                for _ in range(10000):
-                    boots.append(statistics.median(rng.choice(ratios) for _ in ids))
-                boots.sort()
-                paired[ds] = dict(query_pairs=len(ids), median_ratio=statistics.median(ratios),
-                                  bootstrap_95=[boots[250], boots[9750]],
-                                  meaning="asgrep / sgrep time; >1 means asgrep took longer. Not quality-adjusted.")
-        lat["paired_asgrep_over_sgrep"] = paired
     meta = dict(platform=platform.platform(), machine=platform.machine())
-    for name, env in (("asgrep", "ASGREP_BIN"), ("sgrep", "SGREP_BIN")):
-        p = os.environ.get(env)
-        if p and Path(p).exists():
-            meta[name] = dict(path=p, sha256=digest(Path(p).read_bytes()))
-    out = dict(summary=summary, by_language=by_lang, calibration_vs_published_sgrep=cal,
+    p = os.environ.get("ASGREP_BIN")
+    if p and Path(p).exists():
+        meta["asgrep"] = dict(path=p, sha256=digest(Path(p).read_bytes()))
+    out = dict(summary=summary, by_language=by_lang,
                latency=lat, meta=meta)
     save(bench / "summary.json", out)
     with open(bench / "summary.csv", "w", newline="") as f:
@@ -586,7 +505,6 @@ def report(bench: Path):
                             s.get("half2000", ""), s.get("half8000", ""), s.get("full8000", ""),
                             s["p50_ms"], s["p95_ms"], s["p99_ms"], s["errors"], s["timeouts"]])
     print(json.dumps(summary, indent=1))
-    print("calibration:", json.dumps(cal, indent=1))
 
 
 # ---------------------------------------------------------------- rescore
@@ -629,7 +547,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bench", type=Path, required=True)
     ap.add_argument("--asgrep")
-    ap.add_argument("--sgrep")
     ap.add_argument("--limit", type=int, help="smoke: first N queries per dataset")
     ap.add_argument("--only", help="comma-separated query ids (smoke)")
     ap.add_argument("phase", choices=("prep", "retrieve", "latency", "setup", "report", "rescore"))
