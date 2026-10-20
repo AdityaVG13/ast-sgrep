@@ -32,6 +32,29 @@ done
 
 Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts. A broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). Publication is OIDC-only (br-r8k): there is no token lane, so an OIDC failure means the npm trusted-publisher registration is wrong. Fix it on npmjs.com and re-dispatch publish-only. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher. After either publish job succeeds, the workflow re-pins `package-lock.json` against the live release and pushes it to `main` (br-zvh); this runs under the publish approval, not a second one.
 
+## Linux preflight before dispatching the lane
+
+The packaged e2e is platform-conditional (the 2.6.0 malformed-WAL bug was Linux-only and surfaced only in the lane). Run it on a real Linux box before spending CI minutes:
+
+```bash
+ASGREP_E2E_SSH=user@host ASGREP_E2E_DIR=/remote/dir npm run release:e2e-linux
+```
+
+The host is private infrastructure and this repo is public, so nothing is hardcoded: `ASGREP_E2E_SSH` (key-based ssh target) and `ASGREP_E2E_DIR` (remote path, created if missing) are required. The remote needs bash, node >= 22.19, cargo, and rsync. The script incrementally rsyncs the tree (node_modules included, so the first run pays the install), builds the three natives on the host, and runs the full `release-gate-e2e.mjs` against them. Green here means the lane's e2e stage will pass on both x64 and arm64 Linux; a red here costs ~2 minutes instead of ~30 per CI attempt.
+
+## When GitHub Actions is starved (the fallback publisher)
+
+Exhausted runner minutes park the OIDC publication job in `waiting` indefinitely while the build+verify stages sit green and the tarballs sit on the GitHub release (this happened on 2026-10-19: 4+ h queued, run cancelled). The lane stays canonical, but when it cannot run, publish the preserved artifacts from your own machine:
+
+```bash
+npm run release:fallback -- X.Y.Z    # interactive: ONE npm 2FA browser approval
+npm run release:verify -- X.Y.Z      # verify-only, safe anytime, no publishes
+```
+
+`release:fallback` verifies the release assets byte-for-byte against the release manifest (commit must match the tag), `npm publish`es only the still-missing packages in canonical order, sets `latest` on all seven **explicitly in the same 2FA window** (a 2026-10-19 batch publish moved versions without moving dist-tags — unexplained, so tags are never left to the publish path), flips the GitHub release out of draft and marks it Latest (the starved publication job normally does this; without it the releases sidebar crowns the previous version), then verifies everything: all seven live at the version, every `latest` tag, the GitHub latest release, and clean installs of the launcher and extension.
+
+Provenance caveat: token publishes carry no OIDC attestation. Note it in the release prose when the fallback is used. Re-dispatching the lane later for the same tag is safe: live packages are skipped idempotently.
+
 ## Pi npm package family
 
 The npm release publishes the canonical family at the contract's canonical version, only from the human-approved official tag and commit:

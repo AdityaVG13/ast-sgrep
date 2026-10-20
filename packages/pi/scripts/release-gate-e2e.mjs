@@ -86,8 +86,12 @@ const setJson = async (pathname, mutate) => {
 }
 function pack(directory, destination) {
   const output = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', path.dirname(destination), directory]));
-  assert.equal(output.length, 1);
-  const generated = path.join(path.dirname(destination), output[0].filename);
+  // npm <=10 prints an array of pack results; npm >=11 prints an object keyed
+  // by package name. Local Linux preflight hosts run current node/npm, so
+  // accept both shapes and never depend on the runner's npm major.
+  const entries = Array.isArray(output) ? output : Object.values(output ?? {});
+  assert.equal(entries.length, 1);
+  const generated = path.join(path.dirname(destination), entries[0].filename);
   if (generated !== destination) renameSync(generated, destination);
 }
 const packArtifacts = async () => {
