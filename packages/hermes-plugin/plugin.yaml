@@ -1,0 +1,23 @@
+name: asgrep
+version: 0.1.0
+manifest_version: 2
+license: MIT
+description: Native repo search over a persistent asgrep serve worker — fused keyword/AST search, budgeted code reads, index status; read-only and fail-closed.
+provides_tools:
+  - asgrep_search
+  - asgrep_read
+  - asgrep_status
+tags: [coding, search, navigation]
+config_schema:
+  binary:
+    type: str
+    default: asgrep
+    description: "asgrep executable: a name on PATH or an absolute path"
+  timeout_s:
+    type: int
+    default: 120
+    description: Per-call timeout for the serve worker, including cold index builds on first contact with a repository.
+  eager:
+    type: bool
+    default: true
+    description: Keep the tools out of tool_search deferral so models see them immediately, like built-ins.
