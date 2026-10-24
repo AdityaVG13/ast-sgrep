@@ -24,7 +24,7 @@ pub fn literal_pass(
     };
     // Cached-only: a one-shot query must not pay the full `lines`
     // materialization + token-index build (flamegraph 2026-09-20). Warmed
-    // sessions (codemode-serve) hold the corpus and keep the memchr scan;
+    // sessions (`asgrep serve`) hold the corpus and keep the memchr scan;
     // everyone else takes the trigram/SQL path below.
     if let Some(corpus) = store.line_corpus_if_cached()? {
         return scan_line_corpus(&corpus, store, options, parsed, needle);

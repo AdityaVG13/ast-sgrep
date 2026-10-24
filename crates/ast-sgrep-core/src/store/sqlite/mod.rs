@@ -72,14 +72,14 @@ fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
 fn missing_index_error(root: &Path, db_path: &Path) -> crate::StoreError {
     if let Some(enclosing) = enclosing_index_db(root) {
         return crate::StoreError::Other(format!(
-            "index is empty for {}: no index file at {}; this checkout is indexed at {} -- run the command at that root, or pass --index-path for a separate index",
+            "index is empty for {}: no index file at {}; this checkout is indexed at {} -- run the command at that root, pass --index-path for a separate index, or rerun with --auto-index to index this checkout in place",
             root.display(),
             db_path.display(),
             enclosing.display()
         ));
     }
     crate::StoreError::Other(format!(
-        "index is empty for {}: no index file at {}; run: asgrep index {} --json",
+        "index is empty for {}: no index file at {}; run: asgrep index {} --json, or rerun with --auto-index to index this checkout in place",
         root.display(),
         db_path.display(),
         root.display()
@@ -649,7 +649,7 @@ impl IndexStore {
     /// token-index build (flamegraph 2026-09-20: ~95% of one-shot wall under
     /// `literal_pass` -> `line_corpus`, 3/3 captures); they fall back to the
     /// trigram/SQL path instead. Warm sessions (`warm_search_path`,
-    /// codemode-serve) load once and keep the memchr scan. A stale entry is
+    /// `asgrep serve`) load once and keep the memchr scan. A stale entry is
     /// reported as `None`, not reloaded: the next explicit warm revalidates.
     pub(crate) fn line_corpus_if_cached(
         &self,

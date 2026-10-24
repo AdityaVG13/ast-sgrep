@@ -385,7 +385,7 @@ pub(crate) fn run_queries(
         while let Some(m) = matches.next() {
             let mut name_text: Option<&str> = None;
             let mut match_node: Option<Node> = None;
-            for cap in m.captures {
+            for cap in m.captures() {
                 if name_idx == Some(cap.index) {
                     name_text = node_text(&cap.node, source);
                 }
@@ -393,7 +393,7 @@ pub(crate) fn run_queries(
                     match_node = Some(cap.node);
                 }
             }
-            let node = match_node.or_else(|| m.captures.first().map(|c| c.node));
+            let node = match_node.or_else(|| m.captures().first().map(|c| c.node));
             let Some(node) = node else {
                 continue;
             };

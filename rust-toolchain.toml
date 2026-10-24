@@ -1,0 +1,10 @@
+# ast-sgrep builds on the latest nightly.
+#
+# Pinned 2026-10-23 when ast-sgrep-mcp moved from rmcp (stable toolchain) to
+# fastmcp-rust, whose crates require rustc >= 1.100. FastMCP's own project
+# pins nightly-2026-08-25; this repo tracks `nightly` (>= 1.101.0) so both
+# build. The rest of the workspace is plain edition-2021 stable code and
+# compiles unchanged on nightly.
+[toolchain]
+channel = "nightly"
+profile = "minimal"

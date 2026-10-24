@@ -1044,7 +1044,11 @@ pub(crate) fn try_build_general_template(
         && matches!(node.kind(), "lock_statement" | "using_statement")
         && !placeholders.is_empty()
         && csharp_statement_body_carries_placeholder(&node, &probe.doc, placeholders);
-    probe.root_kind.push_str(node.kind());
+    // tree-sitter 0.27: the template root node borrows `probe` through
+    // `general_template_root`, so the kind must be copied out before the
+    // mutable `root_kind` borrow (0.26 ended the node borrow earlier).
+    let root_kind = node.kind().to_string();
+    probe.root_kind.push_str(&root_kind);
     probe.force_empty = force_empty;
     Some(probe)
 }
