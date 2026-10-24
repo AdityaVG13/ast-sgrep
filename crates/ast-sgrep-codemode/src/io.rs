@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) const MAX_READ_REFS: usize = 32;
-pub(crate) const MAX_READ_CHARS: usize = 100_000;
+pub const MAX_READ_REFS: usize = 32;
+pub const MAX_READ_CHARS: usize = 100_000;
 pub(crate) const MAX_EDITS: usize = 16;
 const MAX_LINE_CHARS: usize = 2_000;
 
@@ -199,10 +199,12 @@ pub fn dispatch_find_query(raw: &str) -> String {
     }
 }
 
-struct ReadSpec {
-    path: String,
-    start: u32,
-    end: u32,
+/// One `read` window request. Shared by the codemode session reader and the
+/// CLI `read` subcommand so every surface answers refs identically.
+pub struct ReadSpec {
+    pub path: String,
+    pub start: u32,
+    pub end: u32,
 }
 
 struct EditSpec {
@@ -280,7 +282,9 @@ fn parse_ref_value(value: &Value) -> anyhow::Result<ReadSpec> {
     })
 }
 
-fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
+/// Parse a string ref: `path`, `path#L12`, or `path#L12-L40`. A bare path
+/// reads the default bounded window (1..=40).
+pub fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
     if let Some((path, rest)) = raw.rsplit_once("#L") {
         let rest = rest.trim();
         let (start_s, end_s) = rest.split_once("-L").unwrap_or((rest, rest));
@@ -298,6 +302,33 @@ fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
             start,
             end,
         });
+    }
+    // LSP-style line refs (`path:12`, `path:12-40`): exact-equivalent
+    // spellings of `path#L12(-L40)`. The digits-only suffix guard keeps
+    // Windows drive prefixes (`C:\x`) and real colon filenames on the
+    // bare-path path.
+    if let Some((path, rest)) = raw.rsplit_once(':') {
+        let rest = rest.trim();
+        let (start_s, end_s) = rest.split_once('-').unwrap_or((rest, ""));
+        if !path.is_empty()
+            && !start_s.is_empty()
+            && start_s.chars().all(|c| c.is_ascii_digit())
+            && (end_s.is_empty() || end_s.chars().all(|c| c.is_ascii_digit()))
+        {
+            let end_s = if end_s.is_empty() { start_s } else { end_s };
+            let (start, end): (u32, u32) = match (start_s.parse(), end_s.parse()) {
+                (Ok(start), Ok(end)) => (start, end),
+                _ => return Err(anyhow!("invalid line ref in {raw}")),
+            };
+            if start == 0 || end < start {
+                return Err(anyhow!("invalid ref range in {raw}"));
+            }
+            return Ok(ReadSpec {
+                path: path.to_string(),
+                start,
+                end,
+            });
+        }
     }
     Ok(ReadSpec {
         path: raw.to_string(),
@@ -424,7 +455,10 @@ fn rel_display(path: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
-fn read_one_window(
+/// Read one window: index-backed when the file is indexed, else a bounded
+/// disk scan. Enforces the root jail (no `..`, canonicalized inside root).
+/// Returns `{path, ref, start, end, truncated, text}`.
+pub fn read_one_window(
     store: &ast_sgrep_core::IndexStore,
     root: &Path,
     spec: &ReadSpec,

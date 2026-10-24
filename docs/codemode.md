@@ -149,7 +149,7 @@ Wall time ≈ serial + parallel_work / N.
 | SQLite open once per session; single-use guest Worker | Independent `search`/`find`/`read` inside `Promise.all` |
 
 Same-tick coalesce turns N serial spawn costs into **one** batch process. Prefer
-**session-scoped sticky serve** (`codemode-serve`): one warm Searcher per project
+**session-scoped sticky serve** (`asgrep serve`, previously `codemode-serve`): one warm Searcher per project
 root for the whole Pi session, shared by Code Mode programs, direct tools, and
 freshness checks.
 Inside a one-shot batch, Rust **Auto is always serial warm**. Unique search/find
@@ -165,7 +165,7 @@ only for an explicit experiment.
 
 Install **either** MCP **or** the Pi package (Code Mode); they are siblings, not a stack. Both should feel like a native grep: warm index, zero process spawn, microseconds-to-milliseconds per lookup after the first open.
 
-CLI `codemode-serve` remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Official npm installs ship `ast-sgrep-codemode.node` inside each `@ast-sgrep/<platform>` package next to the CLI binary.
+CLI `asgrep serve` (`codemode-serve` alias kept) remains only as a degraded fallback when the `.node` addon is missing (unsupported host). Official npm installs ship `ast-sgrep-codemode.node` inside each `@ast-sgrep/<platform>` package next to the CLI binary.
 
 ```bash
 # Dev: build the in-process addon for this host

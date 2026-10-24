@@ -66,7 +66,22 @@ impl ToolName {
             Self::CatalogDescribe => "catalog_describe",
         }
     }
+
+    /// Mutating tools: a recovered (non-exact) name must never run one —
+    /// the dispatcher teaches instead (CLI ergonomics parity).
+    pub fn is_mutating(self) -> bool {
+        matches!(self, Self::Edit | Self::IndexRepo)
+    }
 }
+
+/// Exact cross-surface vocabulary (MCP tool names an agent transfers to a
+/// session). These are not guesses — they run, stamped with the canonical
+/// name in the response (`recovered`).
+const SESSION_VOCAB: &[(&str, ToolName)] = &[
+    ("keyword_search", ToolName::Find),
+    ("ast_search", ToolName::Search),
+    ("semantic_search", ToolName::Semantic),
+];
 
 #[derive(Debug, Error)]
 pub enum CallError {
@@ -90,7 +105,10 @@ pub fn call_tool(
     name: &str,
     args: Value,
 ) -> Result<Value, CallError> {
-    let tool = ToolName::parse(name).ok_or_else(|| unknown_tool(name))?;
+    let tool = match ToolName::parse(name) {
+        Some(tool) => tool,
+        None => return recover_tool_name(session, name, args),
+    };
     match tool {
         ToolName::Search => session.search(&args).map_err(CallError::from),
         ToolName::Find => session.find(&args).map_err(CallError::from),
@@ -240,6 +258,40 @@ fn suggest_tool(name: &str) -> Option<&'static str> {
         }
     }
     best.map(|(name, _)| name)
+}
+
+/// Loose-verb recovery at the session boundary (CLI ergonomics parity).
+/// Ladder: exact cross-surface vocabulary runs (stamped `recovered`);
+/// typos recover into read-only tools only; a near-miss naming a mutating
+/// tool refuses and teaches; anything else gets the catalog pointer.
+fn recover_tool_name(
+    session: &mut CodeModeSession,
+    name: &str,
+    args: Value,
+) -> Result<Value, CallError> {
+    if let Some((_, tool)) = SESSION_VOCAB.iter().find(|(alias, _)| *alias == name) {
+        let canonical = tool.as_str();
+        let mut value = call_tool(session, canonical, args)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("recovered".into(), json!(canonical));
+        }
+        return Ok(value);
+    }
+    if let Some(canonical) = suggest_tool(name).and_then(ToolName::parse) {
+        if canonical.is_mutating() {
+            let actual = canonical.as_str();
+            return Err(CallError::UnknownTool(format!(
+                "refusing to guess `{name}` into the mutating tool `{actual}` — \
+                 mutating tools are never guessed into execution. If intended: {actual}",
+            )));
+        }
+        let mut value = call_tool(session, canonical.as_str(), args)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert("recovered".into(), json!(canonical.as_str()));
+        }
+        return Ok(value);
+    }
+    Err(unknown_tool(name))
 }
 
 fn unknown_tool(name: &str) -> CallError {

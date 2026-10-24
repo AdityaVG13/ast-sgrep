@@ -72,6 +72,9 @@ pub struct BatchRequest {
     pub index_path: Option<std::path::PathBuf>,
     #[serde(default)]
     pub use_embed: Option<bool>,
+    /// Opt out of ambient freshness for this batch (hosts driving refreshes).
+    #[serde(default)]
+    pub ambient_freshness: Option<bool>,
     #[serde(default)]
     pub limit: Option<usize>,
     /// Legacy bool: true → Parallel, false → Serial. Prefer `parallel_mode`.
@@ -253,6 +256,9 @@ fn apply_config(mut config: SessionConfig, request: &BatchRequest) -> SessionCon
     }
     if let Some(use_embed) = request.use_embed {
         config.use_embed = use_embed;
+    }
+    if let Some(ambient) = request.ambient_freshness {
+        config.ambient_freshness = ambient;
     }
     if let Some(limit) = request.limit {
         config.limit = limit.clamp(1, 500);

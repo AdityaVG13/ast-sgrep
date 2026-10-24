@@ -27,6 +27,10 @@ pub struct SessionConfig {
     pub use_embed: bool,
     /// Default search output: capsule keeps PTC intermediates cheap.
     pub default_format: OutputFormat,
+    /// Ambient freshness: search probes the index delta and incrementally
+    /// updates inline, so sessions answer on current disk without any
+    /// explicit index call. Hosts that drive freshness themselves opt out.
+    pub ambient_freshness: bool,
 }
 
 impl Default for SessionConfig {
@@ -44,6 +48,10 @@ impl Default for SessionConfig {
             ),
             use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
             default_format: OutputFormat::AgentCapsule,
+            ambient_freshness: std::env::var("ASGREP_NO_AMBIENT_FRESHNESS")
+                .ok()
+                .as_deref()
+                != Some("1"),
         }
     }
 }
@@ -109,6 +117,8 @@ pub struct CodeModeSession {
     pub max_calls: usize,
     /// Cooperative cancel for the in-flight `index_repo` walk/prepare.
     cancel: Option<Arc<AtomicBool>>,
+    /// Last ambient freshness probe (cooldown-bounded; None = never probed).
+    last_ambient: Option<std::time::Instant>,
 }
 
 fn interactive_index_threads() -> usize {
@@ -150,6 +160,7 @@ impl CodeModeSession {
             calls: 0,
             max_calls: 64,
             cancel: None,
+            last_ambient: None,
         }
     }
 
@@ -346,6 +357,9 @@ impl CodeModeSession {
             .min(MAX_EXCERPT_LINES);
         let format = self.resolve_format(args);
         let root = self.root_arg(args)?;
+        // Ambient freshness BEFORE any cache read: an update invalidates the
+        // render cache too, so a maintenance notice never serves stale hits.
+        let ambient_notice = self.ambient_refresh(&root);
         let writer_generation =
             ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
         self.drop_searcher_if_stale(&root, lang_filter.as_deref(), writer_generation);
@@ -377,11 +391,19 @@ impl CodeModeSession {
             response.limit = limit;
         }
         ensure_render_input_bounded(&response, format, excerpt_lines)?;
-        let value = format_response_with(&response, format, excerpt_lines);
+        let mut value = format_response_with(&response, format, excerpt_lines);
         drop(guard);
+        // Cache the maintenance-free render: the notice is per-call state and
+        // must never leak into a later identical query via the render cache.
+        let cacheable = value.clone();
+        if let Some(notice) = ambient_notice {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("refreshed".to_string(), notice);
+            }
+        }
         // Cached takes bypass call(), so only admitted wire values may be stored.
         admit_response(&value)?;
-        self.store_render(render_key, value.clone());
+        self.store_render(render_key, cacheable);
         Ok(value)
     }
 
@@ -420,6 +442,7 @@ impl CodeModeSession {
             }
         };
         let root = self.root_arg(args)?;
+        let ambient_notice = self.ambient_refresh(&root);
         let mut guard = self.searcher_for(root, self.config.limit, None, None)?;
         let searcher = guard
             .as_mut()
@@ -433,7 +456,13 @@ impl CodeModeSession {
             max_work,
         };
         let response = expand_chain(searcher.store(), query, &config)?;
-        Ok(serde_json::to_value(response)?)
+        let mut value = serde_json::to_value(response)?;
+        if let Some(notice) = ambient_notice {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("refreshed".to_string(), notice);
+            }
+        }
+        Ok(value)
     }
 
     fn cached_render(&self, key: &str) -> Option<Value> {
@@ -532,6 +561,47 @@ impl CodeModeSession {
             guard.clear();
         }
         guard.insert(key, value);
+    }
+
+    /// Ambient freshness: before a search answers, probe the index delta and
+    /// incrementally update inline so hits reflect current disk without any
+    /// explicit index call. Cooldown-bounded per session. Maintenance failure
+    /// falls back to serving the current index (the search itself stays
+    /// fail-closed). Returns `{"files", "ms"}` when maintenance ran, else
+    /// `None` (unchanged tree adds no field — responses stay byte-stable).
+    fn ambient_refresh(&mut self, root: &Path) -> Option<Value> {
+        const AMBIENT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(1);
+        if !self.config.ambient_freshness {
+            return None;
+        }
+        if let Some(last) = self.last_ambient {
+            if last.elapsed() < AMBIENT_COOLDOWN {
+                return None;
+            }
+        }
+        self.last_ambient = Some(std::time::Instant::now());
+        let started = std::time::Instant::now();
+        let mut indexer = Indexer::new(IndexOptions {
+            root: root.to_path_buf(),
+            index_path: self.config.index_path.clone(),
+            embed_semantic: self.config.use_embed,
+            ..IndexOptions::default()
+        })
+        .ok()?;
+        indexer.set_thread_limit(interactive_index_threads());
+        if let Some(cancel) = &self.cancel {
+            indexer.set_cancel(Arc::clone(cancel));
+        }
+        let stats = indexer.index_all().ok()?;
+        let changed = stats.files_indexed + stats.files_removed;
+        if changed == 0 {
+            return None;
+        }
+        self.invalidate_searcher_cache();
+        Some(json!({
+            "files": changed,
+            "ms": started.elapsed().as_millis() as u64,
+        }))
     }
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
