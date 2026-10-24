@@ -30,6 +30,19 @@ asgrep install --target claude --target codex --target opencode --yes
 asgrep install --target all --yes
 ```
 
+## Hermes
+
+Hermes does NOT use the MCP server — install the native plugin instead
+(eager tools, persistent `asgrep serve` worker, zero spawn per call; see
+`packages/hermes-plugin/README.md`):
+
+```bash
+asgrep install --target hermes --yes
+```
+
+The binary embeds the plugin files, so the command is self-contained. It
+refuses to touch a dev-live symlink; `--force` replaces a prior install.
+
 ## Cursor / Claude Desktop
 
 Or add the server by hand:
@@ -174,18 +187,25 @@ The compact payload uses this versioned schema:
 
 ### Structured results and protocol revision (r2lu)
 
-Every search tool declares an `outputSchema`, and `tools/call` returns typed
-`structuredContent` alongside the minified text fallback, so a current client
-parses results directly instead of reverse-engineering the compact envelope.
-The two always agree: the text is the same JSON, minified.
+Every search tool declares an `outputSchema` documenting the shape of the
+compact envelope, so a client can parse results mechanically instead of
+reverse-engineering them. On the served revision the body rides the text
+content block as minified JSON.
 
-`initialize` negotiates. A client asking for `2024-11-05` or `2025-11-25`
-keeps it, a client asking for `2026-07-28` gets it, and an unrecognized
-revision is answered with the server's current revision (`2026-07-28`).
-`server/discover` advertises the supported revisions. List results carry
-the required `resultType` discriminator plus `ttlMs`/`cacheScope` cache
-fields; peers on older revisions keep their historical wire shape without
-`resultType`.
+`initialize` is the session entry. The fastmcp serve facade negotiates the
+exact 2024-11-05 legacy revision for every offered version (a client
+asking for `2025-11-25` or `2026-07-28` is still served 2024-11-05 —
+single-era serve, pinned by the initialize golden and the versioned-session
+anchor). The earlier 2026-07-28 stateless experiment (per-request `_meta`
+revision, `server/discover`, `ttlMs`/`cacheScope` list fields) was retired
+with the rmcp serve loop and no longer exists on this surface.
+
+Argument admission is framework-owned: schema violations (bounds, types,
+unknown keys, arity, empty or non-lowercase `preview` values) fail fast as
+JSON-RPC -32602 naming the offending path, before any handler runs.
+Unknown tools are -32601. Handler-level faults — stale or reversed line
+ranges, roots outside the workspace, missing files, a corrupt index —
+return the tool-error envelope with one actionable text block.
 
 ### Misses
 

@@ -12,7 +12,8 @@
 //! hanging the suite.
 
 use ast_sgrep_testkit::{
-    assert_tool_error_shape, assert_tool_success_shape, rpc_session, tool_body, tool_call,
+    assert_jsonrpc_error, assert_tool_error_shape, assert_tool_success_shape, rpc_session,
+    tool_body, tool_call,
 };
 use serde_json::{json, Value};
 
@@ -517,7 +518,7 @@ fn code_read_window_contract() {
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
         for response in &responses[2..] {
-            assert_tool_error_shape(response);
+            assert_jsonrpc_error(response, -32602);
         }
         let exact = tool_body(&responses[0]);
         assert_eq!(
@@ -938,7 +939,7 @@ fn code_read_truncation_contract() {
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
         for response in &responses[2..] {
-            assert_tool_error_shape(response);
+            assert_jsonrpc_error(response, -32602);
         }
         let min = tool_body(&responses[0]);
         assert_eq!(min["nodes"][0]["content"], "a", "{min:#}");
@@ -1282,5 +1283,30 @@ fn code_read_emptyfile_contract() {
         );
         assert_eq!(bare["nodes"][0]["content"], "", "{bare:#}");
         assert_eq!(bare["nodes"][0]["truncated"], false, "{bare:#}");
+    }
+}
+
+/// INTENT: single-line `#L12` and LSP-style `:12` refs read the same line as
+/// the canonical `#L12-L12` range — ref-form parity with the CLI/serve/Pi
+/// surfaces, so a model holding any of the three spellings can read.
+/// KILLS: parse_node_id rejecting every non-range ref (the pre-round-12
+/// server only understood `#Lstart-Lend`).
+#[test]
+fn code_read_accepts_single_line_and_colon_refs() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("one.rs"), "alpha\nbeta\ngamma\n").unwrap();
+    let responses = rpc_session(
+        vec![
+            tool_call(1, "code_read", json!({"ids": ["one.rs#L2"]})),
+            tool_call(2, "code_read", json!({"ids": ["one.rs:2"]})),
+            tool_call(3, "code_read", json!({"ids": ["one.rs#L2-L2"]})),
+        ],
+        Some(temp.path()),
+    );
+    for (index, response) in responses.iter().enumerate() {
+        assert_tool_success_shape(response);
+        let body = tool_body(response);
+        assert_eq!(node_content(&body, 0), "beta", "form {index}: {body:#}");
+        assert_eq!(window(&body, 0), (2, 2), "form {index}: {body:#}");
     }
 }

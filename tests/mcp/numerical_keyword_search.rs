@@ -11,7 +11,7 @@
 //! hanging the suite.
 
 use ast_sgrep_testkit::{
-    assert_tool_error_shape, assert_tool_success_shape, indexed_tree, rpc_session, snippet_bytes,
+    assert_jsonrpc_error, assert_tool_success_shape, indexed_tree, rpc_session, snippet_bytes,
     tool_body, tool_call,
 };
 use serde_json::{json, Value};
@@ -62,8 +62,9 @@ fn keyword_search_limit_contract() {
         assert_eq!(responses.len(), 4);
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
-        assert_tool_error_shape(&responses[2]);
-        assert_tool_error_shape(&responses[3]);
+        // fastmcp admission owns the bound outliers: -32602, not tool errors.
+        assert_jsonrpc_error(&responses[2], -32602);
+        assert_jsonrpc_error(&responses[3], -32602);
         let one = tool_body(&responses[0]);
         let rows = one["h"].as_array().unwrap();
         assert!(!rows.is_empty(), "limit=1 must still hit: {one:#}");
@@ -117,7 +118,7 @@ fn keyword_search_limit_contract() {
         );
         assert_eq!(responses.len(), 6);
         for response in &responses[..5] {
-            assert_tool_error_shape(response);
+            assert_jsonrpc_error(response, -32602);
         }
         assert_tool_success_shape(&responses[5]);
     }
@@ -331,8 +332,8 @@ fn keyword_search_budget_contract() {
         assert_eq!(responses.len(), 4);
         assert_tool_success_shape(&responses[0]);
         assert_tool_success_shape(&responses[1]);
-        assert_tool_error_shape(&responses[2]);
-        assert_tool_error_shape(&responses[3]);
+        assert_jsonrpc_error(&responses[2], -32602);
+        assert_jsonrpc_error(&responses[3], -32602);
         let min = tool_body(&responses[0]);
         assert_eq!(min["zd"][0], 1, "{min:#}");
         let max = tool_body(&responses[1]);
@@ -381,7 +382,7 @@ fn keyword_search_budget_contract() {
         );
         assert_eq!(responses.len(), 6);
         for response in &responses[..5] {
-            assert_tool_error_shape(response);
+            assert_jsonrpc_error(response, -32602);
         }
         assert_tool_success_shape(&responses[5]);
         assert_eq!(tool_body(&responses[5])["zd"][0], 8, "{:#}", responses[5]);

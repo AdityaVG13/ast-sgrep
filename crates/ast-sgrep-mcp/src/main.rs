@@ -2,23 +2,18 @@
 
 use anyhow::Context;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 2 {
         match args[1].as_str() {
             "-h" | "--help" => {
-                println!("asgrep-mcp {}\nMCP server for hierarchical ast-sgrep code retrieval (stdio).\n\nUSAGE:\n    asgrep-mcp\n\nFLAGS:\n    -h, --help       Print this help and exit\n    -V, --version    Print version and exit", env!("CARGO_PKG_VERSION"));
+                println!("asgrep-mcp {}\nMCP server (stdio) exposing ast-sgrep search, read, and index tools.", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
-            "-V" | "--version" => {
-                println!("asgrep-mcp {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            _ => {}
+            _ => anyhow::bail!("unexpected argument {:?} (only -h/--help is recognized); the server speaks MCP on stdin/stdout", args[1]),
         }
     }
-    ast_sgrep_mcp::serve_stdio()
-        .await
-        .context("MCP server init failed")
+
+    let server = ast_sgrep_mcp::McpServer::from_env().context("initialize MCP server")?;
+    ast_sgrep_mcp::serve_stdio_blocking(server)
 }

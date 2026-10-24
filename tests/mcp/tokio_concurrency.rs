@@ -7,7 +7,7 @@
 //! never message text, never durations.
 
 use ast_sgrep_testkit::{
-    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok, big_tree,
+    assert_jsonrpc_error, assert_ping_ok, assert_tool_success, assert_tools_list_ok, big_tree,
     cancelled_notif, collect_responses, ping, response_by_id, small_tree, tool_body, tool_call,
     tool_text, tools_list, LiveSession,
 };
@@ -187,8 +187,10 @@ fn pipelined_error_does_not_poison_batch_or_session() {
     session.send(&tool_call(4, "index_status", json!({})));
     let responses = collect_responses(&session, 4, RECV_TIMEOUT);
 
-    assert_tool_error_shape(response_by_id(&responses, 1));
-    assert_tool_error_shape(response_by_id(&responses, 2));
+    // Routing (unknown tool) and admission (limit 0) failures, pipelined
+    // alongside successes: per-id classes hold, batch unpoisoned.
+    assert_jsonrpc_error(response_by_id(&responses, 1), -32601);
+    assert_jsonrpc_error(response_by_id(&responses, 2), -32602);
     let good = response_by_id(&responses, 3);
     assert_tool_success(good);
     assert!(
@@ -425,7 +427,7 @@ fn session_durability_batches_and_phases() {
         json!({"query": "greenchisel", "limit": 4}),
     ));
     let phase3 = collect_responses(&session, 3, RECV_TIMEOUT);
-    assert_tool_error_shape(response_by_id(&phase3, 5));
+    assert_jsonrpc_error(response_by_id(&phase3, 5), -32601);
     assert_ping_ok(response_by_id(&phase3, 6), 6);
     let late = response_by_id(&phase3, 7);
     assert_tool_success(late);

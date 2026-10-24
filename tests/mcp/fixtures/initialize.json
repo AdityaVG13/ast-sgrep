@@ -1,8 +1,11 @@
 {
   "capabilities": {
-    "tools": {}
+    "logging": {},
+    "tools": {
+      "listChanged": true
+    }
   },
-  "protocolVersion": "2025-11-25",
+  "protocolVersion": "2024-11-05",
   "serverInfo": {
     "name": "ast-sgrep",
     "version": "<version>"

@@ -1,5 +1,11 @@
 [
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Fused hybrid search (lexical + structural + semantic, same as CLI asgrep). Prefer this for workspace-grounded questions when the wording or location is unknown. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -33,6 +39,7 @@
           "type": "string"
         },
         "query": {
+          "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH.",
           "maxLength": 4096,
           "minLength": 1,
           "type": "string"
@@ -126,6 +133,12 @@
     }
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -159,6 +172,7 @@
           "type": "string"
         },
         "query": {
+          "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH.",
           "maxLength": 4096,
           "minLength": 1,
           "type": "string"
@@ -252,6 +266,12 @@
     }
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Native AST/pattern search (pattern: semantics). No external ast-grep process. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -285,6 +305,7 @@
           "type": "string"
         },
         "query": {
+          "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH.",
           "maxLength": 4096,
           "minLength": 1,
           "type": "string"
@@ -378,6 +399,12 @@
     }
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Embedding-only search. Requires a non-empty index with semantic chunks. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -411,6 +438,7 @@
           "type": "string"
         },
         "query": {
+          "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH.",
           "maxLength": 4096,
           "minLength": 1,
           "type": "string"
@@ -504,6 +532,12 @@
     }
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Deprecated compatibility alias for keyword_search; no automatic fusion across channels. Returns a compact envelope: `p` maps path ids to project paths, and each entry of `h` is [id, kind, signal, symbol, snippet] where id is `<path_id>:<start_line>-<end_line>`. kind: x=asgrep d=def c=caller g=graph a=anchor i=import p=pattern e=embed. signal: x=exact t=structural m=semantic. Pass any id straight to code_read for the full body. A snippet of `~` means this session already sent that exact body for that id: reuse the earlier result, or call code_read. Pass resend_seen=true to disable.",
     "inputSchema": {
       "additionalProperties": false,
@@ -537,6 +571,7 @@
           "type": "string"
         },
         "query": {
+          "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH.",
           "maxLength": 4096,
           "minLength": 1,
           "type": "string"
@@ -630,7 +665,13 @@
     }
   },
   {
-    "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`) and explicit `path#Lstart-Lend` refs. Paths are sandboxed under ASGREP_ROOT.",
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`), explicit `path#Lstart-Lend` refs, single-line `path#Lstart`, and LSP-style `path:start`. Paths are sandboxed under ASGREP_ROOT.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -665,6 +706,12 @@
     "name": "code_read"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Show ast-sgrep index statistics for a project root under the configured workspace.",
     "inputSchema": {
       "additionalProperties": false,
@@ -678,6 +725,12 @@
     "name": "index_status"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Build or incrementally update the index. Single-flight with a wall-clock deadline; concurrent calls serialize.",
     "inputSchema": {
       "additionalProperties": false,

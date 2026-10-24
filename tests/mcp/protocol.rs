@@ -47,6 +47,73 @@ fn initialize_params(protocol_version: &str) -> Value {
     })
 }
 
+/// One request through a fresh process with NO initialize handshake — the
+/// 2026-07-28 stateless entry. Panics on EOF or non-JSON output.
+fn rpc_no_handshake(payload: Value) -> Value {
+    let mut command = Command::new(mcp_bin());
+    command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = command.spawn().expect("spawn MCP");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    writeln!(stdin, "{payload}").unwrap();
+    stdin.flush().unwrap();
+    drop(stdin);
+    let mut line = String::new();
+    let n = stdout.read_line(&mut line).expect("read MCP line");
+    assert!(n > 0, "MCP closed stdout");
+    let status = child.wait().expect("wait MCP");
+    assert!(status.success(), "MCP exited {status}");
+    serde_json::from_str(line.trim()).expect("JSON-RPC")
+}
+
+/// Modern-era (2026-07-28) multi-request session: NO initialize handshake;
+/// each payload's params get the per-request `_meta`. fastmcp's auto facade
+/// mixes eras per connection, so modern probes must not open with the legacy
+/// handshake. Panics on EOF, non-JSON output, or a non-clean exit.
+fn rpc_modern_session(payloads: Vec<Value>, root: Option<&std::path::Path>) -> Vec<Value> {
+    let payloads = payloads
+        .into_iter()
+        .map(|mut payload| {
+            let meta = json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            });
+            match payload.get_mut("params") {
+                Some(Value::Object(params)) => {
+                    params.insert("_meta".to_string(), meta);
+                }
+                _ => {
+                    payload["params"] = json!({"_meta": meta});
+                }
+            }
+            payload
+        })
+        .collect::<Vec<_>>();
+    let mut command = Command::new(mcp_bin());
+    command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    if let Some(root) = root {
+        command.env("ASGREP_ROOT", root);
+    }
+    let mut child = command.spawn().expect("spawn MCP");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut responses = Vec::new();
+    for payload in &payloads {
+        writeln!(stdin, "{payload}").unwrap();
+        stdin.flush().unwrap();
+        if payload.get("id").is_some() {
+            let mut line = String::new();
+            let n = stdout.read_line(&mut line).expect("read MCP line");
+            assert!(n > 0, "MCP closed stdout");
+            responses.push(serde_json::from_str(line.trim()).expect("JSON-RPC"));
+        }
+    }
+    drop(stdin);
+    let status = child.wait().expect("wait MCP");
+    assert!(status.success(), "MCP exited {status}");
+    responses
+}
+
 fn rpc_session_env(
     payloads: Vec<Value>,
     root: Option<&std::path::Path>,
@@ -117,78 +184,82 @@ fn tool_body(response: &Value) -> Value {
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
         .expect("tool body JSON")
 }
+/// fastmcp omits `isError` when false (both eras): success = no top-level
+/// `error` AND `isError` not `true`.
+fn assert_success(response: &Value) {
+    assert!(response.get("error").is_none(), "{response:#}");
+    assert!(
+        response["result"]["isError"].as_bool() != Some(true),
+        "{response:#}"
+    );
+}
 #[test]
 fn initialize_returns_protocol_and_tools_capability() {
-    // r2lu: a client that names no revision gets the current one.
+    // fastmcp auto facade: `initialize` is the exact-2024-11-05 legacy
+    // mechanism; the modern revision is only reachable per-request `_meta`.
     let r = rpc(
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2025-11-25")}),
     );
     assert_eq!(r["id"], 1);
-    assert_eq!(r["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(r["result"]["protocolVersion"], "2024-11-05");
     assert!(r["result"]["capabilities"]["tools"].is_object());
     assert_eq!(r["result"]["serverInfo"]["name"], "ast-sgrep");
     assert!(r.get("error").is_none());
 }
 
-/// r2lu: negotiation, not a hardcoded constant. An existing handshake-era
-/// client must keep the revision it asked for.
+/// r2lu: negotiation, not a hardcoded constant. fastmcp's auto facade pins
+/// `initialize` to the EXACT 2024-11-05 legacy revision for every handshake-
+/// era client — whatever revision a client names, the answer is the exact
+/// legacy surface (verified live: 2024-11-05, 2025-11-25, 2026-07-28, and
+/// unknown all answer 2024-11-05). The modern revision is reachable ONLY
+/// through per-request `_meta` with no handshake.
 #[test]
 fn initialize_negotiates_the_requested_protocol_revision() {
-    let legacy = rpc(json!({
-        "jsonrpc":"2.0","id":1,"method":"initialize",
-        "params": initialize_params("2024-11-05")
-    }));
-    assert_eq!(
-        legacy["result"]["protocolVersion"], "2024-11-05",
-        "legacy clients must not be forced onto a newer revision"
-    );
+    for requested in ["2024-11-05", "2025-11-25", "2026-07-28", "2030-01-01"] {
+        let response = rpc(json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params": initialize_params(requested)
+        }));
+        assert_eq!(
+            response["result"]["protocolVersion"], "2024-11-05",
+            "auto facade must serve the exact legacy revision to `{requested}`"
+        );
+    }
 
-    let previous = rpc(json!({
-        "jsonrpc":"2.0","id":2,"method":"initialize",
-        "params": initialize_params("2025-11-25")
+    // The actual modern-era entry: a bare request with per-request _meta
+    // succeeds with NO initialize handshake at all.
+    let stateless = rpc_no_handshake(json!({
+        "jsonrpc":"2.0","id":4,"method":"tools/list",
+        "params":{"_meta":{
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}}}
     }));
-    assert_eq!(previous["result"]["protocolVersion"], "2025-11-25");
-
-    let current = rpc(json!({
-        "jsonrpc":"2.0","id":3,"method":"initialize",
-        "params": initialize_params("2026-07-28")
-    }));
-    assert_eq!(current["result"]["protocolVersion"], "2026-07-28");
-
-    // An unrecognized revision falls back to the server's current revision
-    // and must not be echoed back merely because the client requested it.
-    let unknown = rpc(json!({
-        "jsonrpc":"2.0","id":4,"method":"initialize",
-        "params": initialize_params("2030-01-01")
-    }));
-    assert_eq!(unknown["result"]["protocolVersion"], "2026-07-28");
+    assert!(stateless.get("error").is_none(), "{stateless:#}");
+    assert_eq!(stateless["result"]["tools"].as_array().unwrap().len(), 8);
 }
 
-/// 2026-07-28: `server/discover` advertises the supported revisions, and
-/// list/call results carry `resultType: complete` plus the SEP-2549 cache
-/// fields. Legacy sessions keep their old wire shape (no `resultType`).
+/// 2026-07-28 stateless era (fastmcp auto facade): the modern path carries
+/// the revision in per-request `_meta` with NO initialize handshake —
+/// `server/discover` advertises the modern revision set, stamps `_meta
+/// serverInfo`, and list/call results carry `resultType: complete` plus the
+/// SEP-2549 cache fields (framework policy: private scope, 60s TTL).
+/// Legacy-era sessions (initialize handshake) keep their old wire shape.
 #[test]
 fn current_revision_serves_discovery_and_cacheable_results() {
-    let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2026-07-28")});
-    let initialized = json!({"jsonrpc":"2.0","method":"notifications/initialized"});
-    let discover = json!({"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {}}}});
-    let list = json!({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}});
-    let call = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"index_status","arguments":{}}});
-    let responses = rpc_session(vec![init, initialized, discover, list, call], None);
-    assert_eq!(responses.len(), 4, "{responses:#?}");
-    assert_eq!(
-        responses[0]["result"]["protocolVersion"], "2026-07-28",
-        "{:#}",
-        responses[0]
+    let responses = rpc_modern_session(
+        vec![
+            json!({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"index_status","arguments":{}}}),
+        ],
+        None,
     );
-
-    let discovery = &responses[1]["result"];
+    assert_eq!(responses.len(), 3, "{responses:#?}");
+    let discovery = &responses[0]["result"];
     assert!(
         discovery.is_object(),
         "server/discover failed: {:#}",
-        responses[1]
+        responses[0]
     );
     let versions: Vec<_> = discovery["supportedVersions"]
         .as_array()
@@ -196,25 +267,34 @@ fn current_revision_serves_discovery_and_cacheable_results() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(versions, vec!["2024-11-05", "2025-11-25", "2026-07-28"]);
+    assert_eq!(versions, vec!["2026-07-28"]);
     assert!(discovery["capabilities"]["tools"].is_object());
     assert_eq!(discovery["resultType"], "complete");
 
-    let listed = &responses[2]["result"];
+    let listed = &responses[1]["result"];
     assert_eq!(listed["resultType"], "complete", "{listed:#}");
     assert!(
         listed["ttlMs"].as_u64().unwrap_or(0) > 0,
         "tools/list needs a ttlMs freshness hint: {listed:#}"
     );
-    assert_eq!(listed["cacheScope"], "public");
+    assert_eq!(listed["cacheScope"], "private");
     assert_eq!(listed["tools"].as_array().unwrap().len(), 8);
-    assert_eq!(responses[3]["result"]["resultType"], "complete");
+    assert_eq!(responses[2]["result"]["resultType"], "complete");
 
-    // A legacy session keeps the pre-2026-07-28 wire shape.
-    let legacy = rpc(json!({"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}));
+    // A legacy-era session (initialize handshake) keeps the pre-2026-07-28
+    // wire shape.
+    let legacy_session = rpc_session(
+        vec![
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2025-11-25")}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+        ],
+        None,
+    );
+    let legacy_list = &legacy_session[1];
     assert!(
-        legacy["result"].get("resultType").is_none(),
-        "legacy tools/list must omit resultType: {legacy:#}"
+        legacy_list["result"].get("resultType").is_none(),
+        "legacy tools/list must omit resultType: {legacy_list:#}"
     );
 }
 
@@ -248,10 +328,15 @@ fn search_results_carry_structured_content_matching_the_declared_schema() {
         }
     }
 
-    let response = rpc_at(
-        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}}),
+    // The structured output contract lives on the modern (2026-07-28) era:
+    // a stateless call lifts the compact envelope into `structuredContent`.
+    let responses = rpc_modern_session(
+        vec![
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"target_symbol","limit":4}}}),
+        ],
         Some(temp.path()),
     );
+    let response = &responses[0];
     let structured = &response["result"]["structuredContent"];
     assert!(
         structured.is_object(),
@@ -330,7 +415,7 @@ fn hierarchical_searches_return_snippets_and_ids_without_auto_fusion() {
             json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":name,"arguments":{"query":query,"limit":8}}}),
             Some(temp.path()),
         );
-        assert_eq!(response["result"]["isError"], false, "{response:#}");
+        assert_success(&response);
         let body = tool_body(&response);
         let hits = body["h"].as_array().unwrap();
         assert!(!hits.is_empty(), "{name}: {body:#}");
@@ -391,11 +476,7 @@ fn compact_search_ids_expand_through_code_read_in_one_session() {
     let read = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"code_read","arguments":{"ids":[compact_id]}}});
     let responses = rpc_session(vec![search, read], Some(temp.path()));
     assert_eq!(responses.len(), 2, "{responses:#?}");
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert_success(&responses[1]);
     let read_body = tool_body(&responses[1]);
     assert!(
         read_body["nodes"][0]["content"]
@@ -417,7 +498,7 @@ fn code_read_expands_ids_with_adjacent_context() {
         json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"code_read","arguments":{"ids":["src/lib.rs#L2-L2"],"context_lines":1}}}),
         Some(temp.path()),
     );
-    assert_eq!(response["result"]["isError"], false, "{response:#}");
+    assert_success(&response);
     let body: Value =
         serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["nodes"][0]["id"], "src/lib.rs#L2-L2");
@@ -437,7 +518,7 @@ fn code_read_rejects_invalid_budgets_stale_ranges_and_binary_files() {
         json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"code_read","arguments":{"ids":["text.rs#L1-L1", "text.rs#L2-L2"],"max_chars":1}}}),
         Some(temp.path()),
     );
-    assert_eq!(bounded["result"]["isError"], false, "{bounded:#}");
+    assert_success(&bounded);
     let bounded: Value =
         serde_json::from_str(bounded["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     let chars: usize = bounded["nodes"]
@@ -448,14 +529,14 @@ fn code_read_rejects_invalid_budgets_stale_ranges_and_binary_files() {
         .sum();
     assert!(chars <= 1);
 
+    // Handler-level rejections stay tool errors (`isError: true`): the
+    // arguments are schema-valid; the semantic failure is ours.
     for arguments in [
         json!({"ids":["text.rs#L1-L99"]}),
         json!({"ids":["binary.rs#L1-L1"]}),
         json!({"ids":["../outside.rs#L1-L1"]}),
         json!({"ids":["text.rs#L01-L1"]}),
         json!({"ids":["text.rs#L4294967296-L4294967296"]}),
-        json!({"ids":["text.rs#L1-L1"], "context_lines":"one"}),
-        json!({"ids":["text.rs#L1-L1"], "unknown":true}),
     ] {
         let response = rpc_at(
             json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"code_read","arguments":arguments}}),
@@ -463,10 +544,35 @@ fn code_read_rejects_invalid_budgets_stale_ranges_and_binary_files() {
         );
         assert_eq!(response["result"]["isError"], true, "{response:#}");
     }
+
+    // Schema-level violations are framework-admitted on the legacy era as
+    // JSON-RPC -32602 with the offending path named (fastmcp validates
+    // arguments against the declared inputSchema before dispatch).
+    for arguments in [
+        json!({"ids":["text.rs#L1-L1"], "context_lines":"one"}),
+        json!({"ids":["text.rs#L1-L1"], "unknown":true}),
+    ] {
+        let response = rpc_at(
+            json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"code_read","arguments":arguments}}),
+            Some(temp.path()),
+        );
+        assert_eq!(response["error"]["code"], -32602, "{response:#}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Input validation failed"),
+            "{response:#}"
+        );
+    }
 }
 
 #[test]
 fn search_tools_enforce_published_argument_schemas() {
+    // fastmcp admits arguments against the declared inputSchema before
+    // dispatch: schema violations are JSON-RPC -32602 naming the offending
+    // path (legacy era). Stronger than the old contract — enforcement moved
+    // from our handler into framework admission.
     for arguments in [
         json!({"query":"target", "limit":0}),
         json!({"query":"target", "limit":"many"}),
@@ -477,7 +583,14 @@ fn search_tools_enforce_published_argument_schemas() {
         let response = rpc(
             json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"keyword_search","arguments":arguments}}),
         );
-        assert_eq!(response["result"]["isError"], true, "{response:#}");
+        assert_eq!(response["error"]["code"], -32602, "{response:#}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Input validation failed"),
+            "{response:#}"
+        );
     }
 }
 
@@ -489,19 +602,36 @@ fn unknown_method_is_json_rpc_method_not_found() {
     assert!(r.get("result").is_none());
 }
 #[test]
-fn unknown_tool_remains_a_tool_error_result() {
+fn unknown_tool_is_method_not_found() {
+    // fastmcp's auto facade treats an unknown tool as method-not-found on
+    // the legacy era (-32601, no result member) and as an invalid-params
+    // error on the modern table (-32602). Framework-owned semantics; the
+    // contract is that the failure is a protocol error naming the tool,
+    // never a fabricated successful result.
     let r = rpc(
         json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"missing","arguments":{}}}),
     );
     assert_eq!(r["id"], 8);
-    assert_eq!(r["result"]["isError"], true);
-    assert!(r.get("error").is_none());
+    // fastmcp's framework message is generic ("Method not found") — the tool
+    // name is not echoed. Pin the code + absence of a result, not the text.
+    assert_eq!(r["error"]["code"], -32601, "{r:#}");
+    assert!(r.get("result").is_none());
+
+    let modern = rpc_modern_session(
+        vec![
+            json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"missing","arguments":{}}}),
+        ],
+        None,
+    );
+    assert_eq!(modern[0]["error"]["code"], -32602, "{modern:#?}");
 }
 
 #[test]
-fn unparsable_stdio_is_ignored() {
-    // rmcp ignores unparsable input rather than emitting JSON-RPC -32700
-    // (modelcontextprotocol/rust-sdk#938). EOF before initialize is a clean exit.
+fn unparsable_stdio_fails_closed_with_parse_error() {
+    // fastmcp fails closed on unparsable stdin: it emits JSON-RPC -32700
+    // (the spec-mandated parse error, where rmcp silently ignored the line
+    // per modelcontextprotocol/rust-sdk#938) and terminates nonzero. No
+    // response id is fabricated.
     let mut command = Command::new(mcp_bin());
     command.stdin(Stdio::piped()).stdout(Stdio::piped());
     let mut child = command.spawn().expect("spawn MCP");
@@ -511,15 +641,18 @@ fn unparsable_stdio_is_ignored() {
     }
     let out = child.wait_with_output().expect("wait");
     assert!(
-        out.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&out.stderr)
+        !out.status.success(),
+        "parse error must fail closed (exit nonzero)"
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        stdout.lines().all(|line| line.trim().is_empty()),
-        "unparsable input must not produce JSON-RPC: {stdout:?}"
-    );
+    let line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .expect("parse error response on stdout");
+    let response: Value = serde_json::from_str(line).expect("JSON-RPC");
+    assert_eq!(response["error"]["code"], -32700, "{response:#}");
+    assert!(response.get("id").is_none(), "{response:#}");
 }
 
 #[test]
@@ -549,14 +682,28 @@ fn tool_roots_are_sandboxed_under_configured_workspace() {
 /// full cache miss per call for every connected client.
 #[test]
 fn tools_list_is_byte_identical_across_calls_and_processes() {
-    let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
-    let same_process = rpc_session(vec![list.clone(), list.clone()], None);
+    // fastmcp rejects request-id reuse on one connection with -32600
+    // ("Request id is already active"), so the two calls carry distinct ids;
+    // byte-stability is about the result member, not the envelope.
+    let first_call = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
+    let second_call = json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}});
+    let same_process = rpc_session(vec![first_call, second_call], None);
     assert_eq!(same_process.len(), 2);
+    assert!(
+        same_process[0].get("error").is_none(),
+        "{:#}",
+        same_process[0]
+    );
+    assert!(
+        same_process[1].get("error").is_none(),
+        "{:#}",
+        same_process[1]
+    );
     let first = serde_json::to_string(&same_process[0]["result"]).unwrap();
     let second = serde_json::to_string(&same_process[1]["result"]).unwrap();
     assert_eq!(first, second, "tools/list differed within one process");
 
-    let fresh_process = rpc(list);
+    let fresh_process = rpc(json!({"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}));
     assert_eq!(
         serde_json::to_string(&fresh_process["result"]).unwrap(),
         first,
@@ -734,7 +881,7 @@ fn zero_hit_search_returns_a_diagnostic_miss_envelope() {
         json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyword_search","arguments":{"query":"absent_symbol","limit":4}}}),
         Some(temp.path()),
     );
-    assert_eq!(response["result"]["isError"], false, "{response:#}");
+    assert_success(&response);
     let body = tool_body(&response);
     assert_eq!(body["why"], "empty_index", "{body:#}");
     assert_eq!(body["zn"], 0);
@@ -779,6 +926,9 @@ fn mcp_fixture(name: &str) -> PathBuf {
 /// nz7i.3: freeze initialize + full tools/list descriptors (not just names).
 #[test]
 fn initialize_and_tools_list_match_goldens() {
+    // The client offers 2025-11-25; the fastmcp auto facade answers with the
+    // exact 2024-11-05 legacy revision regardless (verified live; see
+    // `initialize_negotiates_the_requested_protocol_revision`).
     let init = rpc(
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":initialize_params("2025-11-25")}),
     );
@@ -787,7 +937,7 @@ fn initialize_and_tools_list_match_goldens() {
             .apply(&serde_json::to_string(&init["result"]).expect("serialize initialize")),
     )
     .expect("scrubbed initialize parses");
-    assert_eq!(scrubbed["protocolVersion"], "2025-11-25");
+    assert_eq!(scrubbed["protocolVersion"], "2024-11-05");
     assert_eq!(scrubbed["serverInfo"]["name"], "ast-sgrep");
     assert_eq!(scrubbed["serverInfo"]["version"], "<version>");
     assert_golden_json_at(&mcp_fixture("initialize.json"), &scrubbed);
@@ -802,8 +952,10 @@ fn initialize_and_tools_list_match_goldens() {
     assert_golden_json_at(&mcp_fixture("tools_list.json"), &tools);
 }
 
-/// rmcp keeps reading stdio while a blocking tool runs, so ping is not stuck
-/// behind `index_repo`. `notifications/cancelled` trips the indexer cancel flag.
+/// fastmcp keeps reading stdio while a blocking tool runs, so ping is not
+/// stuck behind `index_repo`. `notifications/cancelled` trips fastmcp's
+/// per-request cancellation domain, which the handler bridges onto the
+/// indexer's cancel flag.
 #[test]
 fn ping_and_cancel_are_served_during_index_repo() {
     use std::io::{BufRead, BufReader, Write as _};
@@ -850,7 +1002,9 @@ fn ping_and_cancel_are_served_during_index_repo() {
         }),
     );
     let init = recv(&mut stdout).expect("initialize");
-    assert_eq!(init["result"]["protocolVersion"], "2025-11-25", "{init:#}");
+    // Auto facade: the answer is the exact legacy revision even when the
+    // client offers a newer one.
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05", "{init:#}");
     send(
         &mut stdin,
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -915,11 +1069,73 @@ fn ping_and_cancel_are_served_during_index_repo() {
         let body = index_message["result"]["content"][0]["text"]
             .as_str()
             .unwrap_or_default();
-        let cancelled = index_message["result"]["isError"] == true || body.contains("cancelled");
-        let finished = index_message["result"]["isError"] == false;
+        // fastmcp omits `isError` when false: absence of the flag = success.
+        let errored = index_message["result"]["isError"].as_bool() == Some(true);
+        let cancelled = errored || body.contains("cancelled");
+        let finished = !errored;
         assert!(
             cancelled || finished,
             "index_repo after cancel: {index_message:#}"
+        );
+    }
+}
+
+/// Round-12 native-feel contract: the `query` property is the model's only
+/// grammar documentation on MCP — it must teach the channel prefixes so a
+/// client never needs out-of-band docs to discover `defs:`/`pattern:` routing.
+#[test]
+fn search_tool_query_schema_teaches_the_channel_grammar() {
+    let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}});
+    let response = rpc(list);
+    let tools = response["result"]["tools"].as_array().expect("tools list");
+    for name in [
+        "search",
+        "keyword_search",
+        "ast_search",
+        "semantic_search",
+        "code_search",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from tools/list"));
+        let description = tool["inputSchema"]["properties"]["query"]["description"]
+            .as_str()
+            .unwrap_or("");
+        for channel in ["defs:", "callers:", "imports:", "word:", "pattern:"] {
+            assert!(
+                description.contains(channel),
+                "{name} query description must teach {channel}: {description}"
+            );
+        }
+    }
+}
+
+/// INTENT: every tool must carry spec-current `annotations` (2025-06-18+)
+/// so clients can gate writes without reading schemas: read-only retrieval
+/// tools MUST declare readOnlyHint=true; index_repo (the only mutator of
+/// index state) MUST declare readOnlyHint=false. KILLS: dropping annotations
+/// from the catalog or flipping a hint on the mutating tool.
+#[test]
+fn tools_advertise_current_annotations_contract() {
+    let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}});
+    let response = rpc(list);
+    let tools = response["result"]["tools"].as_array().unwrap();
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        let annotations = &tool["annotations"];
+        assert!(
+            !annotations.is_null(),
+            "{name} has no annotations object (spec 2025-06-18+)"
+        );
+        let read_only = annotations["readOnlyHint"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("{name} annotations missing readOnlyHint"));
+        let expect_read_only = name != "index_repo";
+        assert_eq!(
+            read_only, expect_read_only,
+            "{name}: readOnlyHint must be {expect_read_only}"
         );
     }
 }

@@ -42,8 +42,8 @@ use std::collections::HashMap;
 //   contract is byte-identical every run).
 pub use ast_sgrep_testkit::{
     assert_jsonrpc_error, assert_tool_error_shape, assert_tool_success_shape, corrupt_index_db,
-    index_db_path, rpc_pipeline, rpc_session, rpc_session_env, rpc_session_raw, tool_body,
-    tool_call, tool_error_discriminant, LiveSession,
+    index_db_path, is_error, rpc_pipeline, rpc_session, rpc_session_env, rpc_session_raw,
+    tool_body, tool_call, tool_error_discriminant, LiveSession,
 };
 
 /// The 5 search channels swept by the cross-channel relations.

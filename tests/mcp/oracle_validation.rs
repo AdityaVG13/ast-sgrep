@@ -9,7 +9,10 @@
 //! builders come from `testkit`. This file needs no file-local
 //! helpers.
 
-use ast_sgrep_testkit::{assert_tool_error_shape, indexed_tree, tool_body, tool_call, LiveSession};
+use ast_sgrep_testkit::{
+    assert_jsonrpc_error, assert_tool_error_shape, indexed_tree, is_error, tool_body, tool_call,
+    LiveSession,
+};
 use serde_json::json;
 
 /// INTENT: every tool-arg boundary accepts its edges and rejects its outliers
@@ -21,8 +24,9 @@ use serde_json::json;
 /// bound-check-removed, budget-ignored (tuples stay 5-wide), window-math
 /// off-by-one, `start > 0` dropped, `end >= start` dropped.
 /// NOT killed (catalog gaps, kept as-is): budget ceiling-reject (no
-/// 65537-reject leg, only ceiling-accept), query empty-string reject,
-/// max_chars accept-side (reject-only here).
+/// 65537-reject leg, only ceiling-accept), max_chars accept-side
+/// (reject-only here). Query empty-string reject is closed since the
+/// fastmcp facade: admission enforces minLength 1 (-32602) pre-dispatch.
 ///
 /// ABSORBS: search_limit_accepts_1_and_100_rejects_0_and_101,
 /// budget_tokens_accepts_1_and_max_rejects_0,
@@ -134,33 +138,17 @@ fn arg_boundaries_accept_edges_reject_outliers() {
     assert_eq!(responses.len(), 17);
 
     // Limit leg discriminants + non-empty hits on the accept edge.
-    assert_eq!(
-        responses[0]["result"]["isError"], false,
-        "{:#}",
-        responses[0]
-    );
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
-    assert_tool_error_shape(&responses[2]);
-    assert_tool_error_shape(&responses[3]);
+    assert!(!is_error(&responses[0]), "{:#}", responses[0]);
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
+    assert_jsonrpc_error(&responses[2], -32602);
+    assert_jsonrpc_error(&responses[3], -32602);
     let body = tool_body(&responses[0]);
     assert!(!body["h"].as_array().unwrap().is_empty(), "{body:#}");
 
     // Budget leg discriminants + 6-wide detail tuples on the accept edge.
-    assert_eq!(
-        responses[4]["result"]["isError"], false,
-        "{:#}",
-        responses[4]
-    );
-    assert_eq!(
-        responses[5]["result"]["isError"], false,
-        "{:#}",
-        responses[5]
-    );
-    assert_tool_error_shape(&responses[6]);
+    assert!(!is_error(&responses[4]), "{:#}", responses[4]);
+    assert!(!is_error(&responses[5]), "{:#}", responses[5]);
+    assert_jsonrpc_error(&responses[6], -32602);
     let body = tool_body(&responses[4]);
     for hit in body["h"].as_array().unwrap() {
         let tuple = hit.as_array().expect("hit is a positional tuple");
@@ -172,41 +160,23 @@ fn arg_boundaries_accept_edges_reject_outliers() {
     }
 
     // Context leg discriminants + exact L3-L3 window on the accept edge.
-    assert_eq!(
-        responses[7]["result"]["isError"], false,
-        "{:#}",
-        responses[7]
-    );
-    assert_eq!(
-        responses[8]["result"]["isError"], false,
-        "{:#}",
-        responses[8]
-    );
-    assert_tool_error_shape(&responses[9]);
-    assert_tool_error_shape(&responses[10]);
+    assert!(!is_error(&responses[7]), "{:#}", responses[7]);
+    assert!(!is_error(&responses[8]), "{:#}", responses[8]);
+    assert_jsonrpc_error(&responses[9], -32602);
+    assert_jsonrpc_error(&responses[10], -32602);
     let body = tool_body(&responses[7]);
     assert_eq!(body["nodes"][0]["lines"], json!({"start": 3, "end": 3}));
     assert_eq!(body["nodes"][0]["content"], "l3");
 
     // Range leg discriminants.
-    assert_eq!(
-        responses[11]["result"]["isError"], false,
-        "{:#}",
-        responses[11]
-    );
+    assert!(!is_error(&responses[11]), "{:#}", responses[11]);
+    // 0-based and reversed ranges are well-typed strings: the HANDLER
+    // rejects them semantically (tool error), not schema admission.
     assert_tool_error_shape(&responses[12]);
     assert_tool_error_shape(&responses[13]);
 
     // Query leg discriminants.
-    assert_eq!(
-        responses[14]["result"]["isError"], false,
-        "{:#}",
-        responses[14]
-    );
-    assert_eq!(
-        responses[15]["result"]["isError"], false,
-        "{:#}",
-        responses[15]
-    );
-    assert_tool_error_shape(&responses[16]);
+    assert!(!is_error(&responses[14]), "{:#}", responses[14]);
+    assert!(!is_error(&responses[15]), "{:#}", responses[15]);
+    assert_jsonrpc_error(&responses[16], -32602);
 }

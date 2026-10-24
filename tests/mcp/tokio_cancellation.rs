@@ -29,9 +29,16 @@ const CANCEL_DELAY: Duration = Duration::from_millis(500);
 /// Tree width whose uncancelled `index_repo` takes ~5s in debug, giving the
 /// 500ms cancel a wide mid-call margin on fast machines.
 const BIG_FILES: usize = 2500;
-/// Smaller tree for abort drills: the abort must land mid-call, and the
-/// post-EOF wind-down must fit the harness wait bound.
-const ABORT_FILES: usize = 1200;
+/// Abort-drill tree. Sized so an uncancelled `index_repo` runs WELL past
+/// fastmcp's 5s correlated-response drain window (`DISPATCH_WORKER_SHUTDOWN_
+/// TIMEOUT` in fastmcp-server 0.13): clean EOF first attempts to drain the
+/// in-flight response, and exit 1 (shutdown cancellation) is only observable
+/// when the request cannot finish inside that window. At ~1.8ms/file in
+/// debug on tree-sitter 0.27, 12000 files ≈ 20s ≈ 4x the window — the cancel
+/// branch stays deterministic even on machines several times faster. When
+/// this facet fails with exit 0, measure the real index time before blaming
+/// the server: the fixture may have slipped under the window again.
+const ABORT_FILES: usize = 12000;
 
 /// `None` on timeout only; a closed stdout while the session must be live is
 /// re-raised as a failure, not a quiet window. (Testkit `recv_timeout` panics
@@ -291,7 +298,9 @@ fn stray_cancels_are_silent_and_harmless() {
 }
 
 /// INTENT: EOF/abort at any point -- before init, idle, mid-call, after a
-/// cancel, mid-burst -- ends the server with exit 0, never a hang or failure.
+/// cancel, mid-burst -- ends the server promptly, never a hang or signal
+/// death. fastmcp exits 0 when idle at EOF and 1 when a request was still
+/// in flight (shutdown cancellation; both observed classes pinned below).
 /// KILLS: hang-on-eof / abort-hang / exit-code mutants.
 /// Facets: pre-init EOF (K2.1) + idle EOF (K2.2) + mid-call abort (K2.3) +
 /// EOF right after cancel (K2.4) + stdin slammed shut mid-burst (K4.3).
@@ -314,8 +323,11 @@ fn eof_and_abort_handling_all_phases_exit_ok() {
     let status = session.wait_clean();
     assert!(status.success(), "EOF mid-session exited {status}");
 
-    // Facet 3 (K2.3): client abort (stdin close) mid-tool-call terminates
-    // the server with exit 0 within a bounded wait.
+    // Facet 3 (K2.3): client abort (stdin close) mid-tool-call on a request
+    // that CANNOT finish inside fastmcp's 5s correlated-response drain window
+    // terminates the server with the shutdown-cancellation exit code 1: the
+    // drain times out, the request is cancelled, and no response is emitted.
+    // Deterministic only because ABORT_FILES exceeds the window with margin.
     let temp = big_tree(ABORT_FILES);
     let mut session = LiveSession::spawn(Some(temp.path()));
     session.handshake();
@@ -323,10 +335,27 @@ fn eof_and_abort_handling_all_phases_exit_ok() {
     std::thread::sleep(CANCEL_DELAY);
     session.close_stdin();
     let status = session.wait_clean();
-    assert!(status.success(), "abort mid-call exited {status}");
+    assert_eq!(status.code(), Some(1), "abort mid-call exited {status}");
 
-    // Facet 4 (K2.4): EOF immediately after cancelling an in-flight call
-    // still exits 0.
+    // Facet K2.5: the drain branch — EOF mid-call on a request that CAN
+    // finish inside the 5s window must deliver the response anyway and exit
+    // 0. The hang-up never drops a completable answer: the harness reader
+    // thread buffers stdout, so the response is observable after close.
+    let temp = small_tree();
+    let mut session = LiveSession::spawn(Some(temp.path()));
+    session.handshake();
+    session.send(&tool_call(1, "index_repo", json!({})));
+    std::thread::sleep(CANCEL_DELAY);
+    session.close_stdin();
+    let response = session.recv_timeout(SLOW_RECV_TIMEOUT);
+    assert_tool_success(&response);
+    let status = session.wait_clean();
+    assert_eq!(status.code(), Some(0), "drained mid-call exit {status}");
+
+    // Facet 4 (K2.4): EOF immediately after cancelling an in-flight call is
+    // RACY between the two exit classes (0 when the cancel landed first, 1
+    // when the request was still active at EOF); both are legitimate. Pin
+    // the invariant: bounded exit, no signal death, code 0 or 1.
     let temp = big_tree(ABORT_FILES);
     let mut session = LiveSession::spawn(Some(temp.path()));
     session.handshake();
@@ -335,10 +364,14 @@ fn eof_and_abort_handling_all_phases_exit_ok() {
     session.send(&cancelled_notif(1));
     session.close_stdin();
     let status = session.wait_clean();
-    assert!(status.success(), "EOF after cancel exited {status}");
+    assert!(
+        matches!(status.code(), Some(0) | Some(1)),
+        "EOF after cancel exited {status}"
+    );
 
-    // Facet 5 (K4.3): stdin slammed shut mid-burst with zero reads still ends
-    // the server with exit 0 -- no hang, no failure code.
+    // Facet 5 (K4.3): stdin slammed shut mid-burst with zero reads ends
+    // promptly with either exit class (the lightweight burst may or may not
+    // still have a request in flight); no hang, no signal death.
     let temp = small_tree();
     let mut session = LiveSession::spawn(Some(temp.path()));
     session.handshake();
@@ -350,7 +383,10 @@ fn eof_and_abort_handling_all_phases_exit_ok() {
     // the server on a full pipe.
     session.close_stdin();
     let status = session.wait_clean();
-    assert!(status.success(), "abort mid-burst exited {status}");
+    assert!(
+        matches!(status.code(), Some(0) | Some(1)),
+        "abort mid-burst exited {status}"
+    );
 }
 
 const QUERIES: [&str; 3] = ["redhammer", "blueanvil", "greenchisel"];

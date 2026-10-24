@@ -68,14 +68,16 @@ fn consistency_mistyped_root_is_same_tool_error_on_every_root_tool() {
     let responses: Vec<Value> = raw.iter().map(|line| parse_line(line)).collect();
     for (response, id) in responses.iter().zip(1..=8) {
         assert_eq!(response["id"], id, "{response:#}");
-        assert_tool_error_shape(response);
+        // fastmcp admits the typed `root` argument before dispatch: the
+        // mistyped root is a uniform -32602 on every tool.
+        assert_jsonrpc_error(response, -32602);
     }
-    let first = tool_error_discriminant(&responses[0]);
-    for response in &responses[1..] {
+    let first = canonical_modulo_id(&raw[0]);
+    for line in &raw[1..] {
         assert_eq!(
-            tool_error_discriminant(response),
+            canonical_modulo_id(line),
             first,
-            "same fault diverged across tools: {response:#}"
+            "same fault diverged across tools: {line}"
         );
     }
 }
@@ -105,14 +107,15 @@ fn consistency_unknown_argument_is_same_tool_error_on_every_tool() {
     let responses: Vec<Value> = raw.iter().map(|line| parse_line(line)).collect();
     for (response, id) in responses.iter().zip(1..=8) {
         assert_eq!(response["id"], id, "{response:#}");
-        assert_tool_error_shape(response);
+        // Unknown keys are admission faults: uniform -32602 on every tool.
+        assert_jsonrpc_error(response, -32602);
     }
-    let first = tool_error_discriminant(&responses[0]);
-    for response in &responses[1..] {
+    let first = canonical_modulo_id(&raw[0]);
+    for line in &raw[1..] {
         assert_eq!(
-            tool_error_discriminant(response),
+            canonical_modulo_id(line),
             first,
-            "same fault diverged across tools: {response:#}"
+            "same fault diverged across tools: {line}"
         );
     }
 }
@@ -143,15 +146,10 @@ fn consistency_limit_fault_spellings_share_one_tool_error_code() {
     let responses: Vec<Value> = raw.iter().map(|line| parse_line(line)).collect();
     for (response, id) in responses.iter().zip(1..=4) {
         assert_eq!(response["id"], id, "{response:#}");
-        assert_tool_error_shape(response);
-    }
-    let first = tool_error_discriminant(&responses[0]);
-    for response in &responses[1..] {
-        assert_eq!(
-            tool_error_discriminant(response),
-            first,
-            "same fault class diverged by spelling: {response:#}"
-        );
+        // Admission owns every bound/type spelling: one code, not four tool
+        // errors. The message names the violated bound and legitimately
+        // differs by spelling; the code is the discriminant.
+        assert_jsonrpc_error(response, -32602);
     }
 }
 
@@ -175,10 +173,12 @@ fn determinism_identical_errors_are_byte_identical_across_sessions() {
     };
     let first = rpc_session_raw(tool_calls(), Some(temp.path()));
     let second = rpc_session_raw(tool_calls(), Some(temp.path()));
-    assert_eq!(first, second, "tool-error bytes drifted across sessions");
-    for line in &first {
-        assert_tool_error_shape(&parse_line(line));
-    }
+    assert_eq!(first, second, "error bytes drifted across sessions");
+    // id 7 unknown tool -> -32601, id 8 bound violation -> -32602, id 9
+    // stale range -> semantic tool error; each still byte-deterministic.
+    assert_jsonrpc_error(&parse_line(&first[0]), -32601);
+    assert_jsonrpc_error(&parse_line(&first[1]), -32602);
+    assert_tool_error_shape(&parse_line(&first[2]));
     // JSON-RPC-error leg: same ids, two fresh sessions.
     let rpc_calls = || {
         vec![
@@ -192,9 +192,10 @@ fn determinism_identical_errors_are_byte_identical_across_sessions() {
         first, second,
         "JSON-RPC-error bytes drifted across sessions"
     );
-    for line in &first {
-        assert_jsonrpc_error(&parse_line(line), -32601);
-    }
+    // id 21 unknown method -> -32601; id 22 non-string name is an
+    // admission-level shape fault -> -32602.
+    assert_jsonrpc_error(&parse_line(&first[0]), -32601);
+    assert_jsonrpc_error(&parse_line(&first[1]), -32602);
 }
 
 /// D3: the same bad args twice within ONE session (ids necessarily differ)
@@ -225,9 +226,12 @@ fn determinism_repeated_bad_call_in_one_session_is_identical_modulo_id() {
         normalized[2], normalized[3],
         "repeat of unknown-tool call drifted"
     );
-    for line in &raw {
-        assert_tool_error_shape(&parse_line(line));
-    }
+    // Both repeats carry no per-call state; their classes are admission
+    // (-32602) and routing (-32601) respectively.
+    assert_jsonrpc_error(&parse_line(&raw[0]), -32602);
+    assert_jsonrpc_error(&parse_line(&raw[1]), -32602);
+    assert_jsonrpc_error(&parse_line(&raw[2]), -32601);
+    assert_jsonrpc_error(&parse_line(&raw[3]), -32601);
 }
 
 /// P1: the same id set in permuted order -- backend-failure call first vs
@@ -251,8 +255,8 @@ fn position_permuted_transcript_yields_same_per_call_responses() {
     );
     let by_first = by_id(&bad_first);
     assert_tool_error_shape(&parse_line(by_first[&1]));
-    assert_eq!(parse_line(by_first[&2])["result"]["isError"], false);
-    assert_eq!(parse_line(by_first[&3])["result"]["isError"], false);
+    assert!(!is_error(&parse_line(by_first[&2])), "{:#}", by_first[&2]);
+    assert!(!is_error(&parse_line(by_first[&3])), "{:#}", by_first[&3]);
 }
 
 /// P2: a notification (absent `id`, hence silent) ahead of a bad call leaves
@@ -283,7 +287,8 @@ fn position_notification_before_bad_call_leaves_error_bytes_unchanged() {
         bare[0], with_notif,
         "notification perturbed the error bytes"
     );
-    assert_tool_error_shape(&parse_line(&with_notif));
+    // limit 0 is admission-owned: -32602 either way.
+    assert_jsonrpc_error(&parse_line(&with_notif), -32602);
 }
 
 /// F1: across a fault catalog spanning both error levels, every error response
@@ -317,12 +322,18 @@ fn failclosed_error_responses_carry_no_success_members_or_payload_keys() {
     let n = calls.len();
     let raw = rpc_session_raw(std::mem::take(&mut calls), Some(temp.path()));
     assert_eq!(raw.len(), n);
-    for line in &raw[..6] {
-        assert_tool_error_shape(&parse_line(line));
-    }
-    for line in &raw[6..] {
-        assert_jsonrpc_error(&parse_line(line), -32601);
-    }
+    // Per-row classes: semantic faults (escaped root STRING, stale range)
+    // stay tool errors; admission/routing faults are JSON-RPC errors.
+    assert_jsonrpc_error(&parse_line(&raw[0]), -32601); // unknown tool
+    assert_jsonrpc_error(&parse_line(&raw[1]), -32602); // limit 0
+    assert_tool_error_shape(&parse_line(&raw[2])); // escaped root (string)
+    assert_tool_error_shape(&parse_line(&raw[3])); // stale range
+    assert_jsonrpc_error(&parse_line(&raw[4]), -32602); // root: 42
+    assert_jsonrpc_error(&parse_line(&raw[5]), -32602); // unknown key
+    assert_jsonrpc_error(&parse_line(&raw[6]), -32601); // missing method
+    assert_jsonrpc_error(&parse_line(&raw[7]), -32601); // tools/unknown
+    assert_jsonrpc_error(&parse_line(&raw[8]), -32602); // unshaped tools/call
+
     // Same JSON-RPC fault, two spellings: one code (above) and identical
     // error-object member keys.
     let first_keys: Vec<String> = parse_line(&raw[6])["error"]
@@ -340,13 +351,19 @@ fn failclosed_error_responses_carry_no_success_members_or_payload_keys() {
             .collect();
         assert_eq!(keys, first_keys, "error-object keys diverged: {line}");
     }
-    // Fail-closed byte scan: no success-payload key may appear in any error.
-    const FORBIDDEN: [&str; 5] = [
+    // Fail-closed byte scan: no success-payload key may appear in any error,
+    // in raw form (structuredContent era) or escaped form (text-block era).
+    const FORBIDDEN: [&str; 10] = [
         "structuredContent",
         "\"nodes\":",
         "\"h\":",
         "\"zn\":",
         "\"file_count\":",
+        "\\\"nodes\\\":",
+        "\\\"h\\\":",
+        "\\\"zn\\\":",
+        "\\\"file_count\\\":",
+        "file_count",
     ];
     for line in &raw {
         for key in FORBIDDEN {
@@ -368,15 +385,24 @@ fn failclosed_error_responses_carry_no_success_members_or_payload_keys() {
 /// OVERLAP: P2 corrupt-channels trigger (adds byte-absence + controls).
 #[test]
 fn failclosed_backend_failures_carry_no_partial_payloads() {
-    const FORBIDDEN: [&str; 5] = [
+    // Escaped forms included: the body rides content[0].text on the legacy
+    // era, so a smuggled payload would appear as `\"nodes\":` bytes.
+    const FORBIDDEN: [&str; 10] = [
         "structuredContent",
         "\"nodes\":",
         "\"h\":",
         "\"zn\":",
         "\"file_count\":",
+        "\\\"nodes\\\":",
+        "\\\"h\\\":",
+        "\\\"zn\\\":",
+        "\\\"file_count\\\":",
+        "file_count",
     ];
 
-    // Positive controls: healthy successes DO carry the payload keys.
+    // Positive controls: healthy successes DO carry the payload members.
+    // The body rides content[0].text on the legacy era, so assert on the
+    // PARSED body rather than raw-byte key forms.
     let healthy = indexed_tree();
     let ok = rpc_session_raw(
         vec![
@@ -390,11 +416,19 @@ fn failclosed_backend_failures_carry_no_partial_payloads() {
         Some(healthy.path()),
     );
     assert_eq!(ok.len(), 2);
-    assert_eq!(parse_line(&ok[0])["result"]["isError"], false, "{}", ok[0]);
-    assert_eq!(parse_line(&ok[1])["result"]["isError"], false, "{}", ok[1]);
-    assert!(ok[0].contains("\"nodes\""), "control lost nodes: {}", ok[0]);
+    assert!(!is_error(&parse_line(&ok[0])), "{}", ok[0]);
+    assert!(!is_error(&parse_line(&ok[1])), "{}", ok[1]);
     assert!(
-        ok[1].contains("\"h\"") && ok[1].contains("\"zn\""),
+        !tool_body(&parse_line(&ok[0]))["nodes"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "control lost nodes: {}",
+        ok[0]
+    );
+    let hits = tool_body(&parse_line(&ok[1]));
+    assert!(
+        !hits["h"].as_array().unwrap().is_empty() && hits["zn"].as_u64().unwrap() >= 1,
         "control lost hits: {}",
         ok[1]
     );

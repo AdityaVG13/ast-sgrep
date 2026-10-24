@@ -373,12 +373,13 @@ fn propagation_sequence_reports_per_call_errors_without_dropping_results() {
         "{:#}",
         responses[6]
     );
-    // The three tool-level failure classes share one envelope, mutually
-    // indistinguishable by shape -- and none leaks to another level.
-    for response in &responses[1..4] {
-        assert_tool_error_shape(response);
-    }
-    // Unknown method is the only JSON-RPC-level error.
+    // The stale-range fault stays a tool error; unknown tool (-32601) and the
+    // bound-violating limit (-32602) are framework-owned JSON-RPC failures.
+    // None leaks to another level.
+    assert_tool_error_shape(&responses[1]);
+    assert_jsonrpc_error(&responses[2], -32601);
+    assert_jsonrpc_error(&responses[3], -32602);
+    // Unknown method shares the unknown-tool routing code.
     assert_jsonrpc_error(&responses[4], -32601);
 }
 
@@ -427,7 +428,7 @@ fn propagation_pipelined_batch_with_backend_failure_keeps_every_id() {
     assert_tool_success_shape(by_id[&12]);
     assert!(!tool_body(by_id[&12])["h"].as_array().unwrap().is_empty());
     assert_tool_error_shape(by_id[&13]);
-    assert_tool_error_shape(by_id[&14]);
-    assert_tool_error_shape(by_id[&15]);
+    assert_jsonrpc_error(by_id[&14], -32602);
+    assert_jsonrpc_error(by_id[&15], -32601);
     assert_jsonrpc_error(by_id[&16], -32601);
 }

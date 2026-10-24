@@ -1,6 +1,6 @@
 //! MCP stdio server for snippet-first hierarchical ast-sgrep retrieval.
 //!
-//! Wire protocol is official `rmcp` over stdio. Tool dispatch stays synchronous
+//! Wire protocol is fastmcp-rust over stdio. Tool dispatch stays synchronous
 //! on `spawn_blocking` so the reader can accept `ping` and `notifications/cancelled`
 //! while search or index holds SQLite.
 //!
@@ -45,9 +45,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// Serve MCP over stdio via official `rmcp`.
-pub async fn serve_stdio() -> anyhow::Result<()> {
-    handler::serve_stdio(McpServer::from_env()?).await
+/// Serve MCP over stdio via fastmcp-rust (asupersync runtime).
+pub fn serve_stdio_blocking(server: McpServer) -> anyhow::Result<()> {
+    handler::serve_stdio(server)
 }
 
 const MAX_AGENT_LIMIT: usize = 100;
@@ -251,7 +251,8 @@ impl McpServer {
 
     pub(crate) fn tools_catalog(&self) -> Value {
         let search_properties = json!({
-            "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS},
+            "query": {"type": "string", "minLength": 1, "maxLength": ast_sgrep_core::MAX_QUERY_CHARS,
+                "description": "Query grammar: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route to pattern); scope inside the query with in:PATH."},
             "root": {"type": "string", "description": "Project root (defaults to ASGREP_ROOT or cwd)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_LIMIT},
             "resend_seen": {"type": "boolean", "description": "Send snippets already returned this session instead of the ~ marker. Set true only if you do not keep earlier results."},
@@ -294,7 +295,17 @@ impl McpServer {
                     "required": ["query"],
                     "additionalProperties": false
                 },
-                "outputSchema": search_output_schema.clone()
+                "outputSchema": search_output_schema.clone(),
+                // Spec-current metadata (2025-06-18+): retrieval never mutates
+                // index or workspace state, so clients can gate writes without
+                // parsing schemas.
+                "annotations": {
+                    "title": name.replace('_', " "),
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
             })
         };
         // kxmc: the compact envelope contract lives in the tool descriptions,
@@ -316,16 +327,19 @@ impl McpServer {
             search_tool("semantic_search", &describe("Embedding-only search. Requires a non-empty index with semantic chunks."), search_properties.clone()),
             // Kept for clients still calling the pre-split name; dispatches as Keyword (see dispatch_tool).
             search_tool("code_search", &describe("Deprecated compatibility alias for keyword_search; no automatic fusion across channels."), search_properties),
-            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`) and explicit `path#Lstart-Lend` refs. Paths are sandboxed under ASGREP_ROOT.",
+            {"name": "code_read", "description": "Read full code for result node IDs with optional adjacent-line context. Accepts compact search ids (`<path_id>:<start>-<end>`), explicit `path#Lstart-Lend` refs, single-line `path#Lstart`, and LSP-style `path:start`. Paths are sandboxed under ASGREP_ROOT.",
              "inputSchema": {"type": "object", "properties": {
                 "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_REFS},
                 "root": {"type": "string", "description": "Project root under the configured workspace"},
                 "context_lines": {"type": "integer", "minimum": 0, "maximum": MAX_CONTEXT_LINES},
                 "max_chars": {"type": "integer", "minimum": 1, "maximum": MAX_READ_CHARS}
-             }, "required": ["ids"], "additionalProperties": false}},
+             }, "required": ["ids"], "additionalProperties": false},
+             "annotations": {"title": "Code read", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}},
             {"name": "index_status", "description": "Show ast-sgrep index statistics for a project root under the configured workspace.",
+             "annotations": {"title": "Index status", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
              "inputSchema": {"type": "object", "properties": {"root": {"type": "string"}}, "additionalProperties": false}},
             {"name": "index_repo", "description": "Build or incrementally update the index. Single-flight with a wall-clock deadline; concurrent calls serialize.",
+             "annotations": {"title": "Index repo", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
              "inputSchema": {"type": "object", "properties": {
                 "root": {"type": "string"}, "force": {"type": "boolean"}}, "additionalProperties": false}}
         ]})

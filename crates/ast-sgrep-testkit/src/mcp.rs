@@ -437,32 +437,45 @@ pub fn snippet_bytes(body: &Value) -> Vec<usize> {
         .collect()
 }
 
-/// The `isError` discriminant (`result.isError == true`). Panics when the
-/// envelope lacks a boolean `isError` — a malformed envelope is a test
-/// failure, never a silent `false`. Pure accessor; never inspects message text.
+/// The `isError` discriminant (`result.isError == true`). Under fastmcp's
+/// auto facade the field is omitted when false (both eras), so ABSENT means
+/// success; a present-but-non-boolean is a malformed envelope and panics.
 pub fn is_error(response: &Value) -> bool {
-    response["result"]["isError"].as_bool().unwrap()
+    match &response["result"]["isError"] {
+        Value::Bool(true) => true,
+        Value::Bool(false) => false,
+        Value::Null => false,
+        other => panic!("malformed isError member: {other} in {response:#}"),
+    }
 }
 
-/// Assert the success discriminant: `isError == false`, no top-level `error`.
+/// Assert the success discriminant: `isError` false-or-absent (fastmcp
+/// omits the member when false on both eras), no top-level `error`.
 pub fn assert_tool_success(response: &Value) {
-    assert_eq!(response["result"]["isError"], false, "{response:#}");
+    assert!(!is_error(response), "{response:#}");
     assert!(response.get("error").is_none(), "{response:#}");
 }
 
-/// INTENT: strict tool-success envelope — `isError: false`, no top-level
-/// `error`, AND a machine-readable `structuredContent` body mirroring the
-/// text block. STRICTEST-wins delta vs [`assert_tool_success`]: that pins
-/// only the discriminant pair, so a success that drops its machine body
-/// passes it; this rejects that drift. Suites proving machine readability
-/// use this; discriminant-only probes keep the laxer form. Pure assertion.
+/// INTENT: strict tool-success envelope — no error discriminant AND a
+/// machine-readable body. The body's member is era syntax: the modern
+/// (2026-07-28) era lifts it into `structuredContent`; the exact-legacy
+/// (2024-11-05) projection carries it in the text block, which is itself
+/// the compact JSON envelope. Machine readability is the contract; either
+/// member satisfies it. Pure assertion.
 pub fn assert_tool_success_shape(response: &Value) {
-    assert_eq!(response["result"]["isError"], false, "{response:#}");
-    assert!(response.get("error").is_none(), "{response:#}");
-    assert!(
-        response["result"].get("structuredContent").is_some(),
-        "{response:#}"
-    );
+    assert_tool_success(response);
+    if response["result"].get("structuredContent").is_none() {
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        let parses_as_object = serde_json::from_str::<Value>(text)
+            .map(|body| body.is_object())
+            .unwrap_or(false);
+        assert!(
+            parses_as_object,
+            "no structuredContent and text block is not a JSON object: {response:#}"
+        );
+    }
 }
 
 /// INTENT: JSON-RPC error row — numeric `code`, object `error`, no
@@ -548,10 +561,12 @@ pub fn response_by_id(responses: &[Value], id: u32) -> &Value {
         .unwrap_or_else(|| panic!("missing response id {id}: {responses:#?}"))
 }
 
-/// Assert the strictest error shape: `isError == true`, no top-level `error`,
-/// exactly one `text` content block, no `structuredContent`.
+/// Assert the error shape: `isError == true`, no top-level `error`, exactly
+/// one `text` content block. `structuredContent` is era syntax (modern error
+/// results carry the admitted miss envelope; exact-legacy omits the member),
+/// so its presence is not asserted either way here. Pure assertion.
 pub fn assert_tool_error_shape(response: &Value) {
-    assert_eq!(response["result"]["isError"], true, "{response:#}");
+    assert!(is_error(response), "{response:#}");
     assert!(response.get("error").is_none(), "{response:#}");
     assert_eq!(
         response["result"]["content"][0]["type"], "text",
@@ -560,10 +575,6 @@ pub fn assert_tool_error_shape(response: &Value) {
     assert_eq!(
         response["result"]["content"].as_array().map(Vec::len),
         Some(1),
-        "{response:#}"
-    );
-    assert!(
-        response["result"].get("structuredContent").is_none(),
         "{response:#}"
     );
 }

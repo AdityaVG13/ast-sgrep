@@ -10,8 +10,8 @@
 //! extractors and single-tree fixtures come from `testkit`.
 
 use ast_sgrep_testkit::{
-    assert_tool_error_shape, collect_responses, indexed_tree, multi_hit_tree, tool_body, tool_call,
-    tool_text, LiveSession,
+    assert_jsonrpc_error, assert_tool_error_shape, collect_responses, indexed_tree, is_error,
+    multi_hit_tree, tool_body, tool_call, tool_text, LiveSession,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -40,16 +40,8 @@ fn alias_matches_keyword_search_exactly() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[0]["result"]["isError"], false,
-        "{:#}",
-        responses[0]
-    );
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[0]), "{:#}", responses[0]);
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     assert_eq!(
         tool_text(&responses[0]),
         tool_text(&responses[1]),
@@ -85,7 +77,7 @@ fn pure_reads_repeat_byte_identical() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     for response in &responses {
-        assert_eq!(response["result"]["isError"], false, "{response:#}");
+        assert!(!is_error(response), "{response:#}");
     }
     assert_eq!(tool_text(&responses[0]), tool_text(&responses[1]));
     assert_eq!(tool_text(&responses[2]), tool_text(&responses[3]));
@@ -126,16 +118,8 @@ fn limit_growth_is_prefix_stable() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[0]["result"]["isError"], false,
-        "{:#}",
-        responses[0]
-    );
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[0]), "{:#}", responses[0]);
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     let small = tool_body(&responses[0]);
     let large = tool_body(&responses[1]);
     assert_eq!(small["zn"], 2, "{small:#}");
@@ -206,14 +190,21 @@ fn query_and_preview_normalization() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    for response in &responses {
-        assert_eq!(response["result"]["isError"], false, "{response:#}");
+    for (index, response) in responses.iter().enumerate() {
+        // The schema enum is case-sensitive: uppercase preview values are
+        // admission-rejected (-32602); the handler-era case-fold is gone.
+        if index == 3 {
+            assert_jsonrpc_error(response, -32602);
+            continue;
+        }
+        assert!(!is_error(response), "{response:#}");
     }
     // Trim facet: padded query collapses to the bare query, byte-identical.
     assert_eq!(tool_text(&responses[0]), tool_text(&responses[1]));
     assert_eq!(tool_body(&responses[1])["q"], "shared_token");
-    // Preview-case facet: FULL == full, byte-identical.
-    assert_eq!(tool_text(&responses[2]), tool_text(&responses[3]));
+    // Lowercase preview=full still serves the full body (the old
+    // case-fold counterpart is pinned above as an admission reject).
+    assert!(!tool_body(&responses[2])["h"].as_array().unwrap().is_empty());
     // Preview-none facet: same ranking/ids as the short control, snippets blank.
     let short = tool_body(&responses[4]);
     let none = tool_body(&responses[5]);
@@ -293,15 +284,20 @@ fn adversarial_inputs_share_tool_error_shape() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(responses.len(), 12);
-    for response in &responses[..11] {
-        assert_tool_error_shape(response);
+    // fastmcp splits the old uniform tool-error class: unknown/case-shifted
+    // tool names are routing faults (-32601); schema-admitted arg faults
+    // (missing query, float/huge limit, bad preview enum) are -32602;
+    // handler-semantic faults (blank query, empty/overlong filter strings)
+    // stay tool errors.
+    for (index, response) in responses.iter().enumerate().take(11) {
+        match index {
+            0 | 1 | 2 => assert_jsonrpc_error(response, -32601),
+            3 | 4 | 5 | 7 => assert_jsonrpc_error(response, -32602),
+            _ => assert_tool_error_shape(response),
+        }
     }
     // Unicode is a runnable query: a miss envelope, not a tool error.
-    assert_eq!(
-        responses[11]["result"]["isError"], false,
-        "{:#}",
-        responses[11]
-    );
+    assert!(!is_error(&responses[11]), "{:#}", responses[11]);
     let body = tool_body(&responses[11]);
     assert_eq!(body["why"], "no_match", "{body:#}");
     assert_eq!(body["h"].as_array().unwrap().len(), 0);
@@ -333,8 +329,15 @@ fn adversarial_inputs_share_tool_error_shape() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(responses.len(), 10);
-    for response in &responses {
-        assert_tool_error_shape(response);
+    // Admission owns the typed/structural id faults (rows 0, 4-9: empty
+    // list, oversize list, wrong types, missing/null arguments); the
+    // handler owns id STRING semantics (rows 1-3: empty, unicode,
+    // overlong ids -- tool errors).
+    for (index, response) in responses.iter().enumerate() {
+        match index {
+            1 | 2 | 3 => assert_tool_error_shape(response),
+            _ => assert_jsonrpc_error(response, -32602),
+        }
     }
 
     // Leg 3 (recovery probe): a valid read in a FRESH process, not the
@@ -352,7 +355,7 @@ fn adversarial_inputs_share_tool_error_shape() {
     let response = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(response["result"]["isError"], false, "{:#}", response);
+    assert!(!is_error(&response), "{:#}", response);
     assert_eq!(
         tool_body(&response)["nodes"][0]["content"],
         "fn target_symbol() {}"
@@ -383,7 +386,7 @@ fn reindex_is_idempotent() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     for response in &responses {
-        assert_eq!(response["result"]["isError"], false, "{response:#}");
+        assert!(!is_error(response), "{response:#}");
     }
     assert_eq!(tool_body(&responses[2])["files_indexed"], 0);
     assert_eq!(
@@ -440,15 +443,15 @@ fn pipelined_batch_answers_every_id_once() {
         assert!(by_id.contains_key(&id), "missing id {id}");
     }
     assert_eq!(by_id[&106]["error"]["code"], -32601);
-    assert_eq!(by_id[&105]["result"]["isError"], true);
-    assert!(by_id[&105].get("error").is_none());
-    assert_eq!(by_id[&103]["result"]["isError"], false, "{:#}", by_id[&103]);
-    assert_eq!(by_id[&104]["result"]["isError"], false, "{:#}", by_id[&104]);
+    // Unknown tool is a routing fault: -32601, no `result` member.
+    assert_jsonrpc_error(by_id[&105], -32601);
+    assert!(!is_error(by_id[&103]), "{:#}", by_id[&103]);
+    assert!(!is_error(by_id[&104]), "{:#}", by_id[&104]);
 }
 
-/// INTENT: unknown methods and unshaped tools/call envelopes are top-level
-/// -32601 with no `result`; calls that reach dispatch (even with absent/null
-/// arguments, which default to `{}`) are tool errors.
+/// INTENT: unknown methods are top-level -32601 with no `result`; unshaped
+/// tools/call envelopes (empty params, array/absent/null arguments) are
+/// admission-level -32602 -- absent arguments no longer reach dispatch.
 ///
 /// KILLS: topology-confusion/default-args mutants.
 ///
@@ -471,10 +474,11 @@ fn envelope_topology_method_vs_tool_errors() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(responses.len(), 5);
-    for response in &responses[..3] {
-        assert_eq!(response["error"]["code"], -32601, "{response:#}");
-        assert!(response.get("result").is_none(), "{response:#}");
+    // Unknown method stays -32601; every malformed tools/call envelope is
+    // now an admission-level -32602 -- nothing reaches dispatch.
+    assert_eq!(responses[0]["error"]["code"], -32601, "{:#}", responses[0]);
+    assert!(responses[0].get("result").is_none(), "{:#}", responses[0]);
+    for response in &responses[1..] {
+        assert_jsonrpc_error(response, -32602);
     }
-    assert_tool_error_shape(&responses[3]);
-    assert_tool_error_shape(&responses[4]);
 }

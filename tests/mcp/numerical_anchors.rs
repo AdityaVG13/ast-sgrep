@@ -15,9 +15,9 @@
 //! regressed server fails the test instead of hanging the suite.
 
 use ast_sgrep_testkit::{
-    assert_tool_error_shape, assert_tool_success_shape, indexed_tree, initialized_notif,
-    rpc_session, snippet_bytes, tool_body, tool_call, tool_text, tools_list, CallSession,
-    LiveSession,
+    assert_jsonrpc_error, assert_tool_error_shape, assert_tool_success_shape, indexed_tree,
+    initialized_notif, rpc_session, snippet_bytes, tool_body, tool_call, tool_text, tools_list,
+    CallSession, LiveSession,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -44,6 +44,8 @@ fn rpc_session_versioned(
     }));
     let init = session.recv();
     assert_eq!(init["id"], "__init", "{init:#}");
+    // Single-era serve: the requested version is never echoed.
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05", "{init:#}");
     session.send(&initialized_notif());
     let mut responses = Vec::new();
     for payload in &payloads {
@@ -58,8 +60,9 @@ fn rpc_session_versioned(
     responses
 }
 
-/// INTENT=tools/list schema bounds equal parser literals; ttlMs is exactly
-/// 3_600_000 on a 2026-07-28 session.
+/// INTENT=tools/list schema bounds equal parser literals; the facade
+/// negotiates protocol 2024-11-05 for ANY requested version (single-era
+/// serve) and tools/list carries no era-specific ttlMs member.
 /// KILLS=schema/parser bound drift in either direction.
 /// ABSORBS=none (KEEP anchor).
 #[test]
@@ -89,7 +92,11 @@ fn tools_list_schema_bounds_match_parser() {
     assert_eq!(read_props["max_chars"]["maximum"], 1_000_000, "{read:#}");
 
     let fresh = rpc_session_versioned(vec![tools_list(2)], None, "2026-07-28");
-    assert_eq!(fresh[0]["result"]["ttlMs"], 3_600_000, "{:#}", fresh[0]);
+    assert!(
+        fresh[0]["result"].get("ttlMs").is_none(),
+        "2024-11-05 tools/list must carry no ttlMs: {:#}",
+        fresh[0]
+    );
 }
 
 /// INTENT=ids rejects [] (no div-by-zero) and 21 items, accepts 1.
@@ -109,8 +116,9 @@ fn ids_arity_edges_reject_empty_and_21_accept_single() {
         Some(temp.path()),
     );
     assert_eq!(responses.len(), 3);
-    assert_tool_error_shape(&responses[0]);
-    assert_tool_error_shape(&responses[1]);
+    // Admission owns both arity fences: -32602, not tool errors.
+    assert_jsonrpc_error(&responses[0], -32602);
+    assert_jsonrpc_error(&responses[1], -32602);
     assert_tool_success_shape(&responses[2]);
     let body = tool_body(&responses[2]);
     assert_eq!(body["nodes"].as_array().unwrap().len(), 1, "{body:#}");

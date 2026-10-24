@@ -11,9 +11,9 @@
 //! Every live-session read and process wait carries a timeout.
 
 use ast_sgrep_testkit::{
-    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok, index_tree,
-    indexed_tree, ping, rpc_session, tool_body, tool_call, tool_text, tools_list, truncate_file,
-    LiveSession,
+    assert_jsonrpc_error, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
+    assert_tools_list_ok, index_tree, indexed_tree, ping, rpc_session, tool_body, tool_call,
+    tool_text, tools_list, truncate_file, LiveSession,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -179,8 +179,9 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
     );
     assert_eq!(root_baseline, baseline, "catalog differs between trees");
 
-    // Facet 3 (error determinism): invalid calls fail with byte-identical tool
-    // errors in every fresh process; every failure keeps the uniform shape.
+    // Facet 3 (error determinism): invalid calls fail byte-identically in
+    // every fresh process; classes are per-row (admission -32602, routing
+    // -32601, semantic tool error).
     let chain = || {
         vec![
             tool_call(
@@ -198,11 +199,16 @@ fn transcripts_catalog_and_errors_reproduce_across_restarts_and_faults() {
     assert_eq!(first.len(), 4);
     assert_eq!(second.len(), 4);
     for (index, response) in first.iter().enumerate() {
-        assert_tool_error_shape(response);
-        assert_tool_error_shape(&second[index]);
+        match index {
+            // Stale range is handler-semantic; unknown tool is routing.
+            2 => assert_tool_error_shape(response),
+            3 => assert_jsonrpc_error(response, -32601),
+            // Bound violations (limit 0, empty query) are admission-owned.
+            _ => assert_jsonrpc_error(response, -32602),
+        }
         assert_eq!(
-            tool_text(response),
-            tool_text(&second[index]),
+            serde_json::to_string(response).unwrap(),
+            serde_json::to_string(&second[index]).unwrap(),
             "error {index} drifted across restarts"
         );
     }

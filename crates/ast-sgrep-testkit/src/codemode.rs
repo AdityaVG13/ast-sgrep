@@ -34,6 +34,9 @@ pub fn config_at(root: &Path) -> SessionConfig {
         limit: 5,
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
+        // Hermetic kit: no ambient writes; freshness tests live in the CLI
+        // e2e suite (tests/cli/codemode_ambient.rs).
+        ambient_freshness: false,
     }
 }
 
@@ -112,6 +115,8 @@ pub fn config_at_indexed(root: &Path, index_path: &Path) -> SessionConfig {
         limit: 5,
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
+        // Hermetic kit: explicit db lifecycle, no ambient writes.
+        ambient_freshness: false,
     }
 }
 

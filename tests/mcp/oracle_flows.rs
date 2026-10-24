@@ -15,8 +15,8 @@
 //! extractors and fixtures come from `testkit`.
 
 use ast_sgrep_testkit::{
-    assert_tool_error_shape, distinct_hit_paths, file_tree, indexed_tree, tool_body, tool_call,
-    tool_text, tools_list, LiveSession,
+    assert_jsonrpc_error, assert_tool_error_shape, distinct_hit_paths, file_tree, indexed_tree,
+    is_error, tool_body, tool_call, tool_text, tools_list, LiveSession,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -71,7 +71,7 @@ fn dispatch_by_advertised_names_with_tool_count_tripwire() {
     let searched = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(searched["result"]["isError"], false, "{searched:#}");
+    assert!(!is_error(&searched), "{searched:#}");
     let envelope = tool_body(&searched);
     let hits = envelope["h"].as_array().unwrap();
     assert!(!hits.is_empty(), "{envelope:#}");
@@ -96,11 +96,7 @@ fn dispatch_by_advertised_names_with_tool_count_tripwire() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     let body = tool_body(&responses[1]);
     let nodes = body["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), 1, "{body:#}");
@@ -148,7 +144,7 @@ fn search_then_read_fan_out_matches_counts_and_path_table() {
     let searched = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(searched["result"]["isError"], false, "{searched:#}");
+    assert!(!is_error(&searched), "{searched:#}");
     let envelope = tool_body(&searched);
     let hits = envelope["h"].as_array().unwrap().clone();
     assert!(!hits.is_empty(), "{envelope:#}");
@@ -178,11 +174,7 @@ fn search_then_read_fan_out_matches_counts_and_path_table() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     let body = tool_body(&responses[1]);
     let nodes = body["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), hits.len(), "{body:#}");
@@ -227,7 +219,7 @@ fn ast_search_chain_reads_pattern_hits() {
     let searched = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(searched["result"]["isError"], false, "{searched:#}");
+    assert!(!is_error(&searched), "{searched:#}");
     let envelope = tool_body(&searched);
     let hits = envelope["h"].as_array().unwrap();
     assert!(!hits.is_empty(), "{envelope:#}");
@@ -249,11 +241,7 @@ fn ast_search_chain_reads_pattern_hits() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     let body = tool_body(&responses[1]);
     assert_eq!(body["nodes"].as_array().unwrap().len(), 1);
     assert!(
@@ -290,7 +278,7 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     let miss = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(miss["result"]["isError"], false, "{miss:#}");
+    assert!(!is_error(&miss), "{miss:#}");
     let miss_body = tool_body(&miss);
     assert_eq!(miss_body["why"], "empty_index", "{miss_body:#}");
     assert_eq!(miss_body["zn"], 0);
@@ -303,7 +291,7 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     let indexed = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(indexed["result"]["isError"], false, "{indexed:#}");
+    assert!(!is_error(&indexed), "{indexed:#}");
     assert_eq!(tool_body(&indexed)["files_indexed"], 2);
 
     // Spawn 3: the same query now hits both files.
@@ -313,7 +301,7 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     let searched = session.recv();
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(searched["result"]["isError"], false, "{searched:#}");
+    assert!(!is_error(&searched), "{searched:#}");
     let envelope = tool_body(&searched);
     let hits = envelope["h"].as_array().unwrap();
     assert!(envelope["zn"].as_u64().unwrap() >= 2, "{envelope:#}");
@@ -335,11 +323,7 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     assert_eq!(
         tool_body(&responses[1])["nodes"].as_array().unwrap().len(),
         1
@@ -366,17 +350,10 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
     session.close_stdin();
     assert!(session.wait_clean().success());
     assert_eq!(responses.len(), 3);
-    assert_eq!(
-        responses[0]["result"]["isError"], false,
-        "{:#}",
-        responses[0]
-    );
+    // fastmcp omits isError on success; is_error treats absent as false.
+    assert!(!is_error(&responses[0]), "{:#}", responses[0]);
     assert_eq!(tool_body(&responses[0])["file_count"], 0);
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
     let miss = tool_body(&responses[1]);
     assert_eq!(miss["why"], "empty_index", "{miss:#}");
     assert_eq!(miss["zn"], 0);
@@ -385,9 +362,9 @@ fn index_lifecycle_and_empty_tree_fail_closed() {
 }
 
 /// INTENT: the failure taxonomy side by side in one session -- unknown
-/// JSON-RPC methods are top-level -32601 with no `result`; unknown tools,
-/// mistyped args and missing roots are uniform tool errors with no top-level
-/// `error`.
+/// JSON-RPC methods AND unknown tools are top-level -32601 with no `result`;
+/// mistyped (non-string) args are admission-level -32602; a well-typed but
+/// nonexistent root string is the one tool error, no top-level `error`.
 ///
 /// KILLS: taxonomy-confusion mutants (root-arg cases are new vs the surface
 /// topology test).
@@ -418,9 +395,9 @@ fn error_taxonomy_method_vs_tool_vs_args_vs_root() {
     assert_eq!(responses.len(), 4);
     assert_eq!(responses[0]["error"]["code"], -32601, "{:#}", responses[0]);
     assert!(responses[0].get("result").is_none(), "{:#}", responses[0]);
-    for response in &responses[1..] {
-        assert_tool_error_shape(response);
-    }
+    assert_jsonrpc_error(&responses[1], -32601); // unknown tool: routing
+    assert_jsonrpc_error(&responses[2], -32602); // root: 42: admission
+    assert_tool_error_shape(&responses[3]); // nonexistent root string
 }
 
 /// INTENT: errors do not poison the session -- a nonexistent per-call root
@@ -475,11 +452,7 @@ fn session_recovers_after_errors_without_restart() {
     for response in &responses[..3] {
         assert_tool_error_shape(response);
     }
-    assert_eq!(
-        responses[3]["result"]["isError"], false,
-        "{:#}",
-        responses[3]
-    );
+    assert!(!is_error(&responses[3]), "{:#}", responses[3]);
     assert!(!tool_body(&responses[3])["h"].as_array().unwrap().is_empty());
 
     // Leg 2 (poisoned process): unknown tool + bad read, then a genuine
@@ -501,13 +474,9 @@ fn session_recovers_after_errors_without_restart() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_tool_error_shape(&responses[0]);
+    assert_jsonrpc_error(&responses[0], -32601); // unknown tool: routing
     assert_tool_error_shape(&responses[1]);
-    assert_eq!(
-        responses[2]["result"]["isError"], false,
-        "{:#}",
-        responses[2]
-    );
+    assert!(!is_error(&responses[2]), "{:#}", responses[2]);
     let compact_id = tool_body(&responses[2])["h"][0][0]
         .as_str()
         .unwrap()
@@ -533,17 +502,9 @@ fn session_recovers_after_errors_without_restart() {
     }
     session.close_stdin();
     assert!(session.wait_clean().success());
-    assert_tool_error_shape(&responses[0]);
-    assert_eq!(
-        responses[1]["result"]["isError"], false,
-        "{:#}",
-        responses[1]
-    );
-    assert_eq!(
-        responses[2]["result"]["isError"], false,
-        "{:#}",
-        responses[2]
-    );
+    assert_jsonrpc_error(&responses[0], -32601); // unknown tool: routing
+    assert!(!is_error(&responses[1]), "{:#}", responses[1]);
+    assert!(!is_error(&responses[2]), "{:#}", responses[2]);
     assert_eq!(
         tool_body(&responses[2])["nodes"].as_array().unwrap().len(),
         1
@@ -600,6 +561,6 @@ fn session_rerun_is_deterministic_across_processes() {
         tool_text(&runs[1][2]),
         "read drifted"
     );
-    assert_eq!(runs[0][1]["result"]["isError"], false);
-    assert_eq!(runs[0][2]["result"]["isError"], false);
+    assert!(!is_error(&runs[0][1]), "{:#}", runs[0][1]);
+    assert!(!is_error(&runs[0][2]), "{:#}", runs[0][2]);
 }

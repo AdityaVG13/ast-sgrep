@@ -241,19 +241,17 @@ fn drill_malformed_envelopes_mid_session_codes_then_session_usable() {
     let unknown = session.call(&json!({"jsonrpc":"2.0","id":2,"method":"missing"}), 2);
     assert_jsonrpc_error(&unknown, -32601);
 
-    session.send(&json!({"jsonrpc": "2.0", "id": 3}));
+    session.send(&json!({ "jsonrpc": "2.0", "id": 3 }));
     let invalid = session.recv();
     assert_jsonrpc_error(&invalid, -32600);
-    assert!(
-        invalid.get("id").is_none(),
-        "-32600 must not echo an id: {invalid:#}"
-    );
+    // fastmcp echoes the offending id on -32600.
+    assert_eq!(invalid["id"], 3, "{invalid:#}");
 
     let unshaped = session.call(
         &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{}}),
         4,
     );
-    assert_jsonrpc_error(&unshaped, -32601);
+    assert_jsonrpc_error(&unshaped, -32602);
 
     let read = session.call(&read_call(5), 5);
     assert_tool_success_shape(&read);
@@ -271,11 +269,13 @@ fn drill_malformed_envelopes_mid_session_codes_then_session_usable() {
 }
 
 /// D5: a storm of bad-argument calls hits a live session: bound, sign, type,
-/// unknown-key, shape, overflow, and unknown-tool faults. Every one is the
-/// uniform tool-error envelope with its id echoed (one code, not seven), and
-/// a search plus a read succeed immediately after. Pass 2 P8 pins one static
-/// mixed sequence; this pins a parse-level storm with uniformity plus
-/// usability-after on a live session.
+/// unknown-key, shape, overflow, and unknown-tool faults. fastmcp splits
+/// them into three framework-owned classes -- admission -32602 (bound, sign,
+/// type, unknown-key, maxItems), routing -32601 (unknown tool), and the
+/// handler-semantic tool-error envelope (malformed id STRING) -- each with
+/// its id echoed, and a search plus a read succeed immediately after. Pass 2
+/// P8 pins one static mixed sequence; this pins a parse-level storm with
+/// per-class uniformity plus usability-after on a live session.
 /// INTENT: 9-call parse-level storm uniform toolerr with ids, search+read serve after.
 /// KILLS: storm-divergence, session-poison.
 /// ABSORBS: none.
@@ -305,18 +305,18 @@ fn drill_bad_argument_storm_mid_session_uniform_then_usable() {
         tool_call(17, "index_repo", json!({"force": "yes"})),
         tool_call(18, "no_such_tool", json!({})),
     ];
-    let mut discriminants = Vec::new();
     for (i, payload) in storm.iter().enumerate() {
         let id = 10 + i as u32;
         let response = session.call(payload, id);
-        assert_tool_error_shape(&response);
-        discriminants.push(tool_error_discriminant(&response));
-    }
-    for discriminant in &discriminants[1..] {
-        assert_eq!(
-            *discriminant, discriminants[0],
-            "storm fault diverged from the uniform tool-error code"
-        );
+        match id {
+            // Malformed id STRING ("src/lib.rs#1-2") is handler-semantic.
+            15 => assert_tool_error_shape(&response),
+            // Unknown tool is routing.
+            18 => assert_jsonrpc_error(&response, -32601),
+            // Every admission fault (bound/sign/type/unknown-key/maxItems)
+            // shares one framework code.
+            _ => assert_jsonrpc_error(&response, -32602),
+        }
     }
 
     let search = session.call(&search_call(19, "keyword_search", 8), 19);

@@ -12,10 +12,10 @@
 //! text, never durations.
 
 use ast_sgrep_testkit::{
-    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
-    cancelled_notif, collect_responses, index_tree, init_payload, initialized_notif, mcp_bin, ping,
-    response_by_id, small_tree, tool_body, tool_call, tool_text, tools_list, LiveSession,
-    TESTKIT_CLIENT_NAME,
+    assert_jsonrpc_error, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
+    assert_tools_list_ok, cancelled_notif, collect_responses, index_tree, init_payload,
+    initialized_notif, is_error, mcp_bin, ping, response_by_id, small_tree, tool_body, tool_call,
+    tool_text, tools_list, LiveSession, TESTKIT_CLIENT_NAME,
 };
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -636,13 +636,15 @@ fn sequential_vs_pipelined_equivalence() {
     assert_eq!(sequential.len(), script.len());
     assert_eq!(pipelined.len(), script.len());
     for responses in [&sequential, &pipelined] {
+        // Admission/routing failures carry top-level `error` and no
+        // `result`; semantic failures carry result.isError.
         let errors = responses
             .iter()
-            .filter(|r| r["result"]["isError"] == true)
+            .filter(|r| r.get("error").is_some() || is_error(r))
             .count();
         let successes = responses
             .iter()
-            .filter(|r| r["result"]["isError"] == false)
+            .filter(|r| r.get("result").is_some() && !is_error(r))
             .count();
         assert!(errors >= 2, "expected >=2 errors: {responses:#?}");
         assert!(successes >= 2, "expected >=2 successes: {responses:#?}");
@@ -652,13 +654,17 @@ fn sequential_vs_pipelined_equivalence() {
         let b = response_by_id(&pipelined, id);
         assert_eq!(a["id"], id);
         assert_eq!(b["id"], id);
-        assert_eq!(
-            a["result"]["isError"], b["result"]["isError"],
-            "id {id} success bit diverged:\n{a:#}\n{b:#}"
-        );
-        if id == 4 {
+        if a.get("error").is_some() {
+            // Framework-owned failure (unknown tool, bound violation):
+            // byte-identical across schedules.
+            assert_eq!(
+                serde_json::to_string(a).unwrap(),
+                serde_json::to_string(b).unwrap(),
+                "id {id} rpc-error bytes diverged:\n{a:#}\n{b:#}"
+            );
+        } else if id == 4 {
             assert_status_counts_eq(a, b);
-        } else if a["result"]["isError"] == true {
+        } else if is_error(a) {
             assert_tool_error_shape(a);
             assert_tool_error_shape(b);
             assert_eq!(tool_text(a), tool_text(b), "id {id} error bytes diverged");
@@ -1207,19 +1213,21 @@ fn burst_mixed_calls_and_error_accounting() {
     assert_eq!(responses.len(), requests.len());
     assert_id_set_complete(&responses, requests.len() as u32);
     for id in [1, 7] {
-        assert_tool_error_shape(response_by_id(&responses, id));
+        // Unknown tools are routing faults: -32601, no result member.
+        assert_jsonrpc_error(response_by_id(&responses, id), -32601);
     }
     assert_eq!(
-        tool_text(response_by_id(&responses, 1)),
-        tool_text(response_by_id(&responses, 7)),
+        response_by_id(&responses, 1)["error"],
+        response_by_id(&responses, 7)["error"],
         "unknown-tool error bytes diverged"
     );
     for id in [3, 12] {
-        assert_tool_error_shape(response_by_id(&responses, id));
+        // Bound violations are admission faults: -32602, no result member.
+        assert_jsonrpc_error(response_by_id(&responses, id), -32602);
     }
     assert_eq!(
-        tool_text(response_by_id(&responses, 3)),
-        tool_text(response_by_id(&responses, 12)),
+        response_by_id(&responses, 3)["error"],
+        response_by_id(&responses, 12)["error"],
         "invalid-args error bytes diverged"
     );
     let red = response_by_id(&responses, 2);

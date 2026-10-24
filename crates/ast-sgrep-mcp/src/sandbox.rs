@@ -11,12 +11,30 @@ use std::path::{Component, Path};
 const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(crate) fn parse_node_id(id: &str) -> anyhow::Result<(&str, usize, usize)> {
-    let (file, range) = id
-        .rsplit_once("#L")
-        .context("node ID must end in #Lstart-Lend")?;
-    let (start_raw, end_raw) = range
-        .split_once("-L")
-        .context("node ID must end in #Lstart-Lend")?;
+    // Ref forms (parity with the CLI/serve/Pi read surfaces): canonical
+    // `path#Lstart-Lend`, single-line `path#Lstart`, and LSP-style
+    // `path:start`. Compact search ids (`<path_id>:<start>-<end>`) are
+    // resolved to the canonical form BEFORE this boundary; a `path:start`
+    // ref never carries `-Lend`, so the two colon shapes cannot collide.
+    let (file, start_raw, end_raw) = if let Some((file, range)) = id.rsplit_once("#L") {
+        match range.split_once("-L") {
+            Some((start_raw, end_raw)) => (file, start_raw, end_raw),
+            None => (file, range, range),
+        }
+    } else if let Some((file, line)) = id.rsplit_once(':') {
+        if line.is_empty() || line.contains('-') || !line.bytes().all(|b| b.is_ascii_digit()) {
+            // Unresolved compact ids and any other colon shape are malformed
+            // here; the message names the accepted forms.
+            anyhow::bail!(
+                "node ID must end in #Lstart-Lend (single-line #Lstart and LSP path:start are also accepted)"
+            );
+        }
+        (file, line, line)
+    } else {
+        anyhow::bail!(
+            "node ID must end in #Lstart-Lend (single-line #Lstart and LSP path:start are also accepted)"
+        );
+    };
     let start = start_raw
         .parse::<u32>()
         .context("invalid node start line")?;

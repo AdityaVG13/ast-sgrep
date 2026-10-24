@@ -10,10 +10,10 @@
 //! so a regressed server fails the test instead of hanging the suite.
 
 use ast_sgrep_testkit::{
-    assert_ping_ok, assert_tool_error_shape, assert_tool_success, assert_tools_list_ok,
-    corrupt_index_db, index_tree, indexed_tree, init_payload, ping, rpc_session, rpc_session_env,
-    spawn_raw_no_handshake, tool_body, tool_call, tool_text, tools_list, truncate_file,
-    LiveSession, TESTKIT_CLIENT_NAME,
+    assert_jsonrpc_error, assert_ping_ok, assert_tool_error_shape, assert_tool_success,
+    assert_tools_list_ok, corrupt_index_db, index_tree, indexed_tree, init_payload, ping,
+    rpc_session, rpc_session_env, spawn_raw_no_handshake, tool_body, tool_call, tool_text,
+    tools_list, truncate_file, LiveSession, TESTKIT_CLIENT_NAME,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -484,8 +484,9 @@ fn stdin_eof_clean_and_partial_line_exits_cleanly_without_torn_response() {
 /// without echo or hang, an invalid envelope yields the JSON-RPC error shape,
 /// and the session serves the next valid call after each.
 /// KILLS: hang/echo and error-shape mutants.
-/// FACETS: garbage line draws no response and no late echo; unknown-method
-/// envelope echoes its id with a numeric code and no `result`.
+/// FACETS: garbage line draws exactly one -32700 parse error (no id) and no
+/// late echo; unknown-method envelope echoes its id with a numeric code and
+/// no `result`.
 #[test]
 fn stream_faults_garbage_ignored_invalid_envelope_errors_session_survives() {
     // Facet 1 (garbage line): ignored mid-stream; the next calls answer with
@@ -497,6 +498,11 @@ fn stream_faults_garbage_ignored_invalid_envelope_errors_session_survives() {
     session.send(&tool_call(1, "index_status", json!({})));
     assert_eq!(session.recv()["id"], 1);
     session.send_raw_line("{{not json");
+    // fastmcp answers an unparsable line once with -32700 (no id echo);
+    // the stream stays healthy -- the next calls still answer in order.
+    let parse_error = session.recv();
+    assert_jsonrpc_error(&parse_error, -32700);
+    assert!(parse_error.get("id").is_none(), "{parse_error:#}");
     session.send(&ping(2));
     assert_ping_ok(&session.recv(), 2);
     session.send(&tool_call(3, "index_status", json!({})));
