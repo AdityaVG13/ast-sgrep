@@ -176,13 +176,29 @@ def make_fake_host(cwd: str):
                 description="")
 
     class _Original:
-        """The builtin search_files handler: records and answers."""
+        """The builtin search_files handler: records and answers. Mirrors
+        search_tool's guard bump (same key shape) so fallback parity is
+        testable — the real stock handler bumps exactly once per call."""
 
         def __init__(self):
             self.calls = []
 
         def __call__(self, args, **kw):
             self.calls.append((dict(args), kw))
+            task_id = kw.get("task_id") or "default"
+            target_map = {"grep": "content", "find": "files"}
+            raw_target = args.get("target", "content")
+            target = target_map.get(raw_target, raw_target)
+            path = args.get("path", ".") or "."
+            offset, limit = normalize_search_pagination(
+                args.get("offset", 0), args.get("limit", 50))
+            key = ("search", args.get("pattern", ""), target, str(path),
+                   args.get("file_glob") or "", limit, offset,
+                   args.get("order", "discovery"))
+            with file_tools._read_tracker_lock:
+                td = file_tools._read_tracker.setdefault(
+                    task_id, {"last_key": None, "consecutive": 0})
+                _bump_consecutive(td, key)
             return json.dumps({"total_count": 0, "via": "original"})
 
     registry_mod.tool_error = lambda msg, **kw: json.dumps({"error": msg, **kw})
@@ -414,15 +430,53 @@ class TakeoverTest(OverrideTestBase):
         self.assertNotIn("matches", out)
         self.assertEqual(self.host.original.calls, [])
 
-    def test_truncation_probe_sets_hint(self):
+    def test_overflow_falls_back_to_stock(self):
+        # More hits than one page: asgrep must not serve a ranked subset
+        # where rg would serve a walk-order subset -- rg owns the whole
+        # pagination sequence.
         pool = FakePool(response={
             "ok": True,
             "value": {"hits": HITS + [_hit("notes.md", 1, "alpha_marker here")]}})
         out = json.loads(self.call_search(
             pool, {"pattern": "alpha_marker", "limit": 2}, ctx=self.ctx))
-        self.assertEqual(out["total_count"], 2)
-        self.assertTrue(out.get("truncated"))
-        self.assertIn("offset=2", out["_hint"])
+        self.assertEqual(out["via"], "original")
+        self.assertEqual(self.host.original.calls, [({"pattern": "alpha_marker", "limit": 2}, {"task_id": "t1"})])
+
+    def test_elided_preview_falls_back_to_stock(self):
+        # A width-elided capsule preview hides what stock rg would show (up
+        # to 500 chars); long-line matches belong to rg.
+        pool = FakePool(response={"ok": True, "value": {"hits": [
+            _hit("src/gen.rs", 9, "let x = " + "y" * 200 + " …")]}})
+        out = json.loads(self.call_search(
+            pool, {"pattern": "alpha_marker"}, ctx=self.ctx))
+        self.assertEqual(out["via"], "original")
+
+    def test_guard_state_restored_on_repeated_fallbacks(self):
+        # Fallback paths restore the pre-bump tracker snapshot, so the stock
+        # handler's own bump is the only one that survives: N identical
+        # handoffs count N, not 2N. The 3rd call must still answer (stock
+        # semantics: warning at 3, block at 4) instead of being BLOCKED.
+        pool = FakePool(response={
+            "ok": True,
+            "value": {"hits": HITS + [_hit("notes.md", 1, "alpha_marker here")]}})
+        args = {"pattern": "alpha_marker", "limit": 2}
+        for _ in range(3):
+            out = json.loads(self.call_search(pool, args, ctx=self.ctx))
+            self.assertEqual(out["via"], "original",
+                             "3rd identical fallback must answer, not BLOCK")
+        blocked = json.loads(self.call_search(pool, args, ctx=self.ctx))
+        self.assertIn("BLOCKED", blocked["error"])
+
+    def test_full_page_falls_back_to_stock(self):
+        # hits == limit exactly (the worker clamps the limit+1 probe at its
+        # own cap, so a full page can never be proven complete).
+        pool = FakePool(response={"ok": True, "value": {"hits": [
+            _hit("src/a.rs", 3, "fn alpha_marker() {"),
+            _hit("src/c.rs", 2, "alpha_marker"),
+        ]}})
+        out = json.loads(self.call_search(
+            pool, {"pattern": "alpha_marker", "limit": 2}, ctx=self.ctx))
+        self.assertEqual(out["via"], "original")
 
     def test_read_blocked_matches_are_omitted_with_note(self):
         pool = FakePool(response={"ok": True, "value": {"hits": [

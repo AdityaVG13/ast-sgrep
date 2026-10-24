@@ -97,13 +97,21 @@ stock ripgrep handler verbatim.
   and the takeover call runs inside the stock rg pipeline's own 60s budget
   — if the worker cannot answer in what ripgrep would have been given, the
   call falls back to rg.
+- **Serves only provably-identical answers**: takeover answers only when
+  the complete hit set fits strictly inside one page (a full page cannot be
+  proven complete — the worker clamps the limit+1 probe at its own cap, and
+  a ranked top-N is not rg's walk-order first-N; rg owns every pagination
+  sequence) and no hit's preview was width-elided (stock shows up to 500
+  chars of a line; an elided capsule can hide the match itself). Everything
+  else — regex patterns, file search, context lines, offsets, count modes,
+  overflow pages, long-line matches — falls through to stock rg.
+- **Guard parity**: the repeat-search guard bumps exactly once per call,
+  whichever engine answers; fallback paths restore the pre-bump tracker
+  snapshot, so handoffs are invisible to the anti-loop guardrail.
 - Undo: plugin unload restores the stock handler (host-tracked).
 - Known deltas (documented, deliberate): match paths are repo-relative
-  (stock rg prefixes `./` when given the default path); ranking is
-  definitions-first; and a takeover that fails mid-flight (worker error)
-  falls back through the stock handler, which bumps the repeat-search
-  guard a second time — on that degraded path identical searches block
-  on the second consecutive call instead of the fourth.
+  (stock rg prefixes `./` when given the default path) and ranking is
+  definitions-first within a served page.
 
 > Minimal-PATH hosts: GUI harnesses (desktop gateways, launchd agents) often
 > run with `PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`, which omits

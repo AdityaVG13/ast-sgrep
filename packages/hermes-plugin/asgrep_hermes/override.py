@@ -232,11 +232,24 @@ def _takeover(host, pool, root_fn, args, task_id):
 
     # Repeat-search guard: identical plumbing to search_tool so the anti-loop
     # guardrail survives the engine swap (search_key includes the same fields).
+    # The entry is snapshotted before bumping: every FALLBACK path restores it,
+    # so the stock handler's own bump is the only one that survives a handoff
+    # -- exactly one bump per call, whichever engine answers (copy/restore is
+    # layout-agnostic, so a host-side tracker format change cannot wedge it).
     search_key = ("search", pattern, target, str(path), file_glob or "", limit, offset, order)
     with host.read_tracker_lock:
         task_data = host.read_tracker.setdefault(
             task_id, {"last_key": None, "consecutive": 0, "read_history": set()})
+        saved_task_data = dict(task_data)
         count = host.bump_consecutive(task_data, search_key)
+
+    def _restore_guard() -> None:
+        with host.read_tracker_lock:
+            current = host.read_tracker.get(task_id)
+            if current is not None:
+                current.clear()
+                current.update(saved_task_data)
+
     if count >= 4:
         return host.tool_error(
             f"BLOCKED: You have run this exact search {count} times in a row. "
@@ -254,26 +267,52 @@ def _takeover(host, pool, root_fn, args, task_id):
         return cached_nf
 
     # --- the only leaf that differs from search_tool: the engine ---
+    # Takeover serves ONLY answers that are indistinguishable from what rg
+    # would have shown on this call:
+    #   * the complete hit set fits strictly inside one page (hit_count
+    #     < limit) -- the worker clamps the limit+1 probe at its own cap,
+    #     so a FULL page can never be proven complete, and a capped page
+    #     would be asgrep's ranked subset vs rg's walk-order subset with
+    #     offset pagination crossing engines mid-stream;
+    #   * no hit's preview was width-elided ("...") -- stock shows up to 500
+    #     chars of a line, the capsule preview ~120 with the match itself
+    #     possibly hidden in the elided middle.
+    # Anything else hands off to the stock handler with the guard restored.
     # 60s matches the stock rg pipeline's own per-run budget: if the worker
     # cannot answer within what ripgrep would have been given, fall back and
     # let rg rescan at its budget instead of stacking both latencies.
-    out = pool.call(session_root, "search",
-                    {"query": f"literal:{pattern}", "limit": limit + 1},
-                    timeout_s=60.0)
-    if not out.get("ok"):
+    try:
+        out = pool.call(session_root, "search",
+                        {"query": f"literal:{pattern}", "limit": limit + 1},
+                        timeout_s=60.0)
+        if not out.get("ok"):
+            _restore_guard()
+            return None
+        hits = (out.get("value") or {}).get("hits") or []
+        if len(hits) >= limit:
+            # A full page (or more) cannot be proven complete -- the worker
+            # clamps the limit+1 probe at its own cap, and a ranked top-N is
+            # not rg's walk-order first-N. rg owns the pagination sequence.
+            _restore_guard()
+            return None
+        if any(str(h.get("preview", "")).endswith("…") for h in hits):
+            # A long line was elided; stock would show up to 500 chars.
+            _restore_guard()
+            return None
+        matches = [
+            host.SearchMatch(
+                path=str(h.get("file", "")),
+                line_number=int((h.get("lines") or {}).get("start", 0)),
+                content=str(h.get("preview", "")),
+            )
+            for h in hits
+        ]
+    except Exception:
+        log.exception("asgrep takeover failed; falling back to stock search")
+        _restore_guard()
         return None
-    hits = (out.get("value") or {}).get("hits") or []
-    truncated = len(hits) > limit
-    matches = [
-        host.SearchMatch(
-            path=str(h.get("file", "")),
-            line_number=int((h.get("lines") or {}).get("start", 0)),
-            content=str(h.get("preview", "")),
-        )
-        for h in hits[:limit]
-    ]
     result = host.SearchResult(matches=matches, total_count=len(matches),
-                               truncated=truncated)
+                               truncated=False)
 
     omitted = host.filter_read_blocked(result, task_id)
     for m in getattr(result, "matches", None) or ():
@@ -296,10 +335,6 @@ def _takeover(host, pool, root_fn, args, task_id):
         result_dict["_warning"] = (
             f"You have run this exact search {count} times consecutively. "
             "The results have not changed. Use the information you already have.")
-    if result_dict.get("truncated"):
-        result_dict["_hint"] = (
-            f"Results truncated. Use offset={offset + limit} to see more, "
-            "or narrow with a more specific pattern or file_glob.")
     return json.dumps(result_dict, ensure_ascii=False)
 
 
