@@ -21,6 +21,7 @@
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--excerpt-lines",
         "--file-filter",
         "--files-with-matches",
@@ -53,6 +54,12 @@
       "usage": "asgrep call-path"
     },
     {
+      "about": "Find call sites of a symbol (callers: channel)",
+      "flags": [],
+      "name": "callers",
+      "usage": "asgrep callers"
+    },
+    {
       "about": "Print the machine-readable CLI contract (JSON)",
       "flags": [
         "--json"
@@ -75,6 +82,7 @@
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--dry-run",
         "--excerpt-lines",
         "--file-filter",
@@ -108,12 +116,10 @@
       "usage": "asgrep codemode-batch"
     },
     {
-      "about": "Sticky NDJSON Code Mode worker",
-      "flags": [
-        "--no-embed"
-      ],
-      "name": "codemode-serve",
-      "usage": "asgrep codemode-serve"
+      "about": "Find definitions of a symbol (defs: channel)",
+      "flags": [],
+      "name": "defs",
+      "usage": "asgrep defs"
     },
     {
       "about": "Diagnose index health and return recovery commands",
@@ -135,11 +141,18 @@
       "usage": "asgrep eval"
     },
     {
+      "about": "Find files importing a module (imports: channel)",
+      "flags": [],
+      "name": "imports",
+      "usage": "asgrep imports"
+    },
+    {
       "about": "Build or incrementally refresh an index",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--dry-run",
         "--excerpt-lines",
         "--file-filter",
@@ -179,6 +192,7 @@
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--excerpt-lines",
         "--file-filter",
         "--files-with-matches",
@@ -201,11 +215,21 @@
       "usage": "asgrep outline"
     },
     {
+      "about": "Read bounded source windows for file refs (path, path#L12, path#L12-L40)",
+      "flags": [
+        "--context-lines",
+        "--max-chars"
+      ],
+      "name": "read",
+      "usage": "asgrep read"
+    },
+    {
       "about": "Force a full transactional rebuild",
       "flags": [
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--dry-run",
         "--excerpt-lines",
         "--file-filter",
@@ -244,6 +268,7 @@
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--excerpt-lines",
         "--file-filter",
         "--files-with-matches",
@@ -267,6 +292,7 @@
         "--ann-probes",
         "--ann-threshold",
         "--budget-tokens",
+        "--count",
         "--excerpt-lines",
         "--file-filter",
         "--files-with-matches",
@@ -281,6 +307,17 @@
       "name": "semantic",
       "robot_output": "--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab",
       "usage": "asgrep semantic"
+    },
+    {
+      "about": "Sticky NDJSON Code Mode worker",
+      "aliases": [
+        "codemode-serve"
+      ],
+      "flags": [
+        "--no-embed"
+      ],
+      "name": "serve",
+      "usage": "asgrep serve"
     },
     {
       "about": "Show index and embedding status",

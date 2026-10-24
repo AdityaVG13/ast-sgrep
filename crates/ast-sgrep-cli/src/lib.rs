@@ -10,6 +10,7 @@ mod install;
 pub mod keep_gate;
 mod machine;
 mod outline_cmd;
+mod read_cmd;
 mod search_cmd;
 pub mod supervisor;
 mod watch;
@@ -128,8 +129,14 @@ fn run_process() -> ! {
 fn run_process_with(run: impl FnOnce(&Cli) -> anyhow::Result<()>) -> ! {
     let raw_args = rewrite_search_path_alias(std::env::args_os().collect());
     let (raw_args, typo_warnings) = agent::rewrite_typos(raw_args);
-    for warning in &typo_warnings {
-        eprintln!("{warning}");
+    if machine::raw_machine_output_requested(&raw_args) {
+        // Machine mode: teaching notes ride the JSON envelope, stderr stays
+        // silent (the envelope is complete for piping).
+        machine::set_pending_notes(typo_warnings);
+    } else {
+        for warning in &typo_warnings {
+            eprintln!("{warning}");
+        }
     }
     let cli = match Cli::try_parse_from(&raw_args) {
         Ok(cli) => cli,
@@ -174,15 +181,45 @@ fn run_process_with(run: impl FnOnce(&Cli) -> anyhow::Result<()>) -> ! {
         Err(error) => {
             let usage = error.downcast_ref::<UsageError>().is_some();
             let exit_code = if usage { 1 } else { 2 };
+            let mut detail = format!("{error:#}");
+            // (Mode words ast/structural/syntax/tree used to fall into this
+            // branch read as QUERY; they now recover onto `search` at the
+            // argv layer, so the bad-root Tip for them is gone.)
+            //
+            // Unquoted multi-word query habit (`asgrep auth refresh`): QUERY
+            // takes the first positional, ROOT the second — a missing second
+            // positional usually means the query needed quotes.
+            if detail.contains("project root does not exist or is not a directory")
+                && cli.query.is_some()
+                && cli.search_root != PathBuf::from(".")
+            {
+                if let Some(query) = &cli.query {
+                    let root_token = cli.search_root.display().to_string();
+                    let tip = if root_token.starts_with('-') {
+                        format!(
+                            "\nTip: `{root_token}` landed in the ROOT positional — flags \
+                             must precede the QUERY (everything after `--` is positional). \
+                             Try: asgrep {root_token} \"{query}\""
+                        )
+                    } else {
+                        format!(
+                            "\nTip: `{root_token}` reads as the ROOT positional and is not a directory. If \
+                             you meant one multi-word query, quote it: asgrep \"{query} {root_token}\" \
+                             (or pass a real ROOT directory)."
+                        )
+                    };
+                    detail.push_str(&tip);
+                }
+            }
             if cli.machine_output_requested() {
                 print_machine_failure(
                     cli.command_name(),
                     if usage { "usage" } else { "operational" },
                     exit_code,
-                    &format!("{error:#}"),
+                    &detail,
                 );
             } else {
-                eprintln!("{error:#}");
+                eprintln!("{detail}");
                 agent::print_agent_help_footer();
             }
             std::process::exit(exit_code);
@@ -239,7 +276,14 @@ fn validate_cli(cli: &Cli) -> anyhow::Result<()> {
     // Search-only flags must fail on commands that cannot apply them.
     let search_command = matches!(
         cli.command.as_ref(),
-        None | Some(Commands::Search(_) | Commands::Keyword(_) | Commands::Semantic(_))
+        None | Some(
+            Commands::Search(_)
+                | Commands::Keyword(_)
+                | Commands::Semantic(_)
+                | Commands::Defs(_)
+                | Commands::Callers(_)
+                | Commands::Imports(_)
+        )
     );
     if tuning.semantic_only
         && matches!(cli.command.as_ref(), Some(Commands::Search(q)) if !q.pattern.is_empty())
@@ -289,6 +333,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         }
         Commands::Status(r) => print_status_command(cli, &r.root),
         Commands::Outline(o) => outline_cmd::run_outline(cli, &o.root.root, &o.path),
+        Commands::Read(r) => read_cmd::run_read(cli, r),
         Commands::Reindex(c) => {
             if c.dry_run {
                 return run_index_dry_run("reindex", &c.root.root, cli);
@@ -334,6 +379,17 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         }
         Commands::Keyword(q) => search_cmd::run_keyword_search(&q.query.root, cli, &q.query.query),
         Commands::Semantic(q) => search_cmd::run_search(&q.query.root, cli, &q.query.query, true),
+        // Cross-dialect verbs (round 6): the codemode dispatcher's verb family
+        // routes through the same prefixed grammar channels (QG-002/003).
+        Commands::Defs(d) => {
+            search_cmd::run_search(&d.root, cli, &format!("defs:{}", d.symbol), false)
+        }
+        Commands::Callers(d) => {
+            search_cmd::run_search(&d.root, cli, &format!("callers:{}", d.symbol), false)
+        }
+        Commands::Imports(d) => {
+            search_cmd::run_search(&d.root, cli, &format!("imports:{}", d.symbol), false)
+        }
         Commands::Chain(q) => search_cmd::run_chain(
             &q.query.root,
             cli,
@@ -347,7 +403,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
         Commands::Eval(args) => eval::run_eval(cli, args),
         Commands::CodemodeBatch { requests, .. } => run_codemode_batch(cli, requests),
-        Commands::CodemodeServe { .. } => run_codemode_serve(cli),
+        Commands::Serve { .. } => run_codemode_serve(cli),
         Commands::Install(args) => install::run_install(args),
     }
 }

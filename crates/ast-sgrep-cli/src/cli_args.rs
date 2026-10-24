@@ -15,6 +15,19 @@ pub(crate) const MAX_SNIPPET_TOKENS: usize = 4_096;
 pub(crate) const MAX_RESPONSE_SNIPPET_TOKENS: usize = 65_536;
 
 #[derive(Args, Clone, Debug)]
+pub(crate) struct ReadArgs {
+    /// File refs to read: `path`, `path#L12`, or `path#L12-L40` (relative to root).
+    #[arg(value_name = "REF", required = true)]
+    pub(crate) refs: Vec<String>,
+    /// Context lines added around each requested span.
+    #[arg(long, default_value_t = 0, help = "Context lines around each window")]
+    pub(crate) context_lines: usize,
+    /// Max characters per window (clamped to 1..=100000).
+    #[arg(long, default_value_t = 100_000, help = "Max characters per window")]
+    pub(crate) max_chars: usize,
+}
+
+#[derive(Args, Clone, Debug)]
 pub(crate) struct OutlineArgs {
     /// File to outline (relative to root, or absolute inside root).
     /// Required positionals precede the optional ROOT positional (clap order).
@@ -47,6 +60,14 @@ pub(crate) struct ChainArgs {
           value_parser = clap::value_parser!(u64).range(1..=ast_sgrep_core::chain::MAX_CHAIN_WORK as u64),
           help = "Traversal attempt budget, independent of --limit (not a SQL/time bound)")]
     pub(crate) max_work: u64,
+}
+
+#[derive(Args, Clone, Debug)]
+pub(crate) struct SymbolRootArg {
+    #[arg(help = "Symbol to look up (module substring for imports)")]
+    pub(crate) symbol: String,
+    #[arg(default_value = ".", help = "Project root directory")]
+    pub(crate) root: PathBuf,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -206,6 +227,16 @@ pub(crate) struct SearchTuning {
         help = "Print matching file paths (sorted, deduped) instead of hits; --json adds a `files` array"
     )]
     pub(crate) files_with_matches: bool,
+    /// Per-file match counts (grep -c): text output prints `path:count`
+    /// lines instead of hits; --json envelopes add a `counts` array.
+    /// Zero-match files stay absent (the hit set is the source of truth).
+    #[arg(
+        long,
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Print per-file match counts (path:count) instead of hits; --json adds a `counts` array"
+    )]
+    pub(crate) count: bool,
 }
 
 /// Snippet size for machine-readable search output.
@@ -312,7 +343,7 @@ pub(crate) struct LexicalQueryCmd {
     pub(crate) tuning: SearchTuning,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(
     name = "asgrep",
     version,
@@ -412,7 +443,7 @@ pub(crate) struct Cli {
     pub(crate) search_root: PathBuf,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub(crate) enum Commands {
     /// Build or incrementally refresh an index
     #[command(about = "Build or incrementally refresh an index")]
@@ -423,6 +454,9 @@ pub(crate) enum Commands {
     /// List a file's indexed symbols (structure outline)
     #[command(about = "List a file's indexed symbols (structure outline)")]
     Outline(OutlineArgs),
+    /// Read bounded source windows for file refs (MCP `code_read` parity)
+    #[command(about = "Read bounded source windows for file refs (path, path#L12, path#L12-L40)")]
+    Read(ReadArgs),
     /// Force a full transactional rebuild
     #[command(about = "Force a full transactional rebuild")]
     Reindex(ReindexCmd),
@@ -480,6 +514,15 @@ pub(crate) enum Commands {
     /// Find a bounded directed call path; this does not track values
     #[command(about = "Find a bounded call path (call graph only, not value flow)")]
     CallPath(CallPathArgs),
+    /// Find where a symbol is defined
+    #[command(about = "Find definitions of a symbol (defs: channel)")]
+    Defs(SymbolRootArg),
+    /// Find call sites of a symbol
+    #[command(about = "Find call sites of a symbol (callers: channel)")]
+    Callers(SymbolRootArg),
+    /// Find files importing a module
+    #[command(about = "Find files importing a module (imports: channel)")]
+    Imports(SymbolRootArg),
     /// Print the machine-readable CLI contract
     #[command(about = "Print the machine-readable CLI contract (JSON)")]
     Capabilities(agent::CapabilitiesArgs),
@@ -511,9 +554,13 @@ pub(crate) enum Commands {
             help = "Disable semantic embeddings")]
         no_embed: bool,
     },
-    /// Sticky NDJSON Code Mode worker (one warm Searcher for a whole program).
-    #[command(about = "Sticky NDJSON Code Mode worker")]
-    CodemodeServe {
+    /// Sticky NDJSON session worker — the agent front door (one warm
+    /// Searcher, ambient freshness, session memory for a whole program).
+    #[command(
+        alias = "codemode-serve",
+        about = "Sticky NDJSON Code Mode worker"
+    )]
+    Serve {
         #[arg(long, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue,
             value_parser = clap::builder::BoolishValueParser::new(),
             help = "Disable semantic embeddings")]
@@ -524,7 +571,7 @@ pub(crate) enum Commands {
     Install(crate::install::InstallArgs),
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub(crate) struct VersionArgs {
     #[arg(long)]
     pub(crate) json: bool,
@@ -717,12 +764,13 @@ impl Cli {
                 t.preview.clone_from(&o.preview);
             }
             t.files_with_matches |= o.files_with_matches;
+            t.count |= o.count;
         }
         t.no_embed |= matches!(
             self.command.as_ref(),
             Some(
                 Commands::CodemodeBatch { no_embed: true, .. }
-                    | Commands::CodemodeServe { no_embed: true }
+                    | Commands::Serve { no_embed: true }
             )
         );
         t
@@ -744,6 +792,7 @@ impl Cli {
             Some(Commands::Index(_)) => "index",
             Some(Commands::Status(_)) => "status",
             Some(Commands::Outline(_)) => "outline",
+            Some(Commands::Read(_)) => "read",
             Some(Commands::Reindex(_)) => "reindex",
             Some(Commands::Codemod(_)) => "codemod",
             Some(Commands::Search(_)) => "search",
@@ -753,6 +802,9 @@ impl Cli {
             Some(Commands::Semantic(_)) => "semantic",
             Some(Commands::Chain(_)) => "chain",
             Some(Commands::CallPath(_)) => "call-path",
+            Some(Commands::Defs(_)) => "defs",
+            Some(Commands::Callers(_)) => "callers",
+            Some(Commands::Imports(_)) => "imports",
             Some(Commands::Capabilities(_)) => "capabilities",
             Some(Commands::Version(_)) => "version",
             Some(Commands::RobotDocs(_)) => "robot-docs",
@@ -760,7 +812,7 @@ impl Cli {
             Some(Commands::Eval(_)) => "eval",
             Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
             Some(Commands::Install(_)) => "install",
-            Some(Commands::CodemodeServe { .. }) => "codemode-serve",
+            Some(Commands::Serve { .. }) => "serve",
         }
     }
 }

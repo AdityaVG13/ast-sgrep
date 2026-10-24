@@ -110,8 +110,75 @@ pub(crate) fn run_call_path(args: &crate::cli_args::CallPathArgs, cli: &Cli) -> 
     Ok(())
 }
 
+/// Open the searcher for a possibly-FILE root (grep `QUERY FILE` habit).
+/// For a file root, try each indexed ancestor nearest-first (stale or
+/// foreign-layout indexes are skipped by falling through to the next
+/// candidate), scoping with an exact-path filter relative to the winning
+/// base. The remap note rides the machine envelope or stderr on SUCCESS
+/// only — a total failure surfaces the last (outermost) error untouched.
+/// An explicit --file-filter always wins (base still remaps, no note).
+fn open_searcher_file_aware(root: &Path, cli: &Cli) -> anyhow::Result<ast_sgrep_core::Searcher> {
+    if !root.is_file() {
+        return open_searcher(root, cli);
+    }
+    // Canonicalize: the ancestor walk must terminate at the real filesystem
+    // root, not at the empty string a relative path's ancestors end with.
+    let root = &root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve file root: {}", root.display()))?;
+    let file_dir = root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mut candidates: Vec<std::path::PathBuf> = file_dir
+        .ancestors()
+        .filter(|dir| dir.join(".asgrep").join("index.db").is_file())
+        .map(Path::to_path_buf)
+        .collect();
+    if !candidates.contains(&file_dir) {
+        candidates.push(file_dir);
+    }
+    let mut last_err = None;
+    for base in candidates.iter() {
+        let mut probe = cli.clone();
+        if probe.tuning.file_filter.is_none() {
+            if let Ok(rel) = root.strip_prefix(base) {
+                let filter = rel.to_string_lossy().replace('\\', "/");
+                if !filter.is_empty() {
+                    probe.tuning.file_filter = Some(filter);
+                }
+            }
+        }
+        match open_searcher(base, &probe) {
+            Ok(searcher) => {
+                // Note only when a real index answered (the unindexed
+                // file-dir fallback teaches through its own error path).
+                if base.join(".asgrep").join("index.db").is_file()
+                    && cli.tuning.file_filter.is_none()
+                {
+                    let note = format!(
+                        "note: root `{}` is a file -- searched it via `{}` with an \
+                         exact-path file filter. Next time: asgrep QUERY --root {} \
+                         --file-filter <path>",
+                        root.display(),
+                        base.display(),
+                        base.display()
+                    );
+                    crate::machine::push_pending_note(note.clone());
+                    if !cli.machine_output_requested() {
+                        eprintln!("{note}");
+                    }
+                }
+                return Ok(searcher);
+            }
+            Err(error) => last_err = Some(error),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no candidate roots for {}", root.display())))
+}
+
 pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow::Result<()> {
-    let response = open_searcher(root, cli)?
+    let response = open_searcher_file_aware(root, cli)?
         .search_lexical(query)
         .context("keyword search failed")?;
     print_search_response(
@@ -133,9 +200,59 @@ fn files_from_hits(response: &SearchResponse) -> Vec<String> {
     files
 }
 
+/// The grep `-c` result set — `(path, matches)` sorted by path. Derived from
+/// the same hit set as `files_from_hits`; zero-match files stay absent.
+fn counts_from_hits(response: &SearchResponse) -> Vec<(String, u64)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for hit in &response.hits {
+        let count = counts.entry(hit.file.clone()).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            order.push(hit.file.clone());
+        }
+    }
+    order.sort();
+    order
+        .into_iter()
+        .map(|file| {
+            let count = counts[&file];
+            (file, count)
+        })
+        .collect()
+}
+
 /// Human-readable hit output: the boolean path listing when the flag is set,
 /// one line per hit otherwise. Shared by the single- and multi-pattern paths.
-fn print_human_hits(response: &SearchResponse, files_with_matches: bool) -> anyhow::Result<()> {
+fn print_human_hits(
+    response: &SearchResponse,
+    files_with_matches: bool,
+    count: bool,
+    miss: Option<ast_sgrep_plugins::MissContext>,
+) -> anyhow::Result<()> {
+    // A silent zero-hit answer is indistinguishable from a no-op: classify
+    // the miss in human output too (the machine envelopes carry `why`).
+    if response.hits.is_empty() {
+        if let Some(ctx) = miss {
+            let reason = ctx.reason();
+            let first_filter = ctx.scope.first().map(|(name, _)| name.as_str());
+            write_stdout_line(&format!(
+                "no hits for `{}` (tried: {}) -- {}. Next: {}",
+                response.query,
+                ctx.tried.join("+"),
+                reason.as_str(),
+                reason.next_step(first_filter)
+            ))?;
+        }
+        return Ok(());
+    }
+    if count {
+        // grep -c habit: `path:count`, one line per file with hits.
+        for (file, count) in counts_from_hits(response) {
+            write_stdout_line(&format!("{file}:{count}"))?;
+        }
+        return Ok(());
+    }
     if files_with_matches {
         for path in files_from_hits(response) {
             write_stdout_line(&path)?;
@@ -161,7 +278,8 @@ pub(crate) fn run_search(
     } else {
         "search failed"
     };
-    let response = do_search(&open_searcher(root, cli)?, query, semantic_ch).context(ctx)?;
+    let response =
+        do_search(&open_searcher_file_aware(root, cli)?, query, semantic_ch).context(ctx)?;
     let default = if semantic_ch {
         ast_sgrep_plugins::OutputFormat::Agent
     } else {
@@ -171,7 +289,7 @@ pub(crate) fn run_search(
         if semantic_ch { "semantic" } else { "search" },
         &response,
         default,
-        cli,
+        &cli,
     )
 }
 
@@ -188,7 +306,7 @@ pub(crate) fn run_multi_pattern_search(
     cli: &Cli,
     patterns: &[String],
 ) -> anyhow::Result<()> {
-    let searcher = open_searcher(root, cli)?;
+    let searcher = open_searcher_file_aware(root, cli)?;
     let response = searcher
         .search_multi_pattern(patterns)
         .context("multi-pattern search failed")?;
@@ -196,7 +314,7 @@ pub(crate) fn run_multi_pattern_search(
         "search",
         &response,
         ast_sgrep_plugins::OutputFormat::Native,
-        cli,
+        &cli,
     )
 }
 
@@ -207,7 +325,12 @@ fn print_search_response(
     cli: &Cli,
 ) -> anyhow::Result<()> {
     if !cli.search_machine_output() {
-        return print_human_hits(response, cli.active_tuning().files_with_matches);
+        return print_human_hits(
+            response,
+            cli.active_tuning().files_with_matches,
+            cli.active_tuning().count,
+            Some(miss_context(command, cli)),
+        );
     }
     let tuning = cli.active_tuning();
     let format = resolve_output_format(tuning.format.as_deref(), default_format)?;
@@ -226,6 +349,18 @@ fn print_search_response(
                         .map(serde_json::Value::String)
                         .collect(),
                 ),
+            );
+        }
+    }
+    // grep -c habit: same additive pattern as `files` above.
+    if tuning.count {
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "counts".into(),
+                serde_json::json!(counts_from_hits(response)
+                    .into_iter()
+                    .map(|(file, count)| serde_json::json!({ "file": file, "count": count }))
+                    .collect::<Vec<_>>()),
             );
         }
     }
@@ -253,9 +388,10 @@ fn render_search_json(
 
     let tuning = cli.active_tuning();
 
+    let miss = miss_context(command, cli);
     // Compact miss envelope is cheaper than an empty hit list for agents.
     if format == OutputFormat::Compact && response.hits.is_empty() {
-        return to_compact_miss_json(&response.query, &miss_context(command, cli));
+        return to_compact_miss_json(&response.query, &miss);
     }
 
     // Explicit token budget wins over preview size defaults, not explicit none.
@@ -330,7 +466,18 @@ fn render_search_json(
             },
         ),
     };
-    format_response_with_budget(response, format, excerpt, budget)
+    let mut envelope = format_response_with_budget(response, format, excerpt, budget);
+    // Zero-hit answers classify the miss on every machine format, not only
+    // the compact envelope whose schema has always documented `why` — a
+    // silent empty hit list is indistinguishable from a no-op.
+    if response.hits.is_empty() {
+        let reason = miss.reason();
+        let first_filter = miss.scope.first().map(|(name, _)| name.as_str());
+        envelope["why"] = serde_json::Value::String(reason.as_str().to_owned());
+        envelope["next"] =
+            serde_json::Value::String(reason.next_step(first_filter).to_owned());
+    }
+    envelope
 }
 
 fn blank_compact_snippets(envelope: &mut serde_json::Value) {

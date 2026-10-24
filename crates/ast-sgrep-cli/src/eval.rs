@@ -19,7 +19,7 @@ const RESOLUTION_TIERS: [&str; 8] = [
     "ambiguous",
     "unresolved",
 ];
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub(crate) struct EvalArgs {
     #[arg(long)]
     gold: PathBuf,

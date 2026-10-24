@@ -35,6 +35,36 @@ fn bounded_error_message(message: &str) -> String {
     }
 }
 
+thread_local! {
+    /// Argv-level teaching notes (typo recovery) staged by the process
+    /// boundary for machine-mode runs: they ride the JSON envelope instead
+    /// of stderr, so `2>/dev/null` pipelines lose nothing (usage failures
+    /// stay stderr-silent per the machine contract). Human mode prints
+    /// them to stderr at the boundary instead (see `run_process_with`).
+    static PENDING_NOTES: std::cell::RefCell<Vec<String>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+/// Stage notes for the next machine envelope printed on this thread.
+pub(crate) fn set_pending_notes(notes: Vec<String>) {
+    PENDING_NOTES.with(|cell| *cell.borrow_mut() = notes);
+}
+
+/// Append one runtime note (decided after argv parse, e.g. a root remap) to
+/// whatever argv-level notes are already staged.
+pub(crate) fn push_pending_note(note: String) {
+    PENDING_NOTES.with(|cell| cell.borrow_mut().push(note));
+}
+
+fn attach_pending_notes(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let notes = PENDING_NOTES.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    if !notes.is_empty() {
+        if let Ok(value) = serde_json::to_value(notes) {
+            object.insert("notes".into(), value);
+        }
+    }
+}
+
 fn machine_value(command: &str, value: impl serde::Serialize) -> anyhow::Result<serde_json::Value> {
     let mut value = serde_json::to_value(value)?;
     let object = match &mut value {
@@ -88,6 +118,7 @@ pub(crate) fn print_machine_json_with_style(
     if let Some(object) = value.as_object_mut() {
         object.insert("ok".into(), ok.into());
         object.insert("exit_code".into(), exit_code.into());
+        attach_pending_notes(object);
     }
     let payload = if compact {
         serde_json::to_string(&value)?
@@ -99,11 +130,14 @@ pub(crate) fn print_machine_json_with_style(
 }
 
 pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, message: &str) {
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "schema_version": MACHINE_SCHEMA_VERSION, "tool": "asgrep", "command": command,
         "ok": false, "exit_code": exit_code,
         "error": {"kind": kind, "message": bounded_error_message(message)}
     });
+    if let Some(object) = value.as_object_mut() {
+        attach_pending_notes(object);
+    }
     let payload = serde_json::to_string_pretty(&value).expect("failure envelope serializes");
     // Ignore broken pipe: agents piping JSON may close early.
     let _ = write_stdout_line(&payload);

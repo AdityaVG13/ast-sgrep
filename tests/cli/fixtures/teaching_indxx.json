@@ -5,6 +5,9 @@
     "message": "unknown subcommand 'indxx'; did you mean: asgrep index ... ? Try: asgrep capabilities --json"
   },
   "exit_code": 1,
+  "notes": [
+    "note: `indxx` names the MCP tool `index`; the CLI canonical form is `asgrep index …` and mutating commands are never guessed into execution. If intended: asgrep index --help"
+  ],
   "ok": false,
   "schema_version": "1.0.0",
   "tool": "asgrep"

@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct InstallArgs {
-    /// Agent target(s): cursor|claude|codex|opencode|all (repeatable).
+    /// Agent target(s): cursor|claude|codex|opencode|hermes|all (repeatable;
+    /// hermes installs the native plugin, not an MCP entry).
     #[arg(long = "target", value_name = "NAME", num_args = 1.., required = true)]
     pub(crate) targets: Vec<String>,
     /// Skip confirmation prompts.
@@ -28,6 +29,7 @@ enum Target {
     Claude,
     Codex,
     OpenCode,
+    Hermes,
 }
 
 impl Target {
@@ -37,9 +39,10 @@ impl Target {
             "claude" | "claude-code" | "cc" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             "opencode" => Ok(Self::OpenCode),
+            "hermes" | "hermes-agent" => Ok(Self::Hermes),
             "all" => bail!("expand 'all' before parse"),
             other => bail!(
-                "unknown install target '{other}' (expected cursor|claude|codex|opencode|all)"
+                "unknown install target '{other}' (expected cursor|claude|codex|opencode|hermes|all)"
             ),
         }
     }
@@ -50,7 +53,12 @@ impl Target {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
+            Self::Hermes => "hermes",
         }
+    }
+
+    fn is_mcp(self) -> bool {
+        !matches!(self, Self::Hermes)
     }
 }
 
@@ -58,7 +66,6 @@ pub(crate) fn run_install(args: &InstallArgs) -> anyhow::Result<()> {
     if !args.yes {
         bail!("pass --yes to write agent MCP config (non-interactive; no daemon is started)");
     }
-    let command = resolve_mcp_command()?;
     let mut targets = Vec::new();
     for raw in &args.targets {
         if raw.eq_ignore_ascii_case("all") {
@@ -75,19 +82,137 @@ pub(crate) fn run_install(args: &InstallArgs) -> anyhow::Result<()> {
     targets.sort_by_key(|t| t.label());
     targets.dedup_by_key(|t| t.label());
 
+    // Hermes installs the native plugin (no MCP entry, no asgrep-mcp binary
+    // needed); resolve the MCP command only when an MCP host is present.
+    let mcp_command = if targets.iter().any(|t| t.is_mcp()) {
+        Some(resolve_mcp_command()?)
+    } else {
+        None
+    };
+
     let mut written = Vec::new();
+    let mut installed_hermes = false;
     for target in targets {
+        if let Target::Hermes = target {
+            let dest = install_hermes_plugin(args.force)?;
+            written.push(format!("hermes → {}", dest.display()));
+            installed_hermes = true;
+            continue;
+        }
+        let command = mcp_command.as_deref().expect("resolved for MCP targets");
         let path = config_path(target)?;
-        install_target(target, &path, &command, args.force)?;
+        install_target(target, &path, command, args.force)?;
         written.push(format!("{} → {}", target.label(), path.display()));
     }
     for line in written {
         println!("installed: {line}");
     }
-    println!(
-        "stdio MCP only — no daemon started. Restart the agent (or open a new session) to load asgrep-mcp."
-    );
+    if installed_hermes {
+        println!(
+            "hermes plugin installed. Restart Hermes (or open a new session) — \
+             the tool list freezes per session."
+        );
+    }
+    if mcp_command.is_some() {
+        println!(
+            "stdio MCP only — no daemon started. Restart the agent (or open a new session) to load asgrep-mcp."
+        );
+    }
     Ok(())
+}
+
+/// Embedded native Hermes plugin (packages/hermes-plugin). Shipping the files
+/// inside the binary keeps `asgrep install --target hermes` self-contained:
+/// no checkout path, no download. Tests are not shipped.
+const HERMES_PLUGIN_FILES: &[(&str, &str)] = &[
+    (
+        "plugin.yaml",
+        include_str!("../../../packages/hermes-plugin/plugin.yaml"),
+    ),
+    (
+        "__init__.py",
+        include_str!("../../../packages/hermes-plugin/__init__.py"),
+    ),
+    (
+        "plugin.py",
+        include_str!("../../../packages/hermes-plugin/plugin.py"),
+    ),
+    (
+        "asgrep_hermes/__init__.py",
+        include_str!("../../../packages/hermes-plugin/asgrep_hermes/__init__.py"),
+    ),
+    (
+        "asgrep_hermes/eager.py",
+        include_str!("../../../packages/hermes-plugin/asgrep_hermes/eager.py"),
+    ),
+    (
+        "asgrep_hermes/serve_client.py",
+        include_str!("../../../packages/hermes-plugin/asgrep_hermes/serve_client.py"),
+    ),
+];
+
+fn install_hermes_plugin(force: bool) -> anyhow::Result<PathBuf> {
+    let home = dirs_home()?;
+    let base = std::env::var_os("HERMES_PLUGINS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".hermes").join("plugins"));
+    let dest = base.join("asgrep");
+    if dest.exists() || dest.symlink_metadata().is_ok() {
+        let is_symlink = dest
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        anyhow::ensure!(
+            !is_symlink,
+            "{} is a symlink (likely a dev-live checkout link); remove it manually before installing",
+            dest.display()
+        );
+        anyhow::ensure!(
+            force,
+            "{} already exists; pass --force to replace the plugin files",
+            dest.display()
+        );
+        // Replace prior install file-by-file: explicit --force, and only the
+        // embedded set is ever touched.
+        for (rel, _) in HERMES_PLUGIN_FILES {
+            let file = dest.join(rel);
+            if file.symlink_metadata().is_ok() {
+                fs::remove_file(&file)
+                    .with_context(|| format!("replace {}", file.display()))?;
+            }
+        }
+    }
+    for (rel, content) in HERMES_PLUGIN_FILES {
+        let file = dest.join(rel);
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::write(&file, content)
+            .with_context(|| format!("write {}", file.display()))?;
+    }
+    // Best-effort enable: the hermes CLI may be absent (headless installs).
+    match which("hermes") {
+        Some(hermes) => {
+            match std::process::Command::new(&hermes)
+                .args(["plugins", "enable", "asgrep"])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    println!("enabled: hermes plugins enable asgrep");
+                }
+                Ok(out) => println!(
+                    "note: `hermes plugins enable asgrep` failed: {} — run it manually",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+                Err(err) => println!(
+                    "note: could not run hermes ({err}) — run `hermes plugins enable asgrep` manually"
+                ),
+            }
+        }
+        None => println!("note: hermes CLI not on PATH — run `hermes plugins enable asgrep`"),
+    }
+    Ok(dest)
 }
 
 fn resolve_mcp_command() -> anyhow::Result<String> {
@@ -128,6 +253,10 @@ pub(crate) fn which(name: &str) -> Option<PathBuf> {
 fn config_path(target: Target) -> anyhow::Result<PathBuf> {
     let home = dirs_home()?;
     Ok(match target {
+        Target::Hermes => std::env::var_os("HERMES_PLUGINS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".hermes").join("plugins"))
+            .join("asgrep"),
         Target::Cursor => {
             let base = std::env::var_os("CURSOR_CONFIG_DIR")
                 .map(PathBuf::from)
@@ -175,6 +304,8 @@ fn install_target(target: Target, path: &Path, command: &str, force: bool) -> an
         Target::Cursor | Target::Claude | Target::OpenCode => {
             install_json_mcp(path, command, force, target)
         }
+        // Hermes is dispatched in run_install (plugin copy, not MCP config).
+        Target::Hermes => unreachable!("hermes install is not an MCP write"),
     }
 }
 
@@ -195,6 +326,7 @@ fn install_json_mcp(path: &Path, command: &str, force: bool, target: Target) -> 
         }
         Target::Cursor | Target::OpenCode => ensure_object(&mut root, "mcpServers")?,
         Target::Codex => unreachable!(),
+        Target::Hermes => unreachable!("hermes install is not an MCP write"),
     };
     let replaced_names = ["asgrep", "ast-sgrep", "zvec_grep"];
     for key in replaced_names {
