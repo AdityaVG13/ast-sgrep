@@ -1335,6 +1335,9 @@ fn hermes_install_target_embeds_the_native_plugin() {
     assert!(manifest.contains("name: asgrep"), "{manifest}");
     assert!(plugins.join("asgrep/asgrep_hermes/serve_client.py").is_file());
     assert!(plugins.join("asgrep/asgrep_hermes/eager.py").is_file());
+    // Every module plugin.py imports must ship: a missing one kills the
+    // whole plugin at load on installed copies (dev-live symlinks hide it).
+    assert!(plugins.join("asgrep/asgrep_hermes/override.py").is_file());
     // Embedded copy must be byte-identical to the checkout (not stale).
     let installed = std::fs::read_to_string(plugins.join("asgrep/plugin.py")).unwrap();
     let checkout = std::fs::read_to_string("../../packages/hermes-plugin/plugin.py").unwrap();

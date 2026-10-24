@@ -146,6 +146,10 @@ const HERMES_PLUGIN_FILES: &[(&str, &str)] = &[
         include_str!("../../../packages/hermes-plugin/asgrep_hermes/eager.py"),
     ),
     (
+        "asgrep_hermes/override.py",
+        include_str!("../../../packages/hermes-plugin/asgrep_hermes/override.py"),
+    ),
+    (
         "asgrep_hermes/serve_client.py",
         include_str!("../../../packages/hermes-plugin/asgrep_hermes/serve_client.py"),
     ),
