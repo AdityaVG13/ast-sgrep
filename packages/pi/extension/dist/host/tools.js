@@ -11,14 +11,15 @@ export const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 100;
 const MAX_EXCERPT_LINES = 100;
 const searchParameters = Type.Object({
-    query: Type.String({ maxLength: 4_096 }),
+    query: Type.String({ maxLength: 4_096, description: "Fused keyword/AST query: plain words, symbols, snake_case fragments ('auth refresh', 'parse_pattern'); channel prefixes defs:SYMBOL, callers:SYMBOL, imports:MODULE, word:TERM, literal:TEXT, regex:PATTERN, pattern:'fn name($$$A)' with metavariables (bare $VAR patterns auto-route); scope inside the query with in:PATH. Or set `mode` instead of a prefix." }),
     mode: Type.Optional(Type.Unsafe({
         type: "string",
         enum: ["natural", "pattern", "defs", "callers", "chain", "semantic", "word", "literal", "regex", "imports"],
         default: "natural",
+        description: "Query channel: natural = fused hybrid (default); pattern/defs/callers/imports/word/literal/regex prefix the query with that channel; semantic = embedding-only search; chain = caller-chain expansion.",
     })),
-    limit: Type.Optional(Type.Integer({ default: DEFAULT_LIMIT })),
-    excerptLines: Type.Optional(Type.Integer({ default: 0 })),
+    limit: Type.Optional(Type.Integer({ default: DEFAULT_LIMIT, description: "Max hits (default 8, max 100)." })),
+    excerptLines: Type.Optional(Type.Integer({ default: 0, description: "Context lines around each hit excerpt (0 = signature capsule)." })),
     in: Type.Optional(Type.String({ maxLength: 512, description: "Bound to a directory or glob" })),
     lang: Type.Optional(Type.String({ maxLength: 32, description: "Language filter (rs, ts, py)" })),
 }, { additionalProperties: false });
@@ -37,7 +38,7 @@ const editParameters = Type.Object({
 }, { additionalProperties: false });
 const readParameters = Type.Object({
     path: Type.Optional(Type.String({ maxLength: 512 })),
-    ref: Type.Optional(Type.String({ description: "Hit ref path#L12-L40" })),
+    ref: Type.Optional(Type.String({ description: "Hit ref: path, path#L12, path#L12-L40 (LSP-style path:12 also accepted)" })),
     refs: Type.Optional(Type.Array(Type.String(), { maxItems: 24, description: "Several refs in one call" })),
     start: Type.Optional(Type.Integer()),
     end: Type.Optional(Type.Integer()),

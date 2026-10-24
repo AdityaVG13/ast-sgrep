@@ -3,11 +3,15 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // npm run release:fallback -- X.Y.Z      publish + verify (interactive: one npm 2FA approval)
 // npm run release:verify -- X.Y.Z        verify only (no publishes; safe anytime)
+// npm run release:fallback -- X.Y.Z --from-dir DIR
+//                                         publish from fleet-built tarballs (release-fleet.mjs pack output)
+//                                         instead of the preserved GitHub release assets; creates the draft
+//                                         release + uploads assets when missing (fleet lane)
 //
 // The starved-Actions fallback (2026-10-19: the OIDC publication job queued
 // 4+ h on exhausted runner minutes while all build+verify stages were green
@@ -35,7 +39,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const args = process.argv.slice(2);
 const verifyOnly = args.includes('--verify-only');
-const version = args.find((arg) => !arg.startsWith('--'));
+const fromDir = args.includes('--from-dir') ? args[args.indexOf('--from-dir') + 1] : null;
+const version = args.find((arg) => /^\d+\.\d+\.\d+$/u.test(arg));
 const fail = (code, message) => { console.error(`[fallback] ${code}: ${message}`); process.exit(1); };
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) fail('ASGREP_FALLBACK_USAGE', 'usage: npm run release:fallback -- X.Y.Z   (or release:verify -- X.Y.Z)');
 const tag = `v${version}`;
@@ -56,21 +61,43 @@ if (!remoteTag) fail('ASGREP_FALLBACK_TAG', `${tag} is not pushed to origin`);
 if ((peeled ?? remoteTag) !== localTag.stdout) fail('ASGREP_FALLBACK_TAG', `${tag} on origin points elsewhere`);
 
 const releaseJson = capture('gh', ['release', 'view', tag, '--json', 'isDraft,isPrerelease,assets']);
-if (releaseJson.status !== 0) fail('ASGREP_FALLBACK_RELEASE', `no GitHub release for ${tag}: ${releaseJson.stderr.split('\n').slice(-1)[0]}`);
-const release = JSON.parse(releaseJson.stdout);
+let release;
+if (releaseJson.status === 0) release = JSON.parse(releaseJson.stdout);
+else if (fromDir) {
+  // Fleet lane first publication: no Actions run ever happened, so the draft
+  // release does not exist yet — create it and preserve the tarballs.
+  console.log(`[fallback] no release for ${tag}; creating draft and uploading fleet assets`);
+  const create = sh('gh', ['release', 'create', tag, '--verify-tag', '--draft',
+    '--title', `ast-sgrep ${tag}`,
+    '--notes', `Fleet-built, immutable npm tarballs and manifest for ${tag}.`]);
+  if (create.status !== 0) fail('ASGREP_FALLBACK_RELEASE', `gh release create failed: ${String(create.stderr ?? '')}`);
+  release = { isDraft: true, isPrerelease: false, assets: [] };
+} else fail('ASGREP_FALLBACK_RELEASE', `no GitHub release for ${tag}: ${releaseJson.stderr}`);
 
 const temporary = await mkdtemp(path.join(tmpdir(), `asgrep-fallback-${version}-`));
+const artifactsDir = fromDir ? path.resolve(fromDir) : temporary;
 try {
-  const download = sh('gh', ['release', 'download', tag, '--repo', 'AdityaVG13/ast-sgrep', '--dir', temporary, '--pattern', '*.tgz', '--pattern', 'release-manifest.json']);
-  if (download.status !== 0) fail('ASGREP_FALLBACK_ASSETS', `asset download failed: ${String(download.stderr ?? '').split('\n').slice(-1)[0]}`);
-  const manifest = JSON.parse(await readFile(path.join(temporary, 'release-manifest.json'), 'utf8'));
+  if (fromDir) {
+    if (!existsSync(path.join(artifactsDir, 'release-manifest.json'))) fail('ASGREP_FALLBACK_ASSETS', `${artifactsDir} has no release-manifest.json (release:fleet pack output expected)`);
+    const names = readdirSync(artifactsDir).filter((name) => name.endsWith('.tgz') || name === 'release-manifest.json');
+    const upload = names.filter((name) => !release.assets.some((asset) => asset.name === name));
+    if (upload.length) {
+      const up = sh('gh', ['release', 'upload', tag, ...upload.map((name) => path.join(artifactsDir, name))]);
+      if (up.status !== 0) fail('ASGREP_FALLBACK_ASSETS', `asset upload failed: ${String(up.stderr ?? '')}`);
+    }
+    console.log(`[fallback] fleet artifacts from ${artifactsDir} (${names.length} files; ${upload.length} uploaded, ${names.length - upload.length} preserved)`);
+  } else {
+    const download = sh('gh', ['release', 'download', tag, '--repo', 'AdityaVG13/ast-sgrep', '--dir', temporary, '--pattern', '*.tgz', '--pattern', 'release-manifest.json']);
+    if (download.status !== 0) fail('ASGREP_FALLBACK_ASSETS', `asset download failed: ${String(download.stderr ?? '')}`);
+  }
+  const manifest = JSON.parse(await readFile(path.join(artifactsDir, 'release-manifest.json'), 'utf8'));
   if (manifest.version !== version) fail('ASGREP_FALLBACK_MANIFEST', `manifest version ${manifest.version} != ${version}`);
   if (manifest.commit !== localTag.stdout) fail('ASGREP_FALLBACK_MANIFEST', `manifest commit ${manifest.commit.slice(0, 8)} != ${tag} commit ${localTag.stdout.slice(0, 8)}`);
   const artifacts = manifest.artifacts ?? [];
   if (artifacts.length !== 7) fail('ASGREP_FALLBACK_MANIFEST', `manifest lists ${artifacts.length} artifacts, expected 7`);
 
   for (const artifact of artifacts) {
-    const bytes = await readFile(path.join(temporary, artifact.filename));
+    const bytes = await readFile(path.join(artifactsDir, artifact.filename));
     const sha1 = createHash('sha1').update(bytes).digest('hex');
     const ok = artifact.shasum ? artifact.shasum === sha1
       : artifact.integrity ? artifact.integrity === `sha512-${createHash('sha512').update(bytes).digest('base64')}`
@@ -93,7 +120,7 @@ try {
     console.log('[fallback] npm 2FA: the FIRST publish below prints an npm URL — open it, approve, and the rest of the window finishes unattended.\n');
     for (const artifact of toPublish) {
       console.log(`[fallback] npm publish ${artifact.filename}`);
-      const r = sh('npm', ['publish', path.join(temporary, artifact.filename), '--access', 'public'], { stdio: 'inherit' });
+      const r = sh('npm', ['publish', path.join(artifactsDir, artifact.filename), '--access', 'public'], { stdio: 'inherit' });
       if (r.status !== 0) fail('ASGREP_FALLBACK_PUBLISH', `${artifact.name} publish failed (fix and rerun; completed ones are skipped)`);
     }
     // Tags in the same window, always explicit — never trust publish to have moved latest.

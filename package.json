@@ -17,6 +17,7 @@
     "release:preflight": "node packages/pi/scripts/release-preflight.mjs",
     "release:prepare": "node packages/pi/scripts/release-prepare.mjs",
     "release:e2e-linux": "node packages/pi/scripts/release-e2e-linux.mjs",
+    "release:fleet": "node packages/pi/scripts/release-fleet.mjs",
     "release:fallback": "node packages/pi/scripts/release-fallback.mjs",
     "release:verify": "node packages/pi/scripts/release-fallback.mjs --verify-only",
     "publish:pi-extension": "node packages/pi/scripts/publish-extension.mjs",

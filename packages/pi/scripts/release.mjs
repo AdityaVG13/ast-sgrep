@@ -35,8 +35,9 @@ const query = (command, args) => {
 const args = process.argv.slice(2);
 const version = args.find((arg) => !arg.startsWith('--'));
 const dryRun = args.includes('--dry-run');
-if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) fail('ASGREP_RELEASE_USAGE', 'usage: npm run release -- X.Y.Z [--dry-run] (explicit version only, no keywords)');
-for (const arg of args) if (arg.startsWith('--') && arg !== '--dry-run') fail('ASGREP_RELEASE_USAGE', `unknown flag ${arg}`);
+const noDispatch = args.includes('--no-dispatch');
+if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) fail('ASGREP_RELEASE_USAGE', 'usage: npm run release -- X.Y.Z [--dry-run] [--no-dispatch] (explicit version only, no keywords)');
+for (const arg of args) if (arg.startsWith('--') && arg !== '--dry-run' && arg !== '--no-dispatch') fail('ASGREP_RELEASE_USAGE', `unknown flag ${arg}`);
 const tag = `v${version}`;
 
 const contract = JSON.parse(readFileSync(path.join(root, 'packages/pi/release-contract.json'), 'utf8'));
@@ -111,6 +112,10 @@ if (localTag === null && remoteTag === null) {
   console.log(`[release] reusing ${tag} at HEAD`);
 }
 if (remoteTag === null) runInherit('git', ['push', 'origin', `refs/tags/${tag}`]);
+if (noDispatch) {
+  console.log('[release] --no-dispatch: tag signed and pushed; Actions lane NOT dispatched (fleet lane: npm run release:fleet -- all)');
+  process.exit(0);
+}
 const dispatch = runCapture('gh', ['workflow', 'run', 'pi-npm-release.yml', '--ref', tag, '-f', `release_tag=${tag}`, '-f', 'publish=true', '-f', 'layer=family', '-f', 'mode=full']);
 const runUrl = dispatch.match(/https:\/\/\S+/u)?.[0] ?? dispatch;
 console.log(`[release] dispatched: ${runUrl}`);
