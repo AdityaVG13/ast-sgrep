@@ -37,6 +37,9 @@ tempfile.workspace = true
 name = "protocol"
 path = "../../tests/mcp/protocol.rs"
 [[test]]
+name = "cross_surface_parity"
+path = "../../tests/mcp/cross_surface_parity.rs"
+[[test]]
 name = "oracle_validation"
 path = "../../tests/mcp/oracle_validation.rs"
 [[test]]
