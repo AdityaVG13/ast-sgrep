@@ -194,6 +194,13 @@ class ServePool:
                     dead.close()
         raise AssertionError("unreachable")  # pragma: no cover
 
+    def has_worker(self, root: Path) -> bool:
+        """True when a live worker is already held for ``root`` (no spawn)."""
+        root = Path(root).resolve()
+        with self._lock:
+            worker = self._procs.get(root)
+            return worker is not None and worker.proc.poll() is None
+
     def close(self) -> None:
         with self._lock:
             workers = list(self._procs.values())

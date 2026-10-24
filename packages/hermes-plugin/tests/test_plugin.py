@@ -52,7 +52,10 @@ class StubContext:
     """The PluginContext subset the plugin touches."""
 
     def __init__(self, config=None, cwd=None):
-        self.config = dict(config or {})
+        # Prewarm spawns a real serve worker on the corpus root; unit tests
+        # assert exact spawn counts, so it is opt-in here (plugin default on).
+        self.config = {"prewarm": False}
+        self.config.update(config or {})
         self.cwd = str(cwd or Path.cwd())
         self.tools = {}
         self.unload_hooks = []

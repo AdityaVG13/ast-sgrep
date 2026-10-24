@@ -21,6 +21,7 @@ from pathlib import Path
 
 try:  # imported as a package module by the Hermes loader
     from .asgrep_hermes.eager import install_eager_tools
+    from .asgrep_hermes.override import prewarm, register_search_override
     from .asgrep_hermes.serve_client import ServeError, ServePool, resolve_binary
 except ImportError:  # imported as a top-level module (tests, ad-hoc runs)
     import sys as _sys
@@ -29,6 +30,7 @@ except ImportError:  # imported as a top-level module (tests, ad-hoc runs)
     if _here not in _sys.path:
         _sys.path.insert(0, _here)
     from asgrep_hermes.eager import install_eager_tools
+    from asgrep_hermes.override import prewarm, register_search_override
     from asgrep_hermes.serve_client import ServeError, ServePool, resolve_binary
 
 log = logging.getLogger(__name__)
@@ -187,10 +189,31 @@ def register(ctx):
                 lambda: bool(setting("eager", True)),
             )
 
+    # Lane B — habit lane: take over the stock search_files for eligible
+    # literal searches (host-gated by plugins.entries.asgrep.allow_tool_override;
+    # inert unless the operator grants it). Prewarm then supplies the live
+    # worker + ambient index build so the first eligible call is warm.
+    undo_override = None
+    with __import__("contextlib").suppress(Exception):
+        undo_override = register_search_override(
+            ctx, pool, root_fn=root, setting=setting)
+    if bool(setting("prewarm", True)):
+        executable = binary()
+        if executable is not None:
+            with __import__("contextlib").suppress(Exception):
+                pool.binary = executable
+                try:
+                    warm_s = float(setting("prewarm_timeout_s", 600))
+                except (TypeError, ValueError):
+                    warm_s = 600.0
+                prewarm(pool, root_fn=root, timeout_s=warm_s)
+
     def unload():
         pool.close()
         if undo_eager is not None:
             undo_eager()
+        if undo_override is not None:
+            undo_override()
 
     atexit.register(pool.close)
     on_unload = getattr(ctx, "on_unload", None)

@@ -15,7 +15,7 @@ schemas).
 
 | tool | maps to | purpose |
 |---|---|---|
-| `asgrep_search` | `find` | fused keyword/AST search (`query`, `lang?`, `file_filter?`, `limit?`, `excerpt_lines?`, `semantic_only?`) |
+| `asgrep_search` | `search` | fused keyword/AST search (`query`, `lang?`, `file_filter?`, `limit?`, `excerpt_lines?`, `semantic_only?`) — the same fused lane the CLI and MCP expose |
 | `asgrep_read` | `read` | budgeted source windows for refs/hit ids (`refs`, `context_lines?`, `max_chars?`) |
 | `asgrep_status` | `index_status` | index health for the session root |
 
@@ -68,6 +68,33 @@ Requires `asgrep` on PATH (or set the plugin `binary` config); the worker is
 | `binary` | `asgrep` | executable name on PATH, or absolute path |
 | `timeout_s` | `120` | per-call timeout, including cold index builds |
 | `eager` | `true` | keep the tools out of `tool_search` deferral (genome-pattern host seam; degrades to the bridged surface if the seams move) |
+| `prewarm` | `true` | start the serve worker + ambient index build at plugin load, off the search path |
+| `prewarm_timeout_s` | `600` | prewarm call budget (long: the worker keeps building even when the call returns) |
+
+## Habit lane (`search_files` takeover, Lane B)
+
+The tools above require the model to *choose* asgrep. The habit lane meets
+the model where it already is: for the narrow eligible set — **literal
+content search on the warm indexed session root** — the stock `search_files`
+tool is answered by the asgrep worker, ranked (definitions first), in the
+exact stock result shape. Everything else (regex patterns, file search,
+context lines, pagination, count modes, cold roots) falls through to the
+stock ripgrep handler verbatim.
+
+- **Dormant by construction**: registration uses the host's sanctioned
+  `register_tool(override=True)` seam, which refuses to load unless the
+  operator sets `plugins.entries.asgrep.allow_tool_override: true`. The
+  host — not this plugin — enforces the trust decision.
+- **Ripgrep-faithful by construction**: the takeover path mirrors
+  `tools.file_tools.search_tool` by importing and calling the host's own
+  pipeline pieces (repeat-search guard, path resolution, read-block
+  filtering, secret redaction, truncation hints). Every needed host symbol
+  is probed at load; if any moved, the lane stays inert. Any exception
+  during takeover falls back to the stock handler — the override can slow a
+  call, never break one.
+- **Warm-only**: the search path never spawns a worker; takeover happens
+  only when the pool already holds one (`prewarm` supplies that at load).
+- Undo: plugin unload restores the stock handler (host-tracked).
 
 > Minimal-PATH hosts: GUI harnesses (desktop gateways, launchd agents) often
 > run with `PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`, which omits
@@ -78,11 +105,13 @@ Requires `asgrep` on PATH (or set the plugin `binary` config); the worker is
 
 ```bash
 python3 tests/test_plugin.py        # e2e against target/release/asgrep
+python3 tests/test_override.py      # Lane B contracts; host modules faked
 ASGREP_TEST_BIN=/path/to/asgrep python3 tests/test_plugin.py
 ```
 
 Stdlib only; no hermes-agent import (the plugin entry is exercised through a
-stub context mirroring `PluginContext`).
+stub context mirroring `PluginContext`; the override suite fakes the host
+pipeline symbols it mirrors).
 
 ## Doctrine notes
 
@@ -95,7 +124,8 @@ stub context mirroring `PluginContext`).
   identity-marked `_asgrep_eager`, chainable with other plugins doing the
   same. Any seam that cannot be wrapped is skipped — the failure mode is
   benign degradation to `tool_search` bridging.
-- Lane B (overriding the built-in `search_files` with an asgrep-backed
-  engine, ripgrep-faithful fallback) is designed but deliberately NOT built:
-  it requires the operator opt-in `plugins.entries.asgrep.allow_tool_override`
-  and an owner go-ahead.
+- Lane B (the built-in `search_files` takeover) is built and **dormant by
+  default**: the host's `allow_tool_override` gate must be granted before it
+  activates. See "Habit lane" above; `tests/test_override.py` pins the
+  eligibility, guardrail, and fallback contracts with faked host modules,
+  and the takeover path was live-fired against the real host pipeline.
