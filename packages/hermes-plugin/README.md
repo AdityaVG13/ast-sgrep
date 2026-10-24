@@ -93,8 +93,17 @@ stock ripgrep handler verbatim.
   during takeover falls back to the stock handler — the override can slow a
   call, never break one.
 - **Warm-only**: the search path never spawns a worker; takeover happens
-  only when the pool already holds one (`prewarm` supplies that at load).
+  only when the pool already holds one (`prewarm` supplies that at load),
+  and the takeover call runs inside the stock rg pipeline's own 60s budget
+  — if the worker cannot answer in what ripgrep would have been given, the
+  call falls back to rg.
 - Undo: plugin unload restores the stock handler (host-tracked).
+- Known deltas (documented, deliberate): match paths are repo-relative
+  (stock rg prefixes `./` when given the default path); ranking is
+  definitions-first; and a takeover that fails mid-flight (worker error)
+  falls back through the stock handler, which bumps the repeat-search
+  guard a second time — on that degraded path identical searches block
+  on the second consecutive call instead of the fourth.
 
 > Minimal-PATH hosts: GUI harnesses (desktop gateways, launchd agents) often
 > run with `PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`, which omits

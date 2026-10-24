@@ -254,8 +254,12 @@ def _takeover(host, pool, root_fn, args, task_id):
         return cached_nf
 
     # --- the only leaf that differs from search_tool: the engine ---
+    # 60s matches the stock rg pipeline's own per-run budget: if the worker
+    # cannot answer within what ripgrep would have been given, fall back and
+    # let rg rescan at its budget instead of stacking both latencies.
     out = pool.call(session_root, "search",
-                    {"query": f"literal:{pattern}", "limit": limit + 1})
+                    {"query": f"literal:{pattern}", "limit": limit + 1},
+                    timeout_s=60.0)
     if not out.get("ok"):
         return None
     hits = (out.get("value") or {}).get("hits") or []

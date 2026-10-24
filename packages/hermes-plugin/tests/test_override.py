@@ -233,7 +233,7 @@ class FakePool:
         return self.has_worker_value
 
     def call(self, root, tool, args, timeout_s=None):
-        self.calls.append((str(root), tool, dict(args)))
+        self.calls.append((str(root), tool, dict(args), timeout_s))
         if self.error is not None:
             raise self.error
         return self.response
@@ -398,11 +398,13 @@ class TakeoverTest(OverrideTestBase):
         self.assertEqual(out["matches"][1]["content"], "«redacted»")
         # The original handler must never run on takeover.
         self.assertEqual(self.host.original.calls, [])
-        # The worker saw the literal channel with a truncation probe.
-        root, tool, args = self.pool.calls[0]
+        # The worker saw the literal channel with a truncation probe, inside
+        # the stock rg budget (never the pool's longer default).
+        root, tool, args, timeout_s = self.pool.calls[0]
         self.assertEqual(tool, "search")
         self.assertEqual(args["query"], "literal:alpha_marker")
         self.assertEqual(args["limit"], 11)
+        self.assertEqual(timeout_s, 60.0)
 
     def test_zero_hits_is_a_final_answer(self):
         pool = FakePool(response={"ok": True, "value": {"hits": []}})
@@ -446,7 +448,6 @@ class TakeoverTest(OverrideTestBase):
         # The guard fires before any worker interaction on the 4th call.
         self.assertEqual(len(self.pool.calls), 3)
 
-
 class PrewarmTest(OverrideTestBase):
     def test_prewarm_pings_index_status_in_background(self):
         ov = self.load_override()
@@ -455,7 +456,7 @@ class PrewarmTest(OverrideTestBase):
         thread.join(timeout=10)
         self.assertFalse(thread.is_alive())
         self.assertEqual(
-            [(t, a) for _r, t, a in pool.calls],
+            [(t, a) for _r, t, a, _to in pool.calls],
             [("index_status", {})])
 
     def test_prewarm_swallows_errors(self):
