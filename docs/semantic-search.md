@@ -159,7 +159,7 @@ protocol for history. Fresh-process opens are not in-process warm opens.
 [the current refresh](../benchmarks/results/baselines.md#260-candidate-refresh-2026-10-11)
 does not replace them with invented inputs. In that historical run, unique-query
 `asgrep semantic` was
-**p50 0.51 ms / p90 0.74 ms** (n=85, `codemode-serve`, limit 8). Default hybrid
+**p50 0.51 ms / p90 0.74 ms** (n=85, `asgrep serve`, limit 8). Default hybrid
 on the same unique-query set is **p50 1.27 ms / p90 8.4 ms**: the IVF mmap path
 is tens of microseconds; remaining hybrid time is lexical discovery plus
 finish/fanout, not nprobe. High-df conceptual terms (for example `encode

@@ -2,9 +2,9 @@
 
 This repository publishes npm packages and public crates from one source commit with separate, explicit release identities. Publishing is irreversible: prepare and verify locally, then wait for explicit human approval before any external registry command or protected release-environment approval.
 
-## Official release happy path (copy-paste)
+## Official release happy path — the fleet lane (copy-paste)
 
-One terminal, five steps. Everything below the checklist is reference for when something deviates.
+One terminal, five steps. Builds run on owned hosts (this Mac for darwin, the Spark box for linux arm64 + cross x64, the Windows box for win32 MSVC) via `release:fleet`, so no GitHub Actions minutes are spent. Everything below the checklist is reference for when something deviates.
 
 ```bash
 # 1. Mechanical bump (workspace, npm family + extension, contract, constants,
@@ -15,22 +15,31 @@ npm run check:pi-contract && npm run check:pi-dist && npm run check:pi-release
 git commit -am "release: ast-sgrep X.Y.Z" && git push origin main
 
 # 2. The release moment: verifies the prepared tree, runs preflight, signs
-#    and pushes the tag, dispatches the family lane, and opens the run page:
-npm run release -- X.Y.Z          # append --dry-run to print the plan only
+#    and pushes the official tag — and skips the Actions dispatch entirely:
+npm run release -- X.Y.Z --no-dispatch
 
-# 3. Wait ~30 min for builds + verify, then approve the one
-#    `npm-production` deployment gate on the run page ("Review pending
-#    deployments"). Nothing else needs a click.
+# 3. Build the five native targets on the fleet, stage + verify them, pack
+#    the seven-package family + manifest, run the packaged e2e, and preserve
+#    the tarballs on the draft GitHub release (tag == checkout == build commit):
+npm run release:fleet -- all          # ~20-40 min cold, less warm; plan: release:fleet -- plan
 
-# 4. Verify all seven packages are live at the release versions:
-for p in ast-sgrep @ast-sgrep/darwin-arm64 @ast-sgrep/darwin-x64 \
-         @ast-sgrep/linux-arm64-gnu @ast-sgrep/linux-x64-gnu \
-         @ast-sgrep/win32-x64-msvc pi-ast-sgrep; do
-  printf '%-32s %s\n' "$p" "$(npm view "$p" version 2>/dev/null)"
-done
+# 4. Publish from the fleet artifacts (interactive: ONE npm 2FA browser
+#    approval; creates/publishes the release object, sets all seven latest
+#    tags, and verifies installs):
+npm run release:fallback -- X.Y.Z --from-dir dist/fleet/npm-packs
+
+# 5. Verify all seven packages are live at the release versions:
+npm run release:verify -- X.Y.Z
+node packages/pi/scripts/repin-lock.mjs --version X.Y.Z   # then commit the lock
 ```
 
-Rules of the road: never dispatch from `main` (the gate requires tag == checkout == workflow commit); never move a tag after publication starts. A broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare); reruns are idempotent (live tarballs with matching integrity are skipped, order is native → launcher → extension); to retry only the publish steps without rebuilding, dispatch the same tag with `-f mode=publish-only` (family lane; reuses the preserved release assets and refuses when they are missing or differ). Publication is OIDC-only (br-r8k): there is no token lane, so an OIDC failure means the npm trusted-publisher registration is wrong. Fix it on npmjs.com and re-dispatch publish-only. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher. After either publish job succeeds, the workflow re-pins `package-lock.json` against the live release and pushes it to `main` (br-zvh); this runs under the publish approval, not a second one.
+Hosts come from `~/.config/dsr/hosts.yaml` (`spark`, `windows-native`) or `ASGREP_FLEET_SPARK_SSH`/`ASGREP_FLEET_SPARK_DIR`/`ASGREP_FLEET_WIN_SSH`/`ASGREP_FLEET_WIN_DIR` env overrides — private infrastructure, nothing hardcoded in this public repo. Spark needs cargo with both linux targets + `x86_64-linux-gnu-gcc`; Windows needs cargo (msvc), node, and tar. Every host builds the exact tag tree (`git archive | ssh tar`), preserving the lane's tag == checkout == build-commit invariant; win32 builds with `/Brepro` exactly like the Actions matrix.
+
+Rules of the road: never build from a dirty tree (the fleet gate enforces tag == checkout); never move a tag after publication starts. A broken pre-publish tag may be re-signed and force-pushed again only while nothing is published, and every move must be followed by clearing that tag's unconsumed npm release assets (fresh commit SHA + fresh Windows timestamps would fail the byte-compare). Publish order is native → launcher → extension, always. Token publishes (fleet + fallback) carry no OIDC attestation — note it in the release prose; the Actions lane below remains available when OIDC provenance is wanted and minutes allow. Brand-new package names cannot use this flow until a human publishes them once manually (`npm publish` with 2FA) and registers the trusted publisher.
+
+## The GitHub Actions lane (OIDC alternative, not the default)
+
+`pi-npm-release.yml` remains a fully-working spec: sign+push the tag, then either `npm run release -- X.Y.Z` (dispatches it) or dispatch manually from the tag. Builds + verifies + publishes all seven with OIDC provenance under the protected `npm-production` environment (~30 min of metered minutes; when runner minutes are exhausted the publication job parks indefinitely — that is what the fleet lane replaces). Publication via Actions is OIDC-only (br-r8k): an OIDC failure means the npm trusted-publisher registration is wrong; fix it on npmjs.com and re-dispatch `mode=publish-only`. After an Actions publish, the workflow re-pins `package-lock.json` and pushes it to `main` (br-zvh).
 
 ## Linux preflight before dispatching the lane
 
@@ -42,14 +51,16 @@ ASGREP_E2E_SSH=user@host ASGREP_E2E_DIR=/remote/dir npm run release:e2e-linux
 
 The host is private infrastructure and this repo is public, so nothing is hardcoded: `ASGREP_E2E_SSH` (key-based ssh target) and `ASGREP_E2E_DIR` (remote path, created if missing) are required. The remote needs bash, node >= 22.19, cargo, and rsync. The script incrementally rsyncs the tree (node_modules included, so the first run pays the install), builds the three natives on the host, and runs the full `release-gate-e2e.mjs` against them. Green here means the lane's e2e stage will pass on both x64 and arm64 Linux; a red here costs ~2 minutes instead of ~30 per CI attempt.
 
-## When GitHub Actions is starved (the fallback publisher)
+## The fallback publisher (starved Actions)
 
-Exhausted runner minutes park the OIDC publication job in `waiting` indefinitely while the build+verify stages sit green and the tarballs sit on the GitHub release (this happened on 2026-10-19: 4+ h queued, run cancelled). The lane stays canonical, but when it cannot run, publish the preserved artifacts from your own machine:
+Exhausted runner minutes park the OIDC publication job in `waiting` indefinitely while the build+verify stages sit green and the tarballs sit on the GitHub release (this happened on 2026-10-19: 4+ h queued, run cancelled). When the Actions lane was used and stalls, publish the preserved artifacts from your own machine:
 
 ```bash
 npm run release:fallback -- X.Y.Z    # interactive: ONE npm 2FA browser approval
 npm run release:verify -- X.Y.Z      # verify-only, safe anytime, no publishes
 ```
+
+The same script is the fleet lane's publisher, pointed at fleet-built tarballs instead of release assets: `npm run release:fallback -- X.Y.Z --from-dir dist/fleet/npm-packs` (creates the draft release and uploads the tarballs when the release does not exist yet).
 
 `release:fallback` verifies the release assets byte-for-byte against the release manifest (commit must match the tag), `npm publish`es only the still-missing packages in canonical order, sets `latest` on all seven **explicitly in the same 2FA window** (a 2026-10-19 batch publish moved versions without moving dist-tags — unexplained, so tags are never left to the publish path), flips the GitHub release out of draft and marks it Latest (the starved publication job normally does this; without it the releases sidebar crowns the previous version), then verifies everything: all seven live at the version, every `latest` tag, the GitHub latest release, and clean installs of the launcher and extension.
 

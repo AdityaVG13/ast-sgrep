@@ -181,7 +181,7 @@ host; see
 | One-shot token query | 6.7 ms p95 (`literal:`, indexed) | 6.1 ms p95 | 17.624 ms p95 (scan) | N/A |
 | One-shot structural query | 7.6 ms p95 (`pattern:`, indexed) | 6.9 ms p95 | N/A | 80.182 ms p95 (hand-written code) |
 | Conceptual NL query (p50) | 24.9–33.7 ms | 6.3–9.5 ms | N/A | N/A |
-| Warm distinct-query round | 4.27–4.84 ms round p50 (`codemode-serve`) | 0.67–0.76 ms | N/A (no server) | N/A (no server) |
+| Warm distinct-query round | 4.27–4.84 ms round p50 (`asgrep serve`) | 0.67–0.76 ms | N/A (no server) | N/A (no server) |
 
 ast-sgrep pays an upfront indexing cost; ripgrep pays per scan. Generated-file
 parse cost is isolated by the ast-grep control in the canonical matrix. The

@@ -7,6 +7,28 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventio
 
 **Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
 
+## [2.7.0] - 2026-10-23
+
+The agent-native release: asgrep runs as first-class tools inside the Hermes
+agent harness, and the CLI absorbs the grep/rg invocation habits coding
+models actually type — each habit recovers to the canonical form with a note
+that names the difference.
+
+### Added
+
+- Native Hermes plugin, embedded in the binary and installed by `asgrep install --target hermes --yes`: writes `~/.hermes/plugins/asgrep` (self-contained, refuses to write through a dev symlink, `--force` replaces a prior install, best-effort `hermes plugins enable`). The plugin registers eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — zero process spawn per call, tool errors pass through verbatim with their recovery commands. Hermes installs the plugin, not the MCP server. Tool schemas teach the query channels (`defs:` / `callers:` / `imports:` / `word:` / `pattern:`), metavariable patterns, `excerpt_lines` (bodies in the hit set), `semantic_only`, and LSP-style `path:line` refs.
+- grep/rg habit recovery at the argv layer: `-A N` / `-B N` / `-C N` (and attached `-A3`) map to `--excerpt-lines N` with the one-window approximation named; `-m N` maps to `--limit N` (global hit cap, no per-file mode); the short-flag cluster letters (`-l -i -n -w -F -c -g -t -e`) recover; `-p PATTERN` and root-level repeatable `--pattern` route onto `search`; bare metavariable patterns (`asgrep 'fn parse($$$A)'`) hit the pattern channel; `chain SYM --to TARGET` rewrites onto `call-path SOURCE SINK`.
+- `--count` / `-c`: `path:count` lines on the human path; `counts[]` array in `--json` envelopes, derived from the same hit set as `files`.
+- File-as-root searches: passing a file as the search root walks ancestors nearest-first to the enclosing indexed root and scopes to an exact-path filter (stale candidate indexes are skipped, proven live against a leftover schema-v16 index).
+- Teaching at the refusal boundary: unquoted multi-word queries (`asgrep auth refresh`) name the quoted form; a flag landing after `--` teaches flag order; missing verbs and mode words name the canonical subcommand. All recovery notes ride the machine JSON envelope.
+- Native-feel parity across every agent surface, not just Hermes: the MCP server's `query` schema now teaches the channel grammar (`defs:`/`callers:`/`imports:`/`word:`/`literal:`/`regex:`/`pattern:` prefixes, metavariable auto-routing, `in:` scoping) — pinned by a protocol contract test so the teaching cannot silently regress. `code_read` accepts single-line `path#L12` and LSP-style `path:12` refs (parity with the CLI/serve/Pi read surfaces; previously only `#Lstart-Lend` ranges parsed). The Pi extension's tool schemas describe `query`, `mode`, `limit`, `excerptLines`, and both `ref` spellings. The Agent Plugins skill documents the grammar and ref forms in prose.
+- MCP serve layer moved from rmcp 3.7.0 to fastmcp-rust 0.13.0 (workspace toolchain: stable → `nightly` >= 1.101.0, pinned with the port named). Every tool keeps spec-current `annotations` (read-only hints for all retrieval tools; `index_repo` is the one declared mutator) and the five search tools keep `outputSchema` — pinned by goldens and a cross-process byte-identity test. Single-era serve: `initialize` negotiates the exact 2024-11-05 revision for every offered version; the rmcp-era 2026-07-28 stateless experiment (per-request `_meta`, `server/discover`, `ttlMs`/`cacheScope`) is retired. Argument admission is framework-owned: schema violations (bounds, types, unknown keys, arity, empty or non-lowercase `preview`) fail fast as JSON-RPC -32602 naming the offending path — stronger than the old uniform tool-error envelope, and it closes the empty-query gap; unknown tools are -32601, unparsable lines draw one -32700, and handler-level faults (stale ranges, escaped roots, corrupt index) keep the tool-error envelope with an actionable message. EOF mid-call exits 1 (shutdown cancellation of the in-flight request); idle EOF exits 0. Every delta is pinned by the 22 wire-level suites (151 tests) reconciled against live probes.
+
+### Changed
+
+- The persistent Code Mode front door is `asgrep serve` (the old `codemode-serve` name remains an alias); the session protocol and tool table are unchanged.
+- Missing-index errors name the enclosing indexed ancestor and the `--auto-index` in-place recovery, in both the plain and enclosing-index forms.
+
 ## [2.6.0] - 2026-10-19
 
 Local-first semantic search: a native static embed engine ships as the default

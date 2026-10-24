@@ -632,3 +632,56 @@ docs, capability inventories citing `compact-drops-provenance` /
 `MCP-no-fusion`) plus one npm-script snippet: no prior perf-fix
 rejection, revert, or within-noise signal against this change. `git log`
 perf commits above are the interim record.
+
+## Rejected: FrankenSQLite as the storage engine (2026-10-24)
+
+Candidate: replace rusqlite/bundled SQLite (libsqlite3-sys 0.38.2) with
+FrankenSQLite (`fsqlite` crates) under ast-sgrep-core's store. Rejected
+**unmeasured** on fitness blockers — no benchmark was run, so this is a
+risk/conformance rejection, not a measured perf one. Evidence (project
+README at commit ad5d473, 2026-10-23):
+
+- **Our load-bearing surface is FTS5-native**: `lines_fts`
+  (porter+unicode61), `lines_trigram` (external content + trigram
+  tokenizer), `lines_code_fts` (unicode61 tokenchars `_`), plus a
+  `temp.fts5vocab('main', 'lines_trigram', 'row')` DF cache. FrankenSQLite
+  implements FTS5 with all four tokenizers and external-content/contentless
+  modes, BUT external-content column projection can still return NULL with
+  the content table present (bd-c6jre, OPEN), and `fts5vocab` is not
+  mentioned anywhere in its documentation — unconfirmed, and our trigram DF
+  ranking depends on it (with a documented degradation ladder when absent).
+- **Cross-version WAL hazard class**: mixed 0.3.x/0.4.x WAL access "has
+  corrupted real stores"; the reverse guard and Windows detection are not
+  shipped. Our index file is shared across asgrep CLI, asgrep-watch, the
+  MCP server, and napi host processes — an engine-version skew inside that
+  fleet is exactly the corruption scenario.
+- **No current performance claim**: the project itself states "No numeric
+  performance result is claimed for current main" (release-blocking timing
+  discontinuity under investigation, tracked by bd-dqdoe). There is no
+  upside number to chase yet.
+- **Raw C FFI reach**: store/sql.rs calls
+  `sqlite3_file_control(SQLITE_FCNTL_PERSIST_WAL)` via `rusqlite::ffi`;
+  the fsqlite C ABI is an optional secondary surface, and the Rust crates
+  would require rewriting the whole store layer against a different API.
+- **Workload mismatch**: our index is single-process, read-mostly,
+  rebuildable from source. FrankenSQLite's wins — concurrent writers, MVCC
+  page versions, RaptorQ durability, VDBE-boundary cancellation — do not
+  bind any measured ast-sgrep cost. SQLite's 24-year on-disk stability is
+  the asset we actually consume (index files persist across tool versions).
+
+CASS 60-day failure-term mining was unavailable for this entry
+(maintenance-required, archive over the automatic-repair budget; background
+reindex started by cass itself). No historical exclusion evidence for this
+candidate was found or claimed.
+
+Retry predicate: re-open only when ALL hold — (a) bd-c6jre
+(external-content FTS5 NULL projection) is closed and regression-kept;
+(b) `fts5vocab` virtual tables (row mode) are implemented and
+differentially tested against C SQLite — probe by running our `VOCAB_DDL`
+plus a DF point lookup against fsqlite; (c) forward+reverse cross-process
+WAL guards are shipped (or a stable cross-process contract with version
+constants that actually change); (d) a citation-grade performance matrix
+on current main shows >= parity on read-heavy FTS5 point lookups. Then run
+a bounded spike: store layer behind a Cargo feature flag, gated by
+frozen_suite + parity goldens + a fresh-fsqlite-index vs stock-index
+differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.

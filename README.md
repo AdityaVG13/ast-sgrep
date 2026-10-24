@@ -68,15 +68,38 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 
 ---
 
-## What's new in 2.6.0
+## What's new in 2.7.0
 
-2.6.0 is the static-engine release: offline semantic ranking in every
-default search, with the embedding table compiled into the binary.
-Full notes: [CHANGELOG](CHANGELOG.md#260---2026-10-19).
+2.7.0 is the agent-native release: asgrep ships inside the Hermes agent
+harness as first-class tools, and the CLI absorbs the grep/rg habits coding
+models actually type. Full notes: [CHANGELOG](CHANGELOG.md#270---2026-10-23).
 
 | You can now... | How |
 |----------------|-----|
-| Search semantically with zero setup | A native static embed engine is compiled in — no model download, no ONNX runtime, no API key, never a network call. The embed channel runs ungated in hybrid fusion, so plain-language queries rank code without any flags. |
+| Use asgrep natively inside Hermes | `asgrep install --target hermes --yes` writes an embedded native plugin to `~/.hermes/plugins/`: eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — zero process spawn per call, channels (`defs:`, `callers:`, `pattern:`…) taught in the schema itself. Hermes gets the plugin, not the MCP server. |
+| Type grep/rg habits and have them recover | `-A/-B/-C N` → `--excerpt-lines`, `-m N` → `--limit`, the `-l -i -n -w -F -c -g -t -e` short flags, `-p PATTERN` and repeatable `--pattern` batches, bare metavariable patterns (`asgrep 'fn parse($$$A)'`), and grep's `asgrep QUERY FILE` shape (the file root walks to the indexed ancestor). Each recovery prints the canonical form. |
+| Count matches like `grep -c` | `--count` / `-c` prints `path:count` lines; `--json` envelopes carry a `counts[]` array derived from the same hit set as `files`. |
+| Ask reachability in grep clothing | `chain SYM --to TARGET` recovers onto `call-path SYM TARGET`; the note names the canonical verb. |
+| Learn the fix from every refusal | Unquoted multi-word queries teach the quoted form, a flag after `--` teaches flag order, missing verbs and mode words name the right one, and every note rides the machine envelope. |
+
+Honest tradeoffs: `-A`/`-B`/`-C` all map onto one window around the hit
+(after/before are not separate knobs) and `-m` is a global hit cap (there is
+no per-file mode — queries are fused), and every such approximation says so
+in its note. The Hermes plugin is a Python plugin on a persistent serve
+worker: tool schemas freeze per session, so a plugin upgrade needs a new
+session.
+
+---
+
+## What was new in 2.6.0
+
+2.6.0 was the static-engine release: offline semantic ranking in every
+default search, with the embedding table compiled into the binary.
+Full notes: [CHANGELOG](CHANGELOG.md#260---2026-10-19).
+
+| You could now... | How |
+|----------------|-----|
+| Search semantically with zero setup | A native static embed engine was compiled in — no model download, no ONNX runtime, no API key, never a network call. The embed channel runs ungated in hybrid fusion, so plain-language queries rank code without any flags. |
 | Trust NL→code ranking | On the frozen RepoQA-600 suite: MRR@10 .297 → **.719**, Hit@1 .190 → **.608** (release-paired against published 2.5.4; see the [benchmark summary](#benchmarks-honest-summary)). |
 | Upgrade indexes without rebuilding by hand | Indexes record their embedding model identity and re-embed automatically when it changes; retired engines fail closed instead of silently switching. |
 | Bound graph chains | `max_work` caps call-chain exploration with work/truncation diagnostics. |

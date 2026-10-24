@@ -34,6 +34,12 @@ Start with small limits and `preview: "short"`. Use `code_read` only for IDs wor
 - Use `semantic_search` only when you explicitly want embed-only ranking.
 - Use `code_read` only for the compact IDs worth expanding.
 
+## Query grammar (works in every search tool's `query`)
+
+Plain words, symbols, and snake_case fragments (`auth refresh`, `parse_pattern`) fuse lexical + structural + semantic channels. Prefix the query to pin a channel: `defs:SYMBOL`, `callers:SYMBOL`, `imports:MODULE`, `word:TERM`, `literal:TEXT`, `regex:PATTERN`, `pattern:'fn name($$$A)'` (metavariables; bare `$VAR` patterns auto-route). Scope inside the query with `in:PATH`.
+
+`code_read` accepts compact IDs (`p3:120-145`), explicit refs (`src/a.rs#L120-L145`), single-line refs (`src/a.rs#L120`), and LSP-style (`src/a.rs:120`).
+
 ## Safe workflow
 
 1. Call `index_status` when setup or index readiness is uncertain.
