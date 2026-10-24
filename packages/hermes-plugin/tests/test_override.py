@@ -502,6 +502,32 @@ class TakeoverTest(OverrideTestBase):
         # The guard fires before any worker interaction on the 4th call.
         self.assertEqual(len(self.pool.calls), 3)
 
+class PrewarmScopeTest(OverrideTestBase):
+    """should_prewarm: prewarm is speculation — only repo-like roots get it.
+
+    A session opened in $HOME (the desktop default) must NOT kick off a
+    background ambient index of the entire home tree; there is no tree-size
+    cap below the worker, only per-file caps. The power lane still works
+    on any root on demand; only the speculation is scoped.
+    """
+
+    def _should_prewarm(self, root):
+        ov = self.load_override()
+        return ov.should_prewarm(Path(root))
+
+    def test_git_repo_root_prewarms(self):
+        (self.root / ".git").mkdir()
+        self.assertTrue(self._should_prewarm(self.root))
+
+    def test_already_indexed_root_prewarms(self):
+        (self.root / ".asgrep").mkdir()
+        self.assertTrue(self._should_prewarm(self.root))
+
+    def test_plain_directory_does_not_prewarm(self):
+        # No .git, no .asgrep: a scratch/home-style tree — stock rg territory.
+        self.assertFalse(self._should_prewarm(self.root))
+
+
 class PrewarmTest(OverrideTestBase):
     def test_prewarm_pings_index_status_in_background(self):
         ov = self.load_override()

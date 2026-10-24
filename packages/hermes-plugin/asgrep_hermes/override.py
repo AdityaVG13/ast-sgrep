@@ -17,8 +17,9 @@ Fidelity contract (ripgrep-faithful by construction):
   never changes; acceleration is an implementation detail.
 * The takeover path mirrors ``tools.file_tools.search_tool`` by importing and
   calling the host's own pipeline pieces (repeat-search guard, NTLM/path
-  resolution, read-block filtering, secret redaction, pagination hints), so
-  the guardrails that live above the search engine all still run.
+  resolution, read-block filtering, secret redaction), so the guardrails
+  that live above the search engine all still run; pages that could be
+  partial hand off to ripgrep whole (``_hint`` pagination is stock's own).
 * Every host symbol is probed up front; if ANY is missing (host update moved
   a private name), the override stays inert — the stock tool is untouched.
 * Any exception during takeover falls back to the stock handler; the override
@@ -336,6 +337,22 @@ def _takeover(host, pool, root_fn, args, task_id):
             f"You have run this exact search {count} times consecutively. "
             "The results have not changed. Use the information you already have.")
     return json.dumps(result_dict, ensure_ascii=False)
+
+
+def should_prewarm(root: Path) -> bool:
+    """Prewarm is speculation: only repo-like roots earn it.
+
+    A session opened in ``$HOME`` (the desktop default) must not kick off a
+    background ambient index of the whole home tree — the worker caps
+    per-file bytes, not tree size. A root is repo-like when it carries a
+    ``.git`` (a checkout someone opened deliberately) or an existing
+    ``.asgrep`` index (asgrep was used here before). The power lane is
+    unaffected: explicit ``asgrep_*`` calls work on any root on demand;
+    only the speculative warm-up is scoped. Without a warm worker the
+    habit lane also stays inert on such roots — stock rg answers there.
+    """
+    root = Path(root)
+    return (root / ".git").exists() or (root / ".asgrep").is_dir()
 
 
 def prewarm(pool, *, root_fn: Callable[[], Optional[Path]],

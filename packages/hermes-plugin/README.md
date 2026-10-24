@@ -97,6 +97,11 @@ stock ripgrep handler verbatim.
   and the takeover call runs inside the stock rg pipeline's own 60s budget
   — if the worker cannot answer in what ripgrep would have been given, the
   call falls back to rg.
+- **Prewarm is scoped**: only repo-like roots (`.git` or an existing
+  `.asgrep` index) get the speculative warm-up — a session opened in
+  `$HOME` never kicks off a background index of the home tree. On such
+  roots there is no warm worker, so the habit lane stays inert there and
+  stock rg answers; the power-lane tools still work on demand anywhere.
 - **Serves only provably-identical answers**: takeover answers only when
   the complete hit set fits strictly inside one page (a full page cannot be
   proven complete — the worker clamps the limit+1 probe at its own cap, and

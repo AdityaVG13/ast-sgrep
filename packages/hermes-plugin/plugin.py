@@ -21,7 +21,7 @@ from pathlib import Path
 
 try:  # imported as a package module by the Hermes loader
     from .asgrep_hermes.eager import install_eager_tools
-    from .asgrep_hermes.override import prewarm, register_search_override
+    from .asgrep_hermes.override import prewarm, register_search_override, should_prewarm
     from .asgrep_hermes.serve_client import ServeError, ServePool, resolve_binary
 except ImportError:  # imported as a top-level module (tests, ad-hoc runs)
     import sys as _sys
@@ -30,7 +30,7 @@ except ImportError:  # imported as a top-level module (tests, ad-hoc runs)
     if _here not in _sys.path:
         _sys.path.insert(0, _here)
     from asgrep_hermes.eager import install_eager_tools
-    from asgrep_hermes.override import prewarm, register_search_override
+    from asgrep_hermes.override import prewarm, register_search_override, should_prewarm
     from asgrep_hermes.serve_client import ServeError, ServePool, resolve_binary
 
 log = logging.getLogger(__name__)
@@ -199,7 +199,10 @@ def register(ctx):
             ctx, pool, root_fn=root, setting=setting)
     if bool(setting("prewarm", True)):
         executable = binary()
-        if executable is not None:
+        here = root()
+        # Speculation is scoped to repo-like roots (.git / existing .asgrep):
+        # a session opened in $HOME must not ambient-index the home tree.
+        if executable is not None and here is not None and should_prewarm(here):
             with __import__("contextlib").suppress(Exception):
                 pool.binary = executable
                 try:
