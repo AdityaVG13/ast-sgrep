@@ -2777,3 +2777,17 @@ same last-wins `max_by` tie-break).
   reimplementation of the from-scratch seeding + Lloyd; engine centroids
   must stay byte-equal to it. Mutation-proven (skip the incremental nearest
   update -> red).
+
+## 2026-10-25 Lloyd assignment reads centroids from one flat buffer (E1-b)
+
+Same k-means, contiguous scratch: `nearest_centroid_flat` walks
+`chunks_exact(dim)` of a row-major buffer refreshed per iteration instead of
+a `&[Vec<f32>]` pointer chase. Inputs and tie-breaks identical -> centroids
+byte-equal (reference-parity test unchanged and green; sidecar md5 still
+9b7543021db2e269d5fb4bd61196e5e2). Honest margin: cold index 9.7 -> 9.3 s
+wall, user 11.3 -> 10.9 s (~4%) -- the 141-centroid set fits LLC, so the
+nested layout was not the bottleneck it looked like in the sample. Kept
+because it is strictly bit-identical and simplifies the hot loop;
+index-speed campaign total this round: 55 -> 9.3 s wall, user CPU
+30.6 -> 10.9 s (-64%). Remaining cold-index cost is parse/relational + sqlite
+writes (product work), not embed machinery.

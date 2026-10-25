@@ -444,6 +444,18 @@ fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
         .map(|(ci, _)| ci)
         .unwrap_or(0)
 }
+/// `nearest_centroid` over a flat row-major centroid buffer. `chunks_exact(dim)`
+/// yields the same `&[f32]` inputs in the same enumerate order, so dot outputs
+/// and the last-wins `max_by` tie-break are identical to the nested form.
+fn nearest_centroid_flat(vector: &[f32], cent_flat: &[f32], dim: usize) -> usize {
+    cent_flat
+        .chunks_exact(dim)
+        .enumerate()
+        .map(|(ci, c)| (ci, dot_similarity(vector, c)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(ci, _)| ci)
+        .unwrap_or(0)
+}
 /// Deterministic k-means over a row-major flat matrix (`n * dim` floats).
 fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>>, Vec<usize>) {
     let n = flat.len().checked_div(dim).unwrap_or(0);
@@ -478,13 +490,21 @@ fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>
         c
     };
     let mut assignments = vec![0usize; n];
+    // Contiguous centroid scratch: Lloyd assignment reads every centroid per
+    // row, so one flat buffer replaces the Vec-of-Vecs pointer chase. Rows are
+    // byte-copies of `centroids` in the same order -- dot inputs are identical,
+    // so results are bit-identical to the nested-layout walk.
+    let mut cent_flat: Vec<f32> = Vec::with_capacity(k * dim);
     for _ in 0..max_iters {
+        cent_flat.clear();
+        cent_flat.extend(centroids.iter().flat_map(|c| c.iter().copied()));
+        let cf = &cent_flat;
         // T1-B: assignment is embarrassingly parallel given fixed centroids.
         // `(0..n).into_par_iter().map(...).collect()` preserves index order, so
         // `next[i]` is the assignment for row `i`. No cross-row data dependence.
         let next: Vec<usize> = (0..n)
             .into_par_iter()
-            .map(|i| nearest_centroid(flat_row(flat, dim, i), &centroids))
+            .map(|i| nearest_centroid_flat(flat_row(flat, dim, i), cf, dim))
             .collect();
         // Early exit: OR of per-row deltas (associative). Must match serial:
         // first iteration where all rows stable skips centroid update.
