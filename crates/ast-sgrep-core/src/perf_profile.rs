@@ -62,6 +62,17 @@ fn collector() -> &'static Mutex<Collector> {
     COLLECTOR.get_or_init(|| Mutex::new(Collector::new()))
 }
 
+/// Current profiler run id on this thread (None when not profiling).
+pub(crate) fn current_run_id() -> Option<u64> {
+    CURRENT_RUN_ID.with(Cell::get)
+}
+
+/// Set this thread's profiler run id so a worker thread's spans attribute to
+/// the run that spawned it; returns the previous value for restore.
+pub(crate) fn enter_run(run_id: Option<u64>) -> Option<u64> {
+    CURRENT_RUN_ID.with(|current| current.replace(run_id))
+}
+
 /// True when `ASGREP_PERF_PROFILE` is boolish-true. Cached for the process.
 #[inline]
 pub fn enabled() -> bool {

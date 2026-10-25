@@ -179,6 +179,9 @@ path = "../../tests/core/semantic_chunk_migration.rs"
 name = "semantic_ivf_roundtrip"
 path = "../../tests/core/semantic_ivf_roundtrip.rs"
 [[test]]
+name = "hybrid_parallel"
+path = "../../tests/core/hybrid_parallel.rs"
+[[test]]
 name = "semantic_layout_rewrite"
 path = "../../tests/core/semantic_layout_rewrite.rs"
 [[test]]

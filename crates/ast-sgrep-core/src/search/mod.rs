@@ -148,6 +148,22 @@ fn foreign_root_bound(store: &IndexStore, root: &Path) -> Result<bool> {
     }))
 }
 
+/// Count of hybrid queries whose forked embed/fanout channel results were
+/// accepted (version-coherent with the primary store). Debug/test surface:
+/// proves the parallel path actually served, and that
+/// `ASGREP_SERIAL_CHANNELS=1` disables it.
+pub fn debug_channel_fork_count() -> u64 {
+    CHANNEL_FORK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static CHANNEL_FORK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `ASGREP_SERIAL_CHANNELS=1` forces the serial channel order (A/B control
+/// arm and a safety valve for hosts where the sibling open is not welcome).
+fn channels_parallel_enabled() -> bool {
+    std::env::var_os("ASGREP_SERIAL_CHANNELS").as_deref() != Some(std::ffi::OsStr::new("1"))
+}
+
 /// L-Q3 (plan Phase 5): `ASGREP_QEMBED_EXPANDED=1` feeds the repo-PPMI
 /// expanded form to the embed lane. Paired frozen-suite measurement
 /// switch only — the default stays the query as written (measured:
@@ -1173,6 +1189,51 @@ impl Searcher {
                 }
             }
         }
+        // Channel fork (c1 L3): on conceptual NL queries with the static
+        // backend and no held snapshot, the embed+fanout channel is independent
+        // of the lexical->symbol cascade, so it runs concurrently on a sibling
+        // read-only store. The primary connection is a single rusqlite handle
+        // (!Sync), so the worker opens its own; WAL readers never block each
+        // other and the CLI search path is already read-only. Coherence: the
+        // worker records its `index_data_version`; a mismatch against the
+        // primary (a concurrent writer committed mid-query) discards the
+        // worker results and reruns the channel serially, so a response can
+        // never mix index generations. Write guards inside the embed path
+        // already skip `set_meta` on read-only stores, so the sibling persists
+        // nothing.
+        let mut embed_worker = if intent == crate::intent::QueryIntent::Conceptual
+            && self.options.use_embed
+            && !self.inert
+            && !self.snapshot_is_held()
+            && channels_parallel_enabled()
+            && self.store.get_meta("embed_backend")?.as_deref() == Some("static")
+        {
+            let root = self.store.root().to_path_buf();
+            let db = self.store.db_path().to_path_buf();
+            let opts = self.options.clone();
+            let sem_q = semantic_query.clone();
+            let raw = parsed.raw.clone();
+            let cache = Arc::clone(&self.semantic_cache);
+            let field = self.use_field_rescoring;
+            let run_id = crate::perf_profile::current_run_id();
+            Some(std::thread::spawn(move || {
+                let _prev_run = crate::perf_profile::enter_run(run_id);
+                let _span = crate::perf_profile::Span::start(
+                    "hybrid_embed_channel_fork",
+                    "search",
+                    "sibling-store embed+fanout channel",
+                );
+                let sibling = IndexStore::open_readonly(&root, Some(&db))?;
+                let version = sibling.index_data_version()?;
+                let semantic = passes::embed::run_embed_pass_cached(
+                    &sibling, &opts, &sem_q, &cache, false, field,
+                )?;
+                let fanout = conceptual_fanout_pass(&sibling, &opts, &raw, &semantic)?;
+                Ok::<_, crate::StoreError>((version, semantic, fanout))
+            }))
+        } else {
+            None
+        };
         let lexical = {
             let _span = crate::perf_profile::Span::start(
                 "hybrid_lexical_prefilter",
@@ -1217,6 +1278,11 @@ impl Searcher {
         // unconstrained semantic (same path as `search_semantic`), then fan-out.
         // Identifier / literal intents stay fail-closed on empty discovery.
         if lexical_files.is_empty() {
+            if let Some(handle) = embed_worker.take() {
+                // The escape path serves from the primary store exactly as
+                // before; drain the fork so its thread ends before we return.
+                let _ = handle.join();
+            }
             if intent == crate::intent::QueryIntent::Conceptual && self.options.use_embed {
                 let mut hits = {
                     let _span = crate::perf_profile::Span::start(
@@ -1371,52 +1437,81 @@ impl Searcher {
         let learned_backend = self.store.get_meta("embed_backend")?.as_deref() == Some("static");
         let embed_as_generator = conceptual && self.options.use_embed && learned_backend;
         if self.options.use_embed {
-            let semantic = {
-                let _span = crate::perf_profile::Span::start(
-                    "hybrid_embed_pass",
-                    "search",
-                    "embed_pass_for_files_with_rescoring",
-                );
-                let trust_snapshot = self.snapshot_is_held();
-                if embed_as_generator {
-                    run_embed_pass_cached(
-                        &self.store,
-                        &self.options,
-                        semantic_query,
-                        &self.semantic_cache,
-                        trust_snapshot,
-                        self.use_field_rescoring,
-                    )?
-                } else {
-                    passes::embed::embed_pass_for_files_cached(
-                        &self.store,
-                        &self.options,
-                        semantic_query,
-                        &working_files,
-                        Some(&self.semantic_cache),
-                        trust_snapshot,
-                        self.use_field_rescoring,
-                    )?
+            // Forked channel: accept the worker's results only when its
+            // `index_data_version` matches the primary's (no writer committed
+            // between fork and join). Any mismatch, worker error, or worker
+            // panic falls through to the serial rerun on the primary store,
+            // which is byte-for-byte today's path.
+            let mut forked: Option<(Vec<SearchHit>, Vec<SearchHit>)> = None;
+            if let Some(handle) = embed_worker.take() {
+                match handle.join() {
+                    Ok(Ok((version, semantic, fanout))) => {
+                        if version == self.store.index_data_version()? {
+                            CHANNEL_FORK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            forked = Some((semantic, fanout));
+                        }
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        // Worker store error or panic: serial rerun below is
+                        // the authoritative path.
+                    }
                 }
-            };
-            // Fan-out is unconditional for conceptual queries: it is the sole
-            // source of caller/graph/pattern contributor evidence, so skipping
-            // it when a def hit exists silently strips call-site provenance
-            // from the ranked response (cli_smoke conceptual_query_fans_out).
-            if intent == crate::intent::QueryIntent::Conceptual {
-                let _span = crate::perf_profile::Span::start(
-                    "hybrid_conceptual_fanout",
-                    "search",
-                    "conceptual_fanout_pass",
-                );
-                hits.extend(conceptual_fanout_pass(
-                    &self.store,
-                    &self.options,
-                    &parsed.raw,
-                    &semantic,
-                )?);
             }
-            hits.extend(semantic);
+            if let Some((semantic, fanout)) = forked {
+                // Same assembly order as the serial path: fan-out extends
+                // before the semantic hits (fusion reads this order).
+                if intent == crate::intent::QueryIntent::Conceptual {
+                    hits.extend(fanout);
+                }
+                hits.extend(semantic);
+            } else {
+                let semantic = {
+                    let _span = crate::perf_profile::Span::start(
+                        "hybrid_embed_pass",
+                        "search",
+                        "embed_pass_for_files_with_rescoring",
+                    );
+                    let trust_snapshot = self.snapshot_is_held();
+                    if embed_as_generator {
+                        run_embed_pass_cached(
+                            &self.store,
+                            &self.options,
+                            semantic_query,
+                            &self.semantic_cache,
+                            trust_snapshot,
+                            self.use_field_rescoring,
+                        )?
+                    } else {
+                        passes::embed::embed_pass_for_files_cached(
+                            &self.store,
+                            &self.options,
+                            semantic_query,
+                            &working_files,
+                            Some(&self.semantic_cache),
+                            trust_snapshot,
+                            self.use_field_rescoring,
+                        )?
+                    }
+                };
+                // Fan-out is unconditional for conceptual queries: it is the sole
+                // source of caller/graph/pattern contributor evidence, so skipping
+                // it when a def hit exists silently strips call-site provenance
+                // from the ranked response (cli_smoke conceptual_query_fans_out).
+                if intent == crate::intent::QueryIntent::Conceptual {
+                    let _span = crate::perf_profile::Span::start(
+                        "hybrid_conceptual_fanout",
+                        "search",
+                        "conceptual_fanout_pass",
+                    );
+                    hits.extend(conceptual_fanout_pass(
+                        &self.store,
+                        &self.options,
+                        &parsed.raw,
+                        &semantic,
+                    )?);
+                }
+                hits.extend(semantic);
+            }
         }
         Ok(hits)
     }
