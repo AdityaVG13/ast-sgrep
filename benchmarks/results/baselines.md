@@ -2564,6 +2564,33 @@ numbers are conservative. Commands: interleaved `hyperfine --runs 15` arms
   `docs/progress/perf-negative-results.md` gates the shipping shape.
 
 
+## 2026-10-25 forked embed channel (c1 campaign, lever L3)
+
+**Status: `measured keep` (dev-tree A/B, not a canonical matrix refresh).**
+One lever: conceptual-NL hybrid queries run the embed+fanout channel
+concurrently on a worker thread with its own read-only `IndexStore`
+(sibling WAL connection), overlapping the lexical -> symbol cascade on
+the primary connection. Version-coherence guard discards worker results
+on any `index_data_version` mismatch and reruns serially; worker error or
+panic takes the same serial path. `ASGREP_SERIAL_CHANNELS=1` is the
+control arm. Same corpus/host/protocol as the v3 sidecar row above
+(external compile load, conservative).
+
+- wall (min-of-15 median): serial 22.43 ms -> parallel 17.96 ms
+  (**-19.9%**, best 15.32); CPU 21.01 -> 23.47 ms (sibling open + spawn
+  ~2.5 ms — the latency-for-CPU trade is intended and disclosed).
+- spans: `hybrid_embed_channel_fork` 12.67 ms attributed to the parent
+  profiler run from the worker thread (perf_profile::enter_run); the
+  main path keeps lexical + symbol; `embed_query` steady-state 0.07 ms
+  (the earlier 2.2 ms reading was load noise — micro-probe crate
+  measured 14.9 us/embed steady-state, 320 us cold).
+- parity: L3-serial byte-identical to the prior binary and L3-parallel
+  byte-identical to L3-serial (14/14 goldens each, corpus-v3).
+- tests: `hybrid_parallel` (fork fires / serial env suppresses / hits
+  identical; mutation-verified), `cli_smoke` 18/18.
+- cumulative campaign wall on this corpus: 30.4 ms (pre-campaign base)
+  -> 17.96 ms (1.69x); composed with the v3-sidecar lever (L2).
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this
