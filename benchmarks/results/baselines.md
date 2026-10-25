@@ -2749,3 +2749,31 @@ released-world matrix.
   the migration arm, not the DDL arm, is the load-bearing assertion.
 - Pre-existing (not this change): `pattern_routing` f64_in_memory_store_migration
   and hconf033 failures reproduce with the change stashed.
+
+## 2026-10-25 IVF farthest-point seeding: incremental nearest-max (E1, redirected)
+
+Profiling redirected E1 before it shipped: the ledger's "~1.9 ms/text embed"
+was a **debug-build** measurement. Release-perf phase split
+(`crates/ast-sgrep-embed/examples/embed_phase_profile.rs`): tokenize 10-31
+us/text, pool 12-30 us/text. The real cold-index dominator was the IVF build:
+farthest-point seeding recomputed `nearest_sim` from scratch per pass --
+O(n*k^2/2) dots, ~198M dots at n=19,906 chunks / k=141 / dim=256 (full-run
+`sample`: semantic_ann ~32 s thread-time, ivf ~14 s, embed_texts only ~2 s).
+
+Fix: maintain `nearest[i]` as a running `f32::max` updated once per new
+centroid -- O(n*k) dots, **bit-identical by construction** (same dot set,
+all dots finite, `f32::max` exact and order-independent on finite floats,
+same last-wins `max_by` tie-break).
+
+- Cold fresh index (bench corpus, 788 files): wall 55.0 s -> 9.7 s (wall was
+  partly load-inflated before); the load-robust user CPU **30.6 s -> 11.3 s
+  (-63%)**. Embedding is no longer the index bottleneck; sqlite writes and
+  parse now dominate.
+- Bit-parity proof: `semantic.ivf` md5 on a fresh pre-change vs post-change
+  index is **identical** (9b7543021db2e269d5fb4bd61196e5e2); golden 6/6
+  battery answered on the post-change index.
+- Contract: `tests/core/semantic_ivf_roundtrip.rs::
+  ivf_kmeans_matches_reference_farthest_point_seeding` -- in-test reference
+  reimplementation of the from-scratch seeding + Lloyd; engine centroids
+  must stay byte-equal to it. Mutation-proven (skip the incremental nearest
+  update -> red).

@@ -590,3 +590,96 @@ fn committed_ivf_frame_opens_and_reject_samples_fail_closed() {
         "truncated frame must fail closed"
     );
 }
+
+/// INTENT: `build_from_flat` must keep the exact deterministic farthest-point
+/// seeding + Lloyd reduction the sidecar fingerprint contract was built on
+/// (bit-identical centroids). The reference below is the from-scratch
+/// O(n * k^2 / 2) seeding form: every value it computes is defined identically
+/// in the engine's incremental nearest-max path (same dot set, exact `f32::max`
+/// lattice, same last-wins `max_by` tie-break), so any ordering or tie-break
+/// regression in the optimized seeding surfaces here as a centroid mismatch.
+#[test]
+fn ivf_kmeans_matches_reference_farthest_point_seeding() {
+    let dim = 8usize;
+    let n = 96usize;
+    let vectors = normalized_flat_vectors(n, dim, 0xE15EED_5EED);
+    let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
+
+    let k = ((n as f64).sqrt() as usize)
+        .clamp(16, 256)
+        .min(n)
+        .max(1);
+    let mut flat = vectors.clone();
+    for i in 0..n {
+        ast_sgrep_embed::normalize_vec_in_place(&mut flat[i * dim..(i + 1) * dim]);
+    }
+    let row = |i: usize| -> &[f32] { &flat[i * dim..(i + 1) * dim] };
+    let dot = ast_sgrep_embed::dot_similarity;
+
+    // Reference seeding: recompute nearest similarity from scratch each pass.
+    let mut c: Vec<Vec<f32>> = vec![row(0).to_vec()];
+    while c.len() < k {
+        let best = (0..n)
+            .map(|i| {
+                let nearest = c
+                    .iter()
+                    .map(|cent| dot(row(i), cent))
+                    .fold(f32::NEG_INFINITY, f32::max);
+                (i, 1.0 - nearest)
+            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        c.push(row(best).to_vec());
+    }
+
+    // Reference Lloyd: serial assignment + row-order reduction, 12 iterations.
+    let mut assignments = vec![0usize; n];
+    for _ in 0..12 {
+        let next: Vec<usize> = (0..n)
+            .map(|i| {
+                c.iter()
+                    .enumerate()
+                    .map(|(ci, cent)| (ci, dot(row(i), cent)))
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(ci, _)| ci)
+                    .unwrap_or(0)
+            })
+            .collect();
+        let changed = next.iter().zip(assignments.iter()).any(|(a, b)| a != b);
+        assignments = next;
+        if !changed {
+            break;
+        }
+        let mut sums = vec![vec![0.0f32; dim]; k];
+        let mut counts = vec![0usize; k];
+        for (i, &cl) in assignments.iter().enumerate() {
+            counts[cl] += 1;
+            for (j, val) in row(i).iter().enumerate() {
+                sums[cl][j] += val;
+            }
+        }
+        c = sums
+            .iter()
+            .zip(counts.iter())
+            .zip(c.iter())
+            .map(|((sum, &count), prev)| {
+                if count == 0 {
+                    prev.clone()
+                } else {
+                    let mut mean = sum.clone();
+                    for value in &mut mean {
+                        *value /= count as f32;
+                    }
+                    ast_sgrep_embed::normalize_vec_in_place(&mut mean);
+                    mean
+                }
+            })
+            .collect();
+    }
+    assert_eq!(
+        index.centroids(),
+        &c,
+        "engine centroids must be bit-identical to the reference farthest-point k-means"
+    );
+}

@@ -449,21 +449,31 @@ fn kmeans(flat: &[f32], dim: usize, k: usize, max_iters: usize) -> (Vec<Vec<f32>
     let n = flat.len().checked_div(dim).unwrap_or(0);
     let k = k.min(n).max(1);
     let mut centroids = {
+        // Farthest-point seeding with an incrementally maintained nearest-max:
+        // `nearest[i]` is the running `f32::max` of `dot(row_i, c_j)` over the
+        // centroids picked so far. Each new centroid costs ONE dot per row
+        // (O(n*k) total instead of O(n*k^2/2)), and the values are bit-identical
+        // to from-scratch recomputation: the dot set is the same, every dot is
+        // finite (dot_similarity coerces non-finite to 0.0), and `f32::max` on
+        // finite floats is exact and order-independent. Selection keeps the
+        // original `(0..n).map().max_by(...)` shape, preserving last-wins ties.
         let mut c = vec![flat_row(flat, dim, 0).to_vec()];
+        let mut nearest = vec![0.0f32; n];
+        for (i, slot) in nearest.iter_mut().enumerate() {
+            *slot = dot_similarity(flat_row(flat, dim, i), &c[0]);
+        }
         while c.len() < k {
             let best = (0..n)
-                .map(|i| {
-                    let v = flat_row(flat, dim, i);
-                    let nearest_sim = c
-                        .iter()
-                        .map(|cent| dot_similarity(v, cent))
-                        .fold(f32::NEG_INFINITY, f32::max);
-                    (i, 1.0 - nearest_sim)
-                })
+                .map(|i| (i, 1.0 - nearest[i]))
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            c.push(flat_row(flat, dim, best).to_vec());
+            let new_centroid = flat_row(flat, dim, best).to_vec();
+            for (i, slot) in nearest.iter_mut().enumerate() {
+                let d = dot_similarity(flat_row(flat, dim, i), &new_centroid);
+                *slot = f32::max(*slot, d);
+            }
+            c.push(new_centroid);
         }
         c
     };
