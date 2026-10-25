@@ -301,3 +301,6 @@ path = "../../tests/core/query_bridge.rs"
 [[test]]
 name = "names_sidecar"
 path = "../../tests/core/names_sidecar.rs"
+[[test]]
+name = "embed_cache_static"
+path = "../../tests/core/embed_cache_static.rs"

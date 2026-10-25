@@ -860,6 +860,13 @@ impl Indexer {
         self.options.force_reindex = true;
         let result = self.index_all();
         self.options.force_reindex = previous;
+        // Static-regime purge: with the embedder cache disabled nothing
+        // repopulates embed_cache, so legacy rows from pre-gate indexes are
+        // pure dead weight. Reclaim once per full rebuild (no-op when the
+        // table is already empty).
+        if result.is_ok() && !crate::store::embed_cache_enabled() {
+            self.store.purge_embed_cache_if_populated()?;
+        }
         result
     }
     pub fn update_paths(&mut self, paths: &[PathBuf]) -> Result<WatchUpdateStats> {

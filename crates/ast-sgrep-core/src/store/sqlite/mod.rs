@@ -1479,6 +1479,18 @@ impl IndexStore {
             None => Ok(()),
         }
     }
+    /// Reclaim legacy `embed_cache` rows left by pre-gate indexes. With the
+    /// static cache disabled nothing repopulates the table, so a full
+    /// rebuild should return the space. VACUUM only when rows actually
+    /// existed so fresh indexes never pay the rewrite.
+    pub fn purge_embed_cache_if_populated(&self) -> Result<()> {
+        let deleted =
+            self.with_file_tx(|| Ok(self.conn.execute("DELETE FROM embed_cache", [])?))?;
+        if deleted > 0 {
+            let _ = self.conn.execute_batch("VACUUM");
+        }
+        Ok(())
+    }
     pub fn clear_all_data(&self) -> Result<()> {
         // Bump both generations inside the same file_tx as the wipe so a crash
         // between COMMIT and a post-tx bump cannot leave empty tables with a

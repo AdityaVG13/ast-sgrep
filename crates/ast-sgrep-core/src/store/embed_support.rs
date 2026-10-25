@@ -60,6 +60,14 @@ pub(super) fn embed_cache_cap() -> usize {
 pub(crate) fn active_model_id() -> &'static str {
     ast_sgrep_embed::STATIC_MODEL_ID
 }
+
+/// Legacy embedder-cache opt-in. The static embedder is a pure function of
+/// the text, so the cache only exists as an explicit A/B control arm
+/// (`ASGREP_EMBED_CACHE=1`); the shipped default computes vectors on
+/// demand and never reads or writes the table.
+pub(crate) fn embed_cache_enabled() -> bool {
+    std::env::var_os("ASGREP_EMBED_CACHE").is_some()
+}
 pub(super) fn init_cache_seq(conn: &Connection, seq: &Cell<i64>) -> Result<()> {
     let max: i64 = conn.query_row(
         "SELECT COALESCE(MAX(accessed_at), 0) FROM embed_cache",
@@ -220,16 +228,23 @@ fn embed_parallel(
         }
     }
     let mut cached: Vec<Option<CacheRow>> = vec![None; jobs.len()];
+    // Static embedder outputs are pure functions of the text: the cache
+    // spends a point-read plus a ~1KB row (63 MB at repo scale) per field
+    // to save a microsecond recompute. Skip lookup and insert unless
+    // ASGREP_EMBED_CACHE forces the legacy path (A/B control arm).
+    let cache_enabled = embed_cache_enabled();
     let mut primary_hits = Vec::new();
-    for (i, (_, slot, text)) in jobs.iter().enumerate() {
-        let h = crate::index_prepare::hash_content(text);
-        if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
-            cached[i] = Some(row);
-            if matches!(slot, EmbedSlot::Primary) {
-                primary_hits.push(CacheHit {
-                    chunk_hash: h,
-                    model_id: mid.to_string(),
-                });
+    if cache_enabled {
+        for (i, (_, slot, text)) in jobs.iter().enumerate() {
+            let h = crate::index_prepare::hash_content(text);
+            if let Some(row) = lookup_embed_cache(conn, &h, mid)? {
+                cached[i] = Some(row);
+                if matches!(slot, EmbedSlot::Primary) {
+                    primary_hits.push(CacheHit {
+                        chunk_hash: h,
+                        model_id: mid.to_string(),
+                    });
+                }
             }
         }
     }
@@ -246,12 +261,14 @@ fn embed_parallel(
         for (job_i, vector) in miss_idx.into_iter().zip(miss_res) {
             let dim = vector.len();
             let vb = ast_sgrep_embed::embed_to_bytes(&vector);
-            entries.push(CacheEntry {
-                chunk_hash: crate::index_prepare::hash_content(&jobs[job_i].2),
-                model_id: mid.to_string(),
-                dim,
-                vector: vb.clone(),
-            });
+            if cache_enabled {
+                entries.push(CacheEntry {
+                    chunk_hash: crate::index_prepare::hash_content(&jobs[job_i].2),
+                    model_id: mid.to_string(),
+                    dim,
+                    vector: vb.clone(),
+                });
+            }
             cached[job_i] = Some(CacheRow { vector: vb, dim });
         }
     }

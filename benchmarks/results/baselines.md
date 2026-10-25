@@ -2673,3 +2673,31 @@ back to the L5 SQL stream. Corpus/host/protocol unchanged (external load
 3. `eval-bakeoff.py` / `results.json` stamping is **absent** from this tree.
    Do not hand-edit historical scores. Do not claim a new MRR win in a close
    reason.
+
+## 2026-10-25 embed_cache dropped for the static embedder (competitor campaign, cost lever S1)
+
+The static (model-free) embedder is a pure function of text; `embed_cache`
+spent a point-read plus a ~1KB row per embedded field (48,538 rows /
+63.4 MB on the 788-file self corpus) to save microsecond recomputes, and
+the table was never read at query time (query vectors use an in-process
+map). Gate both lookup and insert behind `ASGREP_EMBED_CACHE=1` (A/B
+control); `reindex` purges legacy rows once and VACUUMs only when rows
+existed.
+
+- Storage: index.db 368 MB -> **292 MB (-63 MB, -17%)** on the bench
+  corpus; fresh indexes never carry the table.
+- Search outputs: cache-on vs cache-off byte-identical (unit contract,
+  `tests/core/embed_cache_static.rs`, failure-first + mutation-verified);
+  6/6 golden queries identical vs the pre-lever binary on the purged
+  corpus.
+- Search latency: unchanged by design (cache was index-time only).
+- Index-time delta: not measured to a keep-bar under load 71-79 noise;
+  expectation is a small win (no point-reads/inserts per field) — treat
+  as unproven, not claimed.
+- Reproduce: reindex any index and compare `du .asgrep/index.db` before/
+  after; parity via `tests/core/embed_cache_static.rs`.
+
+Next cost lever (open): semantic_chunks per-field vector blobs (~98 MB
+on the same corpus) — same static-embedder determinism argument, but the
+rescore path reads them, so it needs reader-side recompute-on-miss and
+its own parity gate.
