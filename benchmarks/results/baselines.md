@@ -2591,6 +2591,17 @@ control arm. Same corpus/host/protocol as the v3 sidecar row above
 - cumulative campaign wall on this corpus: 30.4 ms (pre-campaign base)
   -> 17.96 ms (1.69x); composed with the v3-sidecar lever (L2).
 
+Campaign close (c1): host never went idle during the battery (external
+compile load 5.5-6.5 the whole session; both arms measured under equal
+load, min-of-15). Quiet-window best: serial 20.14 ms vs parallel
+15.32 ms (-24%). Idle-host spans (not a quoted number) suggest the main
+path floor is ~12 ms, i.e. the fork's payoff grows on a quiet host.
+Next-lever candidates live inside `hybrid_symbol_pass` /
+`hybrid_lexical_prefilter` (now the critical chain; no sub-spans
+instrumented yet) — deferred to a fresh campaign under load < 2 with
+sub-span instrumentation added first (retry condition: host load < 2
+for 10+ min, or a dedicated bench host).
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this
