@@ -26,3 +26,7 @@ path = "../../tests/embed/semantic_unit.rs"
 [[test]]
 name = "static_engine"
 path = "../../tests/embed/static_engine.rs"
+
+[[test]]
+name = "flat_rank"
+path = "../../tests/embed/flat_rank.rs"
