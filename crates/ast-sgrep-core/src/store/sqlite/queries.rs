@@ -310,6 +310,21 @@ impl IndexStore {
         };
         query_map_rows(&self.conn, sql, l, |r| r.get(0))
     }
+    /// Count and max id of the id column [`Self::semantic_chunk_ids`] returns
+    /// — exactly the fingerprint inputs `compute_ann_fingerprint` needs, at
+    /// index-seek cost instead of a full id-array load.
+    pub fn semantic_chunk_count_and_max_id(&self) -> Result<(usize, i64)> {
+        let (count, max_id) = query_map_rows(
+            &self.conn,
+            "SELECT COUNT(*), (SELECT id FROM semantic_chunks ORDER BY id DESC LIMIT 1) FROM semantic_chunks",
+            None,
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?
+        .into_iter()
+        .next()
+        .unwrap_or((0, 0));
+        Ok((count as usize, max_id))
+    }
     /// Same ORDER BY id as `semantic_chunk_ids(None)`, with the chunk's file path.
     /// IVF mmap row i is ids[i]; hybrid file-restrict uses paths[i].
     pub fn semantic_chunk_ids_and_paths(&self) -> Result<Vec<(i64, String)>> {

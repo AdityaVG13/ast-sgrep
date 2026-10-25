@@ -1,6 +1,6 @@
 use crate::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf,
-    load_semantic_ivf_unchecked, save_semantic_ivf_with_publication, semantic_ivf_path,
+    load_semantic_ivf_unchecked, save_semantic_ivf_with_ids, semantic_ivf_path,
     PersistedSemanticIvf,
 };
 use crate::store::IndexStore;
@@ -627,10 +627,16 @@ pub fn load_or_build_semantic_ivf(
     }
     let flat = flatten_vectors_for_search(chunks, dim)?;
     let index = SemanticAnnIndex::build_from_flat(&flat, dim);
+    // v3 sidecar: carry the id column so query-time candidate resolution
+    // reads the mmap instead of a full-table SQL load. One ids SELECT here
+    // is index-time cost only; a length drift (concurrent write) degrades
+    // to the ids-less v2 shape rather than publishing a mismatched file.
     let published = if store.is_read_only() {
         false
     } else {
-        save_semantic_ivf_with_publication(&ivf_path, fingerprint, dim, &flat, &index)?
+        let ids = store.semantic_chunk_ids(None).ok();
+        let ids = ids.filter(|ids| ids.len() == chunks.len());
+        save_semantic_ivf_with_ids(&ivf_path, fingerprint, dim, &flat, &index, ids.as_deref())?
     };
     if !store.is_read_only() && store.connection().is_autocommit() {
         store.set_meta("semantic_ivf_stale", if published { "0" } else { "1" })?;
@@ -742,12 +748,17 @@ fn reassign_stale_ivf_partition(
         return Ok(false);
     }
     let (fingerprint, db_key) = ann_session_key(store, chunks)?;
-    let published = save_semantic_ivf_with_publication(
+    let published = save_semantic_ivf_with_ids(
         &semantic_ivf_path(store.db_path()),
         fingerprint,
         dim,
         &vectors,
         &index,
+        store
+            .semantic_chunk_ids(None)
+            .ok()
+            .filter(|ids| ids.len() == chunks.len())
+            .as_deref(),
     )?;
     let rebuilt = PersistedSemanticIvf::from_owned(fingerprint, dim, vectors, index);
     cache_session(&db_key, fingerprint, Arc::new(rebuilt));

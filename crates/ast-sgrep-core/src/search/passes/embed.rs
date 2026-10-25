@@ -243,11 +243,29 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if options.lang_filter.is_some() {
         return Ok(None);
     }
-    let (ids, _paths, _path_order, dim, fingerprint) = cached_semantic_chunk_index(store)?;
-    let count = ids.len();
-    if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) || dim == 0 {
+    // Fingerprint inputs at index-seek cost: COUNT(*)+MAX(id) instead of
+    // materializing the whole id array (19.8k rows at repo scale). The
+    // inputs are identical to the array-derived check (count, max id, dim,
+    // backend, data version), so the fingerprint is byte-identical and
+    // sidecar validation is unchanged.
+    let (count, max_id) = store.semantic_chunk_count_and_max_id()?;
+    if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) {
         return Ok(None);
     }
+    let dim = store.semantic_primary_dim()?;
+    if dim == 0 {
+        return Ok(None);
+    }
+    let backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".into());
+    let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
+        count,
+        max_id,
+        dim,
+        Some(&backend),
+        store.index_data_version()?,
+    );
     let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
     let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
         return Ok(None);
@@ -255,6 +273,26 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if ivf.chunk_count() != count || ivf.dim != dim {
         return Ok(None);
     }
+    // v3 sidecars carry the id column in the mmap; v2 sidecars resolve ids
+    // from the cached SQL chunk index exactly as before (same ORDER BY id,
+    // so every position resolves to the same row).
+    let sql_ids;
+    let ids: &[i64] = match ivf.ids() {
+        Some(mapped) => mapped,
+        None => {
+            let _span = crate::perf_profile::Span::start(
+                "semantic_ids_fallback",
+                "semantic",
+                "v2 sidecar: SQL chunk-index id resolution",
+            );
+            let (ids, _paths, _path_order, dim_sql, fp_sql) = cached_semantic_chunk_index(store)?;
+            if dim_sql != dim || fp_sql != fingerprint || ids.len() != count {
+                return Ok(None);
+            }
+            sql_ids = ids;
+            &sql_ids
+        }
+    };
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, &query, Some(dim))?;
     let intent = classify(parsed);

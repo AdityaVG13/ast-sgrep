@@ -2538,6 +2538,32 @@ in-process `CORE_PARTS` gate (`tests/core/sub1ms.rs`), not CLI vs competitors.
 Scorecard: [`fusion-scorecard.md`](fusion-scorecard.md). CLI p95 vs ripgrep /
 ast-grep: [`speed.md`](speed.md). Quality ids above unchanged.
 
+## 2026-10-25 v3 IVF sidecar ids (c1 campaign, lever L2)
+
+**Status: `measured keep` (dev-tree A/B, not a canonical matrix refresh).**
+One lever: the semantic IVF sidecar carries the chunk-id column (i64, flatten
+order) after the vectors; query-time candidate resolution mmaps it instead of
+the full-table `SELECT id ... ORDER BY id` load (`semantic_ids_fallback` span
+proves which path served). Corpus: self-repo clone, 716 files / 19.8k chunks /
+256-dim, `release-perf`; host under external compile load (load avg 4-5), so
+numbers are conservative. Commands: interleaved `hyperfine --runs 15` arms
+`asgrep search "<q>" --limit 20`, min-of-runs, 3 reps x 3 queries.
+
+- fresh-CLI wall (min-of-15 median): base@v2 30.4-30.6 ms; candidate@v3
+  21.8-22.1 ms => **-27.2% to -28.6%**; candidate@v2 fallback +1.3% (noise).
+- spans (fresh CLI, ASGREP_PERF_PROFILE=1): `hybrid_embed_pass` 12.96 ms ->
+  1.92-2.61 ms (-80..-85%); `search_query` 39.2 -> 18.5 ms under heavier load;
+  `semantic_ids_fallback` silent on v3, fires once on v2 (degradation is
+  diagnosable, not silent).
+- parity: goldens 14/14 byte-identical for (candidate on v2) and (candidate on
+  v3 vs base on v2, same content); literal/pattern lanes identical. Incremental
+  writer verified empirically (+3 chunks -> +3 ids, tail i64). Targeted:
+  `--test semantic_ivf_roundtrip` 12/12, `--test flat_rank` 3/3.
+- compatibility: v3 file shape is rejected by v2-exact-EOF readers (silent
+  retrain per fresh invocation) — decision row in
+  `docs/progress/perf-negative-results.md` gates the shipping shape.
+
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this

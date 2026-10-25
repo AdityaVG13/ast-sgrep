@@ -2,7 +2,8 @@ use ast_sgrep_core::bench_suite::measure_semantic_ivf_open_p99;
 use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, load_semantic_ivf_index,
-    load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_publication,
+    load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_ids,
+    save_semantic_ivf_with_publication,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
 use ast_sgrep_testkit::updating_goldens;
@@ -14,6 +15,50 @@ fn invalidating_a_missing_sidecar_is_idempotent() {
     let database = dir.path().join("index.db");
     invalidate_semantic_ivf(&database).unwrap();
     invalidate_semantic_ivf(&database).unwrap();
+}
+
+/// v3 sidecars carry the chunk-id column so the embed pass can resolve IVF
+/// positions without the 19.8k-row SQL chunk-index load. The contract:
+/// ids round-trip through the mmap exactly, a length mismatch is rejected at
+/// save, v2 files (no ids) still load with `ids() == None`, and the
+/// fingerprint gate applies to v3 exactly as it does to v2.
+#[test]
+fn v3_sidecar_roundtrips_ids_and_v2_stays_ids_none() {
+    let dim = 4usize;
+    let vectors: Vec<f32> = (0..24).map(|i| i as f32 * 0.1).collect();
+    let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
+    // sc.id-shaped: arbitrary ascending i64s, one per chunk.
+    let ids: Vec<i64> = (101..107).collect();
+    let fingerprint = compute_ann_fingerprint(6, 106, dim, Some("static"), 0);
+    let dir = tempfile::tempdir().unwrap();
+    let v3 = dir.path().join("v3.ivf");
+    let v2 = dir.path().join("v2.ivf");
+
+    save_semantic_ivf_with_ids(&v3, fingerprint, dim, &vectors, &index, Some(&ids)).unwrap();
+    let lazy = load_semantic_ivf_index(&v3, fingerprint)
+        .unwrap()
+        .expect("v3 sidecar loads");
+    assert_eq!(lazy.ids(), Some(ids.as_slice()));
+
+    // Fingerprint gate still rejects a v3 file.
+    let wrong_fp = compute_ann_fingerprint(6, 105, dim, Some("static"), 0);
+    assert!(load_semantic_ivf_index(&v3, wrong_fp).unwrap().is_none());
+
+    // A v2 file (no ids section) keeps loading with ids() == None.
+    save_semantic_ivf(&v2, fingerprint, dim, &vectors, &index).unwrap();
+    let lazy_v2 = load_semantic_ivf_index(&v2, fingerprint)
+        .unwrap()
+        .expect("v2 sidecar loads");
+    assert_eq!(lazy_v2.ids(), None);
+
+    // A save whose ids do not cover the vector population is rejected before
+    // any file is written.
+    let short: Vec<i64> = ids[..5].to_vec();
+    let bad = dir.path().join("bad.ivf");
+    assert!(
+        save_semantic_ivf_with_ids(&bad, fingerprint, dim, &vectors, &index, Some(&short)).is_err()
+    );
+    assert!(!bad.exists());
 }
 
 #[test]

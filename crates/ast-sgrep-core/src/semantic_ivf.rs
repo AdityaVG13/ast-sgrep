@@ -10,7 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 const MAGIC: &[u8; 6] = b"ASIVF\0";
-const VERSION: u32 = 2;
+/// v3 appends the chunk-id column after the vectors (see
+/// [`save_semantic_ivf_with_ids`]). Readers accept v2 and v3: a v2 file has
+/// no ids section and the embed pass falls back to SQL id resolution, so an
+/// older sidecar degrades to the old path instead of failing.
+const VERSION: u32 = 3;
+const MIN_READER_VERSION: u32 = 2;
 const HEADER_SIZE: usize = 80;
 const VECTOR_ALIGNMENT: usize = 4096;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -149,6 +154,22 @@ struct MappedVectors {
     bytes: Range<usize>,
 }
 
+/// Trailing v3 ids section: the chunk-id column in the same order the
+/// vectors were flattened (`SELECT id ... ORDER BY id`). v2 sidecars load
+/// with `None` and callers fall back to SQL id resolution.
+#[derive(Debug, Clone)]
+struct MappedIds {
+    mmap: Arc<Mmap>,
+    bytes: Range<usize>,
+}
+
+impl MappedIds {
+    fn as_slice(&self) -> &[i64] {
+        bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
+            .expect("validated semantic IVF ids alignment")
+    }
+}
+
 impl MappedVectors {
     fn as_slice(&self) -> &[f32] {
         bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
@@ -243,15 +264,38 @@ pub fn save_semantic_ivf_with_publication(
     vectors: &[f32],
     index: &SemanticAnnIndex,
 ) -> Result<bool> {
+    save_semantic_ivf_with_ids(path, fingerprint, dim, vectors, index, None)
+}
+
+/// v3 save: append the chunk-id column (the `SELECT id ... ORDER BY id`
+/// order the vectors were flattened in) so the embed pass resolves IVF
+/// positions from the mmap instead of a full-table SQL load. `None` writes
+/// a file without the section (v2 shape, v3 version); a length mismatch
+/// with the vector population is rejected before any file is created.
+pub fn save_semantic_ivf_with_ids(
+    path: &Path,
+    fingerprint: [u8; 32],
+    dim: usize,
+    vectors: &[f32],
+    index: &SemanticAnnIndex,
+    ids: Option<&[i64]>,
+) -> Result<bool> {
     if dim == 0 || vectors.is_empty() || !vectors.len().is_multiple_of(dim) {
         return Err(crate::StoreError::Other(
             "semantic IVF vectors must be nonempty and dimension-aligned".into(),
         ));
     }
+    let chunk_count = vectors.len() / dim;
+    if let Some(ids) = ids {
+        if ids.len() != chunk_count {
+            return Err(crate::StoreError::Other(
+                "semantic IVF ids must cover the vector population exactly".into(),
+            ));
+        }
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let chunk_count = vectors.len() / dim;
     let mut index_bytes = Vec::new();
     index.write_to(&mut index_bytes, dim)?;
     let k = read_u32(&mut Cursor::new(index_bytes.as_slice()))? as usize;
@@ -265,6 +309,16 @@ pub fn save_semantic_ivf_with_publication(
             .checked_add(index_bytes.len())
             .ok_or_else(|| crate::StoreError::Other("semantic IVF index is too large".into()))?,
         VECTOR_ALIGNMENT,
+    )
+    .ok_or_else(|| crate::StoreError::Other("semantic IVF alignment overflow".into()))?;
+    let vector_len = vectors.len() * std::mem::size_of::<f32>();
+    // i64 alignment for the trailing ids section; only padding between
+    // vectors and ids ever exists, never after ids.
+    let ids_offset = align_up(
+        vector_offset
+            .checked_add(vector_len)
+            .ok_or_else(|| crate::StoreError::Other("semantic IVF size overflow".into()))?,
+        std::mem::align_of::<i64>(),
     )
     .ok_or_else(|| crate::StoreError::Other("semantic IVF alignment overflow".into()))?;
     reap_stale_temporaries(path);
@@ -282,6 +336,8 @@ pub fn save_semantic_ivf_with_publication(
         },
         &index_bytes,
         vectors,
+        ids,
+        ids_offset,
     );
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -290,12 +346,15 @@ pub fn save_semantic_ivf_with_publication(
 }
 
 /// Write IVF payload to a create-new temporary, fsync, then atomically replace `path`.
+#[allow(clippy::too_many_arguments)]
 fn write_ivf_temporary(
     temporary: &Path,
     path: &Path,
     header: IvfHeader,
     index_bytes: &[u8],
     vectors: &[f32],
+    ids: Option<&[i64]>,
+    ids_offset: usize,
 ) -> Result<bool> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -308,6 +367,11 @@ fn write_ivf_temporary(
         header.vector_offset - HEADER_SIZE - index_bytes.len(),
     )?;
     file.write_all(bytemuck::cast_slice(vectors))?;
+    if let Some(ids) = ids {
+        let vector_end = header.vector_offset + vectors.len() * std::mem::size_of::<f32>();
+        write_zeros(&mut file, ids_offset - vector_end)?;
+        file.write_all(bytemuck::cast_slice(ids))?;
+    }
     file.sync_all()?;
     Ok(replace_file(temporary, path)?)
 }
@@ -319,9 +383,16 @@ pub struct LazySemanticIvf {
     chunk_count: usize,
     index: SemanticAnnIndex,
     mapped_vectors: Option<MappedVectors>,
+    mapped_ids: Option<MappedIds>,
 }
 
 impl LazySemanticIvf {
+    /// Chunk ids in flatten order, when the sidecar carries the v3 ids
+    /// section. `None` on v2 sidecars — callers resolve ids from SQL.
+    pub fn ids(&self) -> Option<&[i64]> {
+        self.mapped_ids.as_ref().map(MappedIds::as_slice)
+    }
+
     pub fn candidate_indices(&self, query: &[f32], probes: Option<usize>) -> Vec<usize> {
         self.index.candidate_indices(query, probes)
     }
@@ -424,6 +495,10 @@ pub fn load_semantic_ivf_index(
     let Some(mapped) = map_and_parse(path, Some(expected_fingerprint))? else {
         return Ok(None);
     };
+    let mapped_ids = mapped.ids_bytes.map(|bytes| MappedIds {
+        mmap: Arc::clone(&mapped.mmap),
+        bytes,
+    });
     let mapped_vectors = MappedVectors {
         mmap: mapped.mmap,
         bytes: mapped.vector_bytes,
@@ -435,6 +510,7 @@ pub fn load_semantic_ivf_index(
         chunk_count: mapped.header.chunk_count,
         index: mapped.index,
         mapped_vectors: Some(mapped_vectors),
+        mapped_ids,
     });
     *lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None) = Some(LazyIvfMemo {
         path: path.to_path_buf(),
@@ -481,6 +557,7 @@ struct ParsedMapping {
     header: IvfHeader,
     index: SemanticAnnIndex,
     vector_bytes: Range<usize>,
+    ids_bytes: Option<Range<usize>>,
 }
 
 fn load_semantic_ivf_inner(
@@ -541,9 +618,31 @@ fn map_and_parse(
     let Some(vector_end) = header
         .vector_offset
         .checked_add(vector_len)
-        .filter(|&end| end == mmap.len())
+        .filter(|&end| end <= mmap.len())
     else {
         return Ok(None);
+    };
+    // v3 trailing ids section: chunk_count i64s at i64 alignment past the
+    // vectors, present iff the file ends exactly there. A file ending at
+    // vector_end is the v2 shape (no ids). Anything else is truncated or
+    // corrupt: reject rather than guess.
+    let Some(ids_start) = align_up(vector_end, std::mem::align_of::<i64>()) else {
+        return Ok(None);
+    };
+    let ids_end = header
+        .chunk_count
+        .checked_mul(std::mem::size_of::<i64>())
+        .and_then(|len| ids_start.checked_add(len));
+    let ids_bytes = match ids_end {
+        Some(ids_end) if ids_end == mmap.len() => {
+            let range = ids_start..ids_end;
+            if bytemuck::try_cast_slice::<u8, i64>(&mmap[range.clone()]).is_err() {
+                return Ok(None);
+            }
+            Some(range)
+        }
+        _ if vector_end == mmap.len() => None,
+        _ => return Ok(None),
     };
     if header.vector_offset % VECTOR_ALIGNMENT != 0 {
         return Ok(None);
@@ -567,6 +666,7 @@ fn map_and_parse(
         header,
         index,
         vector_bytes,
+        ids_bytes,
     }))
 }
 
@@ -574,7 +674,11 @@ fn read_header(bytes: &[u8], expected_fingerprint: Option<[u8; 32]>) -> Option<I
     let mut reader = Cursor::new(bytes.get(..HEADER_SIZE)?);
     let mut magic = [0u8; 6];
     reader.read_exact(&mut magic).ok()?;
-    if &magic != MAGIC || read_u32(&mut reader).ok()? != VERSION {
+    if &magic != MAGIC {
+        return None;
+    }
+    let version = read_u32(&mut reader).ok()?;
+    if !(MIN_READER_VERSION..=VERSION).contains(&version) {
         return None;
     }
     if read_u16(&mut reader).ok()? as usize != HEADER_SIZE {
