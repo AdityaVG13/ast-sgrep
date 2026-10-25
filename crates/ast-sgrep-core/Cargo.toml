@@ -304,3 +304,6 @@ path = "../../tests/core/names_sidecar.rs"
 [[test]]
 name = "embed_cache_static"
 path = "../../tests/core/embed_cache_static.rs"
+[[test]]
+name = "fts_external_content"
+path = "../../tests/core/fts_external_content.rs"

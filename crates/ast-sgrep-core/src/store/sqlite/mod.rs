@@ -30,7 +30,7 @@ use std::sync::Arc;
 //      pre-17 fragment-only parents would never be rebuilt on unchanged
 //      files; 17 wipes derived semantic state and re-keys content hashes
 //      (same treatment as the 10 re-render). Never reuse a version.
-pub const INDEX_SCHEMA_VERSION: i64 = 17;
+pub const INDEX_SCHEMA_VERSION: i64 = 18;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -465,6 +465,7 @@ impl IndexStore {
             crate::semantic_ivf::invalidate_semantic_ivf(&self.db_path)?;
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let drops_fts_shadows = version < 18;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
             if version < 12 {
@@ -582,6 +583,24 @@ impl IndexStore {
                        WHERE content_hash NOT LIKE 'parent-chunk-v17:%';",
                 )?;
             }
+            // Schema 18: the two line analyzers become FTS5 external-content
+            // tables bound to `lines`. Postings and ranking are identical
+            // (columns read through the content table by rowid); the
+            // duplicated `_content` shadow stores (~39 MB at repo scale)
+            // disappear. Migration drops the legacy tables, recreates them
+            // from the new DDL, and rebuilds postings from `lines` in-db --
+            // no source re-read. Insert binds the same content value as the
+            // `lines` row, so supplied-text tokenization cannot diverge.
+            if version < 18 {
+                self.conn.execute_batch(
+                    "DROP TABLE IF EXISTS lines_fts; DROP TABLE IF EXISTS lines_code_fts;",
+                )?;
+                self.conn.execute_batch(SCHEMA_DDL)?;
+                self.conn.execute_batch(
+                    "INSERT INTO lines_fts(lines_fts) VALUES('rebuild');\
+                     INSERT INTO lines_code_fts(lines_code_fts) VALUES('rebuild');",
+                )?;
+            }
             self.conn
                 .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
             Ok(())
@@ -596,6 +615,11 @@ impl IndexStore {
                 }
                 return Err(error);
             }
+        }
+        if drops_fts_shadows {
+            // DROP frees pages to the freelist only; return the file space
+            // once for the schema-18 shadow-content reclaim.
+            let _ = self.conn.execute_batch("VACUUM");
         }
         Ok(())
     }

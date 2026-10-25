@@ -2701,3 +2701,27 @@ Next cost lever (open): semantic_chunks per-field vector blobs (~98 MB
 on the same corpus) — same static-embedder determinism argument, but the
 rescore path reads them, so it needs reader-side recompute-on-miss and
 its own parity gate.
+
+## 2026-10-25 FTS line analyzers external-content (competitor campaign, storage lever I1)
+
+`lines_fts` (porter) and `lines_code_fts` (unstemmed `_`-aware) become FTS5
+`content='lines'` tables (schema 18). Postings, ranking, and all read SQL are
+unchanged -- columns read through the content table by rowid, the same
+pattern `lines_trigram` already used. The duplicated `_content` shadow
+stores (19.4 MB each on the 788-file bench corpus) disappear; migration
+drops + recreates + `'rebuild'`s postings from `lines` in-db, then VACUUMs
+once.
+
+- Storage: fresh index **292 MB -> 260 MB (-32 MB)** on the bench corpus;
+  cumulative with S1: 386 -> 260 MB (**-33%**).
+- Parity: 6/6 golden queries byte-identical, schema-17 binary+index vs
+  schema-18 binary+index on identical corpus content (snapshot stamps
+  excluded, generation is expected to differ).
+- Latency: no lexical regression -- min-of-3 spans `hybrid_lexical_prefilter`
+  2.68 ms / `lexical_term_fetch` 0.28 ms on schema 18 (4.73 / 0.49 ms in the
+  round-1 profile window); conceptual `search_query` ~10 ms.
+- Contract: `tests/core/fts_external_content.rs` (failure-first: red on the
+  shadow tables, red on a dropped content= clause; incremental-update path
+  covered).
+- Reproduce: fresh `asgrep index` on any corpus, `du .asgrep/index.db`
+  before/after; sqlite_master must show no `lines_*_fts_content`.

@@ -729,3 +729,18 @@ differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
   and ~100-200 us of every query embed; shapes: simsimd f16 accumulate
   (dependency already present), vocab hash lookup gated to batch callers
   (one-shot CLI must not pay a 63k-entry map build to embed one query).
+
+- **Shipped-binary weight-table compression REJECTED on measured entropy (competitor campaign B1, 2026-10-25).**
+  Proposal: store the 32.5 MB f16 embed table (`potion-code-16m-v2.f16.bin`)
+  compressed in the binary and decompress at startup. Measurement: `zstd -19`
+  achieves only **93%** (28.7 MB) -- random f16 weights are near
+  incompressible -- and full-table decompress costs ~59 ms, which the one-shot
+  CLI latency budget cannot absorb for a 2.4 MB saving. Binary composition
+  (72 MB stripped, macOS): 33.5 MB baked embed assets (57%), ~7.9 MB code
+  (`__text`), remainder grammar/unicode/sqlite const tables; `strip=symbols`
+  and thin-LTO/1-CGU are already on (ledger 2026-09-21: smaller profile
+  variants measured slower). Retry predicate (form 3): reopen when the embed
+  model is retrained or replaced -- a new table re-runs the zstd measurement;
+  or when a distribution format ships data files separately from the binary
+  (then download size, not binary size, is the metric and per-asset
+  compression applies to the archive as a whole).
