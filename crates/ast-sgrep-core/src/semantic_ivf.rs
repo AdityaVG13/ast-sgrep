@@ -53,7 +53,7 @@ pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
 /// True for SQLite in-memory database targets (`:memory:` and the
 /// `file::memory:` / `file:...?mode=memory` URI forms). Such a path can
 /// never name a sidecar's directory, so invalidation is a no-op.
-fn is_in_memory_db(index_db: &Path) -> bool {
+pub(crate) fn is_in_memory_db(index_db: &Path) -> bool {
     let text = index_db.to_string_lossy();
     text == ":memory:"
         || text.starts_with("file:") && (text.contains("mode=memory") || text.contains("::memory:"))
@@ -825,7 +825,7 @@ fn sync_parent(_: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     match fs::rename(source, destination) {
         Ok(()) => {
             sync_parent(destination)?;
@@ -846,7 +846,7 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
 }
 
 #[cfg(not(windows))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
+pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     fs::rename(source, destination)?;
     sync_parent(destination)?;
     Ok(true)

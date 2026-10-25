@@ -24,6 +24,7 @@ mod index_watch;
 pub mod intent;
 pub mod io_bounds;
 pub mod limits;
+pub mod names_sidecar;
 pub mod pattern;
 pub mod perf_profile;
 pub mod pipeline_parts;

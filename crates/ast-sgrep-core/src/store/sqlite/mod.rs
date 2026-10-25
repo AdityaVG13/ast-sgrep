@@ -285,6 +285,9 @@ pub struct IndexStore {
     /// Packed indexed lines for unique-query literal. Cleared on generation bump.
     line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
     line_corpus_disabled: std::cell::Cell<bool>,
+    /// Opened names sidecar (folded idf vocabularies). Generation-gated by
+    /// the reader; cleared implicitly by reopen on generation change.
+    names_sidecar: std::cell::RefCell<Option<std::sync::Arc<crate::names_sidecar::NamesSidecar>>>,
     read_only: bool,
 }
 mod queries;
@@ -423,6 +426,7 @@ impl IndexStore {
             index_data_version_memo: std::cell::Cell::new((0, None)),
             line_corpus: std::cell::RefCell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
+            names_sidecar: std::cell::RefCell::new(None),
             read_only,
         };
         store.init_schema()?;
@@ -1144,6 +1148,14 @@ impl IndexStore {
             )));
         }
         Ok(out)
+    }
+
+    /// Borrow the names-sidecar cache slot (used by
+    /// `names_sidecar::sidecar_dfs_for_store`).
+    pub(crate) fn names_sidecar_slot(
+        &self,
+    ) -> std::cell::RefMut<'_, Option<std::sync::Arc<crate::names_sidecar::NamesSidecar>>> {
+        self.names_sidecar.borrow_mut()
     }
 
     pub fn index_data_version(&self) -> Result<i64> {

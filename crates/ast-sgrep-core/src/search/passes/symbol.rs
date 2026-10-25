@@ -279,13 +279,22 @@ pub fn term_fair_select<T>(items: Vec<T>, term_of: impl Fn(&T) -> usize, limit: 
 /// exactly instead of approximately.
 fn name_table_idf_weights(
     store: &IndexStore,
-    source: &str,
-    column: &str,
+    population: crate::names_sidecar::NamePopulation,
     normalized_terms: &[String],
 ) -> Result<Vec<f64>> {
     if normalized_terms.is_empty() {
         return Ok(Vec::new());
     }
+    // Sidecar lane: folded vocabularies mmap'd once per store, exact
+    // df/total inputs (generation-gated; any doubt falls through to SQL).
+    if let Some((dfs, total)) =
+        crate::names_sidecar::sidecar_dfs_for_store(store, population, normalized_terms)
+    {
+        let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
+        max_normalize_idf(&mut weights);
+        return Ok(weights);
+    }
+    let (source, column) = population.sql_source_and_column();
     let sql = format!("SELECT {column} FROM {source}");
     let conn = store.connection();
     let mut stmt = conn.prepare_cached(&sql)?;
@@ -404,8 +413,7 @@ fn caller_rows_to_hits(
     } else {
         name_table_idf_weights(
             excerpt_store,
-            "(SELECT DISTINCT callee FROM callers)",
-            "callee",
+            crate::names_sidecar::NamePopulation::DistinctCallees,
             &norm_terms,
         )?
     };
@@ -797,7 +805,11 @@ pub(crate) fn symbol_pass_for_files_warmed(
         );
         match warmed {
             Some(table) => table.idf_weights(&norm_terms),
-            None => name_table_idf_weights(store, "symbols", "name", &norm_terms)?,
+            None => name_table_idf_weights(
+                store,
+                crate::names_sidecar::NamePopulation::Symbols,
+                &norm_terms,
+            )?,
         }
     };
     let mut hits = {
@@ -924,7 +936,11 @@ pub(crate) fn def_hits_for_terms(
         like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
     let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_KIND_ORDER, limit)?;
     let norm_terms = normalize_query_terms(&parsed.terms);
-    let idf_weights = name_table_idf_weights(store, "symbols", "name", &norm_terms)?;
+    let idf_weights = name_table_idf_weights(
+        store,
+        crate::names_sidecar::NamePopulation::Symbols,
+        &norm_terms,
+    )?;
     symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Def, |name| {
         score_def_weighted(&norm_terms, &idf_weights, name)
     })

@@ -298,3 +298,6 @@ path = "../../tests/core/short_question_rewrite.rs"
 [[test]]
 name = "query_bridge"
 path = "../../tests/core/query_bridge.rs"
+[[test]]
+name = "names_sidecar"
+path = "../../tests/core/names_sidecar.rs"

@@ -772,7 +772,25 @@ impl Indexer {
         if self.options.embed_semantic && semantic_ivf_dirty {
             self.rebuild_semantic_ivf_sidecar()?;
         }
+        self.rebuild_names_sidecar_if_stale()?;
         Ok(())
+    }
+    /// Rewrite the names sidecar (folded idf vocabularies) when it does not
+    /// reflect the current index generation. Same fresh-skip contract as the
+    /// tantivy sidecar: an unchanged refresh walk leaves it untouched; any
+    /// mutation bumps `index_data_version` inside its transaction and the
+    /// next finalize rewrites the file.
+    fn rebuild_names_sidecar_if_stale(&self) -> Result<()> {
+        if crate::semantic_ivf::is_in_memory_db(self.store.db_path()) {
+            return Ok(());
+        }
+        let generation = self.store.index_data_version()?;
+        if let Some(open) = crate::names_sidecar::NamesSidecar::open(self.store.db_path()) {
+            if open.is_fresh(generation) {
+                return Ok(());
+            }
+        }
+        crate::names_sidecar::write_names_sidecar(&self.store, generation)
     }
     /// Skip the lexical sidecar rebuild when the on-disk sidecar provably
     /// reflects the current index generation.
