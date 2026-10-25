@@ -87,3 +87,36 @@ fn static_identity_is_pinned() {
         StaticEmbedder::new().embed("refresh token")
     );
 }
+
+#[test]
+fn per_text_embed_cost_stays_recompute_friendly() {
+    // Contract: per-text embed cost is a first-class engine cost input.
+    // Measured 2026-10-25: ~1.9 ms/text (wordpiece binary-search lookups +
+    // scalar f16 decode + scalar accumulate), which is what DISQUALIFIED
+    // storing field texts instead of vectors (S2): on-demand recompute at
+    // rescore-pool scale would cost seconds. This tripwire guards against
+    // further regression (bar = 1.5x measured) and prints the number for
+    // the queued hot-path lever (f16 SIMD accumulate, vocab hash lookup).
+    // Bar is 4x the quiet-machine cost: loaded machines inflate it ~1.5x.
+    let e = StaticEmbedder::new();
+    let sample = "symbol: embed_parallel kind: fn scope: store excerpt: pub(super) fn \
+embed_parallel(conn: &Connection, chunks: &[SemanticChunkInput], source_path: &str) \
+-> Result<Vec<EmbeddedChunk>> { let mid = active_model_id(); let mut jobs = Vec::new(); }";
+    let texts: Vec<String> = (0..64)
+        .map(|i| format!("{sample} variant {i} tail tokens to vary the hash input"))
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+    // Warm the weight table into cache, then time two full batches.
+    let _ = e.embed_batch(&refs);
+    let t0 = std::time::Instant::now();
+    let n = 4;
+    for _ in 0..n {
+        let _ = e.embed_batch(&refs);
+    }
+    let per_text_us = t0.elapsed().as_micros() as f64 / (n as f64 * 64.0);
+    eprintln!("per-text embed cost: {per_text_us:.1} us");
+    assert!(
+        per_text_us < 8000.0,
+        "per-text embed cost {per_text_us:.1}us regressed past the 8ms tripwire"
+    );
+}

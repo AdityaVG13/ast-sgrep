@@ -707,3 +707,25 @@ differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
   over the full doclist (e.g. a covering narrow projection with batched content
   refetch for admitted files) AND holds 14/14 goldens AND beats the ordered lane
   by >5% in a same-index interleaved min-of-15 battery at host load < 8.
+
+- **Field-vector text-storage REJECTED on measured recompute cost (competitor campaign S2, 2026-10-25).**
+  Proposal: store the five per-field *texts* in `semantic_chunks.vector_*`
+  (SQLite dynamic typing) instead of the ~78 MB of vector blobs, recompute
+  the static-hash vectors at the read sites. Killed by measurement, not
+  taste: `tests/embed/static_engine.rs::per_text_embed_cost_stays_recompute_friendly`
+  measures **~1.9 ms/text quiet** (wordpiece O(L^2)-substring binary-search
+  vocab lookups + scalar f16 decode + scalar accumulate). Rescore pools
+  (~50-100 ids x 2-4 masked fields) would pay seconds per query. All five
+  columns are live for some intent (`field_weights`: Conceptual uses all 5,
+  Symbol name, Structural body/graph/tests), so no dead column exists to
+  drop, and quantization (f16/i8) changes scores (behavior change, not an
+  optimization). Retry predicate (form 2): retry when per-text embed cost
+  is measured below ~5 us on this corpus class AND rescore pool stays
+  <=100 ids — then text storage plus recompute costs <2 ms/query and must
+  be re-evaluated against the latency budget; alternatively retry when a
+  redesigned field sidecar materializes only ANN-survivor fields outside
+  SQLite. Side discovery kept as lever E1 (open): the same ~1.9 ms/text is
+  ~12 s of every ~40 s cold index (cost dimension vs ripgrep's zero setup)
+  and ~100-200 us of every query embed; shapes: simsimd f16 accumulate
+  (dependency already present), vocab hash lookup gated to batch callers
+  (one-shot CLI must not pay a 63k-entry map build to embed one query).
