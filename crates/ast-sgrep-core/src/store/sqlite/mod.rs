@@ -598,7 +598,8 @@ impl IndexStore {
                 self.conn.execute_batch(SCHEMA_DDL)?;
                 self.conn.execute_batch(
                     "INSERT INTO lines_fts(lines_fts) VALUES('rebuild');\
-                     INSERT INTO lines_code_fts(lines_code_fts) VALUES('rebuild');",
+                     INSERT INTO lines_code_fts(lines_code_fts) VALUES('rebuild');\
+                     DROP INDEX IF EXISTS idx_pattern_nodes_file;",
                 )?;
             }
             self.conn

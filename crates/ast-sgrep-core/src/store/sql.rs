@@ -36,7 +36,6 @@ CREATE TABLE IF NOT EXISTS pattern_nodes (id INTEGER PRIMARY KEY, file_id INTEGE
   line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, excerpt TEXT NOT NULL,\
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE);\
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_signature ON pattern_nodes(signature);\
-CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
 CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file_sig ON pattern_nodes(file_id, signature);\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(content, file_id UNINDEXED, line_no UNINDEXED, tokenize = 'porter unicode61', content='lines');\
 CREATE VIRTUAL TABLE IF NOT EXISTS lines_trigram USING fts5(content, content = 'lines', content_rowid = 'rowid', tokenize = 'trigram');\

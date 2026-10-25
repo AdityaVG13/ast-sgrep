@@ -66,8 +66,60 @@ fn fts_analyzers_are_external_content_and_outputs_stable_across_updates() {
         "FTS shadow content tables must not exist under external content, found: {tables:?}"
     );
 
+    // Contract: pattern_nodes index economy. `idx_pattern_nodes_file
+    // (file_id)` is prefix-redundant with `idx_pattern_nodes_file_sig
+    // (file_id, signature)` and costs ~6 MB at repo scale; only the
+    // composite and the signature-only index may exist.
+    let econ = rusqlite::Connection::open_with_flags(
+        &fixture.db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open db");
+    let mut idx_stmt = econ
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='pattern_nodes'")
+        .expect("prepare index list");
+    let idx: Vec<String> = idx_stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .expect("index list")
+        .map(|r| r.expect("row"))
+        .collect();
+    assert!(
+        !idx.iter().any(|n| n == "idx_pattern_nodes_file"),
+        "prefix-redundant idx_pattern_nodes_file must not exist, found: {idx:?}"
+    );
+    assert!(
+        idx.iter().any(|n| n == "idx_pattern_nodes_file_sig")
+            && idx.iter().any(|n| n == "idx_pattern_nodes_signature"),
+        "file_sig and signature indexes must both exist, found: {idx:?}"
+    );
+    // The survivor must serve the per-file delete path (delete_file_children)
+    // as a seek, not degrade to a table scan.
+    let plan: String = econ
+        .query_row(
+            "EXPLAIN QUERY PLAN DELETE FROM pattern_nodes WHERE file_id=?1",
+            [1i64],
+            |r| r.get::<_, String>(3),
+        )
+        .expect("delete plan");
+    assert!(
+        plan.contains("idx_pattern_nodes_file_sig") && !plan.contains("SCAN"),
+        "per-file delete must seek idx_pattern_nodes_file_sig, got: {plan}"
+    );
+
     // Incremental update must stay consistent: the file-update path deletes
     // FTS rows (token re-derivation reads `lines`) and reinserts them.
+    // Before reopening, regress the db to a legacy shape: schema 17 with the
+    // prefix-redundant idx_pattern_nodes_file still present. The reopen must
+    // migrate it away (schema 18 drops the index), proving the migration
+    // drop -- not just the fresh DDL -- enforces the index economy.
+    {
+        let w = rusqlite::Connection::open(&fixture.db).expect("open writable");
+        w.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_pattern_nodes_file ON pattern_nodes(file_id);\
+             PRAGMA user_version = 17;",
+        )
+        .expect("inject legacy index");
+    }
     std::fs::write(
         fixture.root.join("src/auth.rs"),
         "pub fn refresh_token(next: String, ttl: u32) {\n    let token = next;\n}\n",
@@ -77,6 +129,26 @@ fn fts_analyzers_are_external_content_and_outputs_stable_across_updates() {
     options.embed_semantic = true;
     let mut indexer = ast_sgrep_core::Indexer::new(options).expect("indexer new");
     indexer.index_all().expect("incremental index_all");
+    let post = rusqlite::Connection::open_with_flags(
+        &fixture.db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("reopen db");
+    let survived: i64 = post
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='idx_pattern_nodes_file'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count legacy index");
+    assert_eq!(
+        survived, 0,
+        "schema-18 migration must drop the prefix-redundant idx_pattern_nodes_file"
+    );
+    let v: i64 = post
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("version");
+    assert_eq!(v, 18, "reopen must land on schema 18");
 
     let searcher =
         ast_sgrep_core::Searcher::new(core_search_options(&fixture.root, &fixture.db, 5))

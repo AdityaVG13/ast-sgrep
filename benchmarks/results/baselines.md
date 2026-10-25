@@ -2725,3 +2725,27 @@ once.
   covered).
 - Reproduce: fresh `asgrep index` on any corpus, `du .asgrep/index.db`
   before/after; sqlite_master must show no `lines_*_fts_content`.
+
+## 2026-10-25 pattern_nodes prefix-redundant index dropped (I2)
+
+`idx_pattern_nodes_file (file_id)` was strictly prefix-redundant with
+`idx_pattern_nodes_file_sig (file_id, signature)`; nothing referenced it (no
+INDEXED BY hints; `delete_file_children` and the file-join lane both seek the
+composite). Removed from the schema-18 DDL (18 unreleased; the 17->18
+migration arm drops it for legacy dbs), so the amend covers the full
+released-world matrix.
+
+- Storage: fresh bench-corpus index **260 MB -> 254 MB (-6.09 MB)**, exactly
+  the dbstat size of the dropped index; pattern_nodes cluster now 49.7 ->
+  43.6 MB.
+- Plans: per-file delete and files-join both seek
+  `idx_pattern_nodes_file_sig` (covering) -- same class as before, verified
+  via EXPLAIN QUERY PLAN on the real corpus.
+- Contract: extended `tests/core/fts_external_content.rs` -- fresh-db index
+  set (no `idx_pattern_nodes_file`), legacy 17-with-index reopen must drop it
+  and land on 18, delete-plan must seek not scan. Mutation-proven: removing
+  the migration drop fails the legacy arm; re-adding the DDL line is
+  neutralized by the same drop (fresh dbs traverse the ladder), which is why
+  the migration arm, not the DDL arm, is the load-bearing assertion.
+- Pre-existing (not this change): `pattern_routing` f64_in_memory_store_migration
+  and hconf033 failures reproduce with the change stashed.
