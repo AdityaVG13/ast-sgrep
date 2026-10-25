@@ -2602,6 +2602,41 @@ instrumented yet) — deferred to a fresh campaign under load < 2 with
 sub-span instrumentation added first (retry condition: host load < 2
 for 10+ min, or a dedicated bench host).
 
+## 2026-10-25 idf Rust scan + sub-span instrumentation (c1 campaign, lever L5)
+
+**Status: `measured keep` (dev-tree A/B, not a canonical matrix refresh).**
+Sub-spans added inside the critical chain (lexical df-gate/term-fetch;
+symbol quota-rows/idf/rows-to-hits/caller) located both idf populations
+(`symbols.name` for defs, `DISTINCT callers.callee` for caller hits)
+paying per-term SQL `LIKE '%term%'` aggregates. One lever: stream each
+vocabulary once, count dfs in Rust with the shared
+`content_matches_literal` predicate. Same corpus/host/protocol as the
+fork row (external load 6-33 — noisier; deltas conservative).
+
+- spans: `symbol_idf_weights` 2.16 -> 1.86 ms, `symbol_caller_pass`
+  3.00 -> 2.80 ms, symbol pass total 6.50 -> 6.12 ms (min-of-3
+  profiled); battery wall -1.3% (within load noise). Kept for the span
+  win, simpler SQL, and exact warm/cold idf parity (non-ASCII folds now
+  match `WarmedSymbolTable::idf_weights`; the SQL LIKE lane never did).
+- parity: 14/14 goldens byte-identical vs prior binary; mutation check —
+  case-sensitive predicate diverges 2/14 (gate detects idf changes).
+- tests: `cli_smoke` 18/18, `hybrid_parallel` 1/1.
+- rejected sibling (L4, posting-order literal selection): see
+  `docs/progress/perf-negative-results.md` — diverged 8/14 in shape (a),
+  slower (+14.7% wall) in shape (b); row delivery, not the SQL sort, is
+  the literal lane's cost.
+
+## c1 campaign status vs the 2x target (2026-10-25)
+
+Three matched-window interleaved batteries (base arm vs current arm,
+min-of-15, same corpus content): 30.40 -> 16.8-17.0 ms med, i.e.
+**1.83-1.85x median, 2.01x quiet-window best** (29.41/14.63). The gap to
+a median 2x is ~1.2-1.4 ms with every remaining in-process lever
+estimated <= 1 ms (freshness walk +0.32 ms total; spawn floor ~3 ms is
+process model). Remaining paths: quiet-host re-measurement (numbers are
+load-bound), serve-mode for repeated queries, or a symbol-df vocabulary
+table (index-format change, new campaign with its own drift gates).
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this

@@ -690,3 +690,20 @@ on current main shows >= parity on read-heavy FTS5 point lookups. Then run
 a bounded spike: store layer behind a Cargo feature flag, gated by
 frozen_suite + parity goldens + a fresh-fsqlite-index vs stock-index
 differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
+
+- **literal-posting-order-selection REJECTED 2026-10-25 (c1 campaign, lever L4).**
+  Replacing the distinct-files literal lane's SQL `ORDER BY f.path, l.line_no`
+  (TEMP B-TREE over the trigram doclist) with a posting-order stream + Rust-side
+  per-file map selection. Two shapes tried: (a) first-`limit`-in-arrival-order —
+  DIVERGED 8/14 goldens (over-budget terms like "write" select a different
+  32-file subset in rowid order vs path order; path-order selection is
+  load-bearing); (b) full-doclist stream + map + Rust path-order selection —
+  output-identical 14/14 but SLOWER: lexical span 4.94 -> 5.99 ms, battery wall
+  +14.7%. Root cause: the ordered lane's early break at the preferred-file cap
+  means SQLite delivers only ~100 rows after one sort; the streaming lane decodes
+  every doclist row (content included) through the rusqlite boundary. The sort
+  was not the dominant cost — row delivery is. Reverted. Retry predicate
+  (measurement): reopen only when the candidate avoids per-row content delivery
+  over the full doclist (e.g. a covering narrow projection with batched content
+  refetch for admitted files) AND holds 14/14 goldens AND beats the ordered lane
+  by >5% in a same-index interleaved min-of-15 battery at host load < 8.
