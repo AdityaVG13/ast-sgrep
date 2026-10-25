@@ -7,6 +7,7 @@ Portable [Agent Plugins](https://agent-plugins.org/) package for ast-sgrep.
 - `plugin.json` -- Agent Plugins 1.0.0 manifest
 - `skills/ast-sgrep/` -- Agent Skill (same guidance as the Pi package)
 - `mcp.json` -- stdio MCP server via `asgrep-mcp`
+- `instructions.md` -- copy-paste block for hosts that only read an instruction file (CLAUDE.md / AGENTS.md / .cursorrules)
 
 ## Requirements
 

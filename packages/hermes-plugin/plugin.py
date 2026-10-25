@@ -38,6 +38,17 @@ log = logging.getLogger(__name__)
 TOOLSET = "asgrep"
 
 _SEARCH_SCHEMA = {
+    "name": "asgrep_search",
+    "description":
+        "Reach for this first when you know a name — even a fragment — or "
+        "want where it's defined, who calls it, or who imports it. Results "
+        "rank definitions-first, and every hit carries a ref that "
+        "asgrep_read expands into exact source — search chains into "
+        "reading, no re-grepping. One grammar covers the ladder: "
+        "parse_pattern (fused), defs:SYMBOL, callers:SYMBOL, "
+        "imports:MODULE, word:TERM, pattern:'fn name($$$A)'. The index "
+        "persists per repo and warms as you work. For plain-text, log, or "
+        "config lookups, use your text search.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -70,6 +81,13 @@ _SEARCH_SCHEMA = {
 }
 
 _READ_SCHEMA = {
+    "name": "asgrep_read",
+    "description":
+        "Expand refs from asgrep_search into exact, bounded source — the "
+        "second half of the workflow: search finds, read retrieves. Pass "
+        "the ref verbatim ('src/a.rs#L12-L40', LSP 'src/a.rs:12', or a hit "
+        "id); optional context lines and per-window budgets. Prefer over "
+        "re-searching or shell cat: exact-line, budgeted, warm.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -93,6 +111,11 @@ _READ_SCHEMA = {
 }
 
 _STATUS_SCHEMA = {
+    "name": "asgrep_status",
+    "description":
+        "Call once before heavy retrieval in a fresh repo: index readiness "
+        "and counts. If cold, the first search builds it and the rest of "
+        "the session rides it.",
     "parameters": {
         "type": "object",
         "properties": {},

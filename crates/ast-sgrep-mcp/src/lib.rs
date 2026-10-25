@@ -321,7 +321,7 @@ impl McpServer {
         );
         let describe = |summary: &str| format!("{summary}{COMPACT_CONTRACT}");
         json!({"tools": [
-            search_tool("search", &describe("Fused hybrid search (lexical + structural + semantic, same as CLI asgrep). Prefer this for workspace-grounded questions when the wording or location is unknown."), search_properties.clone()),
+            search_tool("search", &describe("Prefer over grep when you know a name — even a fragment — or want definitions, call sites, or importers; hits rank definitions-first and their compact IDs expand through code_read, so a search chains into reading. Query grammar: plain words/snake_case fragments (fused), defs: callers: imports: word: literal: regex: pattern:'fn name($$$A)', scope with in:PATH. Raw strings, logs, config values: plain text search remains right. Same engine as the CLI."), search_properties.clone()),
             search_tool("keyword_search", &describe("Lexical-only search (FTS/trigram). Does not fuse AST or semantic channels."), search_properties.clone()),
             search_tool("ast_search", &describe("Native AST/pattern search (pattern: semantics). No external ast-grep process."), search_properties.clone()),
             search_tool("semantic_search", &describe("Embedding-only search. Requires a non-empty index with semantic chunks."), search_properties.clone()),
