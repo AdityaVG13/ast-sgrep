@@ -259,14 +259,24 @@ pub fn term_fair_select<T>(items: Vec<T>, term_of: impl Fn(&T) -> usize, limit: 
 
 /// Per-term IDF weights over a name column (`symbols.name` for defs,
 /// distinct `callers.callee` for caller hits): one scan counts, per
-/// normalized term, how many names contain it under the same LIKE
-/// predicate as matching. The population is the name vocabulary — one
-/// entry per distinct name — so a callee called from 500 sites does not
-/// make its tokens 500x more common as name evidence (and the distinct
-/// scan stays ~2 ms where the raw callers scan is ~11 ms on this repo).
-/// `source`/`column` are internal constants, never user input. Mirrors
-/// `WarmedSymbolTable::idf_weights` so warm and cold lanes score
+/// normalized term, how many names contain it under the same ASCII
+/// case-insensitive containment predicate as matching. The population is the
+/// name vocabulary — one entry per distinct name — so a callee called from
+/// 500 sites does not make its tokens 500x more common as name evidence (and
+/// the distinct scan stays cheap where the raw callers scan is not on this
+/// repo). `source`/`column` are internal constants, never user input.
+/// Mirrors `WarmedSymbolTable::idf_weights` so warm and cold lanes score
 /// identically.
+///
+/// Counting runs in Rust over one streamed scan of the vocabulary instead of
+/// per-term SQL `LIKE '%term%'` aggregates: SQLite's LIKE loop walked every
+/// row once per term inside the SUM(CASE) projection, while one
+/// `content_matches_literal` sweep per row (memchr2-accelerated) is far
+/// cheaper. For ASCII terms and ASCII-case folds the predicate is the same
+/// class SQLite's LIKE implements; for non-ASCII case folds it now agrees
+/// with `WarmedSymbolTable::idf_weights` (Rust lowercase folding), which the
+/// SQL LIKE lane never did — this makes the warm/cold idf contract hold
+/// exactly instead of approximately.
 fn name_table_idf_weights(
     store: &IndexStore,
     source: &str,
@@ -276,35 +286,27 @@ fn name_table_idf_weights(
     if normalized_terms.is_empty() {
         return Ok(Vec::new());
     }
-    let mut sql = String::from("SELECT count(*)");
-    for i in 0..normalized_terms.len() {
-        sql.push_str(&format!(
-            ", COALESCE(SUM(CASE WHEN {column} LIKE '%' || ?{} || '%' ESCAPE '\\' THEN 1 ELSE 0 END), 0)",
-            i + 1
-        ));
-    }
-    sql.push_str(&format!(" FROM {source}"));
-    let bound: Vec<String> = normalized_terms
-        .iter()
-        .map(|term| escape_like_term(term))
-        .collect();
-    let params: Vec<&dyn rusqlite::ToSql> =
-        bound.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let sql = format!("SELECT {column} FROM {source}");
     let conn = store.connection();
     let mut stmt = conn.prepare_cached(&sql)?;
-    let n_terms = normalized_terms.len();
-    let (total, dfs) = stmt.query_row(params.as_slice(), |row| {
-        let total: i64 = row.get(0)?;
-        let mut dfs = Vec::with_capacity(n_terms);
-        for i in 0..n_terms {
-            dfs.push(row.get::<_, i64>(i + 1)?);
+    let mut rows = stmt.query([])?;
+    let mut dfs = vec![0u64; normalized_terms.len()];
+    let mut total: u64 = 0;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        total += 1;
+        for (i, term) in normalized_terms.iter().enumerate() {
+            if crate::search::passes::literal::content_matches_literal(
+                &name,
+                term,
+                Some(term),
+                false,
+            ) {
+                dfs[i] += 1;
+            }
         }
-        Ok((total, dfs))
-    })?;
-    let mut weights: Vec<f64> = dfs
-        .iter()
-        .map(|&df| term_idf(df.max(0) as u64, total.max(0) as u64))
-        .collect();
+    }
+    let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
     max_normalize_idf(&mut weights);
     Ok(weights)
 }
@@ -766,8 +768,15 @@ pub(crate) fn symbol_pass_for_files_warmed(
     // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
     let sql_limit = options.retained_limit().clamp(32, SYMBOL_SQL_LIMIT);
     let rows = if let Some(table) = warmed {
+        let _span =
+            crate::perf_profile::Span::start("symbol_warm_matches", "search", "matches_for_files");
         table.matches_for_files(options, &parsed.terms, allowed_files, sql_limit)
     } else {
+        let _span = crate::perf_profile::Span::start(
+            "symbol_quota_rows",
+            "search",
+            "query_quota_symbol_spans",
+        );
         let (mut where_clause, mut bind) =
             like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
         restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
@@ -780,20 +789,36 @@ pub(crate) fn symbol_pass_for_files_warmed(
         quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
     };
     let norm_terms = normalize_query_terms(&parsed.terms);
-    let idf_weights = match warmed {
-        Some(table) => table.idf_weights(&norm_terms),
-        None => name_table_idf_weights(store, "symbols", "name", &norm_terms)?,
+    let idf_weights = {
+        let _span = crate::perf_profile::Span::start(
+            "symbol_idf_weights",
+            "search",
+            "name_table_idf_weights",
+        );
+        match warmed {
+            Some(table) => table.idf_weights(&norm_terms),
+            None => name_table_idf_weights(store, "symbols", "name", &norm_terms)?,
+        }
     };
-    let mut hits = symbol_span_rows_to_hits_opts(
-        store,
-        rows,
-        options,
-        parsed,
-        HitKind::Def,
-        |name| score_def_weighted(&norm_terms, &idf_weights, name),
-        false,
-    )?;
+    let mut hits = {
+        let _span = crate::perf_profile::Span::start(
+            "symbol_rows_to_hits",
+            "search",
+            "symbol_span_rows_to_hits_opts",
+        );
+        symbol_span_rows_to_hits_opts(
+            store,
+            rows,
+            options,
+            parsed,
+            HitKind::Def,
+            |name| score_def_weighted(&norm_terms, &idf_weights, name),
+            false,
+        )?
+    };
     if include_callers {
+        let _span =
+            crate::perf_profile::Span::start("symbol_caller_pass", "search", "query_caller_rows");
         hits.extend(caller_rows_to_hits(
             store,
             query_caller_rows(

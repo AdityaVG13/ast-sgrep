@@ -1741,6 +1741,8 @@ fn literal_prefilter_pass(
                     && !(keep_user_generics && user_first.is_some_and(|user| user.contains(*term))))
         })
         .collect::<Vec<_>>();
+    let _df_span =
+        crate::perf_profile::Span::start("lexical_df_gate_sort", "search", "trigram_df.min_df");
     if drop_common {
         // High-df English (encode/payload/search) owned unique-hybrid p90:
         // each term still ran a full literal_pass. Rare siblings keep the
@@ -1806,6 +1808,7 @@ fn literal_prefilter_pass(
     let user_budget = file_cap.saturating_sub(extra_reserve);
     let mut prefilter_options = options.clone();
     prefilter_options.case_insensitive = true;
+    drop(_df_span);
     for term in terms {
         let extra = user_first.is_some_and(|user| !user.contains(term.as_str()));
         let budget = if extra { file_cap } else { user_budget };
@@ -1834,40 +1837,47 @@ fn literal_prefilter_pass(
             continue;
         }
         let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
-        let hits = match corpus.as_ref() {
-            Some(corpus) => {
-                let lower = term.to_lowercase();
-                corpus
-                    .scan_distinct_files(
-                        term,
-                        term_cap,
-                        &files,
-                        options.lang_filter.as_deref(),
-                        types::matches_lang,
-                        |content| {
-                            passes::literal::content_matches_literal(
-                                content,
-                                term,
-                                Some(&lower),
-                                false,
-                            )
-                        },
-                    )
-                    .into_iter()
-                    .map(|row| {
-                        asgrep_line_hit(
-                            row.path.to_owned(),
-                            row.language.map(str::to_owned),
-                            row.line_no,
-                            row.content.to_owned(),
-                            1.0,
+        let hits = {
+            let _span = crate::perf_profile::Span::start(
+                "lexical_term_fetch",
+                "search",
+                "literal_file_pass",
+            );
+            match corpus.as_ref() {
+                Some(corpus) => {
+                    let lower = term.to_lowercase();
+                    corpus
+                        .scan_distinct_files(
+                            term,
+                            term_cap,
+                            &files,
+                            options.lang_filter.as_deref(),
+                            types::matches_lang,
+                            |content| {
+                                passes::literal::content_matches_literal(
+                                    content,
+                                    term,
+                                    Some(&lower),
+                                    false,
+                                )
+                            },
                         )
-                    })
-                    .collect()
-            }
-            None => {
-                prefilter_options.limit = term_cap;
-                literal_file_pass(store, &prefilter_options, term, &files)?
+                        .into_iter()
+                        .map(|row| {
+                            asgrep_line_hit(
+                                row.path.to_owned(),
+                                row.language.map(str::to_owned),
+                                row.line_no,
+                                row.content.to_owned(),
+                                1.0,
+                            )
+                        })
+                        .collect()
+                }
+                None => {
+                    prefilter_options.limit = term_cap;
+                    literal_file_pass(store, &prefilter_options, term, &files)?
+                }
             }
         };
         for hit in hits {
