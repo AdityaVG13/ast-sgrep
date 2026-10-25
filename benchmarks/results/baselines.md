@@ -2637,6 +2637,33 @@ process model). Remaining paths: quiet-host re-measurement (numbers are
 load-bound), serve-mode for repeated queries, or a symbol-df vocabulary
 table (index-format change, new campaign with its own drift gates).
 
+## 2026-10-25 names.v1 sidecar (c1 campaign, lever L6) — 2x target met
+
+**Status: `measured keep` (dev-tree A/B, not a canonical matrix refresh).**
+The symbol-df vocabulary lever from the status note above, built as a
+sidecar: `names.v1` next to the index db stores the `symbols.name` and
+`DISTINCT callers.callee` vocabularies pre-folded (`to_lowercase`, exactly
+the counting predicate); written at index finalize (atomic rename,
+generation-gated, in-memory dbs excluded), read via mmap, dfs counted in
+Rust. Stale/corrupt/absent sidecar or `ASGREP_NO_NAMES_SIDECAR=1` falls
+back to the L5 SQL stream. Corpus/host/protocol unchanged (external load
+2.9-4.4 this window, both arms interleaved per query).
+
+- spans (min-of-3 profiled): `search_query` 12.45 -> 9.60 ms;
+  `symbol_idf_weights` 1.78 -> 0.67 ms; `symbol_caller_pass` 2.64 -> 0.86
+  ms; symbol pass total 5.55 -> 2.52 ms.
+- battery: sidecar lane vs SQL lane in the same binary **-20.5% med**
+  (13.64 vs 17.15 ms, min-of-15 per query x3 queries).
+- **composition vs pre-campaign base: 32.09/13.64 = 2.35x med and
+  30.52/12.56 = 2.43x best**, confirmed by an independent second round
+  (31.50/13.41 = 2.35x med, 2.52x best). The 2x goal is met under
+  matched load, not just quiet windows.
+- parity: 14/14 goldens byte-identical (L6-sidecar vs prior binary AND
+  sidecar lane vs SQL lane); tests `names_sidecar` 2/2 (failure-first,
+  mutation-verified against a no-fold writer), `cli_smoke` 18/18,
+  `hybrid_parallel` 1/1.
+- c1 cumulative (L2+L3+L5+L6): 30.4 -> 13.4-13.6 ms med = **~2.3x**.
+
 ## Rules
 
 1. No number may be quoted without a section status tag plus a row in this
