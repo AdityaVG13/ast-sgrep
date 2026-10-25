@@ -146,6 +146,14 @@ def register(ctx):
             out = pool.call(here, tool, args, timeout_s())
         except ServeError as exc:
             return _fail(exc.message, exc.recovery)
+        except Exception:
+            # Handler-boundary backstop: the model always gets a structured
+            # envelope, never a stack trace through the tool bridge.
+            log.exception("asgrep dispatch failed unexpectedly")
+            return _fail("unexpected asgrep plugin failure",
+                         "The failure was logged; retry the call, and if it "
+                         "repeats, set the plugin `binary` to a known-good "
+                         "asgrep or report the log line.")
         if out.get("ok"):
             return json.dumps({"ok": True, "value": out.get("value")}, ensure_ascii=False)
         error = out.get("error")

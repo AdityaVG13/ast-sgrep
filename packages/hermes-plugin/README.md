@@ -92,11 +92,14 @@ stock ripgrep handler verbatim.
   is probed at load; if any moved, the lane stays inert. Any exception
   during takeover falls back to the stock handler — the override can slow a
   call, never break one.
-- **Warm-only**: the search path never spawns a worker; takeover happens
-  only when the pool already holds one (`prewarm` supplies that at load),
-  and the takeover call runs inside the stock rg pipeline's own 60s budget
-  — if the worker cannot answer in what ripgrep would have been given, the
-  call falls back to rg.
+- **Warm-only**: the search path never spawns a worker on the common path;
+  takeover happens only when the pool already holds one (`prewarm` supplies
+  that at load). A worker that dies between the warm check and the call is
+  replaced transparently inside the same budget. The takeover call runs
+  inside the stock rg pipeline's own 60s budget with the pool's transparent
+  retry disabled — if the worker cannot answer in what ripgrep would have
+  been given (one attempt, no re-try), the call falls back to rg, which is
+  the retry.
 - **Prewarm is scoped**: only repo-like roots (`.git` or an existing
   `.asgrep` index) get the speculative warm-up — a session opened in
   `$HOME` never kicks off a background index of the home tree. On such

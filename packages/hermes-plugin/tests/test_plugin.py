@@ -257,6 +257,170 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class PoolRetryContractTest(unittest.TestCase):
+    """retry=False is the takeover's budget guarantee: one attempt, then the
+    caller (stock rg) supplies the retry. Default retry=True stays for the
+    power lane, where no fallback exists."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        from asgrep_hermes.serve_client import ServePool  # noqa: PLC0415
+
+        self.serve_pool_cls = ServePool
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_retry_false_is_single_attempt(self):
+        import types as _types  # noqa: PLC0415
+
+        from asgrep_hermes.serve_client import ServeError  # noqa: PLC0415
+
+        class StubWorker:
+            def __init__(self):
+                self.calls = 0
+                self.proc = _types.SimpleNamespace(poll=lambda: None)
+
+            def call(self, *a, **k):
+                self.calls += 1
+                raise ServeError("boom", restartable=True)
+
+            def close(self):
+                pass
+
+        pool = self.serve_pool_cls("asgrep", timeout_s=5)
+        stub = StubWorker()
+        pool._procs[self.root.resolve()] = stub  # pyright: ignore[reportArgumentType]
+        try:
+            with self.assertRaises(ServeError):
+                pool.call(self.root, "search", {}, timeout_s=5, retry=False)
+            self.assertEqual(stub.calls, 1, "retry=False must not re-attempt")
+        finally:
+            pool.close()
+
+    def test_default_retry_attempts_twice(self):
+        # Attempt 0: injected stub raises restartable ServeError -> pool drops
+        # it and re-attempts on a real child; the child is a garbage-line
+        # script, so attempt 1 must end in the malformed-line ServeError (not
+        # an escaping ValueError).
+        import stat  # noqa: PLC0415
+        import types as _types  # noqa: PLC0415
+
+        from asgrep_hermes.serve_client import ServeError  # noqa: PLC0415
+
+        script = self.root / "fake_worker.sh"
+        script.write_text("#!/bin/sh\necho 'garbage not json'\nsleep 30\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        pool = self.serve_pool_cls(str(script), timeout_s=30)
+
+        class StubWorker:
+            def __init__(self):
+                self.calls = 0
+                self.proc = _types.SimpleNamespace(poll=lambda: None)
+
+            def call(self, *a, **k):
+                self.calls += 1
+                raise ServeError("boom", restartable=True)
+
+            def close(self):
+                pass
+
+        stub = StubWorker()
+        pool._procs[self.root.resolve()] = stub  # pyright: ignore[reportArgumentType]
+        try:
+            with self.assertRaises(ServeError) as caught:
+                pool.call(self.root, "search", {}, timeout_s=30)
+            self.assertEqual(stub.calls, 1)
+            self.assertIn("malformed", str(caught.exception),
+                          "attempt 1 must surface the child's protocol failure")
+        finally:
+            pool.close()
+
+
+class MalformedWorkerLineTest(unittest.TestCase):
+    """A worker that answers with a non-JSON line is transport drift, not an
+    escaping exception: serve_client's own contract says nothing raises past
+    the tool-handler boundary."""
+
+    def test_malformed_line_raises_serve_error(self):
+        import stat  # noqa: PLC0415
+        import tempfile as _tf  # noqa: PLC0415
+
+        from asgrep_hermes.serve_client import ServeError, ServePool  # noqa: PLC0415
+
+        with _tf.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "fake_worker.sh"
+            script.write_text("#!/bin/sh\necho 'garbage not json'\nsleep 30\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            pool = ServePool(str(script), timeout_s=30)
+            try:
+                with self.assertRaises(ServeError):
+                    pool.call(root, "search", {}, timeout_s=30)
+            finally:
+                pool.close()
+
+
+class DispatchBackstopTest(unittest.TestCase):
+    """No exception of any kind may cross the tool-handler boundary; the
+    model must always get a structured fail envelope with a recovery hint."""
+
+    def test_unexpected_exception_returns_envelope(self):
+        import tempfile as _tf  # noqa: PLC0415
+
+        import asgrep_hermes.serve_client as sc  # noqa: PLC0415
+
+        with _tf.TemporaryDirectory() as tmp:
+            ctx = StubContext(cwd=Path(tmp))
+            load_plugin().register(ctx)
+            original = sc.ServePool.call
+
+            def kaboom(self, *a, **k):
+                raise RuntimeError("unexpected plugin failure")
+
+            sc.ServePool.call = kaboom
+            try:
+                raw = ctx.tools["asgrep_search"]["handler"]({"query": "x"})
+                out = json.loads(raw)
+                self.assertFalse(out["ok"], out)
+                self.assertTrue(any(k in out for k in ("recovery", "hint")),
+                                "must still teach a fix")
+            finally:
+                sc.ServePool.call = original
+                for fn in ctx.unload_hooks:
+                    fn()
+
+
+class CloseDeadlockTest(unittest.TestCase):
+    """Regression: a child that ignores stdin-close (wedged worker) must not
+    hold close() hostage for its lifetime — stdout is closed only after
+    kill+reap, so the pump thread's blocked readline can never deadlock it."""
+
+    def test_wedged_child_closes_within_backstop(self):
+        import stat  # noqa: PLC0415
+        import tempfile as _tf  # noqa: PLC0415
+        import time as _time  # noqa: PLC0415
+
+        import asgrep_hermes.serve_client as sc  # noqa: PLC0415
+
+        with _tf.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "wedged_worker.sh"
+            script.write_text("#!/bin/sh\nsleep 60\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            worker = sc._Worker(str(script), root, 5)
+            try:
+                started = _time.monotonic()
+                worker.close()
+                elapsed = _time.monotonic() - started
+            finally:
+                worker.kill()
+            self.assertLess(elapsed, 30,
+                            "close() must reap a wedged child, not wait out "
+                            "its 60s sleep")
+
+
 class Round9ParityTest(ToolHandlerTest):
     """Round-9 surface parity: channels, excerpt control, LSP refs."""
 

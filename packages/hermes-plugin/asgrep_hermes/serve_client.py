@@ -13,6 +13,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import subprocess
 import threading
 from contextlib import suppress
@@ -64,6 +65,11 @@ class _Worker:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             cwd=str(root),
+            # Own session: kill() must be able to take the whole group — a
+            # worker that forks helpers must not leave orphans holding the
+            # stdout pipe (they would pin the pump thread's readline, and
+            # with it close()/atexit).
+            start_new_session=True,
         )
         self._lines: queue.Queue = queue.Queue()
         self._seq = 0
@@ -114,7 +120,16 @@ class _Worker:
                     recovery="The call is retried on a fresh worker.",
                     restartable=True,
                 )
-            response = json.loads(line)
+            try:
+                response = json.loads(line)
+            except ValueError:
+                # Non-JSON stdout is protocol drift: transport-level, restart
+                # semantics — never an exception past the handler boundary.
+                raise ServeError(
+                    "serve worker emitted a malformed line (protocol drift)",
+                    recovery="The call is retried on a fresh worker.",
+                    restartable=True,
+                ) from None
             kind = response.get("type")
             if kind == "result":
                 if response.get("id") != rid:
@@ -135,6 +150,10 @@ class _Worker:
             )
 
     def kill(self) -> None:
+        # Group kill first: a forked grandchild still holding the stdout
+        # pipe would otherwise outlive the direct child and pin the pump.
+        with suppress(Exception):
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
         with suppress(Exception):
             self.proc.kill()
 
@@ -143,17 +162,24 @@ class _Worker:
             self.proc.wait(timeout=timeout)
 
     def close(self) -> None:
-        # Graceful: closing stdin ends the serve read loop; kill is the backstop.
+        # Graceful: closing stdin ends the serve read loop. The kill/reap
+        # backstop runs BEFORE closing stdout — the pump thread's blocked
+        # readline holds the stream lock, so closing stdout while anything
+        # still holds the pipe's write end (direct child or a forked
+        # grandchild; hence the group kill) can deadlock close() until that
+        # process exits on its own — a wedged child would hang
+        # pool.close()/atexit for its full lifetime.
         with suppress(Exception):
             if self.proc.stdin is not None:
                 self.proc.stdin.close()
         with suppress(Exception):
-            if self.proc.stdout is not None:
-                self.proc.stdout.close()
+            self.proc.wait(timeout=5)
+        self.kill()
         with suppress(Exception):
             self.proc.wait(timeout=5)
         with suppress(Exception):
-            self.proc.kill()
+            if self.proc.stdout is not None:
+                self.proc.stdout.close()
 
 
 class ServePool:
@@ -166,7 +192,14 @@ class ServePool:
         self._procs: dict[Path, _Worker] = {}
 
     def call(self, root: Path, tool: str, args: dict,
-             timeout_s: Optional[float] = None) -> dict[str, Any]:
+             timeout_s: Optional[float] = None, *,
+             retry: bool = True) -> dict[str, Any]:
+        """Call ``tool`` on the worker for ``root``.
+
+        ``retry=False`` disables the one transparent restart: the caller
+        supplies its own fallback (the takeover hands off to stock rg inside
+        a fixed budget — a re-attempt here would spend that budget twice).
+        """
         root = Path(root).resolve()
         for attempt in (0, 1):
             with self._lock:
@@ -186,7 +219,7 @@ class ServePool:
             try:
                 return worker.call(tool, args, timeout_s)
             except ServeError as exc:
-                if not exc.restartable or attempt:
+                if not exc.restartable or attempt or not retry:
                     raise
                 with self._lock:
                     dead = self._procs.pop(root, None)

@@ -285,7 +285,7 @@ def _takeover(host, pool, root_fn, args, task_id):
     try:
         out = pool.call(session_root, "search",
                         {"query": f"literal:{pattern}", "limit": limit + 1},
-                        timeout_s=60.0)
+                        timeout_s=60.0, retry=False)
         if not out.get("ok"):
             _restore_guard()
             return None

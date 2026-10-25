@@ -28,6 +28,13 @@ def install_eager_tools(names, enabled: Callable[[], bool]) -> Optional[Callable
     names = frozenset(names)
     ordered = tuple(sorted(names))
 
+    def _enabled() -> bool:
+        # Host seams must never break: a raising accessor (torn-down config,
+        # exotic ctx) degrades to the original — bridged — behavior.
+        with contextlib.suppress(Exception):
+            return bool(enabled())
+        return False
+
     module = None
     original = None
     wrapped = None
@@ -38,7 +45,7 @@ def install_eager_tools(names, enabled: Callable[[], bool]) -> Optional[Callable
             return None
         if callable(original):
             def wrapped(name, *args, **kwargs):  # noqa: F811
-                if name in names and enabled():
+                if name in names and _enabled():
                     return False
                 return original(name, *args, **kwargs)
             setattr(wrapped, _MARKER, True)
@@ -58,7 +65,7 @@ def install_eager_tools(names, enabled: Callable[[], bool]) -> Optional[Callable
 
             def for_toolset(target: str, *args, **kwargs):
                 out = list(orig_for_toolset(target, *args, **kwargs))
-                if target in _EAGER_TOOLSETS and enabled():
+                if target in _EAGER_TOOLSETS and _enabled():
                     for item in ordered:
                         if item not in out:
                             out.append(item)
@@ -80,7 +87,7 @@ def install_eager_tools(names, enabled: Callable[[], bool]) -> Optional[Callable
         if callable(orig_reg_gen) and not getattr(orig_reg_gen, _MARKER, False):
             def reg_gen():  # noqa: F811
                 gid, gnum = orig_reg_gen()
-                return (gid, gnum * 2 + (1 if enabled() else 0))
+                return (gid, gnum * 2 + (1 if _enabled() else 0))
             setattr(reg_gen, _MARKER, True)
             toolsets_mod._registry_generation = reg_gen
 

@@ -244,12 +244,14 @@ class FakePool:
         self.response = response or {"ok": True, "value": {"hits": []}}
         self.error = error
         self.calls = []
+        self.retries = []
 
     def has_worker(self, root):
         return self.has_worker_value
 
-    def call(self, root, tool, args, timeout_s=None):
+    def call(self, root, tool, args, timeout_s=None, retry=True):
         self.calls.append((str(root), tool, dict(args), timeout_s))
+        self.retries.append(retry)
         if self.error is not None:
             raise self.error
         return self.response
@@ -502,6 +504,16 @@ class TakeoverTest(OverrideTestBase):
         # The guard fires before any worker interaction on the 4th call.
         self.assertEqual(len(self.pool.calls), 3)
 
+    def test_takeover_disables_pool_retry(self):
+        # The takeover runs inside stock rg's 60s envelope; the pool's
+        # transparent retry would double it (and stock rg IS the retry).
+        pool = FakePool(response={"ok": True, "value": {"hits": HITS}})
+        out = json.loads(self.call_search(
+            pool, {"pattern": "alpha_marker"}, ctx=self.ctx))
+        self.assertEqual(out["total_count"], 2)
+        self.assertEqual(pool.retries, [False])
+
+
 class PrewarmScopeTest(OverrideTestBase):
     """should_prewarm: prewarm is speculation — only repo-like roots get it.
 
@@ -526,6 +538,44 @@ class PrewarmScopeTest(OverrideTestBase):
     def test_plain_directory_does_not_prewarm(self):
         # No .git, no .asgrep: a scratch/home-style tree — stock rg territory.
         self.assertFalse(self._should_prewarm(self.root))
+
+
+class EagerGuardTest(OverrideTestBase):
+    """enabled() runs inside host seams; a raising accessor must degrade to
+    the original answer, never break the host's own deferral check."""
+
+    def setUp(self):
+        super().setUp()
+        self.tool_search = types.ModuleType("tools.tool_search")
+        self.tool_search.is_deferrable_tool_name = (
+            lambda name, defer_tools=None: True)
+        self._prev_ts = sys.modules.get("tools.tool_search")
+        sys.modules["tools.tool_search"] = self.tool_search
+
+    def tearDown(self):
+        if self._prev_ts is None:
+            sys.modules.pop("tools.tool_search", None)
+        else:
+            sys.modules["tools.tool_search"] = self._prev_ts
+        super().tearDown()
+
+    def test_raising_enabled_degrades_to_original(self):
+        from asgrep_hermes.eager import install_eager_tools  # noqa: PLC0415
+
+        def kaboom():
+            raise RuntimeError("settings torn down")
+
+        undo = install_eager_tools(
+            ("asgrep_search",), enabled=kaboom)
+        try:
+            self.assertIsNotNone(undo)
+            # The wrapped seam answers (original: deferrable) without raising.
+            self.assertTrue(self.tool_search.is_deferrable_tool_name("asgrep_search"))
+        finally:
+            if undo:
+                undo()
+        # Undo restores the pristine seam.
+        self.assertTrue(self.tool_search.is_deferrable_tool_name("asgrep_search"))
 
 
 class PrewarmTest(OverrideTestBase):
