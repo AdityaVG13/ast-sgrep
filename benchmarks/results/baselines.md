@@ -2812,3 +2812,35 @@ HEAD carries post-2.6.0 ranking work; attribute the delta to tree+corpus
 drift, not to this round. Embed stays mildly negative on this symbol-heavy
 self gold (gap narrowed -0.042 -> -0.005) and is out-scoped by the frozen
 external suite rows (strongly positive there). No new quality claim.
+
+## 2026-10-25 ast-grep re-pin: Pattern-1 parity + structural latency (competitor #2)
+
+Match-set parity first: `ASGREP_DIFF_AST_GREP=/tmp/ast-grep-pin-0451x/ast-grep
+cargo test -p ast-sgrep-core --test pattern_diff --` -> **5/5 pass** against
+pinned ast-grep **0.45.1** (official release artifact `app-aarch64-apple-darwin.zip`,
+tag 0.45.1). Token-exact faces (`process_request`, `process_request($$$)`,
+`$OBJ.$METHOD($$$)`, `if $COND { $BODY }`) remain match-set equal on the
+current tree; normalized faces stay asserted natively (ast-grep parses
+`fn $NAME($$$)` as a trait item and is visibility-exact -- the native engine
+normalizes both).
+
+Latency (bench corpus, 788 files, warm index vs parse-per-query, alternate
+single runs interleaved, min of 15 / min of 9 on the re-measured face):
+
+| face | asgrep min | ast-grep 0.45.1 min | ratio |
+|---|---:|---:|---:|
+| identifier (`pattern:dot_similarity`) | 9.4 ms | 321.9 ms | **34x** |
+| free call (`dot_similarity($$$)`) | 55.6 ms | 329.7 ms | **5.9x** |
+| member call (`$OBJ.$METHOD($$$)`) | 407 ms | 435 ms | ~1.0x (within load noise) |
+
+Caveats, kept plain: asgrep answers identifier/call faces from the index
+(warm, one-shot CLI incl. process spawn); ast-grep parses the corpus per
+query -- indexed-vs-parse is the documented asymmetry, not general
+superiority. The member-call face takes the native walk (index signatures
+cannot express it): parity with ast-grep, no win claimed; two interleaved
+batteries under fluctuating host load flipped the sign (515 vs 414, then 407
+vs 435), so it is noise-bound. `ASGREP_WALK_THREADS=12` measured SLOWER
+(527 ms vs 407 ms default 4) -- the walk cap is not a latency lever on this
+host; raising it stays a duty-cycle policy call, not taken here. Supersedes
+the 2026-09-20 latency-only row (9.5 vs 61.3 ms) with a same-protocol
+battery plus match-set parity and a walk face.
