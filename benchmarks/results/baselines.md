@@ -2791,3 +2791,24 @@ because it is strictly bit-identical and simplifies the hot loop;
 index-speed campaign total this round: 55 -> 9.3 s wall, user CPU
 30.6 -> 10.9 s (-64%). Remaining cold-index cost is parse/relational + sqlite
 writes (product work), not embed machinery.
+
+## 2026-10-25 self-gold quality re-pin at HEAD (post storage/IVF levers S1-I1-I2-E1)
+
+Clean-worktree eval: `git archive HEAD` export, fresh `--release` build,
+`asgrep eval --gold benchmarks/gold/self.json <archive> --json` (+ `--ab
+no-embed`). 17-query self gold, k=20.
+
+| arm | MRR | nDCG | R@20 |
+|---|---:|---:|---:|
+| hybrid (default) | 0.919 | 0.907 | 1.000 |
+| no-embed ablation | 0.924 | 0.925 | 1.000 |
+
+Reading: the round's levers (embed_cache drop, FTS external content,
+prefix-redundant index drop, IVF seeding/Lloyd) are bit-parity by
+construction and moved nothing here -- the no-embed arm is byte-stable vs
+the 2.6.0 row (0.924). The hybrid arm reads 0.882 -> 0.919 vs the published
+2.6.0 row, but the corpus is the HEAD tree, not the 2026-10-19 tree, and
+HEAD carries post-2.6.0 ranking work; attribute the delta to tree+corpus
+drift, not to this round. Embed stays mildly negative on this symbol-heavy
+self gold (gap narrowed -0.042 -> -0.005) and is out-scoped by the frozen
+external suite rows (strongly positive there). No new quality claim.
