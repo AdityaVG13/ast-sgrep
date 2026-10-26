@@ -66,7 +66,8 @@ Requires `asgrep` on PATH (or set the plugin `binary` config); the worker is
 | key | default | meaning |
 |---|---|---|
 | `binary` | `asgrep` | executable name on PATH, or absolute path |
-| `timeout_s` | `120` | per-call timeout, including cold index builds |
+| `timeout_s` | `120` | per-call timeout; a busy live worker is NOT killed at the timeout (see `warm_grace_s`) |
+| `warm_grace_s` | `900` | how long a continuously busy worker is kept alive past call timeouts (ambient freshness commits only at the end; killing mid-pass restarts it from zero). Beyond the grace, kill+restart resumes |
 | `eager` | `true` | keep the tools out of `tool_search` deferral (genome-pattern host seam; degrades to the bridged surface if the seams move) |
 | `prewarm` | `true` | start the serve worker + ambient index build at plugin load, off the search path |
 | `prewarm_timeout_s` | `600` | prewarm call budget (long: the worker keeps building even when the call returns) |

@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Optional
@@ -25,11 +26,17 @@ class ServeError(Exception):
     """Transport-level failure talking to an `asgrep serve` worker."""
 
     def __init__(self, message: str, *, recovery: Optional[str] = None,
-                 restartable: bool = False) -> None:
+                 restartable: bool = False, warming: bool = False,
+                 elapsed_s: Optional[float] = None) -> None:
         super().__init__(message)
         self.message = message
         self.recovery = recovery
         self.restartable = restartable
+        # Warming: the worker is alive and busy (typically ambient index
+        # freshness). NOT restartable — killing it would destroy in-flight
+        # work that commits only at the end.
+        self.warming = warming
+        self.elapsed_s = elapsed_s
 
 
 def resolve_binary(configured: str = "asgrep") -> Optional[str]:
@@ -56,9 +63,15 @@ class _Worker:
     id checking a cheap integrity assertion rather than routing logic.
     """
 
-    def __init__(self, binary: str, root: Path, timeout_s: float) -> None:
+    def __init__(self, binary: str, root: Path, timeout_s: float,
+                 warm_grace_s: float = 900.0) -> None:
         self.root = root
         self.timeout_s = timeout_s
+        # How long a continuously-busy worker is kept alive past call
+        # timeouts before the pool falls back to kill+restart. Ambient
+        # freshness measured 400s on a 63k-file tree (2026-10-26); the
+        # default accommodates several times that.
+        self.warm_grace_s = warm_grace_s
         self.proc = subprocess.Popen(
             [binary, "serve", "--root", str(root)],
             stdin=subprocess.PIPE,
@@ -74,10 +87,21 @@ class _Worker:
         self._lines: queue.Queue = queue.Queue()
         self._seq = 0
         self._call_lock = threading.Lock()
+        # Requests written but not yet answered. The single-writer protocol
+        # answers one request per line, in order; a caller that returns
+        # warming leaves its request outstanding, so later calls must drain
+        # those stale responses (id-keyed) before their own arrives.
+        self._awaited: set[str] = set()
+        self._busy_since: Optional[float] = None
         stream = self.proc.stdout
         assert stream is not None  # PIPE was requested
         self._reader = threading.Thread(target=self._pump, args=(stream,), daemon=True)
         self._reader.start()
+
+    def _forget(self, rid: str) -> None:
+        self._awaited.discard(rid)
+        if not self._awaited:
+            self._busy_since = None
 
     def _pump(self, stream) -> None:
         try:
@@ -88,6 +112,7 @@ class _Worker:
 
     def call(self, tool: str, args: dict, timeout_s: Optional[float] = None) -> dict:
         with self._call_lock:
+            timeout = timeout_s or self.timeout_s
             self._seq += 1
             rid = f"h{self._seq}"
             request = json.dumps(
@@ -104,50 +129,86 @@ class _Worker:
                     recovery="The call is retried on a fresh worker.",
                     restartable=True,
                 ) from exc
-            try:
-                line = self._lines.get(timeout=timeout_s or self.timeout_s)
-            except queue.Empty:
-                self.close()
-                raise ServeError(
-                    "asgrep serve call timed out",
-                    recovery="Raise the plugin timeout_s, or warm the index: "
-                             "`asgrep index <root> --json`",
-                    restartable=True,
-                ) from None
-            if line is None:
-                raise ServeError(
-                    "asgrep serve worker exited",
-                    recovery="The call is retried on a fresh worker.",
-                    restartable=True,
-                )
-            try:
-                response = json.loads(line)
-            except ValueError:
-                # Non-JSON stdout is protocol drift: transport-level, restart
-                # semantics — never an exception past the handler boundary.
-                raise ServeError(
-                    "serve worker emitted a malformed line (protocol drift)",
-                    recovery="The call is retried on a fresh worker.",
-                    restartable=True,
-                ) from None
-            kind = response.get("type")
-            if kind == "result":
-                if response.get("id") != rid:
+            if not self._awaited:
+                self._busy_since = time.monotonic()
+            self._awaited.add(rid)
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    busy_elapsed = time.monotonic() - (self._busy_since or time.monotonic())
+                    if busy_elapsed < self.warm_grace_s:
+                        # Live worker, busy past this call's timeout — almost
+                        # always ambient index freshness, whose work commits
+                        # only at the end. Killing here would restart the
+                        # whole pass on every timeout (2026-10-26 TensorAST
+                        # incident: a 400s rebuild, never able to finish
+                        # under a 120s timeout). Keep the worker; the caller
+                        # retries and rides its progress.
+                        raise ServeError(
+                            f"asgrep serve call still running: worker busy for "
+                            f"{busy_elapsed:.0f}s (warming — in-flight index "
+                            f"work is preserved)",
+                            recovery="Retry the same call shortly; progress is "
+                                     "kept on the live worker. It restarts "
+                                     "automatically only if busy beyond the "
+                                     "grace window.",
+                            restartable=False,
+                            warming=True,
+                            elapsed_s=busy_elapsed,
+                        )
+                    self.close()
                     raise ServeError(
-                        "serve response id mismatch (protocol drift)",
+                        "asgrep serve call timed out",
+                        recovery="Raise the plugin timeout_s, or warm the index: "
+                                 "`asgrep index <root> --json`",
+                        restartable=True,
+                    ) from None
+                try:
+                    line = self._lines.get(timeout=remaining)
+                except queue.Empty:
+                    continue  # re-check the deadline (warm vs hard branch)
+                if line is None:
+                    raise ServeError(
+                        "asgrep serve worker exited",
+                        recovery="The call is retried on a fresh worker.",
                         restartable=True,
                     )
-                return {
-                    "ok": bool(response.get("ok")),
-                    "value": response.get("value"),
-                    "error": response.get("error"),
-                }
-            if kind == "error":
-                return {"ok": False, "error": response.get("error", "serve error")}
-            raise ServeError(
-                f"unexpected serve response type {kind!r}",
-                restartable=True,
-            )
+                try:
+                    response = json.loads(line)
+                except ValueError:
+                    # Non-JSON stdout is protocol drift: transport-level, restart
+                    # semantics — never an exception past the handler boundary.
+                    raise ServeError(
+                        "serve worker emitted a malformed line (protocol drift)",
+                        recovery="The call is retried on a fresh worker.",
+                        restartable=True,
+                    ) from None
+                kind = response.get("type")
+                if kind not in ("result", "error"):
+                    raise ServeError(
+                        f"unexpected serve response type {kind!r}",
+                        restartable=True,
+                    )
+                rid_line = response.get("id")
+                if rid_line == rid:
+                    self._forget(rid)
+                    if kind == "error":
+                        return {"ok": False, "error": response.get("error", "serve error")}
+                    return {
+                        "ok": bool(response.get("ok")),
+                        "value": response.get("value"),
+                        "error": response.get("error"),
+                    }
+                if rid_line in self._awaited:
+                    # Stale answer for an earlier request whose caller already
+                    # returned warming: drop it and keep waiting for ours.
+                    self._forget(rid_line)
+                    continue
+                raise ServeError(
+                    f"unexpected serve response id {rid_line!r} (protocol drift)",
+                    restartable=True,
+                )
 
     def kill(self) -> None:
         # Group kill first: a forked grandchild still holding the stdout
@@ -162,6 +223,8 @@ class _Worker:
             self.proc.wait(timeout=timeout)
 
     def close(self) -> None:
+        self._awaited.clear()
+        self._busy_since = None
         # Graceful: closing stdin ends the serve read loop. The kill/reap
         # backstop runs BEFORE closing stdout — the pump thread's blocked
         # readline holds the stream lock, so closing stdout while anything
@@ -185,9 +248,13 @@ class _Worker:
 class ServePool:
     """Root-keyed pool of sticky workers with one transparent restart."""
 
-    def __init__(self, binary: str, timeout_s: float = 120.0) -> None:
+    def __init__(self, binary: str, timeout_s: float = 120.0,
+                 warm_grace_s: float = 900.0) -> None:
         self.binary = binary
         self.timeout_s = timeout_s
+        # Read at spawn time, so operators (and tests) may retune it on a
+        # live pool (same seam as `pool.binary`).
+        self.warm_grace_s = warm_grace_s
         self._lock = threading.Lock()
         self._procs: dict[Path, _Worker] = {}
 
@@ -208,7 +275,8 @@ class ServePool:
                     if worker is not None:
                         worker.close()
                     try:
-                        worker = _Worker(self.binary, root, self.timeout_s)
+                        worker = _Worker(self.binary, root, self.timeout_s,
+                                         self.warm_grace_s)
                     except OSError as exc:
                         raise ServeError(
                             f"cannot start asgrep serve ({exc})",

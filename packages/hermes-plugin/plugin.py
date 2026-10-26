@@ -132,11 +132,24 @@ def _fail(message: str, recovery: str | None = None) -> str:
 
 
 def register(ctx):
-    pool = ServePool("asgrep")
-
     def setting(key, default):
         getter = getattr(ctx, "get_config", None)
         return getter(key, default) if callable(getter) else default
+
+    def _float_setting(key, default):
+        value = setting(key, default)
+        try:
+            return float(value)  # pyright: ignore[reportArgumentType]
+        except (TypeError, ValueError):
+            return float(default)
+
+    # A live worker busy past a call's timeout is PRESERVED (warming) until
+    # this grace elapses: ambient freshness commits only at the end, so a
+    # premature kill restarts the whole pass on every retry (2026-10-26
+    # TensorAST incident). Default 900s covers several times the measured
+    # 400s worst-case freshness on a 63k-file tree.
+    pool = ServePool("asgrep", timeout_s=_float_setting("timeout_s", 120),
+                     warm_grace_s=_float_setting("warm_grace_s", 900))
 
     def binary() -> str | None:
         return resolve_binary(str(setting("binary", "asgrep")))
