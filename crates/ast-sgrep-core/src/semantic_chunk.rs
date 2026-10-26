@@ -76,7 +76,7 @@ pub fn build_semantic_chunks_with_patterns(
             .collect::<Vec<_>>();
         callee_names.sort();
         callee_names.dedup();
-        let doc = doc_comment_above(lines, sym.line_start, language);
+        let doc = doc_for_symbol(lines, sym.line_start, language);
         let scope = enclosing_scope(symbols, sym);
         for excerpt in excerpts {
             chunks.push(SemanticChunkInput {
@@ -423,6 +423,86 @@ fn doc_comment_above(lines: &[(u32, String)], line_start: u32, language: Option<
     }
     collected.reverse();
     collected.join(" ").trim().to_string()
+}
+
+/// Doc for a symbol: comment above when present (all languages); for python,
+/// fall back to the PEP 257 docstring — the first statement inside the body,
+/// a string literal directly below the def/class line. Without this the
+/// docs field stays empty for python (measured 0.3% docs-vector coverage on
+/// the flask corpus): the docstring's semantics remain locked inside the
+/// body mean-pool, where long functions dilute them below retrieval use.
+/// Paired-arm kill switch: `ASGREP_PYTHON_DOCSTRINGS=off` restores the
+/// above-comment-only behavior.
+fn doc_for_symbol(lines: &[(u32, String)], line_start: u32, language: Option<&str>) -> String {
+    let above = doc_comment_above(lines, line_start, language);
+    let docstrings_enabled = !matches!(
+        std::env::var_os("ASGREP_PYTHON_DOCSTRINGS")
+            .as_deref()
+            .map(|v| v.to_string_lossy()),
+        Some(ref v) if v == "off" || v == "0" || v == "false"
+    );
+    if !above.is_empty() || language != Some("python") || !docstrings_enabled {
+        return above;
+    }
+    docstring_below(lines, line_start)
+}
+
+/// Extract a python docstring from the lines following `line_start`.
+/// Bounded: the first non-blank body line must open a string literal
+/// (after optional r/b/u/f prefixes); triple-quoted strings may span up to
+/// DOC_LOOKBACK_LINES lines. Anything else is code, not documentation.
+fn docstring_below(lines: &[(u32, String)], line_start: u32) -> String {
+    let body: Vec<&(u32, String)> = lines.iter().filter(|(no, _)| *no > line_start).collect();
+    let Some(&(first_no, first)) = body.iter().find(|(_, c)| !c.trim().is_empty()) else {
+        return String::new();
+    };
+    // Only accept the docstring when it is the FIRST body line — a blank
+    // line then a string is unusual style; code-first bodies must never
+    // donate later string statements.
+    if *first_no != line_start + 1 {
+        return String::new();
+    }
+    let trimmed = first.trim_start();
+    let after_prefix =
+        trimmed.trim_start_matches(|c| matches!(c, 'r' | 'R' | 'b' | 'B' | 'u' | 'U' | 'f' | 'F'));
+    let (quote, rest) = if let Some(r) = after_prefix.strip_prefix("\"\"\"") {
+        ("\"\"\"", r)
+    } else if let Some(r) = after_prefix.strip_prefix("'''") {
+        ("'''", r)
+    } else {
+        // Single-line single-quoted docstring: "text" or 'text'.
+        let single = after_prefix
+            .strip_prefix('"')
+            .map(|r| ('"', r))
+            .or_else(|| after_prefix.strip_prefix('\'').map(|r| ('\'', r)));
+        let Some((q, r)) = single else {
+            return String::new();
+        };
+        let inner = r.strip_suffix(&format!("{q}{q}")).unwrap_or(r);
+        let inner = inner.strip_suffix(q).unwrap_or(inner);
+        return inner
+            .trim()
+            .trim_matches(|c| matches!(c, '"' | '\''))
+            .to_string();
+    };
+    // Triple-quoted: collect until the closing marker, bounded.
+    let mut collected: Vec<String> = vec![rest.trim().to_string()];
+    for (no, content) in body.iter() {
+        if *no <= *first_no || collected.len() >= DOC_LOOKBACK_LINES {
+            break;
+        }
+        let line = content.trim();
+        if let Some(idx) = line.find(quote) {
+            collected.push(line[..idx].to_string());
+            break;
+        }
+        collected.push(line.to_string());
+    }
+    collected
+        .join(" ")
+        .trim()
+        .trim_matches(|c| matches!(c, '"' | '\''))
+        .to_string()
 }
 fn strip_comment_marker<'a>(line: &'a str, markers: &[&str]) -> Option<&'a str> {
     let trimmed = line.trim();

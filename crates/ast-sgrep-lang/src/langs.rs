@@ -197,6 +197,7 @@ const TS_JS: &[(&str, KindRule)] = &[
 #[rustfmt::skip]
 const C: &[(&str, KindRule)] = &[
     ("function_definition", SymDeclarator(Function)),
+    ("declaration",         FnDeclaratorIn(&[])),
     ("struct_specifier",    Sym(Type)),
     ("enum_specifier",      Sym(Enum)),
     ("type_definition",     SymDeclarator(Type)),
@@ -207,6 +208,8 @@ const C: &[(&str, KindRule)] = &[
 #[rustfmt::skip]
 const CPP: &[(&str, KindRule)] = &[
     ("function_definition", MethodInDeclarator(CPP_TYPES)),
+    ("declaration",         FnDeclaratorIn(&[])),
+    ("field_declaration",   FnDeclaratorIn(CPP_TYPES)),
     ("class_specifier",     Sym(Class)),
     ("struct_specifier",    Sym(Type)),
     ("enum_specifier",      Sym(Enum)),

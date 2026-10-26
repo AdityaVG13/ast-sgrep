@@ -90,6 +90,8 @@ const CASES: &[LanguageConformanceCase] = &[
             ("GoldenWidget", Type),
             ("GoldenState", Enum),
             ("GoldenRender", Interface),
+            ("GLOSSARY_TABLE", Static),
+            ("MAX_RETRIES", Static),
         ],
         imports: &["std::collections::HashMap"],
         calls: &[("process", "top_level_helper")],

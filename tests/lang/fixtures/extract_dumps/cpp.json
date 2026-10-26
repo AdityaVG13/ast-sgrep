@@ -343,6 +343,14 @@
       "name": "GoldenWidget"
     },
     {
+      "byte_end": 425,
+      "byte_start": 388,
+      "kind": "function",
+      "line_end": 26,
+      "line_start": 26,
+      "name": "helper"
+    },
+    {
       "byte_end": 502,
       "byte_start": 441,
       "kind": "function",
@@ -365,6 +373,14 @@
       "line_end": 12,
       "line_start": 10,
       "name": "render"
+    },
+    {
+      "byte_end": 439,
+      "byte_start": 426,
+      "kind": "function",
+      "line_end": 27,
+      "line_start": 27,
+      "name": "touch"
     }
   ]
 }

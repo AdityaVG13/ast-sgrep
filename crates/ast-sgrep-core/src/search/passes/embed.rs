@@ -1,7 +1,10 @@
 use crate::intent::{classify, QueryIntent};
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
-use crate::search::field_weight::{field_weights, rescore_similarity, EmbedFieldScores};
+use crate::search::field_weight::{
+    field_rank_union_keys, field_rank_union_mode, field_weights, rescore_similarity,
+    EmbedFieldScores, FieldRankUnionMode,
+};
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
 use crate::semantic_chunk::SemanticFieldVectors;
@@ -1180,24 +1183,43 @@ fn embed_similarity_hits(
     struct ParentMatch {
         best_index: usize,
         best_similarity: f32,
+        best_rank: (u32, f32),
         children: Vec<(f32, usize)>,
     }
 
+    let union_mode = field_rank_union_mode();
+    let files: Vec<&str> = chunks.iter().map(|c| c.0.as_str()).collect();
+    let union_keys = if union_mode == FieldRankUnionMode::Off {
+        (0..ranked.len() as u32)
+            .zip(ranked.iter().map(|(_, score)| *score))
+            .collect()
+    } else {
+        field_rank_union_keys(&ranked, &files, field_notes, union_mode)
+    };
+
     let mut parents = HashMap::<(&str, u32, u32, &str), ParentMatch>::new();
-    for (index, similarity) in ranked {
+    for (pos, (index, similarity)) in ranked.into_iter().enumerate() {
         let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
             continue;
         };
+        let key = union_keys
+            .get(pos)
+            .copied()
+            .unwrap_or((pos as u32, similarity));
         let parent = parents
             .entry((file.as_str(), *line_start, *line_end, symbol.as_str()))
             .or_insert_with(|| ParentMatch {
                 best_index: index,
                 best_similarity: similarity,
+                best_rank: key,
                 children: Vec::new(),
             });
         if similarity > parent.best_similarity {
             parent.best_index = index;
             parent.best_similarity = similarity;
+        }
+        if key < parent.best_rank {
+            parent.best_rank = key;
         }
         if !parent
             .children
@@ -1208,10 +1230,15 @@ fn embed_similarity_hits(
         }
     }
     let mut parents = parents.into_values().collect::<Vec<_>>();
+    // Channel order = (best list rank, winning-list cosine, rescored
+    // similarity), then the deterministic span tie-breaks. The carried
+    // score stays the rescored similarity; only order changes.
     parents.sort_by(|left, right| {
-        right
-            .best_similarity
-            .total_cmp(&left.best_similarity)
+        left.best_rank
+            .0
+            .cmp(&right.best_rank.0)
+            .then_with(|| right.best_rank.1.total_cmp(&left.best_rank.1))
+            .then_with(|| right.best_similarity.total_cmp(&left.best_similarity))
             .then_with(|| chunks[left.best_index].0.cmp(&chunks[right.best_index].0))
             .then_with(|| chunks[left.best_index].1.cmp(&chunks[right.best_index].1))
             .then_with(|| chunks[left.best_index].2.cmp(&chunks[right.best_index].2))

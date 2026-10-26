@@ -292,6 +292,14 @@
       "name": "format_widget"
     },
     {
+      "byte_end": 298,
+      "byte_start": 268,
+      "kind": "function",
+      "line_end": 17,
+      "line_start": 17,
+      "name": "helper"
+    },
+    {
       "byte_end": 351,
       "byte_start": 300,
       "kind": "function",

@@ -174,3 +174,111 @@ pub fn rescore_similarity(
         ),
     }
 }
+
+/// Query-side field rank union (`ASGREP_FIELD_RANK_UNION=off|docs|docs-python|all`,
+/// default `off`).
+///
+/// Per-field cosines arrive intent-masked in `notes` (score_fields zeroes
+/// weight<=0 fields). Each list — the input concat order plus one ranking
+/// per participating field — assigns ranks; a row's order key is its BEST
+/// rank across lists, tie-broken by the winning list's cosine (not the
+/// joint similarity, which is what body dilution corrupts). Unlike
+/// max-over-cosines combination (measured dead on CoSQA 2026-10-17,
+/// mixed-sign on documented corpora), rank arithmetic is monotone per row:
+/// a row never falls below its concat position.
+///
+/// `docs` joins only the docs list: gold NL-query separation lives in the
+/// docs field (documented-repo corpora), while name/body lists arm
+/// identifier-ish distractors — the all-fields union measured
+/// ripgrep .582→.531 despite offline gains. `docs-python` additionally
+/// gates list membership to `.py` rows: python docs fields carry PEP 257
+/// docstrings (orthogonal NL prose below the def), while rust docs fields
+/// carry `///` comments that echo the signature — unioning those armed the
+/// round-D ripgrep regression (.582→.568, rg-stdin lost). With the gate,
+/// a corpus with no `.py` docs rows can never form a docs list, so
+/// non-python corpora are bit-identical to `off` by construction.
+/// `off` restores the shipped mean-combine similarity order for paired
+/// arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldRankUnionMode {
+    Off,
+    Docs,
+    DocsPython,
+    All,
+}
+
+pub fn field_rank_union_mode() -> FieldRankUnionMode {
+    // Default Off: both round-D measured variants lost the keep gate
+    // (symmetric ripgrep .582→.531 / flask +.009; docs-only
+    // ripgrep .582→.568 / flask ±0). The env surface stays for paired
+    // arms; see the perf-negative-results ledger entry for the
+    // transfer-gap mechanism before re-enabling.
+    match std::env::var_os("ASGREP_FIELD_RANK_UNION") {
+        Some(v) => match v.to_string_lossy().as_ref() {
+            "off" | "0" | "false" => FieldRankUnionMode::Off,
+            "all" => FieldRankUnionMode::All,
+            "docs" => FieldRankUnionMode::Docs,
+            "docs-python" => FieldRankUnionMode::DocsPython,
+            _ => FieldRankUnionMode::Off,
+        },
+        None => FieldRankUnionMode::Off,
+    }
+}
+
+/// Keys are (best rank across lists, cosine in the list that produced that
+/// rank). See [`FieldRankUnionMode`] for the mode semantics. `files` is
+/// indexed by chunk idx (aligned with `notes`) and consulted only by
+/// [`FieldRankUnionMode::DocsPython`] membership gating.
+pub fn field_rank_union_keys(
+    ranked: &[(usize, f32)],
+    files: &[&str],
+    notes: &[Option<EmbedFieldScores>],
+    mode: FieldRankUnionMode,
+) -> Vec<(u32, f32)> {
+    let mut best: Vec<(u32, f32)> = (0..ranked.len() as u32)
+        .zip(ranked.iter().map(|(_, score)| *score))
+        .collect();
+    if mode == FieldRankUnionMode::Off || notes.is_empty() {
+        return best;
+    }
+    let participating: &[usize] = match mode {
+        FieldRankUnionMode::Docs | FieldRankUnionMode::DocsPython => &[1], // docs
+        FieldRankUnionMode::All => &[0, 1, 2, 3, 4],
+        FieldRankUnionMode::Off => &[],
+    };
+    for &field in participating {
+        let mut list: Vec<(f32, usize)> = Vec::new();
+        for (pos, (idx, _score)) in ranked.iter().enumerate() {
+            if mode == FieldRankUnionMode::DocsPython
+                && !files.get(*idx).is_some_and(|f| f.ends_with(".py"))
+            {
+                continue;
+            }
+            let Some(cos) = notes
+                .get(*idx)
+                .and_then(|n| n.as_ref())
+                .and_then(|n| match field {
+                    0 => n.name,
+                    1 => n.docs,
+                    2 => n.body,
+                    3 => n.graph,
+                    _ => n.tests_examples,
+                })
+            else {
+                continue;
+            };
+            list.push((cos, pos));
+        }
+        if list.len() < 2 {
+            continue;
+        }
+        list.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (rank, (cos, pos)) in list.into_iter().enumerate() {
+            let rank = rank as u32;
+            if rank < best[pos].0 || (rank == best[pos].0 && cos > best[pos].1) {
+                best[pos] = (rank, cos);
+            }
+        }
+    }
+    best
+}

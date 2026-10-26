@@ -101,3 +101,54 @@ fn bare_declaration_signatures_reach_ruby_go_and_php() {
         );
     }
 }
+
+/// INTENT: header declarations (prototypes without bodies) must extract as
+/// symbols so their Doxygen docs become semantic chunks. The c/cpp census
+/// (competitor campaign, 2026-10-26) measured 11% docs coverage with the
+/// docs mass living above header declarations: oatpp carries 2185 doxygen
+/// blocks and 0 header symbols — extraction tables only match
+/// `function_definition`, so documented header APIs never enter the index.
+/// KILLS: tables that skip `declaration`/`field_declaration`, and rules
+/// that promote plain variable declarations to function symbols.
+#[test]
+fn cpp_header_declarations_extract_as_symbols() {
+    let header = r#"/**
+ * Parses a widget from raw bytes.
+ */
+Widget parse_widget(const uint8_t *data, size_t len);
+
+extern int cache_size;
+
+class Reader {
+public:
+    /** Reads the next record. */
+    Record next();
+};
+"#;
+    let extraction = ParserRegistry::new().parse(Language::Cpp, header).unwrap();
+    let names: Vec<(String, String)> = extraction
+        .symbols
+        .iter()
+        .map(|s| (s.name.clone(), format!("{:?}", s.kind).to_lowercase()))
+        .collect();
+    assert!(
+        names.iter().any(|(n, k)| n == "parse_widget" && k == "function"),
+        "free-function prototype extracted: {names:?}"
+    );
+    assert!(
+        names.iter().any(|(n, k)| n == "next" && k == "method"),
+        "class-method declaration extracted: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|(n, k)| n == "cache_size" && (k == "function" || k == "method")),
+        "plain variable declaration must not become a function/method symbol: {names:?}"
+    );
+
+    let c_src = "/* Adds two ints. */\nint add(int a, int b);\n";
+    let c_extraction = ParserRegistry::new().parse(Language::C, c_src).unwrap();
+    assert!(
+        c_extraction.symbols.iter().any(|s| s.name == "add"),
+        "C prototype extracted: {:?}",
+        c_extraction.symbols
+    );
+}

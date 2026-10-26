@@ -338,6 +338,13 @@ pub(crate) enum KindRule {
     SymDeclarator(SymbolKind),
     /// Like [`KindRule::MethodIn`], but the name is under the `declarator` chain.
     MethodInDeclarator(&'static [&'static str]),
+    /// C/C++ prototype declaration (`declaration`/`field_declaration` whose
+    /// `declarator` chain contains a `function_declarator` — a function
+    /// prototype, not a variable). Method when inside any of `parents`.
+    /// Headers document APIs at the declaration; without this rule
+    /// documented header APIs never enter the symbol index (c/cpp docs
+    /// census 2026-10-26: 11% docs coverage, docs live above header decls).
+    FnDeclaratorIn(&'static [&'static str]),
     /// Symbol kind from anonymous keyword / modifier token text (Kotlin class forms).
     SymByKeywords(&'static [(&'static str, SymbolKind)], SymbolKind),
     /// Named symbol whose name is nested under a signature chain (Dart
@@ -351,6 +358,35 @@ pub(crate) enum KindRule {
     /// One import per direct child of `child_kind` holding a quoted string under
     /// `field` (MoonBit `import_declaration` → `import_item` → `path`).
     ImportItems(&'static str, &'static str),
+}
+
+/// True when the node's `declarator` chain contains a `function_declarator`
+/// (a function prototype: `Widget parse(const uint8_t*, size_t);`), as
+/// opposed to plain variable/array/pointer declarations (`int size;`).
+fn declarator_is_function(node: &Node) -> bool {
+    let mut cur = node.child_by_field_name("declarator");
+    while let Some(d) = cur {
+        if d.kind() == "function_declarator" {            return true;
+        }
+        cur = d.child_by_field_name("declarator");
+    }
+    false
+}
+
+/// Paired-arm kill switch for prototype extraction:
+/// `ASGREP_C_DECLARATIONS=off` restores the function_definition-only
+/// behavior (control arm for the census lever).
+fn c_declarations_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var_os("ASGREP_C_DECLARATIONS")
+                .as_deref()
+                .map(|v| v.to_string_lossy()),
+            Some(ref v) if v == "off" || v == "0" || v == "false"
+        )
+    })
 }
 
 /// Apply the first matching kind rule. Returns true if a rule fired.
@@ -493,6 +529,20 @@ fn apply_kind_rule(ext: &mut Extractor, node: &Node, source: &str, rule: KindRul
             ext.add_symbol(node, source, &name, sk);
         }
         KindRule::MethodInDeclarator(parents) => {
+            let sk = if is_inside_any(node, parents) {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
+            let Some(name) = declarator_name(node, source) else {
+                return;
+            };
+            ext.add_symbol(node, source, &name, sk);
+        }
+        KindRule::FnDeclaratorIn(parents) => {
+            if !c_declarations_enabled() || !declarator_is_function(node) {
+                return;
+            }
             let sk = if is_inside_any(node, parents) {
                 SymbolKind::Method
             } else {

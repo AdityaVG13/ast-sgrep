@@ -282,13 +282,114 @@ fn write_fusion_dump(path: &std::path::Path, input_hits: usize, rows: &[FusionDu
     }
 }
 
-pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) -> Vec<Option<f64>> {
+/// Path-scope prior scale for test/example/bench trees. Kept 2026-10-26 on
+/// paired evidence: semgrep-lane real-binary arms flask 0.647 -> 0.658
+/// MRR@10 (fl-routes miss -> rank 6), ripgrep flat; frozen RepoQA-600
+/// hit1 preserved exactly, hit100 +.0017, mrr10 -.0008 (two documented
+/// test-gold residuals the query guard cannot save); CoSQA-500
+/// bit-identical. `ASGREP_SCOPE_SCALE` overrides the constant for paired
+/// A/B arms (1.0 = off); unparseable values fall back to the default so a
+/// typo never silently disables the prior.
+pub(crate) fn scope_scale(path: &str) -> f64 {
+    const DEFAULT_SCALE: f64 = 0.4;
+    if let Some(v) = std::env::var_os("ASGREP_SCOPE_SCALE") {
+        if let Ok(f) = v.to_string_lossy().parse::<f64>() {
+            if f.is_finite() && f > 0.0 {
+                return f;
+            }
+        }
+    }
+    if is_test_path(path) {
+        DEFAULT_SCALE
+    } else {
+        1.0
+    }
+}
+
+/// Whole-segment and filename test-path classification, ASCII-folded.
+/// Segments: tests/test/testing/testdata/spec/specs/fixtures/bench/benches/
+/// example/examples/sample/samples/demo/demos. Filenames: `test_*`,
+/// `conftest.py`, `*_test.{py,go,rs,ts,js,rb,java}`, `*_spec.{ts,js,rb}`.
+pub(crate) fn is_test_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    if lower.split('/').any(|seg| {
+        matches!(
+            seg,
+            "tests"
+                | "test"
+                | "testing"
+                | "testdata"
+                | "spec"
+                | "specs"
+                | "fixtures"
+                | "bench"
+                | "benches"
+                | "example"
+                | "examples"
+                | "sample"
+                | "samples"
+                | "demo"
+                | "demos"
+        )
+    }) {
+        return true;
+    }
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    if name.starts_with("test_") || name == "conftest.py" {
+        return true;
+    }
+
+    ["py", "go", "rs", "ts", "js", "rb", "java"]
+        .iter()
+        .any(|e| name.ends_with(&format!("_test.{e}")))
+        || ["ts", "js", "rb"]
+            .iter()
+            .any(|e| name.ends_with(&format!("_spec.{e}")))
+}
+
+/// True when the query itself asks about testing/specs/benchmarks
+/// (word-boundary match, ASCII-folded). Such queries must NOT demote
+/// test-path hits — the user is explicitly test-seeking. Word list covers
+/// the frozen-suite regression set (lazydocker-06, croc-06, go-zero-06,
+/// lux-05/06 name testing; fzf-09/reactpy-03 do not and stay demoted).
+pub(crate) fn query_mentions_testing(query: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "test",
+        "tests",
+        "testing",
+        "tested",
+        "spec",
+        "specs",
+        "coverage",
+        "mock",
+        "mocks",
+        "fixture",
+        "fixtures",
+        "benchmark",
+        "benchmarks",
+        "bench",
+    ];
+    query
+        .chars()
+        .map(|c| c.to_ascii_lowercase())
+        .collect::<String>()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| WORDS.contains(&w))
+}
+
+pub fn apply_weighted_rrf(
+    hits: &mut Vec<SearchHit>,
+    weights: &ChannelWeights,
+    query: &str,
+) -> Vec<Option<f64>> {
     // ASGREP_FUSION_DUMP=<path> captures the pre-fusion channel-rank table
     // this ledger's retry predicates demand (loss attribution + the
     // confidence-scaled-fusion / rank-floor retry conditions). Unset → one
     // `var_os` read and no other cost; ranking is untouched either way.
     let dump_path = std::env::var_os("ASGREP_FUSION_DUMP").map(std::path::PathBuf::from);
     let capture = dump_path.is_some();
+    // Test-seeking queries keep test-path hits at full strength.
+    let scope_disabled = query_mentions_testing(query);
     let input_hits = hits.len();
     if hits.is_empty() {
         if let Some(path) = dump_path.as_deref() {
@@ -458,6 +559,16 @@ pub fn apply_weighted_rrf(hits: &mut Vec<SearchHit>, weights: &ChannelWeights) -
             }
         }
         score = score_below_cosine_support(ranks, magnitude, semantic_top, weights, score);
+        // Path-scope prior: production sources outrank test/example/bench
+        // trees on equal evidence ("where does the code do X" retrieval).
+        // Bounded multiplicative scale — a test-only match still surfaces.
+        // Disabled for test-seeking queries (query_mentions_testing) and
+        // via the paired-arm kill switch ASGREP_SCOPE_SCALE=1.0.
+        score *= if scope_disabled {
+            1.0
+        } else {
+            scope_scale(&result.file)
+        };
         result.score = score;
         if capture {
             dump_rows.push(FusionDumpRow {

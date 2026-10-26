@@ -8,6 +8,26 @@ its evidence and a retry-condition predicate in plain measurable language
 Ledger created 2026-09-20. It did not exist before; the seed below is
 reconstructed from verifiable repo evidence only (git log, `benchmarks/`).
 
+## Open: bbtree (crates.io `bbtree`) as a BTreeMap/BTreeSet replacement
+
+Evaluated 2026-10-25 after finding XiangpengHao/bbtree ("fastest concurrent
+ordered map": claims 5x std BTreeMap single-thread, 12x crossbeam-skiplist at
+96 threads, drop-in). Not adopted, unmeasured: the win regime is large maps
+under sustained throughput/concurrency, and ast-sgrep has no such structure.
+Every BTreeMap/BTreeSet in the tree is small and short-lived — pattern
+captures (per-match, <10 keys, `ast-sgrep-lang/src/pattern/*`), module-import
+candidate sets (<20 paths, `store/module_resolve.rs`), wire-serialization
+ordering (plugins envelope, codemode catalog, MCP handler), eval accounting,
+tests. The search hot path is HashMap + SQLite; no concurrent ordered map
+exists anywhere in the tree. Swapping would add a dependency (against the
+lean-deps posture) to accelerate cold structures. Retry predicate (form 3):
+reopen when a profile of a shipped path shows ordered-map operations as a
+named cost center (≥5% of a hot path) on maps over 10k entries, or when a
+surface ships that needs a shared concurrent ordered map (e.g. a codemode
+persistent-session in-process index) — then benchmark bbtree vs std on that
+path with matched-input paired runs before adopting.
+
+
 ## Open: 2.6.0 candidate refresh
 
 The 2026-10-11 complete available-matrix refresh is measured, not a keep.
@@ -744,3 +764,176 @@ differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
   or when a distribution format ships data files separately from the binary
   (then download size, not binary size, is the metric and per-asset
   compression applies to the archive as a whole).
+
+- **Semantic-channel field rank union REJECTED on real-binary keep gate (competitor campaign round D, 2026-10-26).**
+  Family: order semantic hits by a row's best rank across the concat list
+  plus per-field cosine lists (docs/name/body/graph/tests), tie-broken by
+  the winning list's cosine — instead of the shipped
+  `max(primary, weighted-mean-mix)` similarity order. The stored per-field
+  vectors (`vector_name`/`vector_docs`/...) are written by every index but
+  were only ever consumed as a mean-mix; offline exact-cosine probes showed
+  the docs field separates gold at corpus-wide rank 1-3 for 11/15 stuck
+  lane queries (RR-sum 14.55→16.02 docs-only, →18.59 all-fields), so the
+  ordering semantics looked under-exploited. Real binary (same index, paired
+  arms, `ASGREP_FIELD_RANK_UNION=off|docs|all`): symmetric `all` moved
+  ripgrep .582→**.531** / flask .658→**.667** (fl-routes 6→2 real win;
+  rg-flags 1→3, fl-json 5→7 regressions — name/body lists arm
+  identifier-shaped distractors); docs-only moved ripgrep .582→**.568**
+  (rg-stdin 5→lost) / flask ±0.000. Both lose the keep gate. Transfer-gap
+  mechanism (measured, rg-globmatch diagnostic): (a) the union DOES move
+  channel ranks (gold sem reached 6 as designed) but response MRR is capped
+  by def-channel owners — the winner fused def-rank 1 + sem 3 = .0706 vs
+  gold's sem-only ceiling .0437, so semantic-rank gains cannot flip file
+  rank where the winner owns def; (b) docs-list coverage is 0.3% on flask
+  (python docstrings below defs are not the docs field; only comments above
+  count) so the docs list rarely reaches the ≥2-member guard in a 192-pool;
+  (c) offline probes used exact top-192 membership while the engine uses
+  IVF survivors. Shipped default restored to Off (env surface kept for
+  paired arms; `field_rank_union_keys` unit-pinned in field_weight_unit).
+  Retry predicate (form 2): reopen when the fusion ceiling for
+  docs-evidence rows is reachable — concretely, when a lane's gold files
+  have no def-channel owner in the top 3 fused rows (then sem rank ≤2 CAN
+  flip the file), or when the docs field gains python-docstring coverage
+  (index-side extraction change), or when the critic stops demoting
+  union-promoted rows. Distinct from the CoSQA 2026-10-17 field-combination
+  closure: that population has no docs vectors at all; this entry is the
+  documented-repo population.
+
+- **Python docstring docs-field extraction KEPT (competitor campaign round E, 2026-10-26).**
+  Mechanism: `doc_for_symbol` (crates/ast-sgrep-core/src/semantic_chunk.rs)
+  now falls back to the PEP 257 docstring — the first statement inside a
+  def/class body, a string literal directly below the def/class line — when
+  no comment-above exists and the language is python. Triple/single-quoted,
+  r/b/u/f prefixes, bounded at 8 lines, code-first bodies excluded,
+  comments-above keep precedence. Kill switch
+  `ASGREP_PYTHON_DOCSTRINGS=off|0|false` (paired arms), shipped default ON.
+  Motivation was the round-D transfer-gap finding (b): python docs coverage
+  was 0.3% on flask because below-def docstrings never entered the docs
+  field, so the docs rank list rarely reached its >=2-member guard — a data
+  hole dressed as an engine ceiling. Failure-first test in
+  tests/core/embed_unit.rs (red before, green after, mutation-proven).
+  Lane (fresh-copy paired arms, 29-query semgrep lane): flask
+  .658->**.674** mrr10 / hit5 .933->**1.000** (fl-routes 6->2, fl-config
+  3->4; docs chunks 15->570), ripgrep .582 unchanged (Rust /// already
+  captured above).
+  Frozen keep gate (RepoQA 12-repo + CoSQA, both arms reindexed fresh,
+  control env-pinned off): RepoQA mrr10 .7200->**.7208** (+.0008), hit1
+  +.0017, hit5/10/100 exact; python .7520->**.7570** (+.005); cpp/go/java/
+  rust/typescript deltas exactly 0.0. CoSQA mrr10 .3270->**.3319** (+.0049),
+  hit5 +.01, hit100 .878->**.906**. Zero regressed metrics; gains confined
+  to python — the only population the lever touches.
+  Gate integrity notes (both traps caught before interpretation, cost one
+  discarded gate run): `run_asgrep_arm.py` symlinks each arm's out-dir
+  corpus to the shared bench corpus, and `asgrep index` on unchanged files
+  replays the chunk cache — so a gate run over prebuilt bench indexes
+  produced bit-identical arms (both queried one stale pre-docstring index;
+  cosqa docs chunks 6==6 was the tell). Any future index-side/chunk-emission
+  lever MUST wipe derived `.asgrep` dirs before each arm; with the shared
+  symlink, post-hoc db probes read the final arm's index, so arm isolation
+  is proven by the metric signature (python-only movement, non-python
+  bit-identical) rather than by reading the db.
+  Follow-up: round-D rank-union retry predicate clause "docs field gains
+  python-docstring coverage (index-side extraction change)" is now
+  satisfied — a `ASGREP_FIELD_RANK_UNION=docs` retry on freshly built
+  indexes is the natural next round; the docs list should now clear the
+  >=2-member guard on python corpora.
+
+- **Docs rank union, python-gated retry REJECTED on frozen gate (competitor
+  campaign round F, 2026-10-26).** Round E's docstring extraction satisfied
+  round D's retry predicate, so the docs-arm union was re-measured on the
+  populated field. Ungated `docs` first: flask .658-lineage baseline
+  .674->**.694** (fl-json 5->2, +.30 RR) but ripgrep .582->**.568**
+  (rg-stdin 5->lost) — the round-D regression unchanged. New principled
+  gate `ASGREP_FIELD_RANK_UNION=docs-python`: docs-list membership
+  restricted to `.py` rows (PEP 257 docstrings are orthogonal prose below
+  the def; rust docs fields carry `///` signature echoes). By construction
+  a corpus with zero `.py` docs rows can never form a list (verified:
+  ripgrep index has 0/2436 python docs rows), so non-python corpora are
+  bit-identical to `off` — and the lane confirmed it exactly (flask .694
+  held, ripgrep .582/.857 EXACT restore). Frozen gate (query-side arms on
+  the shared docstrings-on bench indexes): non-python languages exactly
+  0.0 as constructed, but python regressed — RepoQA python .7570->**.7556**
+  (-.0014), RepoQA total -.0002 / hit5 -.0017, CoSQA mrr10
+  .3319->**.3285** (-.0034) with hit1/5/10/100 all down. The flask lane
+  win is a single-query flip that does not transfer to held-out python
+  populations — third confirmation of the round-D transfer-gap mechanism,
+  this time corpus-to-corpus instead of offline-to-online. REJECTED; shipped
+  default stays Off. The `docs-python` env value, the `files`-parameter
+  signature, and the
+  `docs_python_union_gates_list_to_python_rows` unit test (failure-first,
+  mutation-proven: neutered gate fails on the non-py concat-key assertion)
+  remain as arm instrumentation. Retry predicate (form 2): reopen only when
+  a query-time signal separates flask-style wins from frozen-python losses
+  — concretely, a docs-evidence intent classifier with >=60% sign-prediction
+  precision on the frozen python population measured before the arm runs —
+  or when frozen RepoQA python mrr10 >= .76 by other levers and this union
+  is re-swept as a residual.
+
+- **tests_examples enrichment: corpus-composition analysis, build deferred
+  pending owner checkpoint (competitor campaign round G investigation,
+  2026-10-26).** Census over 223k bench chunks: name/body 100%, docs
+  11-36% (c/cpp 11% = doxygen-shaped gap), graph 51-89% (java 51%),
+  tests_examples 0-8% except go 25%. Deep-dive findings: (1) doctests are
+  dead (~0% `>>>` density in every corpus — skip that arm); (2) the
+  existing extractor fires only on chunks that ARE tests (path/symbol/doc
+  markers), never attaching test usages to production symbols; (3) the
+  frozen suite is test-free where tests live in separate dirs — RepoQA was
+  prepped src-only (serde/tokio/black/openai-python: 0 test-shaped files on
+  disk; `tests/` absent), CoSQA is 6,267 flat snippets with no structure —
+  so python-pytest and rust-tests-dir extraction is STRUCTURALLY
+  unmeasurable on the keep gate; (4) the go/ts coverage that motivated the
+  census comes from co-located test files (`foo_test.go`, `*.test.ts` under
+  src/) that survived prep — the only frozen populations where a
+  production-symbol test-usage attachment (post-ingest pass joining
+  callers x test-shaped files x semantic_chunks, embedding
+  `used_in_tests:` snippets into vector_tests_examples) can be gated
+  (go+ts = 100/300 RepoQA queries; query side already weights the field
+  0.8 Conceptual / 1.0 Structural). Rust inline `#[cfg(test)]` modules are
+  a further population reachable only via source-level classification
+  (caller edges exist but no path marker; v2). Decision checkpoint taken
+  per AGENTS.md scope rule: the approved premise (python doctest/pytest +
+  rust test extraction) is dead on the frozen corpus; the surviving lever
+  is go/ts co-located attachment. Retry/resolve predicate (form 3): either
+  the owner greenlights the reduced go/ts v1 pass, or this closes as
+  blocked-by-corpus and reopens when a with-tests frozen corpus is cut
+  (suite refresh) — lane-only evidence (flask tests/ intact, 26% symbol
+  coverage available) is NOT shippable per rounds D/F transfer-gap
+  precedent.
+
+- **C/C++ prototype-declaration extraction KEPT (competitor campaign round
+  H, 2026-10-26).** The c/cpp docs census said 11% coverage; the follow-up
+  showed the extractor already captures essentially all impl-side
+  docs-above-def (coverage ≈ available mass) and the real hole is that
+  header `declaration`/`field_declaration` nodes (prototypes, no body) had
+  NO extraction rule at all — documented header APIs never became symbols
+  (oatpp: 2185 doxygen blocks, 0 header symbols). Lever: new
+  `KindRule::FnDeclaratorIn(parents)` (extract.rs) fires on
+  `declaration`/`field_declaration` only when the `declarator` chain
+  contains a `function_declarator` (plain variable/array/pointer
+  declarations excluded); Method inside class/struct specifiers. Tables C
+  and CPP gain the rows. Kill switch `ASGREP_C_DECLARATIONS=off` for paired
+  arms, default ON. Failure-first test
+  `cpp_header_declarations_extract_as_symbols` (tests/lang/signature_unit.rs)
+  red before, green after, mutation-proven (neutered guard promotes
+  `cache_size` to a function symbol and the test fails on exactly that).
+  Behavioral probe (oatpp copy): symbols 2737->4232, chunks 6157->10446,
+  docs chunks 589->**3333 (5.7x)**; control arm reproduces old counts
+  exactly. Frozen gate (fresh-index arms, wipe-.asgrep protocol): cpp mrr10
+  .6099->**.6123** (+.0024) — the ONLY mover; go/java/python/rust/ts and
+  CoSQA exactly 0.0 (untouched grammar tables). RepoQA total +.0004 mrr10,
+  hit1 +.0017, hit5 +.0033, hit10/hit100 exact. Per-query texture is mixed
+  (29 cpp queries moved): doc-heavy repos win big (uvw 5->1, 3->1, 12->4;
+  ClickHouse 18->8; oatpp-05 lost->7) but declaration-dense corpora can
+  flood (oatpp-01 5->12, oatpp-04 6->22, node-sass-07 13->22) and one gold
+  was lost (seastar-03 2->lost). Net keep: every aggregate metric >=
+  control, gains confined to the constructed population. Cost: suite index
+  time 104.6s->126.7s (+21%, concentrated in cpp repos' new declaration
+  chunks); search path unaffected. Goldens: extract_dumps/c.json (+8) and
+  cpp.json (+16) regenerated with reason "documented prototypes now
+  extract"; rust.json (+28) regenerated in the same pass but its diff
+  (static/const symbols) belongs to the parallel codemode lane's
+  in-flight Rust-table work, not this lever. Follow-up predicate (form 2):
+  reopen the oatpp/node-sass regression shape when declaration chunks can
+  be rank-capped or deduped against their definitions (e.g. same-name
+  decl+def in one corpus preferencing the def chunk), or when cpp mrr10
+  >= .63 and the residual is re-swept.
