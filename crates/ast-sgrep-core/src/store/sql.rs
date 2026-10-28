@@ -527,6 +527,26 @@ pub fn checkpoint_wal(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
+
+/// Close-path WAL fold, bounded to the reader busy budget.
+///
+/// Unlike [`checkpoint_wal`], this never sleeps out the writer's 5s busy
+/// timeout: a serve session holding long-lived read snapshots pins the WAL,
+/// and an unbounded `wal_checkpoint(TRUNCATE)` in `IndexStore::drop` blocks
+/// on the busy handler for the full timeout — measured at ~8s per serve
+/// call on a stale root (8503/9484 sampled main-thread frames inside
+/// `sqliteDefaultBusyCallback`). Skipping on BUSY is benign: the WAL is the
+/// normal on-disk state mid-session, `wal_autocheckpoint` +
+/// `journal_size_limit` bound growth, and the next uncontended writer close
+/// folds it. Uncontended closes are unaffected — the fold succeeds
+/// immediately at the smaller budget.
+pub fn checkpoint_wal_on_close(conn: &Connection) -> Result<()> {
+    let prev_ms: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0))?;
+    conn.busy_timeout(Duration::from_millis(250))?;
+    let fold = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    conn.busy_timeout(Duration::from_millis(prev_ms.max(0) as u64))?;
+    fold.map_err(Into::into)
+}
 pub fn integrity_check(conn: &Connection) -> Result<String> {
     conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(Into::into)

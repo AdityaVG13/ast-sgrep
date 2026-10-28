@@ -310,3 +310,6 @@ path = "../../tests/core/embed_cache_static.rs"
 [[test]]
 name = "fts_external_content"
 path = "../../tests/core/fts_external_content.rs"
+[[test]]
+name = "wal_close_bounds"
+path = "../../tests/core/wal_close_bounds.rs"

@@ -1536,7 +1536,7 @@ impl IndexStore {
 impl Drop for IndexStore {
     fn drop(&mut self) {
         if !self.read_only {
-            let _ = super::sql::checkpoint_wal(&self.conn);
+            let _ = super::sql::checkpoint_wal_on_close(&self.conn);
         }
     }
 }
