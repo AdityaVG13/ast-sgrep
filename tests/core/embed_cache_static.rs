@@ -36,6 +36,20 @@ fn cache_count(db: &std::path::Path) -> i64 {
         .expect("count embed_cache")
 }
 
+/// Compare the semantic payload (query, hits, counts, estimates) only: the
+/// `SnapshotStamp` tail embeds the wall-clock `worktree_revision`, which
+/// legitimately differs whenever two index runs straddle a second boundary.
+fn strip_stamp(outs: &[String]) -> Vec<String> {
+    outs.iter()
+        .map(|s| {
+            s.split("snapshot: SnapshotStamp")
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
 fn index_and_search(
     fixture: &ast_sgrep_testkit::CorePipelineFixture,
     queries: &[&str],
@@ -76,7 +90,11 @@ fn embed_cache_stays_empty_and_outputs_match_cached_control() {
     // must produce identical output.
     let a2 = write_core_fixture(FILES);
     let out_a2 = index_and_search(&a2, QUERIES);
-    assert_eq!(out_a, out_a2, "compute path must be deterministic");
+    assert_eq!(
+        strip_stamp(&out_a),
+        strip_stamp(&out_a2),
+        "compute path must be deterministic"
+    );
 
     // Arm 2 (control, cache forced on): cache populated AND outputs identical.
     std::env::set_var("ASGREP_EMBED_CACHE", "1");
@@ -88,7 +106,8 @@ fn embed_cache_stays_empty_and_outputs_match_cached_control() {
         "control arm must prove the env switch restores the legacy cache path"
     );
     assert_eq!(
-        out_a, out_b,
+        strip_stamp(&out_a),
+        strip_stamp(&out_b),
         "cache-off and cache-on indexes must return byte-identical search output"
     );
 }
@@ -123,19 +142,6 @@ fn reindex_all_purges_legacy_embed_cache_rows() {
 
     // Purge must not change search output.
     let out_after = index_and_search(&b, QUERIES);
-    // Purge must not change search output. The snapshot generation stamp
-    // legitimately bumps on every reindex commit; compare the semantic
-    // payload (query, hits, counts, estimates) before that stamp.
-    let strip_stamp = |outs: &[String]| -> Vec<String> {
-        outs.iter()
-            .map(|s| {
-                s.split("snapshot: SnapshotStamp")
-                    .next()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect()
-    };
     assert_eq!(
         strip_stamp(&out_control),
         strip_stamp(&out_after),
