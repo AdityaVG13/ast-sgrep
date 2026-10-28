@@ -26,6 +26,24 @@ const MAX_WORD_CHARS: usize = 100;
 const MAX_TOKEN_BYTES: usize = 65;
 
 static WEIGHTS: &[u8] = include_bytes!("../assets/potion-code-16m-v2.f16.bin");
+
+/// The f16 weight rows decoded to f32 once, lazily. f16→f32 conversion is
+/// exact (a widening conversion with no rounding), so pooling decoded rows
+/// is bit-identical to decoding per element in the hot loop — which cost
+/// ~1.2G byte-pair loads + conversions on a full corpus build because the
+/// mean-pool loop touches every weight element per token per field.
+fn weights_f32() -> &'static [f32] {
+    static DECODED: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    DECODED.get_or_init(|| {
+        let rows = WEIGHTS.len() / 2;
+        let mut out = Vec::with_capacity(rows);
+        for r in 0..rows {
+            let bits = u16::from_le_bytes([WEIGHTS[r * 2], WEIGHTS[r * 2 + 1]]);
+            out.push(f16_to_f32(bits));
+        }
+        out
+    })
+}
 /// Layout: `[u32 n][u32 offsets (n+1)][u32 ids (n)][token bytes]`, tokens
 /// sorted by byte order. Produced by `assets/convert_potion.py`.
 static VOCAB: &[u8] = include_bytes!("../assets/potion-code-16m-v2.vocab.bin");
@@ -241,12 +259,12 @@ impl StaticEmbedder {
             .iter()
             .map(|text| {
                 let ids = self.token_ids(text);
+                let w = weights_f32();
                 let mut v = vec![0.0f32; STATIC_DIM];
                 for id in &ids {
-                    let row = (*id as usize) * STATIC_DIM * 2;
-                    for (j, x) in v.iter_mut().enumerate() {
-                        let p = row + j * 2;
-                        *x += f16_to_f32(u16::from_le_bytes([WEIGHTS[p], WEIGHTS[p + 1]]));
+                    let row = &w[*id as usize * STATIC_DIM..*id as usize * STATIC_DIM + STATIC_DIM];
+                    for (x, p) in v.iter_mut().zip(row) {
+                        *x += *p;
                     }
                 }
                 if !ids.is_empty() {
