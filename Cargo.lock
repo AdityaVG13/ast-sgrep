@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-cli"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-codemode",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-codemode-napi"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-testkit",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-core"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-embed"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "rayon",
  "simsimd",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lang"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-embed",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-lsp"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-core",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mcp"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-codemode",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-mmap"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "memmap2",
  "tempfile",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-plugins"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "ast-sgrep-core",
  "serde",
@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-testkit"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "ast-sgrep-codemode",
  "ast-sgrep-core",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "ast-sgrep-watch"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
  "anyhow",
  "ast-sgrep-cli",

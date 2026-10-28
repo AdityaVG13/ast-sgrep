@@ -6,7 +6,7 @@
 
 **Hybrid code search that understands intent** -- not only text or syntax.
 
-**v2.6.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key)
+**v2.7.0** · 15 languages · local-first semantic · critic + two-channel `AND` · Code Mode (on by default, no API key) · native Hermes agent tools
 
 > **One search tool.** Identifiers, natural language, defs/callers, semantic, and patterns — ranked. You do not need a second grep.
 
@@ -26,7 +26,7 @@ It immediately adds **`asgrep`** (Code Mode), `asgrep_search`, `asgrep_index`, `
 
 **Current embedding engine:** a single static (Model2Vec-style) engine compiled into the binary — deterministic 256-d vectors, no model download, no ONNX runtime. The hashed and neural backends are retired; `--neural-embed` / `ASGREP_EMBED_BACKEND` now error explicitly, and old indexes re-embed automatically on the next index run. See [semantic search](docs/semantic-search.md).
 
-Standalone CLI binaries are on the [v2.6.0 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.6.0) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`) once the release is published; until then, build from source. The npm family (`ast-sgrep` launcher + platform packages) carries the same version. Rust crates.io publication is a separate, explicitly approved step in [`docs/RELEASING.md`](docs/RELEASING.md) and has not happened for prior releases.
+Standalone CLI binaries are on the [v2.7.0 GitHub Release](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.7.0) (`asgrep`, `asgrep_darwin_x64`, `asgrep_linux_arm64`, `asgrep_linux_x64`, `asgrep_windows_amd64.exe`) once the release is published; until then, build from source. The npm family (`ast-sgrep` launcher + platform packages) carries the same version. Rust crates.io publication is a separate, explicitly approved step in [`docs/RELEASING.md`](docs/RELEASING.md) and has not happened for prior releases.
 
 To build from source:
 
