@@ -1,6 +1,8 @@
 mod embed_support;
 pub(crate) use embed_support::active_model_id;
 pub(crate) use embed_support::embed_cache_enabled;
+pub(crate) use embed_support::embed_chunks_offline;
+pub(crate) use embed_support::EmbeddedChunks;
 pub mod line_corpus;
 mod module_resolve;
 pub(crate) mod sql;

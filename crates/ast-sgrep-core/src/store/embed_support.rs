@@ -34,7 +34,7 @@ pub(super) struct CacheHit {
     pub chunk_hash: String,
     pub model_id: String,
 }
-pub(super) struct EmbeddedChunks {
+pub(crate) struct EmbeddedChunks {
     pub chunks: Vec<EmbeddedChunk>,
     pub cache_entries: Vec<CacheEntry>,
     pub cache_hits: Vec<CacheHit>,
@@ -184,7 +184,28 @@ pub(super) fn embed_chunks(
     if !do_embed || chunks.is_empty() {
         return Ok(EmbeddedChunks::empty());
     }
-    let (chunks, cache_entries, cache_hits) = embed_parallel(conn, chunks, source_path)?;
+    let (chunks, cache_entries, cache_hits) = embed_parallel(Some(conn), chunks, source_path)?;
+    Ok(EmbeddedChunks {
+        chunks,
+        cache_entries,
+        cache_hits,
+    })
+}
+
+/// Cache-free arm of [`embed_chunks`] for the parallel prepare phase: the
+/// caller holds no connection (the writer connection is not `Sync`), so
+/// this is only valid with the embed cache disabled — the default. Vectors
+/// are identical to the serial path: `embed_batch` is a pure per-text
+/// function and job assembly is unchanged.
+pub(crate) fn embed_chunks_offline(
+    chunks: &[crate::semantic_chunk::SemanticChunkInput],
+    source_path: &str,
+) -> Result<EmbeddedChunks> {
+    debug_assert!(
+        !embed_cache_enabled(),
+        "offline embed requires the disabled-cache default arm"
+    );
+    let (chunks, cache_entries, cache_hits) = embed_parallel(None, chunks, source_path)?;
     Ok(EmbeddedChunks {
         chunks,
         cache_entries,
@@ -202,7 +223,7 @@ enum EmbedSlot {
 }
 
 fn embed_parallel(
-    conn: &Connection,
+    conn: Option<&Connection>,
     chunks: &[crate::semantic_chunk::SemanticChunkInput],
     source_path: &str,
 ) -> Result<(Vec<EmbeddedChunk>, Vec<CacheEntry>, Vec<CacheHit>)> {
@@ -231,10 +252,12 @@ fn embed_parallel(
     // Static embedder outputs are pure functions of the text: the cache
     // spends a point-read plus a ~1KB row (63 MB at repo scale) per field
     // to save a microsecond recompute. Skip lookup and insert unless
-    // ASGREP_EMBED_CACHE forces the legacy path (A/B control arm).
-    let cache_enabled = embed_cache_enabled();
+    // ASGREP_EMBED_CACHE forces the legacy path (A/B control arm). A None
+    // conn (offline/parallel arm) behaves as cache-disabled.
+    let cache_enabled = embed_cache_enabled() && conn.is_some();
     let mut primary_hits = Vec::new();
     if cache_enabled {
+        let conn = conn.unwrap();
         for (i, (_, slot, text)) in jobs.iter().enumerate() {
             let h = crate::index_prepare::hash_content(text);
             if let Some(row) = lookup_embed_cache(conn, &h, mid)? {

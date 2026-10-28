@@ -500,6 +500,36 @@ impl Indexer {
             });
         let mut semantic_ivf_dirty = false;
         self.check_cancel()?;
+        // Hoisted embedding: identical vectors to the in-upsert call
+        // (embedding is a pure per-text function), computed across files in
+        // parallel instead of serially inside the bulk write transaction.
+        // The write loop then only binds rows. The cache arm
+        // (`ASGREP_EMBED_CACHE=1`) keeps the serial in-upsert path because
+        // its lookups need the writer connection.
+        let embedded_all: crate::Result<Vec<Option<crate::store::EmbeddedChunks>>> =
+            if self.options.embed_semantic && !crate::store::embed_cache_enabled() {
+                let thread_limit = self.thread_limit;
+                run_index_parallel(thread_limit, || {
+                    candidates
+                        .par_iter()
+                        .zip(prepared.par_iter())
+                        .map(|(candidate, outcome)| match outcome {
+                            PrepareOutcome::Ready(prep) if !prep.semantic_chunks.is_empty() => {
+                                crate::store::embed_chunks_offline(
+                                    &prep.semantic_chunks,
+                                    &candidate.rel,
+                                )
+                                .map(Some)
+                            }
+                            _ => Ok(None),
+                        })
+                        .collect::<crate::Result<Vec<_>>>()
+                })
+            } else {
+                Ok((0..candidates.len()).map(|_| None).collect())
+            };
+        let embedded_all = embedded_all?;
+        self.check_cancel()?;
         {
             let _span = crate::perf_profile::Span::start(
                 "sqlite_upsert",
@@ -522,6 +552,7 @@ impl Indexer {
                 self.commit_prepared_files(
                     &candidates,
                     prepared,
+                    &embedded_all,
                     &mut stats,
                     &mut semantic_ivf_dirty,
                 )?;
@@ -548,6 +579,7 @@ impl Indexer {
         &self,
         candidates: &[IndexCandidate],
         prepared: Vec<PrepareOutcome>,
+        embedded_all: &[Option<crate::store::EmbeddedChunks>],
         stats: &mut IndexStats,
         semantic_ivf_dirty: &mut bool,
     ) -> Result<()> {
@@ -564,10 +596,11 @@ impl Indexer {
             }
         }
         let mut seen_paths = HashSet::new();
-        for (rel_str, outcome) in candidates
+        for (file_idx, (rel_str, outcome)) in candidates
             .iter()
             .map(|candidate| &candidate.rel)
             .zip(prepared)
+            .enumerate()
         {
             match outcome {
                 PrepareOutcome::Unchanged => {
@@ -596,22 +629,25 @@ impl Indexer {
                 PrepareOutcome::Ready(prep) => {
                     seen_paths.insert(rel_str.clone());
                     let depth_truncated = prep.depth_truncated;
-                    self.store.upsert_file(UpsertFileInput {
-                        rel_path: rel_str,
-                        language: prep.language.as_deref(),
-                        mtime_secs: prep.mtime_secs,
-                        mtime_nanos: prep.mtime_nanos,
-                        content_hash: &prep.hash,
-                        lines: &prep.lines,
-                        eol: &prep.eol,
-                        symbols: &prep.symbols,
-                        callers: &prep.callers,
-                        imports: &prep.imports,
-                        pattern_nodes: &prep.pattern_nodes,
-                        depth_truncated,
-                        semantic_chunks: &prep.semantic_chunks,
-                        embed_semantic: self.options.embed_semantic,
-                    })?;
+                    self.store.upsert_file_with_embedded(
+                        UpsertFileInput {
+                            rel_path: rel_str,
+                            language: prep.language.as_deref(),
+                            mtime_secs: prep.mtime_secs,
+                            mtime_nanos: prep.mtime_nanos,
+                            content_hash: &prep.hash,
+                            lines: &prep.lines,
+                            eol: &prep.eol,
+                            symbols: &prep.symbols,
+                            callers: &prep.callers,
+                            imports: &prep.imports,
+                            pattern_nodes: &prep.pattern_nodes,
+                            depth_truncated,
+                            semantic_chunks: &prep.semantic_chunks,
+                            embed_semantic: self.options.embed_semantic,
+                        },
+                        embedded_all[file_idx].as_ref(),
+                    )?;
                     // Same bulk_tx as upsert: fail + rollback if body meta cannot land
                     // (structure-skip must not use a stale body fingerprint).
                     self.store

@@ -14,6 +14,20 @@ use std::collections::HashMap;
 
 impl IndexStore {
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
+        self.upsert_file_with_embedded(input, None)
+    }
+
+    /// [`upsert_file`] with caller-computed embeddings. `Some` must cover
+    /// exactly `input.semantic_chunks` for this file and skips the
+    /// in-upsert embed pass — the indexer computes vectors across files in
+    /// the parallel prepare phase (identical output: embedding is a pure
+    /// per-text function), so the bulk write loop only binds rows. `None`
+    /// keeps the cache-aware serial path (the `ASGREP_EMBED_CACHE` A/B arm).
+    pub fn upsert_file_with_embedded(
+        &self,
+        input: UpsertFileInput<'_>,
+        embedded: Option<&EmbeddedChunks>,
+    ) -> Result<i64> {
         let requested_identity = input.embed_semantic.then(active_model_id);
         let struct_fp = structure_fingerprint(
             input.symbols,
@@ -44,12 +58,19 @@ impl IndexStore {
                 });
             }
         }
-        let emb = embed_chunks(
-            &self.conn,
-            input.semantic_chunks,
-            input.rel_path,
-            input.embed_semantic,
-        )?;
+        let emb_storage;
+        let emb = match embedded {
+            Some(precomputed) => precomputed,
+            None => {
+                emb_storage = embed_chunks(
+                    &self.conn,
+                    input.semantic_chunks,
+                    input.rel_path,
+                    input.embed_semantic,
+                )?;
+                &emb_storage
+            }
+        };
         let (cache_hits, cache_misses) = (
             emb.cache_hits.len(),
             emb.chunks.len().saturating_sub(emb.cache_hits.len()),

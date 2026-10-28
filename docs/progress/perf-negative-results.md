@@ -1191,3 +1191,22 @@ differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
   With this row the wall family's open doors reduce to embed-cosine
   margin + span-coverage pairing; absent-family reduces to additive
   cold admission.
+
+## Rejected: larger SQLite page cache for writer connections (256 MiB)
+
+Measured 2026-10-28 in the cold-index perf campaign (self corpus 726 files,
+schema 18, M5 Max 18c, `--profile release-perf`): raising writer
+`cache_size` from 70 MiB (`-71680`) to 256 MiB (`-262144`) moved cold index
+wall from baseline 9.15s p50 (runs 8.42-10.07s) to p50 ~8.85s (runs
+8.72-9.01s) — inside the ±10% noise envelope, not a keep. The motivating
+hypothesis (pagerStress frames in a sampled cold build implying page-cache
+thrash across ~24 btrees) did not survive a synthetic control: 20k × 6KB
+blob inserts into a fresh WAL db at 4KB pages take 0.34s, so raw page
+throughput is not the bottleneck; the upsert span is tokenizer + per-row
+bind/step CPU, addressed instead by hoisting embedding into the parallel
+prepare phase. Change reverted (`store/sql.rs` back to the shared 70 MiB
+line). Retry predicate (form 1): reopen when a profile of a shipped index
+path shows pagerStress/unixWrite as ≥20% of cold-build samples on a corpus
+whose index database exceeds 2× the 70 MiB cache AND the tokenizer/bind
+CPU share is below 30%; then A/B `cache_size` on that corpus with ≥10 runs
+per arm and keep only on a median win outside the envelope.
