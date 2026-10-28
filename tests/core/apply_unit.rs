@@ -210,6 +210,14 @@ fn swap_loop_refuses_target_turned_read_only_after_staging() {
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("a.rs"), SOURCE).unwrap();
     fs::write(src.join("b.rs"), SOURCE).unwrap();
+    // Pin the source modes explicitly: a umask of 0o002 (Ubuntu-style
+    // USERGROUPS default) creates these 0o664 and makes the
+    // mode-preservation assertions below umask-dependent. The contract
+    // under test is "modes survive staging/refusal/rollback", so the
+    // fixture starts from a fixed, stated mode.
+    for name in ["a.rs", "b.rs"] {
+        fs::set_permissions(src.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
     let root_dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
 
     // Plan made while both targets were writable; both files staged
@@ -335,6 +343,14 @@ fn two_file_swappable_state() -> (tempfile::TempDir, CodemodPlan, Vec<StagedFile
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("a.rs"), SOURCE).unwrap();
     fs::write(src.join("b.rs"), SOURCE).unwrap();
+    // Pin the source modes explicitly: a umask of 0o002 (Ubuntu-style
+    // USERGROUPS default) creates these 0o664 and makes the
+    // mode-preservation assertions below umask-dependent. The contract
+    // under test is "modes survive staging/refusal/rollback", so the
+    // fixture starts from a fixed, stated mode.
+    for name in ["a.rs", "b.rs"] {
+        fs::set_permissions(src.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
     let root_dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
 
     let file_plan = |name: &str| CodemodFilePlan {

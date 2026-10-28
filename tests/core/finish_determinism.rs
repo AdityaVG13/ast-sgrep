@@ -236,13 +236,13 @@ fn weighted_rrf_emits_fused_rows_in_deterministic_order() {
     };
 
     let mut reference = build();
-    apply_weighted_rrf(&mut reference, &weights);
+    apply_weighted_rrf(&mut reference, &weights, "");
     let reference_keys = fused_keys(&reference);
     assert_eq!(reference_keys.len(), 8, "one fused row per locus");
 
     for run in 0..24 {
         let mut hits = build();
-        apply_weighted_rrf(&mut hits, &weights);
+        apply_weighted_rrf(&mut hits, &weights, "");
         let keys = fused_keys(&hits);
         assert_eq!(
             keys, reference_keys,

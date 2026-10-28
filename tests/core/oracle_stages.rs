@@ -639,6 +639,7 @@ fn planner_resolution_and_file_filters() {
             prevented_read_bytes: 0,
             snapshot: SnapshotStamp::default(),
             query_expansions: vec![],
+            truncated: false,
         }
     }
     // Empty shortlist: semantic probe first, agent-format command last.

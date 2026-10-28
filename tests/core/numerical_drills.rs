@@ -340,7 +340,7 @@ fn real_producer_scores_invert_through_routing() {
 
     // Fusion cements the inversion: Y rank 0 -> 1/61, X rank 1 -> 1/62.
     let mut fused = routed;
-    apply_weighted_rrf(&mut fused, &ChannelWeights::default());
+    apply_weighted_rrf(&mut fused, &ChannelWeights::default(), "");
     assert_eq!(fused.len(), 2);
     let by_file = |f: &str| fused.iter().find(|h| h.file == f).unwrap().score;
     assert_eq!(by_file("y_inv.rs"), 1.0 / 61.0);

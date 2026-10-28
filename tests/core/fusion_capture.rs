@@ -39,7 +39,7 @@ fn fusion_dump_records_prefusion_channel_ranks_per_result() {
     // our unique file names makes the assertion robust to that interleaving.
     std::env::set_var("ASGREP_FUSION_DUMP", &path);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        apply_weighted_rrf(&mut hits, &ChannelWeights::default());
+        apply_weighted_rrf(&mut hits, &ChannelWeights::default(), "");
     }));
     std::env::remove_var("ASGREP_FUSION_DUMP");
     result.expect("fusion under capture must not fail");
