@@ -382,3 +382,57 @@ fn index_repo_arg_conflicts_fail_with_other_discriminant() {
     assert_eq!(generation(&session), stamp);
     assert!(session.peek_cached_search(&args).is_some());
 }
+
+fn ambient_refreshes(session: &mut CodeModeSession) -> u64 {
+    let status = session
+        .call("index_status", json!({}))
+        .expect("index_status");
+    status["ambient_refreshes"]
+        .as_u64()
+        .expect("ambient_refreshes counter in index_status")
+}
+
+/// INTENT: stat-fingerprint memo for ambient freshness — an unchanged tree
+/// past the cooldown does not re-run the ambient refresh (counter frozen);
+/// a real edit busts the memo, the refresh runs, and the new token is
+/// served on the very next call.
+/// KILLS: drop-the-memo (every post-cooldown call re-pays the full delta
+/// scan — the serve-stall second act), memo-never-busts (stale forever).
+#[test]
+fn m_ambient_memo_skips_unchanged_tree() {
+    let cooldown = std::time::Duration::from_millis(1100);
+    let (root, _index, mut session) = setup();
+
+    // First post-index call: the ambient probe runs (tree already fresh,
+    // changed == 0) and captures the fingerprint.
+    session
+        .call("find", json!({ "query": ALPHA, "limit": 8 }))
+        .expect("first find");
+    let baseline = ambient_refreshes(&mut session);
+    assert_eq!(baseline, 1, "first post-index call runs exactly one probe");
+
+    // Past the cooldown on an UNCHANGED tree: the memo must skip the probe.
+    std::thread::sleep(cooldown);
+    session
+        .call("find", json!({ "query": ALPHA, "limit": 8 }))
+        .expect("unchanged find");
+    assert_eq!(
+        ambient_refreshes(&mut session),
+        baseline,
+        "unchanged tree past cooldown must not re-run the ambient refresh \
+         (stat-fingerprint memo)"
+    );
+
+    // A real edit busts the memo: the probe runs and BETA is served live.
+    write_py(root.path(), "alpha.py", BETA);
+    std::thread::sleep(cooldown);
+    let fresh = session
+        .call("find", json!({ "query": BETA, "limit": 8 }))
+        .expect("post-edit find");
+    assert!(hits_file(&fresh, "alpha.py"), "{fresh}");
+    assert_eq!(
+        ambient_refreshes(&mut session),
+        baseline + 1,
+        "a changed tree must bust the memo and run the refresh"
+    );
+}

@@ -119,6 +119,13 @@ pub struct CodeModeSession {
     cancel: Option<Arc<AtomicBool>>,
     /// Last ambient freshness probe (cooldown-bounded; None = never probed).
     last_ambient: Option<std::time::Instant>,
+    /// Root + stat fingerprint of the tree at the last completed ambient
+    /// probe. A matching fingerprint skips the probe: the memo's cost is one
+    /// stat-only walk, the skipped work is a full Indexer open + delta scan
+    /// (measured ~1s per serve call on a 726-file root).
+    ambient_fp: Option<(std::path::PathBuf, u64)>,
+    /// Completed ambient probes (surfaced through `index_status`).
+    ambient_refreshes: u64,
 }
 
 fn interactive_index_threads() -> usize {
@@ -144,6 +151,62 @@ fn resolve_session_index_path(root: &Path, path: PathBuf) -> PathBuf {
     root.join(path)
 }
 
+/// Order-independent stat fingerprint over the indexer's candidate set.
+/// Mirrors `collect_index_candidates` exactly (same dir skips, same ignore
+/// matcher, same file filter) so the memo can never miss a file a real
+/// probe would see; a stray admitted file only costs one extra full probe
+/// after it changes. Returns `None` when any stat is unreadable — the
+/// caller then runs the full probe instead of memoizing.
+fn ambient_tree_fingerprint(root: &Path) -> Option<u64> {
+    use ast_sgrep_core::gitignore::{should_skip_dir, should_skip_file, IgnoreMatcher};
+    let ignore = IgnoreMatcher::new(root);
+    let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if should_skip_dir(e.path()) {
+                return false;
+            }
+            if e.file_type().is_dir() {
+                if let Ok(rel) = e.path().strip_prefix(root) {
+                    if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+    {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        if ignore.is_ignored(rel) || should_skip_file(entry.path()) {
+            continue;
+        }
+        let metadata = entry.metadata().ok()?;
+        let mtime_ns = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos() as u64;
+        // FNV-1a over the rel path folded with len and mtime; the XOR fold
+        // keeps the result independent of walk order.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in rel.to_string_lossy().as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        fp ^= h ^ metadata.len() ^ mtime_ns.rotate_left(17);
+    }
+    Some(fp)
+}
+
 impl CodeModeSession {
     pub fn new(config: SessionConfig) -> Self {
         let mut config = config;
@@ -161,6 +224,8 @@ impl CodeModeSession {
             max_calls: 64,
             cancel: None,
             last_ambient: None,
+            ambient_fp: None,
+            ambient_refreshes: 0,
         }
     }
 
@@ -608,6 +673,19 @@ impl CodeModeSession {
             }
         }
         self.last_ambient = Some(std::time::Instant::now());
+        // Stat-fingerprint memo: an unchanged tree (same walk-admitted
+        // files, sizes, mtimes) skips the whole probe — one stat walk
+        // instead of a full Indexer open + delta scan. The cooldown above
+        // still bounds the memo walk itself to one per second.
+        if let Some((memo_root, memo_fp)) = &self.ambient_fp {
+            if memo_root == root {
+                if let Some(fp) = ambient_tree_fingerprint(root) {
+                    if fp == *memo_fp {
+                        return None;
+                    }
+                }
+            }
+        }
         let started = std::time::Instant::now();
         let mut indexer = Indexer::new(IndexOptions {
             root: root.to_path_buf(),
@@ -621,6 +699,8 @@ impl CodeModeSession {
             indexer.set_cancel(Arc::clone(cancel));
         }
         let stats = indexer.index_all().ok()?;
+        self.ambient_refreshes += 1;
+        self.ambient_fp = ambient_tree_fingerprint(root).map(|fp| (root.to_path_buf(), fp));
         let changed = stats.files_indexed + stats.files_removed;
         if changed == 0 {
             return None;
@@ -638,7 +718,9 @@ impl CodeModeSession {
             index_path: self.config.index_path.clone(),
             ..IndexOptions::default()
         })?;
-        Ok(serde_json::to_value(indexer.store().status()?)?)
+        let mut value = serde_json::to_value(indexer.store().status()?)?;
+        value["ambient_refreshes"] = serde_json::json!(self.ambient_refreshes);
+        Ok(value)
     }
 
     pub(crate) fn index_repo(&mut self, args: &Value) -> anyhow::Result<Value> {
