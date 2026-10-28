@@ -27,6 +27,28 @@ pub enum QueryMode {
     Regex,
     Word,
 }
+/// Strip ONE balanced wrapping quote layer from a prefixed-mode target.
+///
+/// The tool schemas (MCP, Hermes plugin) advertise the quoted spelling
+/// (`pattern:'fn name($$$A)'`) and agents habitually quote delimited
+/// payloads; keeping the quote bytes in the target made every such query
+/// silently empty or fail native classification with an unrelated
+/// structural-fallback error. One layer only — content quotes stay
+/// expressible by double-wrapping (`literal:'"fn"'` searches for the
+/// bytes `"fn"`). Unbalanced or mixed pairs are payload and pass through
+/// untouched. Same rule the conjunction lane has always applied to its
+/// `semantic:"..."` payloads.
+pub(crate) fn strip_wrapping_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        if (first == b'\'' || first == b'"') && bytes[bytes.len() - 1] == first {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
 impl ParsedQuery {
     pub fn parse(input: &str) -> Self {
         let trimmed = input.trim();
@@ -55,7 +77,7 @@ impl ParsedQuery {
             ("imports:", QueryMode::Imports),
         ] {
             if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let target = rest.trim().to_string();
+                let target = strip_wrapping_quotes(rest.trim()).to_string();
                 return Self {
                     raw: trimmed.to_string(),
                     mode,
@@ -68,7 +90,7 @@ impl ParsedQuery {
             }
         }
         if let Some(rest) = trimmed.strip_prefix("pattern:") {
-            let t = rest.trim().to_string();
+            let t = strip_wrapping_quotes(rest.trim()).to_string();
             return Self {
                 raw: trimmed.to_string(),
                 mode: QueryMode::Pattern,
@@ -85,7 +107,7 @@ impl ParsedQuery {
             ("word:", QueryMode::Word),
         ] {
             if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let target = rest.trim().to_string();
+                let target = strip_wrapping_quotes(rest.trim()).to_string();
                 let terms = if mode == QueryMode::Word {
                     vec![target.to_lowercase()]
                 } else {
@@ -113,6 +135,108 @@ impl ParsedQuery {
             path_scope_error: None,
             path_scope_exact: false,
         }
+    }
+
+    /// Channel names recognized by `parse_mode` plus the `in:` scope prefix
+    /// (br-f5q teaching list; keep in sync with the prefixes there).
+    const KNOWN_CHANNEL_NAMES: &[&str] = &[
+        "callers", "defs", "imports", "pattern", "literal", "regex", "word", "in",
+    ];
+
+    /// Common synonyms that are NOT channels (br-f5q, live 2026-10-27: a
+    /// model typed `def:`-style prefixes and got silent semantic free-text
+    /// noise). The second element is the channel to suggest, or the sentinel
+    /// `semantic_only` (there is no `semantic:` parse prefix — the flag is
+    /// the canonical surface).
+    const CHANNEL_SUGGESTIONS: &[(&str, &str)] = &[
+        ("def", "defs"),
+        ("definition", "defs"),
+        ("definitions", "defs"),
+        ("symbol", "defs"),
+        ("symbols", "defs"),
+        ("sym", "defs"),
+        ("call", "callers"),
+        ("calls", "callers"),
+        ("caller", "callers"),
+        ("import", "imports"),
+        ("module", "imports"),
+        ("text", "word"),
+        ("txt", "word"),
+        ("term", "word"),
+        ("find", "word"),
+        ("grep", "word"),
+        ("match", "regex"),
+        ("sem", "semantic_only"),
+        ("semantic", "semantic_only"),
+        ("embed", "semantic_only"),
+    ];
+
+    fn levenshtein(a: &str, b: &str) -> usize {
+        let a: Vec<char> = a.chars().collect();
+        let b: Vec<char> = b.chars().collect();
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        let mut cur = vec![0usize; b.len() + 1];
+        for (i, ca) in a.iter().enumerate() {
+            cur[0] = i + 1;
+            for (j, cb) in b.iter().enumerate() {
+                let cost = usize::from(ca != cb);
+                cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+            }
+            std::mem::swap(&mut prev, &mut cur);
+        }
+        prev[b.len()]
+    }
+
+    /// br-f5q: a single-token query whose identifier-shaped prefix is an
+    /// alias or a ≤2-edit near-miss of a channel is a channel ATTEMPT;
+    /// return the teaching refusal. Everything else stays free text — URLs,
+    /// `key:value` literals, rust `mod::path` double-colons, multi-token
+    /// text, and the `in:` scope prefix are never hijacked; exact colon
+    /// text has always had the quoted escape (`literal:'key: value'`).
+    pub fn unknown_channel_teaching(query: &str) -> Option<String> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+            return None;
+        }
+        let (prefix, rest) = trimmed.split_once(':')?;
+        // A double-colon rust path (`fmt::Debug`) is never a channel attempt.
+        if rest.starts_with(':') || rest.is_empty() || prefix.is_empty() {
+            return None;
+        }
+        let mut chars = prefix.chars();
+        let first_ok = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+        if !first_ok || !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            return None;
+        }
+        if Self::KNOWN_CHANNEL_NAMES.contains(&prefix) {
+            return None;
+        }
+        const VALID: &str = "callers:, defs:, imports:, pattern:, literal:, regex:, word:";
+        const ESCAPE: &str =
+            " — for literal text containing a colon, quote it: literal:'key: value'";
+        if let Some((_, fix)) =
+            Self::CHANNEL_SUGGESTIONS.iter().find(|(alias, _)| *alias == prefix)
+        {
+            return Some(if *fix == "semantic_only" {
+                format!(
+                    "unknown channel \"{prefix}:\" — semantic search has no prefix; pass `semantic_only: true` (channels: {VALID}){ESCAPE}"
+                )
+            } else {
+                format!(
+                    "unknown channel \"{prefix}:\" — did you mean \"{fix}:\"? (channels: {VALID}){ESCAPE}"
+                )
+            });
+        }
+        let nearest = Self::KNOWN_CHANNEL_NAMES
+            .iter()
+            .filter(|c| **c != "in")
+            .map(|c| (Self::levenshtein(prefix, c), *c))
+            .filter(|(d, _)| *d <= 2)
+            .min()?;
+        Some(format!(
+            "unknown channel \"{prefix}:\" — did you mean \"{}:\"? (channels: {VALID}){ESCAPE}",
+            nearest.1
+        ))
     }
     /// Build a mode-specific query. `raw` is the trimmed payload (no synthetic
     /// prefix) because constructors are invoked without a `literal:`/`regex:`/

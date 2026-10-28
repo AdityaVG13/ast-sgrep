@@ -468,6 +468,13 @@ pub struct SearchResponse {
     /// Index snapshot this response was built from (d3l5).
     #[serde(default)]
     pub snapshot: SnapshotStamp,
+    /// True when the query produced more true hits than the limit budget
+    /// let into the envelope (br-tvv). The warp E2E "miss" — 17 trait sigs,
+    /// limit 16, the 17th silently absent and read as a miss — was a limit
+    /// truncation, not an admission cut. Agents reading a full-looking
+    /// result must know the answer set was cut: raise `--limit` to see more.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
     /// Repository associations that widened this query (ufk7).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query_expansions: Vec<QueryExpansion>,

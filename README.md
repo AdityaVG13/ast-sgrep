@@ -79,13 +79,20 @@ models actually type. Full notes: [CHANGELOG](CHANGELOG.md#270---2026-10-23).
 | Use asgrep natively inside Hermes | `asgrep install --target hermes --yes` writes an embedded native plugin to `~/.hermes/plugins/`: eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — zero process spawn per call, channels (`defs:`, `callers:`, `pattern:`…) taught in the schema itself. Hermes gets the plugin, not the MCP server. |
 | Type grep/rg habits and have them recover | `-A/-B/-C N` → `--excerpt-lines`, `-m N` → `--limit`, the `-l -i -n -w -F -c -g -t -e` short flags, `-p PATTERN` and repeatable `--pattern` batches, bare metavariable patterns (`asgrep 'fn parse($$$A)'`), and grep's `asgrep QUERY FILE` shape (the file root walks to the indexed ancestor). Each recovery prints the canonical form. |
 | Count matches like `grep -c` | `--count` / `-c` prints `path:count` lines; `--json` envelopes carry a `counts[]` array derived from the same hit set as `files`. |
+| Quote a patterned query like the docs show | `pattern:'fn name($$$A)'`, `word:'auth refresh'`, `regex:'a|b'` — one balanced quote layer around a prefixed target parses (and the note teaches the canonical form). |
+| Match functions by return type | `pattern:'fn $A($$$) -> u32'`, `func $A($$$) int`, `: number`, and `fn $A($$$);` — spelled return sections and `;`-completed forms follow the reference per grammar (rust/go/ts/php/py; `$R` binds the declared return). |
+| Match every fn-shaped node by bare name | `pattern:'fn $A'`, `fn plain_ret`, `fn sig_r` — no-parens pure names answer function items AND trait signatures (rust), generics wildcarded; any section on a no-parens form (`fn $A -> u32`) answers empty like the reference. |
+| Trust the envelope | Search responses carry `truncated: true` when the answer set exceeded `--limit` — a full-looking result is never silently cut (the 17th hit of a 17-row answer used to vanish at the default limit 16). Trait-signature files index their own rows, so `fn` patterns admit sig-only files. |
 | Ask reachability in grep clothing | `chain SYM --to TARGET` recovers onto `call-path SYM TARGET`; the note names the canonical verb. |
 | Learn the fix from every refusal | Unquoted multi-word queries teach the quoted form, a flag after `--` teaches flag order, missing verbs and mode words name the right one, and every note rides the machine envelope. |
 
 Honest tradeoffs: `-A`/`-B`/`-C` all map onto one window around the hit
 (after/before are not separate knobs) and `-m` is a global hit cap (there is
 no per-file mode — queries are fused), and every such approximation says so
-in its note. The Hermes plugin is a Python plugin on a persistent serve
+in its note. Body-less fn patterns follow ast-grep's per-grammar recovery
+(rust: trait method signatures; go: declarations; ts/php: nothing) — spell
+`{ $$$B }` when you mean function bodies. The Hermes plugin is a Python
+plugin on a persistent serve
 worker: tool schemas freeze per session, so a plugin upgrade needs a new
 session.
 

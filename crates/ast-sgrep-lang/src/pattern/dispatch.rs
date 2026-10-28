@@ -230,6 +230,25 @@ fn match_pattern_inner(
                 return Ok(hits);
             }
         }
+        // br-osk: a fully-concrete DECLARATION name (`fn plain_ret`,
+        // `function plain`, `fn sig_r`) is the reference's name lane —
+        // every fn-shaped node with that name answers (rust: trait sigs
+        // ∪ function items, generics wildcarded; probed 2026-10-27,
+        // 0.45.2). The literal lane answered silent 0: two tokens never
+        // match one identifier node. Only the pure-name spelling reroutes;
+        // names WITH sections (`fn sig_r -> u32`) keep the arm's
+        // receipted empty via the classifier's loud reject.
+        if let Some(
+            kind @ NativeKind::Function {
+                name: Some(_),
+                body: None,
+                return_spec: None,
+                semicolon: false,
+            },
+        ) = classify_native(pattern)
+        {
+            return match_structural(lang, source, pattern, &kind);
+        }
         return match_literal_pattern(lang, source, pattern);
     }
     // A php STATIC-scope target (`C::$s = 5`, `C::$s = f(5)`, `C::$s == 5`)

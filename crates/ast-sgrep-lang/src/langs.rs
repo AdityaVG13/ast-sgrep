@@ -79,6 +79,8 @@ const RUST: &[(&str, KindRule)] = &[
     ("type_item",                Sym(Type)),
     ("enum_item",                Sym(Enum)),
     ("trait_item",               Sym(Interface)),
+    ("static_item",              Sym(Static)),
+    ("const_item",               Sym(Static)),
     ("call_expression",          Call("function")),
     ("use_declaration",          ImportJoin("::")),
     ("extern_crate_declaration", ImportJoin("::")),

@@ -47,6 +47,74 @@ fn disk_io_rejects_oversized_sources_before_decoding() {
     );
 }
 
+/// INTENT: string line refs (`path#L5-L6`, `path:5-6`) past EOF fail closed
+/// naming the file's real line count — MCP `read_node` parity (sandbox.rs
+/// bounds the requested range) — instead of answering ok with a phantom
+/// empty window. Value-form (`{path, start, end}`) and bare-path reads keep
+/// their pinned clamp-at-EOF contract (ffi_surface `..._agree_at_eof`).
+/// KILLS: `read_one_window` returning `("", truncated:false)` for refs whose
+/// start or end is beyond the last real line (e.g. `README.md#L999999`).
+#[test]
+fn string_line_refs_beyond_eof_fail_closed() {
+    use serde_json::json;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("seed.rs"), "fn seed() {}\n").unwrap();
+    std::fs::write(root.path().join("three.rs"), "a\n\nb\n").unwrap();
+    std::fs::write(root.path().join("void.rs"), "").unwrap();
+    let (_index, mut session) = ast_sgrep_testkit::indexed_session_at(root.path());
+    // Unindexed fallback path (written after the index was built).
+    std::fs::write(root.path().join("two.rs"), "alpha\nbeta\n").unwrap();
+
+    // Leg 1: indexed string ref past EOF names the file and its line count.
+    let error = session
+        .call("read", json!({"refs": ["seed.rs#L5-L6"]}))
+        .expect_err("indexed ref past EOF must fail closed")
+        .to_string();
+    assert!(
+        error.contains("seed.rs") && error.contains("beyond") && error.contains("1 line"),
+        "error must name file + bound: {error}"
+    );
+    // Leg 2: unindexed (disk) string ref past EOF fails the same way.
+    let error = session
+        .call("read", json!({"refs": ["two.rs#L999-L999"]}))
+        .expect_err("disk ref past EOF must fail closed")
+        .to_string();
+    assert!(
+        error.contains("beyond") && error.contains("two.rs"),
+        "{error}"
+    );
+    // Leg 3: the phantom line after a final newline is not a real line.
+    let error = session
+        .call("read", json!({"refs": ["two.rs#L3-L3"]}))
+        .expect_err("line after final newline is past EOF")
+        .to_string();
+    assert!(error.contains("beyond"), "{error}");
+    // Leg 4: an in-range EMPTY line is a legitimate empty window, never an
+    // error — the bound check must not reject empty content.
+    let read = session
+        .call("read", json!({"refs": ["three.rs#L2-L2"]}))
+        .unwrap();
+    assert_eq!(read["windows"][0]["text"], "", "{read:#}");
+    // Leg 5: LSP-style colon refs share the fail-closed bound.
+    let error = session
+        .call("read", json!({"refs": ["seed.rs:9"]}))
+        .expect_err("colon ref past EOF must fail closed")
+        .to_string();
+    assert!(error.contains("beyond"), "{error}");
+    // Leg 6: explicit L1 on an empty file stays success (MCP emptyfile leg).
+    let read = session
+        .call("read", json!({"refs": ["void.rs#L1-L1"]}))
+        .unwrap();
+    assert_eq!(read["windows"][0]["text"], "", "{read:#}");
+    // Leg 7: bare-path default windows and Value-form reads keep clamping.
+    let read = session.call("read", json!({"refs": ["two.rs"]})).unwrap();
+    assert_eq!(read["windows"][0]["text"], "alpha\nbeta", "{read:#}");
+    let read = session
+        .call("read", json!({"path": "two.rs", "start": 1, "end": 40}))
+        .unwrap();
+    assert_eq!(read["windows"][0]["text"], "alpha\nbeta", "{read:#}");
+}
+
 #[cfg(unix)]
 #[test]
 fn disk_io_rejects_nonregular_sources_without_blocking() {

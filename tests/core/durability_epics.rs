@@ -88,7 +88,7 @@ fn empty_lexical_db_is_not_search_ready() {
 #[test]
 fn clear_all_data_is_transactional_and_complete() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let lines = [(1, "hello clear".into())];
     let symbols = [SymbolRow {
         name: "hello".into(),
@@ -131,7 +131,7 @@ fn clear_all_data_is_transactional_and_complete() {
 #[test]
 fn remove_file_deletes_struct_body_meta_and_ivf() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let path = "gone.py";
     let lines = [(1, "x = 1".into())];
     store.upsert_file(base(path, &lines, "h")).unwrap();
@@ -191,7 +191,7 @@ fn lang_filter_index_does_not_wipe_other_languages() {
 #[test]
 fn synchronous_restored_after_file_tx_and_bulk_rollback() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let sync = |s: &IndexStore| -> i64 {
         s.connection()
             .query_row("PRAGMA synchronous", [], |r| r.get(0))
@@ -213,7 +213,7 @@ fn synchronous_restored_after_file_tx_and_bulk_rollback() {
 #[test]
 fn nested_file_tx_inner_error_rolls_back_outer() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let lines = [(1, "nested".into())];
     store.upsert_file(base("keep.py", &lines, "h0")).unwrap();
 
@@ -245,7 +245,7 @@ fn nested_file_tx_inner_error_rolls_back_outer() {
 #[test]
 fn corrupt_embedding_blob_fails_closed() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let lines = [(1, "emb".into())];
     let file_id = store.upsert_file(base("c.py", &lines, "h")).unwrap();
     store
@@ -272,7 +272,7 @@ fn sql_identifier_allowlist_rejects_unknown() {
     assert!(assert_sql_ident("files", COUNT_TABLE_ALLOWLIST).is_ok());
     assert!(assert_sql_ident("files; DROP", COUNT_TABLE_ALLOWLIST).is_err());
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     assert!(store.incoming_calls("x").is_ok());
 }
 
@@ -389,7 +389,7 @@ fn explicit_reindex_quarantines_corrupt_db() {
 #[test]
 fn open_sets_busy_timeout_and_normal_sync() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let busy: i64 = store
         .connection()
         .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
@@ -406,7 +406,7 @@ fn open_sets_busy_timeout_and_normal_sync() {
 #[test]
 fn hybrid_response_cache_invalidates_on_index_generation() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let options = SearchOptions {
         root: temp.path().to_path_buf(),
         index_path: Some(store.db_path().to_path_buf()),
@@ -468,7 +468,7 @@ fn body_hash_meta_persisted_after_index() {
 #[test]
 fn remove_file_clears_graph_rows() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let lines = [(1, "import os".into())];
     let imports = [ImportRow {
         module_path: "os".into(),
@@ -548,7 +548,7 @@ fn body_hash_mismatch_prevents_structure_skip() {
 #[test]
 fn mark_semantic_ivf_stale_sets_flag_and_keeps_sidecar() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_path(store.db_path());
     std::fs::write(&sidecar, b"stale-ivf-bytes").unwrap();
     assert!(sidecar.is_file());

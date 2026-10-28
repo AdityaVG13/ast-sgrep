@@ -205,6 +205,12 @@ pub struct ReadSpec {
     pub path: String,
     pub start: u32,
     pub end: u32,
+    /// True only for string refs with an explicit line suffix (`path#L5-L6`,
+    /// `path:5-6`): the ref CLAIMS a line range, so past-EOF refs fail
+    /// closed (MCP `read_node` parity). Value-form `{path, start, end}` and
+    /// bare paths describe bounded windows and keep clamp-at-EOF semantics
+    /// (pinned by ffi_surface `indexed_and_disk_reads_agree_at_eof`).
+    pub explicit_lines: bool,
 }
 
 struct EditSpec {
@@ -243,6 +249,7 @@ fn collect_refs(args: &Value) -> anyhow::Result<Vec<ReadSpec>> {
         path: path.to_string(),
         start,
         end,
+        explicit_lines: false,
     }])
 }
 
@@ -279,6 +286,7 @@ fn parse_ref_value(value: &Value) -> anyhow::Result<ReadSpec> {
         path: path.to_string(),
         start,
         end,
+        explicit_lines: false,
     })
 }
 
@@ -301,6 +309,7 @@ pub fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
             path: path.to_string(),
             start,
             end,
+            explicit_lines: true,
         });
     }
     // LSP-style line refs (`path:12`, `path:12-40`): exact-equivalent
@@ -327,6 +336,7 @@ pub fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
                 path: path.to_string(),
                 start,
                 end,
+                explicit_lines: true,
             });
         }
     }
@@ -334,6 +344,7 @@ pub fn parse_ref_str(raw: &str) -> anyhow::Result<ReadSpec> {
         path: raw.to_string(),
         start: 1,
         end: 40,
+        explicit_lines: false,
     })
 }
 
@@ -467,6 +478,26 @@ pub fn read_one_window(
 ) -> anyhow::Result<Value> {
     let rel = jail_rel_path(root, &spec.path)?;
     let rel_s = rel_display(&rel);
+    // Explicit string refs CLAIM a line range: reject past-EOF claims with
+    // the file's real bound instead of answering a phantom empty window
+    // (MCP `read_node` parity). Bounded windows (bare path, Value-form)
+    // clamp as before — pinned by ffi_surface `..._agree_at_eof`.
+    if spec.explicit_lines {
+        let total = match store.source_line_total(&rel_s)? {
+            Some(total) => total,
+            None => disk_total_lines(root, &rel)?,
+        };
+        anyhow::ensure!(
+            spec.start <= total && spec.end <= total,
+            "read ref `{}#L{}-L{}` is beyond end of file ({} has {} line{})",
+            spec.path,
+            spec.start,
+            spec.end,
+            rel_s,
+            total,
+            if total == 1 { "" } else { "s" },
+        );
+    }
     let ctx = context_lines as u32;
     let start = spec.start.saturating_sub(ctx).max(1);
     let end = spec.end.saturating_add(ctx);
@@ -539,6 +570,14 @@ fn slice_indexed<'a>(
     } else {
         (out, actual_start, actual_end, truncated)
     }
+}
+
+/// Line count for the unindexed fallback: same cap and same trailing-empty
+/// trimming spirit as the index's `source_end` (a final newline does not
+/// open a line), floored at 1 so empty files still have a bound.
+fn disk_total_lines(root: &Path, rel: &Path) -> anyhow::Result<u32> {
+    let text = read_text_capped(&root.join(rel), MAX_INDEX_FILE_BYTES)?;
+    Ok(text.lines().count().max(1) as u32)
 }
 
 fn read_disk_window(

@@ -14,6 +14,63 @@ const option = (name, fallback) => {
   const index = process.argv.indexOf('--' + name);
   return index < 0 ? fallback : process.argv[index + 1];
 };
+// Shared predicate for the live retry loop and the self-test regression
+// (br-zvh): a regenerated lock is committable only when EVERY expected
+// native entry carries the exact canonical version, is not a link, and
+// resolves to the observed tarball + integrity. This is the rejection that
+// the historical 2.5.4 single-shot repin lacked.
+const validateNativeLock = (candidate, targets, observed, version) => {
+  const violations = [];
+  for (const target of targets) {
+    const entry = candidate.packages?.['node_modules/' + target.package];
+    const dist = observed.get(target.package);
+    if (entry?.version !== version || entry.link || entry.resolved !== dist.tarball || entry.integrity !== dist.integrity) {
+      violations.push(`${target.package}@${version}: regenerated lock has missing or mismatched native metadata`);
+    }
+  }
+  return violations;
+};
+// Regression for the 2.5.4 incomplete-lock class: every stub variant the
+// live loop must reject, plus the complete candidate that must pass.
+const selfTest = () => {
+  const targets = [
+    { package: '@ast-sgrep/native-a' },
+    { package: '@ast-sgrep/native-b' },
+  ];
+  const version = '2.7.0';
+  const observed = new Map(targets.map(target => [target.package, {
+    tarball: `https://registry.npmjs.org/${target.package}/-/${target.package.split('/').pop()}-${version}.tgz`,
+    integrity: `sha512-${'A'.repeat(86)}=`,
+  }]));
+  const entry = (pkg, overrides = {}) => ({
+    version,
+    resolved: observed.get(pkg).tarball,
+    integrity: observed.get(pkg).integrity,
+    ...overrides,
+  });
+  const complete = {
+    packages: Object.fromEntries(targets.map(target => ['node_modules/' + target.package, entry(target.package)])),
+  };
+  const stubs = {
+    'versionless optional stub': { packages: { ...complete.packages, 'node_modules/@ast-sgrep/native-a': entry(targets[0].package, { version: '' }) } },
+    'link stub': { packages: { ...complete.packages, 'node_modules/@ast-sgrep/native-a': entry(targets[0].package, { link: true }) } },
+    'mismatched integrity': { packages: { ...complete.packages, 'node_modules/@ast-sgrep/native-a': entry(targets[0].package, { integrity: `sha512-${'B'.repeat(86)}=` }) } },
+    'stale resolved url': { packages: { ...complete.packages, 'node_modules/@ast-sgrep/native-a': entry(targets[0].package, { resolved: 'https://registry.npmjs.org/stale.tgz' }) } },
+    'missing native entry': { packages: { 'node_modules/@ast-sgrep/native-b': entry(targets[1].package) } },
+  };
+  const rejected = [];
+  for (const [name, candidate] of Object.entries(stubs)) {
+    const violations = validateNativeLock(candidate, targets, observed, version);
+    if (violations.length === 0) throw new Error(`[pi-release] repin self-test FAILED: ${name} lock was accepted`);
+    rejected.push(name);
+  }
+  if (validateNativeLock(complete, targets, observed, version).length) throw new Error('[pi-release] repin self-test FAILED: complete candidate lock was rejected');
+  console.log(`[pi-release] repin self-test accepted a complete lock and rejected ${rejected.join(', ')}`);
+};
+if (process.argv[2] === '--self-test') {
+  selfTest();
+  process.exit(0);
+}
 const version = option('version');
 const timeoutMs = Number(option('timeout-ms', '120000'));
 const pollMs = Number(option('poll-ms', '2000'));
@@ -77,13 +134,8 @@ try {
         await writeFile(path.join(staging, 'package-lock.json'), JSON.stringify(lock, null, 2) + '\n');
         npm(['install', '--package-lock-only', '--ignore-scripts', '--include=optional', '--no-audit', '--no-fund']);
         candidate = await readJson(path.join(staging, 'package-lock.json'));
-        for (const target of matrix.targets) {
-          const entry = candidate.packages?.['node_modules/' + target.package];
-          const dist = observed.get(target.package);
-          if (entry?.version !== version || entry.link || entry.resolved !== dist.tarball || entry.integrity !== dist.integrity) {
-            throw new Error(`${target.package}@${version}: regenerated lock has missing or mismatched native metadata`);
-          }
-        }
+        const violations = validateNativeLock(candidate, matrix.targets, observed, version);
+        if (violations.length) throw new Error(violations[0]);
         if (remaining() <= 0) throw new Error('registry deadline exhausted before validation');
         break;
       } catch (error) {

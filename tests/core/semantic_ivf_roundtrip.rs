@@ -3,7 +3,7 @@ use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, load_semantic_ivf_index,
     load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_ids,
-    save_semantic_ivf_with_publication,
+    save_semantic_ivf_with_publication, semantic_ivf_ids_path,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
 use ast_sgrep_testkit::updating_goldens;
@@ -59,6 +59,96 @@ fn v3_sidecar_roundtrips_ids_and_v2_stays_ids_none() {
         save_semantic_ivf_with_ids(&bad, fingerprint, dim, &vectors, &index, Some(&short)).is_err()
     );
     assert!(!bad.exists());
+}
+
+/// INTENT: the published `semantic.ivf` stays a complete v2 artifact (the
+/// 2.6.x exact-EOF readers accept it — no silent per-invocation retrain in
+/// mixed fleets), with chunk ids carried in a separate fingerprint-bound
+/// `semantic.ivf.ids` sidecar the current reader resolves in preference to
+/// SQL. A foreign or stale sidecar never yields wrong ids, an ids-less
+/// republish removes the sidecar, and legacy embedded-v3 files from dev
+/// trees keep reading. Ledger: perf-negative-results "v3 IVF sidecar
+/// format", resolve-before-release row, option (a).
+/// KILLS: any writer that publishes the v3 embedded shape as the sole
+/// `semantic.ivf` (removing the sidecar would leave ids readable).
+#[test]
+fn published_ivf_stays_v2_shaped_with_fingerprint_bound_ids_sidecar() {
+    let dim = 4usize;
+    let vectors: Vec<f32> = (0..24).map(|i| i as f32 * 0.1).collect();
+    let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
+    let ids: Vec<i64> = (201..207).collect();
+    let fingerprint = compute_ann_fingerprint(6, 206, dim, Some("static"), 0);
+    let dir = tempfile::tempdir().unwrap();
+    let ivf = dir.path().join("semantic.ivf");
+    let sidecar = ast_sgrep_core::semantic_ivf::semantic_ivf_ids_path(&ivf);
+
+    // Leg 1: ids round-trip through the sidecar path.
+    save_semantic_ivf_with_ids(&ivf, fingerprint, dim, &vectors, &index, Some(&ids)).unwrap();
+    let lazy = load_semantic_ivf_index(&ivf, fingerprint)
+        .unwrap()
+        .expect("sidecar-backed ivf loads");
+    assert_eq!(lazy.ids(), Some(ids.as_slice()));
+
+    // Leg 2 — old-reader compat: WITHOUT the sidecar the main file is a
+    // complete v2 artifact. The load goes through a COPY (fresh memo key —
+    // the in-process lazy cache would otherwise replay leg 1's mapping) and
+    // still succeeds (exact-EOF accepted) with no ids. If the ids were
+    // embedded, this leg fails.
+    let bare_path = dir.path().join("bare.ivf");
+    std::fs::copy(&ivf, &bare_path).unwrap();
+    let bare = load_semantic_ivf_index(&bare_path, fingerprint)
+        .unwrap()
+        .expect("v2-shaped main file loads without the ids sidecar");
+    assert_eq!(bare.ids(), None, "main file must not embed the ids column");
+
+    // Leg 3: a foreign sidecar (right shape, wrong fingerprint) is ignored
+    // rather than trusted with wrong ids. Again on a copy, for a fresh memo
+    // key.
+    let gated_path = dir.path().join("gated.ivf");
+    std::fs::copy(&ivf, &gated_path).unwrap();
+    let foreign_fingerprint = compute_ann_fingerprint(6, 207, dim, Some("static"), 0);
+    let mut foreign = Vec::with_capacity(48 + ids.len() * 8);
+    foreign.extend_from_slice(&0x31534449u32.to_ne_bytes());
+    foreign.extend_from_slice(&foreign_fingerprint);
+    foreign.extend_from_slice(&(ids.len() as u32).to_ne_bytes());
+    foreign.extend_from_slice(&[0u8; 8]);
+    for id in &ids {
+        foreign.extend_from_slice(&id.to_ne_bytes());
+    }
+    std::fs::write(semantic_ivf_ids_path(&gated_path), &foreign).unwrap();
+    let guarded = load_semantic_ivf_index(&gated_path, fingerprint)
+        .unwrap()
+        .expect("main file still loads beside a foreign sidecar");
+    assert_eq!(
+        guarded.ids(),
+        None,
+        "fingerprint mismatch must not serve ids"
+    );
+
+    // Leg 4: an ids-less republish removes a stale sidecar.
+    let _ = std::fs::remove_file(&sidecar);
+    save_semantic_ivf_with_publication(&ivf, fingerprint, dim, &vectors, &index).unwrap();
+    assert!(
+        !sidecar.exists(),
+        "ids-less publish must not leave a stale sidecar"
+    );
+
+    // Leg 5: legacy embedded-v3 files (dev trees) keep reading: hand-build
+    // one by appending the aligned ids column to a v2 file with no sidecar.
+    let legacy = dir.path().join("legacy.ivf");
+    save_semantic_ivf(&legacy, fingerprint, dim, &vectors, &index).unwrap();
+    let mut v3 = std::fs::read(&legacy).unwrap();
+    while v3.len() % std::mem::align_of::<i64>() != 0 {
+        v3.push(0);
+    }
+    for id in &ids {
+        v3.extend_from_slice(&id.to_ne_bytes());
+    }
+    std::fs::write(&legacy, &v3).unwrap();
+    let embedded = load_semantic_ivf_index(&legacy, fingerprint)
+        .unwrap()
+        .expect("embedded-v3 file from a dev tree still loads");
+    assert_eq!(embedded.ids(), Some(ids.as_slice()));
 }
 
 #[test]
@@ -605,10 +695,7 @@ fn ivf_kmeans_matches_reference_farthest_point_seeding() {
     let vectors = normalized_flat_vectors(n, dim, 0xE15EED_5EED);
     let index = SemanticAnnIndex::build_from_flat(&vectors, dim);
 
-    let k = ((n as f64).sqrt() as usize)
-        .clamp(16, 256)
-        .min(n)
-        .max(1);
+    let k = ((n as f64).sqrt() as usize).clamp(16, 256).min(n).max(1);
     let mut flat = vectors.clone();
     for i in 0..n {
         ast_sgrep_embed::normalize_vec_in_place(&mut flat[i * dim..(i + 1) * dim]);

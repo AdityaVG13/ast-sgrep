@@ -2,7 +2,10 @@
 
 use super::*;
 use crate::extract::{byte_to_line, is_in_comment_or_string, node_text};
-use crate::pattern_queries::{class_queries_for, queries_for, FUNCTION_QUERY_TABLE};
+use crate::pattern_queries::{
+    bodyless_function_queries_for, class_queries_for, name_only_function_queries_for, queries_for,
+    return_function_queries_for, FUNCTION_QUERY_TABLE,
+};
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::{Node, QueryCursor, StreamingIterator};
@@ -19,21 +22,150 @@ pub(crate) fn match_structural(
     let arguments = argument_template(pattern);
     let (_, declaration_modifiers) = strip_declaration_modifiers(pattern);
     match kind {
-        NativeKind::Function { name, body } => {
-            run_queries(
-                &language,
+        NativeKind::Function {
+            name,
+            body,
+            return_spec,
+            semicolon,
+        } => {
+            // br-hs1: spelled return sections and `;`-completed forms are
+            // receipted to rust/go/ts/php/py (probed 2026-10-27, ast-grep
+            // 0.45.2). Unreceipted grammars stay silent here — the
+            // answerability gate keeps their census loud (same defense as
+            // the interface member-count lane).
+            let return_receipted = matches!(
                 lang,
-                tree.root_node(),
-                source,
-                queries_for(FUNCTION_QUERY_TABLE, lang),
-                declaration_modifiers,
-                name.as_deref(),
-                None,
-                body.as_ref(),
-                arguments.as_ref(),
-                pattern,
-                &mut out,
-            )?;
+                Language::Rust
+                    | Language::Go
+                    | Language::TypeScript
+                    | Language::Php
+                    | Language::Python
+            );
+            if !return_receipted && (return_spec.is_some() || *semicolon) {
+                return Ok(out);
+            }
+            // `;`-completed forms: rust keeps grammar-specific strictness
+            // for the NO-RETURN form (return must be ABSENT; probed); with
+            // a spelled return the `;` is a no-op terminator (re-probed on
+            // the main fixture 2026-10-27: `-> u32;` answers the `-> u32`
+            // sigs — an earlier fixture-specific empty was a misread); go,
+            // ts and php answer empty outright.
+            if *semicolon && lang != Language::Rust {
+                return Ok(out);
+            }
+            // br-osk: NO-PARENS forms (argument list absent). A pure name
+            // (`fn $A`) answers every fn-shaped node of the grammar —
+            // rust: sigs ∪ items, generics wildcarded; any spelled
+            // section OR body template on a no-parens form answers EMPTY
+            // (concrete, metavar, `;`, `{...}`/`:` bodies), except go's
+            // bare metavar result which the reference reads as no
+            // section AND BINDS it to the parameter-list text (probed
+            // 2026-10-27, 0.45.2, 4 stable rounds/cell).
+            if arguments.is_none() {
+                let go_bare_metavar = matches!(return_spec, Some(ReturnSpec::Metavar(_)))
+                    && lang == Language::Go
+                    && body.is_none();
+                if (return_spec.is_some() || *semicolon || body.is_some()) && !go_bare_metavar {
+                    return Ok(out);
+                }
+                if body.is_none() {
+                    run_queries(
+                        &language,
+                        lang,
+                        tree.root_node(),
+                        source,
+                        name_only_function_queries_for(lang),
+                        declaration_modifiers,
+                        name.as_deref(),
+                        None,
+                        None,
+                        None,
+                        pattern,
+                        /* bodyless_lane: */ false,
+                        &ReturnLane::Wildcard,
+                        &mut out,
+                    )?;
+                    // The lane runs several queries; hits collect in query
+                    // order. Restore document order (byte_start) — the
+                    // reference answers in document order.
+                    out.sort_by_key(|m| m.byte_start);
+                    // go bare metavar: the reference binds the metavar to
+                    // the parameter-list text, parens included (`(a int)`,
+                    // `()` for the empty list).
+                    if let Some(ReturnSpec::Metavar(mv)) = return_spec.as_ref() {
+                        let root = tree.root_node();
+                        for hit in out.iter_mut() {
+                            if hit.captures.contains_key(mv) {
+                                continue;
+                            }
+                            let params = root
+                                .descendant_for_byte_range(hit.byte_start, hit.byte_end)
+                                .and_then(|n| n.child_by_field_name("parameters"))
+                                .and_then(|p| node_text(&p, source));
+                            if let Some(text) = params {
+                                hit.captures.insert(mv.clone(), text.to_string());
+                            }
+                        }
+                    }
+                    return Ok(out);
+                }
+            }
+            let return_lane = return_lane_of(return_spec.as_ref(), *semicolon);
+            // br-f4w reference-parity lane: a BODY-LESS pattern (argument
+            // list present, no `{...}` section) diverts to the reference's
+            // per-grammar recovery kinds for the receipted grammars, with
+            // the return-type gate OFF — the reference wildcards a
+            // pattern-absent return on those candidate kinds (ast-grep
+            // 0.45.2 + 0.51.0 probes, 2026-10-27). Patterns without an
+            // argument list, body-having patterns, and every other
+            // language keep the legacy path unchanged.
+            let bodyless = bodyless_function_queries_for(lang, return_spec.is_some())
+                .filter(|_| body.is_none() && arguments.is_some());
+            if let Some(queries) = bodyless {
+                run_queries(
+                    &language,
+                    lang,
+                    tree.root_node(),
+                    source,
+                    queries,
+                    declaration_modifiers,
+                    name.as_deref(),
+                    None,
+                    None,
+                    arguments.as_ref(),
+                    pattern,
+                    /* bodyless_lane: */ true,
+                    &return_lane,
+                    &mut out,
+                )?;
+            } else {
+                // ts/php BODY templates with a spelled return answer free
+                // functions only — the legacy table's method rows never
+                // answer (probed on class-method fixtures, br-hs1).
+                let queries = if return_spec.is_some()
+                    && matches!(lang, Language::TypeScript | Language::Php)
+                {
+                    return_function_queries_for(lang)
+                } else {
+                    queries_for(FUNCTION_QUERY_TABLE, lang)
+                };
+                run_queries(
+                    &language,
+                    lang,
+                    tree.root_node(),
+                    source,
+                    queries,
+                    declaration_modifiers,
+                    name.as_deref(),
+                    None,
+                    body.as_ref(),
+                    arguments.as_ref(),
+                    pattern,
+                    /* bodyless_lane: */ false,
+                    &return_lane,
+                    &mut out,
+                )?;
+            }
         }
         NativeKind::Class {
             keyword,
@@ -76,6 +208,8 @@ pub(crate) fn match_structural(
                 body_filter,
                 None,
                 pattern,
+                /* bodyless_lane: */ false,
+                &ReturnLane::unspecified(),
                 &mut out,
             )?;
         }
@@ -359,6 +493,78 @@ pub(crate) fn walk_universal_inner(
     }
 }
 
+/// How a function template's return section constrains candidates (br-hs1,
+/// probed 2026-10-27 against ast-grep 0.45.2, 3 stable rounds every cell).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReturnLane {
+    /// No spelled section. Body lane: the return must be ABSENT (the
+    /// reference's return agreement). Body-less lane: wildcarded (br-f4w)
+    /// — except the rust `;` form, where the semicolon makes the absent
+    /// return REQUIRED (the strict signature reading).
+    Unspecified { semicolon: bool },
+    /// Metavariable return: presence required and the text binds — except
+    /// go body-less, where absent results wildcard too.
+    Metavar(String),
+    /// Concrete return text: exact equality — with or without the `;`
+    /// terminator (re-probed on the main fixture 2026-10-27: `-> u32;`
+    /// answers the `-> u32` sigs; an earlier fixture-specific empty was a
+    /// misread, not a quirk).
+    Concrete { want: String, semicolon: bool },
+    /// The br-osk no-parens PURE-NAME lane: every fn-shaped node answers,
+    /// returns and generics wildcarded (probed: rust `fn $A` answers
+    /// sigs ∪ items incl. `fn gen<T>`; go answers `[T any]` decls).
+    Wildcard,
+}
+
+impl ReturnLane {
+    pub(crate) fn unspecified() -> Self {
+        ReturnLane::Unspecified { semicolon: false }
+    }
+}
+
+fn return_lane_of(spec: Option<&ReturnSpec>, semicolon: bool) -> ReturnLane {
+    match spec {
+        None => ReturnLane::Unspecified { semicolon },
+        Some(ReturnSpec::Metavar(name)) => ReturnLane::Metavar(name.clone()),
+        Some(ReturnSpec::Concrete(text)) => ReturnLane::Concrete {
+            want: text.clone(),
+            semicolon,
+        },
+    }
+}
+
+/// Per-candidate return agreement. `bodyless_lane` selects the br-f4w
+/// wildcard for section-less patterns and the go metavar wildcard.
+fn return_section_matches(
+    lang: Language,
+    node: &Node,
+    source: &str,
+    lane: &ReturnLane,
+    bodyless_lane: bool,
+) -> bool {
+    let declared = function_return_type_text(node, source);
+    match lane {
+        ReturnLane::Unspecified { semicolon } => {
+            if *semicolon {
+                declared.is_none()
+            } else if bodyless_lane {
+                true
+            } else {
+                declared.is_none()
+            }
+        }
+        ReturnLane::Metavar(_) => {
+            if bodyless_lane && lang == Language::Go {
+                true
+            } else {
+                declared.is_some()
+            }
+        }
+        ReturnLane::Concrete { want, .. } => declared == Some(want.as_str()),
+        ReturnLane::Wildcard => true,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_queries(
     language: &tree_sitter::Language,
@@ -372,6 +578,13 @@ pub(crate) fn run_queries(
     body_filter: Option<&BodyTemplate>,
     argument_filter: Option<&ArgumentTemplate>,
     pattern: &str,
+    // True only for the br-f4w body-less reference-parity lane: the return
+    // type is wildcarded (the reference ignores a pattern-absent return on
+    // recovery candidate kinds — rust signature items, go declarations) and
+    // generic candidates (type_parameters present, rust/go) are refused
+    // because the native subset cannot spell them.
+    bodyless_lane: bool,
+    return_lane: &ReturnLane,
     out: &mut Vec<PatternMatch>,
 ) -> anyhow::Result<()> {
     for qsrc in queries {
@@ -452,12 +665,27 @@ pub(crate) fn run_queries(
                     continue;
                 }
             }
-            // A native function template never carries a return-type
-            // section (those shapes are beyond the native subset and fail
-            // closed), so per reference strictness a matched declaration
-            // must not declare one either. Class templates are
-            // shape-agnostic.
-            if class_filter.is_none() && !function_return_type_absent(&node) {
+            // Return agreement between the template's return section and
+            // the candidate (br-hs1): a section-less pattern requires an
+            // absent return on the body lane (reference strictness), a
+            // spelled metavariable requires presence (and binds), a
+            // spelled concrete text requires equality. The body-less lane
+            // keeps the br-f4w wildcard for section-less patterns and the
+            // go metavar wildcard. Class templates are shape-agnostic (no
+            // return fields on class nodes — vacuously matches).
+            if class_filter.is_none()
+                && !return_section_matches(lang, &node, source, return_lane, bodyless_lane)
+            {
+                continue;
+            }
+            // br-f4w: the reference refuses generic candidates for
+            // body-less patterns — the native subset cannot spell type
+            // parameters, so a spelled-out generic never aligns (probed:
+            // warp body.rs decode sig, go `[T any]`, 0.45.2 + 0.51.0).
+            if bodyless_lane
+                && matches!(lang, Language::Rust | Language::Go)
+                && node.child_by_field_name("type_parameters").is_some()
+            {
                 continue;
             }
             if !arguments_match(&node, argument_filter, &["parameters"]) {

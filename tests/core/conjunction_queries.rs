@@ -103,8 +103,11 @@ fn and_not_subtracts_the_right_channel() {
 fn conjunction_with_pattern_channel_joins_graph_and_structure() {
     let temp = sample_root();
     let searcher = indexed_searcher(temp.path());
+    // br-f4w: body-having form — the fixtures carry function items, no
+    // trait signatures, and the reference answers the body-less spelling
+    // with signature items only (ast-grep 0.45.2 + 0.51.0 probes).
     let response = searcher
-        .search("callers:helper AND pattern:fn $NAME($$$)")
+        .search("callers:helper AND pattern:fn $NAME($$$) { $$$B }")
         .unwrap();
     assert!(
         !response.hits.is_empty(),
@@ -132,7 +135,7 @@ fn pattern_callers_join_excludes_non_calling_functions_in_the_same_file() {
     let searcher = indexed_searcher(temp.path());
 
     let response = searcher
-        .search("pattern:fn $NAME($$$) AND callers:helper")
+        .search("pattern:fn $NAME($$$) { $$$B } AND callers:helper")
         .unwrap();
     assert_eq!(
         response.hits.len(),

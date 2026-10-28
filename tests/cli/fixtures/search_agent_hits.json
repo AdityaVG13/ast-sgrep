@@ -24,8 +24,8 @@
         "end": 11,
         "start": 8
       },
-      "margin": 0.02488043693812797,
-      "score": 0.11900846113167636,
+      "margin": 0.024511773343657936,
+      "score": 0.11863979753720633,
       "semantic": false,
       "signal": "structural",
       "symbol": "process_request",
@@ -84,5 +84,6 @@
     "asgrep --json --format agent 'process_request'"
   ],
   "tool": "asgrep",
+  "truncated": true,
   "version": "<version>"
 }

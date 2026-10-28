@@ -56,6 +56,7 @@ pub fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
         limit: None,
         parallel: None,
         parallel_mode: None,
+        ambient_freshness: None,
         calls,
     }
 }
@@ -73,6 +74,7 @@ pub fn batch_request_with_mode(calls: Vec<BatchCall>, mode: ParallelMode) -> Bat
         limit: None,
         parallel: None,
         parallel_mode: Some(mode),
+        ambient_freshness: None,
         calls,
     }
 }

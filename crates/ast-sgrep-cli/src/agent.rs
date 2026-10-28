@@ -575,8 +575,14 @@ pub(crate) fn suppress_progress() -> bool {
 /// plus any command when the argv carries explicit help intent (the recovered
 /// run cannot mutate anything). Mutating commands (index, reindex, codemod…)
 /// are excluded so a near-miss token never performs writes.
-const RECOVERABLE_INFO_COMMANDS: &[&str] =
-    &["status", "capabilities", "version", "robot-docs", "doctor", "read"];
+const RECOVERABLE_INFO_COMMANDS: &[&str] = &[
+    "status",
+    "capabilities",
+    "version",
+    "robot-docs",
+    "doctor",
+    "read",
+];
 
 fn positional_recovery_is_safe(canonical: &str, help_intent: bool) -> bool {
     RECOVERABLE_INFO_COMMANDS.contains(&canonical) || help_intent
@@ -604,9 +610,9 @@ fn recover_chain_to_call_path(
         if let Some(rest) = text.strip_prefix("--") {
             if !text.contains('=') {
                 let name = rest.split('=').next().unwrap_or(rest);
-                expect_value = parser.get_arguments().any(|spec| {
-                    spec.get_long() == Some(name) && spec.get_action().takes_values()
-                });
+                expect_value = parser
+                    .get_arguments()
+                    .any(|spec| spec.get_long() == Some(name) && spec.get_action().takes_values());
             }
             continue;
         }
@@ -978,10 +984,12 @@ pub(crate) fn rewrite_typos(
                                     value_pending = true; // the pattern passes through as QUERY
                                 }
                                 'i' => warnings.push(
-                                    "note: ignored `-i`; search is case-insensitive by default".to_string(),
+                                    "note: ignored `-i`; search is case-insensitive by default"
+                                        .to_string(),
                                 ),
                                 'n' => warnings.push(
-                                    "note: ignored `-n`; every hit already carries file:line".to_string(),
+                                    "note: ignored `-n`; every hit already carries file:line"
+                                        .to_string(),
                                 ),
                                 _ => unreachable!("cluster filtered to known letters"),
                             }
@@ -1001,7 +1009,8 @@ pub(crate) fn rewrite_typos(
                 if canonical == text
                     && !matches!(
                         text,
-                        "search" | "keyword"
+                        "search"
+                            | "keyword"
                             | "semantic"
                             | "defs"
                             | "callers"
@@ -1070,7 +1079,7 @@ fn habit_long_flag(folded: &str) -> Option<(&'static str, bool)> {
         "include" | "glob" => Some(("file-filter", true)),
         "max-results" | "max-count" => Some(("limit", true)),
         "type" => Some(("lang", true)),
-        "word-regexp" => None,  // mode gap: taught by augment, never aliased
+        "word-regexp" => None,   // mode gap: taught by augment, never aliased
         "fixed-strings" => None, // mode gap
         _ => None,
     }
@@ -1079,12 +1088,8 @@ fn habit_long_flag(folded: &str) -> Option<(&'static str, bool)> {
 /// grep/rg long flags whose semantics are already the asgrep default.
 fn habit_noop_long_flag(folded: &str) -> Option<&'static str> {
     match folded {
-        "ignore-case" | "smart-case" => {
-            Some("search is case-insensitive by default")
-        }
-        "line-number" | "line-numbers" | "line-num" => {
-            Some("every hit already carries file:line")
-        }
+        "ignore-case" | "smart-case" => Some("search is case-insensitive by default"),
+        "line-number" | "line-numbers" | "line-num" => Some("every hit already carries file:line"),
         _ => None,
     }
 }
@@ -1103,7 +1108,10 @@ const MODE_GAP_NAMES: &[(char, &str)] = &[('v', "invert"), ('m', "per-file match
 /// Exact cross-surface vocabulary targets that are safe to recover into
 /// without the info-command gate: unambiguous read-only search/status verbs.
 fn vocab_recovery_is_read_only(canonical: &str) -> bool {
-    matches!(canonical, "search" | "keyword" | "semantic" | "status" | "read")
+    matches!(
+        canonical,
+        "search" | "keyword" | "semantic" | "status" | "read"
+    )
 }
 
 pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static str> {

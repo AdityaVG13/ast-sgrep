@@ -26,7 +26,10 @@ use std::path::Path;
 fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
     let source =
         "fn greet() {\n    println!(\"hi\");\n}\nfn process_request() {\n    greet();\n}\n";
-    let hits = match_pattern(Language::Rust, source, "fn $NAME($$$)").expect("match ok");
+    // br-f4w reference parity: the BODY-LESS `fn $NAME($$$)` answers
+    // trait sigs only (empty on function items) — the body-having form
+    // keeps this pipeline test wired to real hits (reconciled 2026-10-27).
+    let hits = match_pattern(Language::Rust, source, "fn $NAME($$$) { $$$ }").expect("match ok");
     // Hand: two fn decls in the fixture, one hit each.
     assert_eq!(hits.len(), 2);
     for hit in &hits {
@@ -72,7 +75,8 @@ fn e2e_decl_pattern_to_ranked_excerpts_deterministically() {
         let extracted = registry
             .parse(Language::Rust, rep_source)
             .expect("parse ok");
-        let hits = match_pattern(Language::Rust, rep_source, "fn $NAME($$$)").expect("match ok");
+        let hits =
+            match_pattern(Language::Rust, rep_source, "fn $NAME($$$) { $$$ }").expect("match ok");
         let scored: Vec<(usize, f32)> = hits
             .iter()
             .enumerate()
@@ -117,7 +121,10 @@ fn e2e_extraction_and_matching_agree_on_spans_names_lines() {
         Some("alpha".to_string())
     );
     assert!(source.contains(required_pattern_literal("fn alpha($$$)").unwrap().as_str()));
-    let hits = match_pattern(Language::Rust, source, "fn alpha($$$)").expect("match ok");
+    // br-f4w parity: body-less decl patterns answer sigs only — the
+    // body-having spelling keeps the extract↔match span agreement wired
+    // to this function-item fixture (reconciled 2026-10-27).
+    let hits = match_pattern(Language::Rust, source, "fn alpha($$$) { $$$ }").expect("match ok");
     assert!(!hits.is_empty());
     assert!(
         hits.iter().any(|h| {
@@ -129,7 +136,7 @@ fn e2e_extraction_and_matching_agree_on_spans_names_lines() {
     );
     // Name view: $NAME captures equal hand {alpha,beta} and registry names.
     let source = "fn alpha() {}\nfn beta() {}\n";
-    let hits = match_pattern(Language::Rust, source, "fn $NAME($$$)").expect("match ok");
+    let hits = match_pattern(Language::Rust, source, "fn $NAME($$$) { $$$ }").expect("match ok");
     assert_eq!(hits.len(), 2);
     let captured: BTreeSet<&str> = hits
         .iter()

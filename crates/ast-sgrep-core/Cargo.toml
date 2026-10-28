@@ -107,6 +107,9 @@ path = "../../tests/core/identifier_ranking.rs"
 name = "index_schema_rekey_freshness"
 path = "../../tests/core/index_schema_rekey_freshness.rs"
 [[test]]
+name = "lexical_channel_relevance"
+path = "../../tests/core/lexical_channel_relevance.rs"
+[[test]]
 name = "extraction_depth_budget"
 path = "../../tests/core/extraction_depth_budget.rs"
 [[test]]

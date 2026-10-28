@@ -1021,6 +1021,27 @@ impl IndexStore {
         }
         Ok(lines)
     }
+
+    /// Last real line number for an indexed path — trailing empty lines
+    /// trimmed exactly like `source_lines_in_range`'s `source_end`, floored
+    /// at 1 so a line-less file still has a bound. `None` = path not
+    /// indexed (caller falls back to a disk count). Backs the shared
+    /// reader's past-EOF rejection (MCP `read_node` parity).
+    pub fn source_line_total(&self, path: &str) -> Result<Option<u32>> {
+        let mut stmt = self.conn.prepare_cached(
+            "WITH tail AS (
+                 SELECT l.line_no - (l.content = '') AS source_end
+                 FROM lines l JOIN files f ON f.id = l.file_id
+                 WHERE f.path = ?1 ORDER BY l.line_no DESC LIMIT 1
+             )
+             SELECT MAX(CASE WHEN source_end < 1 THEN 1 ELSE source_end END) FROM tail",
+        )?;
+        let mut rows = stmt.query(params![path])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row.get::<_, Option<i64>>(0)?.unwrap_or(1).max(1) as u32),
+            None => None,
+        })
+    }
     pub fn line_content(&self, path: &str, line: u32) -> Result<Option<String>> {
         optional_row(
             &self.conn, "SELECT l.content FROM lines l JOIN files f ON f.id=l.file_id WHERE f.path=?1 AND l.line_no=?2",

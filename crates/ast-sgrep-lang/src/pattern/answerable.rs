@@ -70,6 +70,20 @@ pub(crate) fn native_kind_language_answerable(
             body: Some(BodyTemplate::Exactly(_)),
             ..
         } if *keyword == "type-alias" => matches!(lang, Language::TypeScript),
+        // br-hs1: spelled return sections and `;`-completed fn templates
+        // are answerable ONLY in the receipted grammars (rust, go, ts,
+        // php, py — probed 2026-10-27, ast-grep 0.45.2, 3 stable rounds);
+        // every other grammar keeps the loud fail-closed census class.
+        NativeKind::Function {
+            return_spec: Some(_),
+            ..
+        }
+        | NativeKind::Function {
+            semicolon: true, ..
+        } => matches!(
+            lang,
+            Language::Rust | Language::Go | Language::TypeScript | Language::Php | Language::Python
+        ),
         NativeKind::Function { .. } | NativeKind::Class { .. } | NativeKind::Call { .. } => {
             // The `async def` `$$`-slot face is served by the dedicated
             // async-def lane — the general Function route's parse gate

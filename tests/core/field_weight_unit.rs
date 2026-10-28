@@ -212,12 +212,7 @@ fn docs_python_union_gates_list_to_python_rows() {
         })
     };
     let notes = vec![note(0.95), note(0.60), note(0.20)];
-    let keys = field_rank_union_keys(
-        &ranked,
-        &files,
-        &notes,
-        FieldRankUnionMode::DocsPython,
-    );
+    let keys = field_rank_union_keys(&ranked, &files, &notes, FieldRankUnionMode::DocsPython);
     // Rust row excluded from the docs list: keeps its concat key.
     assert_eq!(keys[0], (0, 0.90), "non-py row keeps its concat key");
     // Python rows re-ranked among themselves: b.py lifted to rank 0.
@@ -225,12 +220,7 @@ fn docs_python_union_gates_list_to_python_rows() {
     assert_eq!(keys[2], (1, 0.20), "c.py second in the python-only list");
     // Contrast: ungated `docs` hands the rust row the docs-list lead —
     // exactly the round-D regression shape.
-    let ungated = field_rank_union_keys(
-        &ranked,
-        &files,
-        &notes,
-        FieldRankUnionMode::Docs,
-    );
+    let ungated = field_rank_union_keys(&ranked, &files, &notes, FieldRankUnionMode::Docs);
     assert_eq!(
         ungated[0],
         (0, 0.95),

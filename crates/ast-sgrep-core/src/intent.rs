@@ -266,10 +266,39 @@ fn channel_ceiling(parsed: &ParsedQuery, hit: &SearchHit) -> f64 {
     }
 }
 pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
+    route_hits_opts(parsed, hits, false);
+}
+pub fn route_hits_opts(
+    parsed: &ParsedQuery,
+    hits: &mut [SearchHit],
+    dynamic_lexical_ceiling: bool,
+) {
     // Normalize only. Intent channel weights are owned by
     // `fusion::apply_weighted_rrf` so hybrid search does not multiply them twice.
     // Count all non-empty terms, including single-char (a639).
     let substantive_terms = parsed.terms.iter().filter(|term| !term.is_empty()).count();
+    // Dynamic lexical ceiling, embed-off lane only. bm25 line scores
+    // routinely reach 3-7, above the static Asgrep ceiling
+    // (rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE ~= 3.3): every saturated hit
+    // clamps to 1.0 and fusion's path-ascending tie-break turns the whole
+    // lexical channel into an alphabetical lottery — a file matching only
+    // the one common query term owned lexical rank 0 over files matching
+    // three and four query terms (flask corpus, 2026-10-25). Dividing by
+    // the observed Asgrep maximum when it exceeds the static ceiling maps
+    // the best lexical hit to exactly 1.0 and preserves within-channel
+    // order without boosting a weak channel (the e2hc.14(a) invariant).
+    // Embed-on lanes keep the static ceiling: their reordering is pinned by
+    // the frozen suite (full_structural_page, RepoQA MRR .521 -> .533) and
+    // must move only with new frozen-suite evidence.
+    let lexical_ceiling = if dynamic_lexical_ceiling {
+        hits.iter()
+            .filter(|hit| hit.kind == HitKind::Asgrep && hit.score.is_finite() && hit.score > 0.0)
+            .map(|hit| hit.score)
+            .fold(0.0f64, f64::max)
+            .max(rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE)
+    } else {
+        rrf_score(0, RRF_K) * LEXICAL_RRF_SCALE
+    };
     for hit in hits {
         let text_channel = matches!(
             hit.kind,
@@ -279,6 +308,11 @@ pub fn route_hits(parsed: &ParsedQuery, hits: &mut [SearchHit]) {
             hit.score = 0.0;
             continue;
         }
-        hit.score = (hit.score / channel_ceiling(parsed, hit)).clamp(0.0, 1.0);
+        let ceiling = if hit.kind == HitKind::Asgrep {
+            lexical_ceiling
+        } else {
+            channel_ceiling(parsed, hit)
+        };
+        hit.score = (hit.score / ceiling).clamp(0.0, 1.0);
     }
 }

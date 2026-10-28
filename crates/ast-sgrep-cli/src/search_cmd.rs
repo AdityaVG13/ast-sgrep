@@ -329,7 +329,7 @@ fn print_search_response(
             response,
             cli.active_tuning().files_with_matches,
             cli.active_tuning().count,
-            Some(miss_context(command, cli)),
+            Some(miss_context(command, cli, &response.query)),
         );
     }
     let tuning = cli.active_tuning();
@@ -388,7 +388,7 @@ fn render_search_json(
 
     let tuning = cli.active_tuning();
 
-    let miss = miss_context(command, cli);
+    let miss = miss_context(command, cli, &response.query);
     // Compact miss envelope is cheaper than an empty hit list for agents.
     if format == OutputFormat::Compact && response.hits.is_empty() {
         return to_compact_miss_json(&response.query, &miss);
@@ -474,8 +474,7 @@ fn render_search_json(
         let reason = miss.reason();
         let first_filter = miss.scope.first().map(|(name, _)| name.as_str());
         envelope["why"] = serde_json::Value::String(reason.as_str().to_owned());
-        envelope["next"] =
-            serde_json::Value::String(reason.next_step(first_filter).to_owned());
+        envelope["next"] = serde_json::Value::String(reason.next_step(first_filter).to_owned());
     }
     envelope
 }
@@ -495,7 +494,7 @@ fn blank_compact_snippets(envelope: &mut serde_json::Value) {
 }
 
 /// Describe a zero-hit CLI search: which channel ran, and what scoped it (6a3i).
-fn miss_context(command: &str, cli: &Cli) -> ast_sgrep_plugins::MissContext {
+fn miss_context(command: &str, cli: &Cli, query: &str) -> ast_sgrep_plugins::MissContext {
     let mut scope = Vec::new();
     if let Some(lang) = &cli.lang {
         scope.push(("lang".to_owned(), lang.clone()));
@@ -511,6 +510,9 @@ fn miss_context(command: &str, cli: &Cli) -> ast_sgrep_plugins::MissContext {
         unavailable: Vec::new(),
         scope,
         indexed_files: None,
+        // Bodyless-args pattern misses teach their contract instead of a
+        // bare 0 (br-yjw).
+        pattern_miss: ast_sgrep_plugins::is_bodyless_fn_args_pattern(query),
     }
 }
 

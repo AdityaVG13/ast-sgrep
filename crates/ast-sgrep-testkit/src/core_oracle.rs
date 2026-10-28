@@ -239,7 +239,7 @@ pub fn mixed_hits() -> Vec<SearchHit> {
 /// application (weighted legs use [`route_fuse_pipeline`]).
 pub fn fused_keys(hits: &[SearchHit]) -> Vec<(HitKind, String, u32, u32, u64, Vec<HitKind>)> {
     let mut fused = hits.to_vec();
-    apply_weighted_rrf(&mut fused, &ChannelWeights::default());
+    apply_weighted_rrf(&mut fused, &ChannelWeights::default(), "");
     fused.iter().map(crate::fused_key).collect()
 }
 
@@ -253,7 +253,7 @@ pub fn route_fuse_pipeline(
 ) -> Vec<SearchHit> {
     let mut hits = hits;
     route_hits(parsed, &mut hits);
-    apply_weighted_rrf(&mut hits, weights);
+    apply_weighted_rrf(&mut hits, weights, &parsed.raw);
     hits
 }
 

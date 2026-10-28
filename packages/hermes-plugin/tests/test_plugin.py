@@ -473,6 +473,53 @@ class Round9ParityTest(ToolHandlerTest):
         self.assertTrue(colon["ok"], colon)
         self.assertIn("alpha_marker", json.dumps(colon["value"]))
 
+    def test_read_dedupes_repeated_refs(self):
+        # br-puf failure-first (live 2026-10-28): models repeat refs (search
+        # echo + copy) and every duplicate forwarded to serve returned an
+        # identical window — paying window budget twice for zero
+        # information. The handler dedupes order-preserving before
+        # forwarding; the window count equals the unique ref count.
+        warm = self.call("asgrep_search", {"query": "alpha_marker"})
+        self.assertTrue(warm["ok"], warm)
+        res = self.call(
+            "asgrep_read",
+            {"refs": ["src/a.rs#L1-L1", "src/a.rs:1", "src/a.rs#L1-L1"]},
+        )
+        self.assertTrue(res["ok"], res)
+        windows = res["value"]["windows"]
+        self.assertEqual(
+            len(windows), 2, "duplicate refs must collapse: " + json.dumps(windows)
+        )
+
+    def test_search_limit_clamped_to_schema_max(self):
+        # br-m2b failure-first (live 2026-10-27): the bridge does not enforce
+        # schema maximums — a limit=500 call returned a 224KB envelope. The
+        # handler owns the contract it teaches: clamp to 1..=200 before
+        # forwarding. The envelope's limit echo (trustworthy since br-ksx)
+        # must report the CLAMPED value, never the oversized ask.
+        big = self.call("asgrep_search", {"query": "alpha_marker", "limit": 500})
+        self.assertTrue(big["ok"], big)
+        self.assertEqual(big["value"].get("limit"), 200, big["value"].get("limit"))
+        floor = self.call("asgrep_search", {"query": "alpha_marker", "limit": 0})
+        self.assertTrue(floor["ok"], floor)
+        self.assertEqual(floor["value"].get("limit"), 1, floor["value"].get("limit"))
+
+
+class SearchSchemaTeachingTest(unittest.TestCase):
+    """br-ao2: the schema must teach pattern forms that ANSWER."""
+
+    def test_query_description_uses_the_answering_pattern_form(self):
+        ctx = StubContext(cwd=Path.cwd())
+        load_plugin().register(ctx)
+        raw = ctx.tools["asgrep_search"]["schema"]
+        schema = raw if isinstance(raw, dict) else json.loads(raw)
+        desc = schema["parameters"]["properties"]["query"]["description"]
+        # The metavar form answers on every corpus (live: 16 hits on the
+        # polyglot repo); the concrete `fn name($$$A)` example fail-closed
+        # on polyglot repos (rust bodyless concrete answers trait sigs only).
+        self.assertIn("'fn $NAME($$$)'", desc)
+        self.assertNotIn("fn name($$$A)", desc)
+
 
 class BinaryResolutionTest(unittest.TestCase):
     """Hosts launch with minimal launchd PATHs that omit ~/.local/bin; a

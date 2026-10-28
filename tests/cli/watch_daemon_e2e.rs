@@ -228,7 +228,10 @@ fn watch_failures_preserve_cli_exit_classes_and_machine_envelope() {
     let bin = asgrep_bin();
     ast_sgrep_testkit::ensure_watch_helper(&bin);
     let helper = ast_sgrep_testkit::watch_helper_path(&bin);
-    assert!(helper.is_file(), "ensure_watch_helper must install the helper");
+    assert!(
+        helper.is_file(),
+        "ensure_watch_helper must install the helper"
+    );
     let helper_env = [("ASGREP_WATCH_BIN", helper.to_str().unwrap())];
     let mut failures = Vec::new();
     // The invalid index also bounds the pre-fix ambiguous-root path: it must

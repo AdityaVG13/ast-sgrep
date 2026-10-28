@@ -20,6 +20,56 @@ fn mode_sql_limit(options: &SearchOptions) -> usize {
     MODE_SQL_LIMIT.max(options.retained_limit())
 }
 const TYPE_SYMBOL_WEIGHT: f64 = 0.65;
+
+/// Def rows in a file whose stem shares a distinctive query term
+/// (`default_types.rs` <- "types", `gitignore.rs` <- "gitignore") carry
+/// direct textual evidence for the query. TYPE_SYMBOL_WEIGHT (0.65)
+/// otherwise truncates statics/consts off the retained window before
+/// fusion — the critic never sees them. 1.7 > 1/0.65 so an equal-term
+/// stem-matching static outranks the function crowd.
+const FILE_STEM_DEF_AFFINITY: f64 = 1.7;
+
+/// Distinctive query terms eligible for file-stem affinity: 4+ chars,
+/// not generic concept tokens, not English function words. Shared by the
+/// def-row score boost and the stem-affine admission pass below.
+fn def_stem_terms(parsed: &ParsedQuery) -> Vec<&str> {
+    parsed
+        .terms
+        .iter()
+        .filter(|term| {
+            term.chars().count() >= 4
+                && !crate::search::critic::is_generic_concept_token(term)
+                && !crate::search::cascade_stopword(term)
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// Files whose stem contains a distinctive query term
+/// (`default_types.rs` <- "types"): direct textual evidence for the query.
+fn stem_affine_files(parsed: &ParsedQuery, allowed_files: &HashSet<String>) -> HashSet<String> {
+    let stem_terms = def_stem_terms(parsed);
+    if stem_terms.is_empty() {
+        return HashSet::new();
+    }
+    allowed_files
+        .iter()
+        .filter(|path| {
+            let stem = file_stem_lower(path);
+            stem_terms.iter().any(|term| stem.contains(term))
+        })
+        .cloned()
+        .collect()
+}
+
+fn file_stem_lower(path: &str) -> String {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let stem = match name.rsplit_once('.') {
+        Some((stem, _)) if !stem.is_empty() => stem,
+        _ => name,
+    };
+    stem.to_ascii_lowercase()
+}
 const SYMBOL_KIND_ORDER: &str =
     " ORDER BY CASE WHEN s.kind IN ('function','method') THEN 0 ELSE 1 END, s.id";
 /// Path-deterministic twin of [`cmp_symbol_rows`] for the hybrid lane: the
@@ -108,11 +158,23 @@ impl WarmedSymbolTable {
         matched.into_iter().map(|i| rows[i].clone()).collect()
     }
 
+    fn term_cooccurrences(&self, norm_terms: &[String]) -> Vec<u64> {
+        cooccurrences_over_names(norm_terms, self.names_lower.iter())
+    }
+
     /// Per-term IDF weights over the warmed table (the whole symbol table):
     /// one pass counting, per normalized term, how many names contain it —
     /// the same predicate as matching. Mirrors [`name_table_idf_weights`]
     /// so warm and cold lanes score defs identically.
     fn idf_weights(&self, normalized_terms: &[String]) -> Vec<f64> {
+        self.idf_weights_with_dfs(normalized_terms).0
+    }
+
+    /// [`Self::idf_weights`] plus the raw per-term document counts, so
+    /// callers can distinguish "term is rare" from "term names no symbol
+    /// at all" (verb-alias discovery gates on df == 0, and a df of zero
+    /// maximizes IDF, so weights alone cannot make that distinction).
+    fn idf_weights_with_dfs(&self, normalized_terms: &[String]) -> (Vec<f64>, Vec<u64>) {
         let mut dfs = vec![0u64; normalized_terms.len()];
         for name in self.names_lower.iter() {
             for (i, term) in normalized_terms.iter().enumerate() {
@@ -124,7 +186,7 @@ impl WarmedSymbolTable {
         let total = self.names_lower.len() as u64;
         let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
         max_normalize_idf(&mut weights);
-        weights
+        (weights, dfs)
     }
 }
 
@@ -282,8 +344,19 @@ fn name_table_idf_weights(
     population: crate::names_sidecar::NamePopulation,
     normalized_terms: &[String],
 ) -> Result<Vec<f64>> {
+    Ok(name_table_idf_weights_with_dfs(store, population, normalized_terms)?.0)
+}
+
+/// [`name_table_idf_weights`] plus the raw per-term document counts
+/// (verb-alias discovery gates on df == 0; see
+/// [`WarmedSymbolTable::idf_weights_with_dfs`]).
+fn name_table_idf_weights_with_dfs(
+    store: &IndexStore,
+    population: crate::names_sidecar::NamePopulation,
+    normalized_terms: &[String],
+) -> Result<(Vec<f64>, Vec<u64>)> {
     if normalized_terms.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     // Sidecar lane: folded vocabularies mmap'd once per store, exact
     // df/total inputs (generation-gated; any doubt falls through to SQL).
@@ -292,7 +365,7 @@ fn name_table_idf_weights(
     {
         let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
         max_normalize_idf(&mut weights);
-        return Ok(weights);
+        return Ok((weights, dfs));
     }
     let (source, column) = population.sql_source_and_column();
     let sql = format!("SELECT {column} FROM {source}");
@@ -317,7 +390,7 @@ fn name_table_idf_weights(
     }
     let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
     max_normalize_idf(&mut weights);
-    Ok(weights)
+    Ok((weights, dfs))
 }
 
 enum CallerMatchMode {
@@ -690,17 +763,34 @@ fn symbol_span_rows_to_hits_opts(
     attach_excerpts: bool,
 ) -> Result<Vec<SearchHit>> {
     let spelling = parsed.identifier_spelling();
+    // Ledger lever (conformance: file-affinity for def rows): distinctive
+    // 3+/4+ char non-generic query terms matched against the file STEM.
+    let stem_terms: Vec<&str> = if kind == HitKind::Def {
+        def_stem_terms(parsed)
+    } else {
+        Vec::new()
+    };
     let mut hits = Vec::with_capacity(rows.len());
     for (path, language, name, sym_kind, line_start, line_end) in rows {
         if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
             continue;
         }
+        let stem_boost = if !stem_terms.is_empty() {
+            let stem = file_stem_lower(&path);
+            if stem_terms.iter().any(|term| stem.contains(term)) {
+                FILE_STEM_DEF_AFFINITY
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
         hits.push(SearchHit::span(SpanHitInput {
             kind,
             file: path,
             line_start,
             line_end,
-            score: score_for(&name) * symbol_match_weight(spelling, &name, &sym_kind),
+            score: score_for(&name) * symbol_match_weight(spelling, &name, &sym_kind) * stem_boost,
             excerpt: String::new(),
             symbol: Some(name),
             language,
@@ -774,28 +864,13 @@ pub(crate) fn symbol_pass_for_files_warmed(
     // File-restricted hybrid does not need the 500-row exhaustive window;
     // finish keeps `limit` hits. 32-64 rows is enough to score defs/callers
     // inside the 100-file cascade without a 1-5 ms SQLite LIKE walk.
+    // Alias-expanded discovery widens the candidate mass enormously (every
+    // `*match*` symbol in the tree): the 32-64-row path-sorted window fills
+    // with alphabetically early noise and the alias target (`Types::matched`
+    // in `crates/ignore/`) falls off the tail before scoring sees it. Alias
+    // queries therefore floor the window at 256 rows — bounded, scored,
+    // fusion decides, not the path alphabet.
     let sql_limit = options.retained_limit().clamp(32, SYMBOL_SQL_LIMIT);
-    let rows = if let Some(table) = warmed {
-        let _span =
-            crate::perf_profile::Span::start("symbol_warm_matches", "search", "matches_for_files");
-        table.matches_for_files(options, &parsed.terms, allowed_files, sql_limit)
-    } else {
-        let _span = crate::perf_profile::Span::start(
-            "symbol_quota_rows",
-            "search",
-            "query_quota_symbol_spans",
-        );
-        let (mut where_clause, mut bind) =
-            like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
-        restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-        // Quotas must precede admission: even a 500-row function-first
-        // window can hide every minority kind. Fetch a bounded quota page in
-        // one statement, then preserve the shared canonical selection policy.
-        let mut rows =
-            query_quota_symbol_spans(store, &parsed.terms, &where_clause, bind, sql_limit)?;
-        rows.sort_by(cmp_symbol_rows);
-        quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
-    };
     let norm_terms = normalize_query_terms(&parsed.terms);
     let idf_weights = {
         let _span = crate::perf_profile::Span::start(
@@ -812,6 +887,95 @@ pub(crate) fn symbol_pass_for_files_warmed(
             )?,
         }
     };
+    let aliases = if has_aliasable_verb(&norm_terms) {
+        let cooccurrences = match warmed {
+            Some(table) => table.term_cooccurrences(&norm_terms),
+            None => name_table_term_cooccurrences(store, &norm_terms)?,
+        };
+        kept_verb_aliases(&norm_terms, &cooccurrences, |candidates| match warmed {
+            Some(table) => Ok(table.idf_weights_with_dfs(candidates)),
+            None => name_table_idf_weights_with_dfs(
+                store,
+                crate::names_sidecar::NamePopulation::Symbols,
+                candidates,
+            ),
+        })?
+    } else {
+        AliasExpansion::default()
+    };
+    let sql_limit = if aliases.discovery.is_empty() {
+        sql_limit
+    } else {
+        sql_limit.max(256).min(SYMBOL_SQL_LIMIT)
+    };
+    let mut def_discovery_terms = parsed.terms.clone();
+    def_discovery_terms.extend(aliases.discovery.iter().cloned());
+    let rows = if let Some(table) = warmed {
+        let _span =
+            crate::perf_profile::Span::start("symbol_warm_matches", "search", "matches_for_files");
+        table.matches_for_files(options, &def_discovery_terms, allowed_files, sql_limit)
+    } else {
+        let _span = crate::perf_profile::Span::start(
+            "symbol_quota_rows",
+            "search",
+            "query_quota_symbol_spans",
+        );
+        let (mut where_clause, mut bind) = like_terms_filter(
+            "s.name",
+            &def_discovery_terms,
+            options.lang_filter.as_deref(),
+        );
+        restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+        // Quotas must precede admission: even a 500-row function-first
+        // window can hide every minority kind. Fetch a bounded quota page in
+        // one statement, then preserve the shared canonical selection policy.
+        let mut rows =
+            query_quota_symbol_spans(store, &def_discovery_terms, &where_clause, bind, sql_limit)?;
+        rows.sort_by(cmp_symbol_rows);
+        quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
+    };
+    let mut score_terms = norm_terms;
+    let mut score_weights = idf_weights;
+    score_terms.extend(aliases.score);
+    score_weights.extend(aliases.weights);
+    // Stem-affine admission (conformance ledger: file-affinity for def
+    // rows must break path-order quota windows). The quota windows above
+    // admit minorities in PATH order, so a stem-matching static
+    // (`DEFAULT_TYPES` in `default_types.rs`) is cut from the window
+    // before scoring ever runs — the score boost in
+    // `symbol_span_rows_to_hits_opts` cannot resurrect a row that was
+    // never selected. Re-query the (few) stem-affine files directly with
+    // the same discovery terms and merge what the quota missed; the
+    // boost then carries those rows through the score-ordered retain.
+    let affine = stem_affine_files(parsed, allowed_files);
+    let mut rows = rows;
+    if !affine.is_empty() {
+        let (mut sup_where, mut sup_bind) = like_terms_filter(
+            "s.name",
+            &def_discovery_terms,
+            options.lang_filter.as_deref(),
+        );
+        restrict_to_files(&mut sup_where, &mut sup_bind, Some(&affine));
+        if let Ok(supplement) =
+            query_symbol_spans(store, &sup_where, sup_bind, SYMBOL_KIND_ORDER, 32)
+        {
+            if !supplement.is_empty() {
+                let mut seen: HashSet<(String, u32, String)> = rows
+                    .iter()
+                    .map(|row| (row.0.clone(), row.4, row.2.clone()))
+                    .collect();
+                let before = rows.len();
+                for row in supplement {
+                    if seen.insert((row.0.clone(), row.4, row.2.clone())) {
+                        rows.push(row);
+                    }
+                }
+                if rows.len() != before {
+                    rows.sort_by(cmp_symbol_rows);
+                }
+            }
+        }
+    }
     let mut hits = {
         let _span = crate::perf_profile::Span::start(
             "symbol_rows_to_hits",
@@ -824,7 +988,7 @@ pub(crate) fn symbol_pass_for_files_warmed(
             options,
             parsed,
             HitKind::Def,
-            |name| score_def_weighted(&norm_terms, &idf_weights, name),
+            |name| score_def_weighted(&score_terms, &score_weights, name),
             false,
         )?
     };
@@ -923,6 +1087,227 @@ fn anchor_pass_impl(
         attach_excerpts,
     )
 }
+/// NL verb → code-verb surface tokens. Static lookup is the substrate here
+/// (no model): each row maps a natural-language verb to the identifier
+/// vocabulary that implements it in real code. Applied ONLY to terms that
+/// never co-occur with another query term inside any indexed symbol name
+/// (`check`→`matched`, `register`→`add_url_rule`, `parse`→`loads`): a verb
+/// whose literal surface is corroborated by the rest of the query (e.g.
+/// query "check all the items" against a `check_all` symbol) must keep its
+/// literal reading — mere population (df > 0) does NOT block aliasing,
+/// because unrelated symbols routinely carry common verbs (measured:
+/// `check` df=5, `register` df=20, `parse` df=1 in the lane corpora, all
+/// with zero co-occurrence). Aliases score at [`ALIAS_DISCOUNT`] so a
+/// literal match outranks an alias match, and an alias is dropped when its
+/// own document frequency exceeds [`ALIAS_DF_CEILING`] (ultra-common tokens
+/// such as `is`/`new` would flood the discovery window without adding
+/// signal).
+const ALIAS_DISCOUNT: f64 = 0.65;
+const ALIAS_DF_CEILING: u64 = 2048;
+static VERB_ALIASES: &[(&str, &[&str])] = &[
+    ("check", &["match", "verify", "validate", "test"]),
+    ("verify", &["check", "validate", "confirm"]),
+    ("validate", &["check", "verify"]),
+    ("parse", &["load", "loads", "read", "decode", "deserialize"]),
+    ("read", &["load", "parse", "open"]),
+    ("load", &["read", "parse", "open", "from"]),
+    ("serialize", &["dump", "dumps", "encode", "write"]),
+    ("register", &["add", "create", "define", "make"]),
+    ("add", &["insert", "append", "push", "register"]),
+    ("remove", &["delete", "drop"]),
+    ("build", &["new", "create", "make", "from"]),
+    ("create", &["new", "build", "make"]),
+    ("make", &["new", "build", "create"]),
+    ("map", &["convert", "transform", "from", "lookup"]),
+    ("decide", &["choose", "select", "pick"]),
+    ("detect", &["find", "has", "sense"]),
+    ("serve", &["send", "handle", "respond"]),
+    ("handle", &["process", "dispatch", "serve"]),
+    ("escape", &["encode", "quote"]),
+    ("print", &["display", "render", "format", "log"]),
+    ("walk", &["visit", "traverse", "iter"]),
+    ("apply", &["use", "exec", "run", "call"]),
+    ("turn", &["make", "convert", "transform"]),
+];
+
+/// Does any query term name an aliasable verb? (Fast path: when false, the
+/// co-occurrence scan is skipped entirely.)
+fn has_aliasable_verb(norm_terms: &[String]) -> bool {
+    norm_terms
+        .iter()
+        .any(|term| VERB_ALIASES.iter().any(|(verb, _)| *verb == term.as_str()))
+}
+
+/// Alias tokens worth probing for this query: only terms whose literal
+/// surface is uncorroborated (zero co-occurrence with any other query term
+/// across symbol names) expand. Deduplicated; never a token the query
+/// already carries. `cooccurrences` may be empty when
+/// [`has_aliasable_verb`] is false — the early return guarantees the
+/// vectors are never read in that case.
+fn verb_alias_candidates(norm_terms: &[String], cooccurrences: &[u64]) -> Vec<String> {
+    if !has_aliasable_verb(norm_terms) {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (i, term) in norm_terms.iter().enumerate() {
+        if cooccurrences.get(i).copied().unwrap_or(0) > 0 {
+            continue;
+        }
+        for (verb, aliases) in VERB_ALIASES {
+            if *verb != term.as_str() {
+                continue;
+            }
+            for alias in aliases.iter() {
+                let norm = normalize_query_terms(&[(*alias).to_string()])
+                    .pop()
+                    .unwrap_or_else(|| (*alias).to_lowercase());
+                if !norm_terms.iter().any(|t| t == &norm) && !out.contains(&norm) {
+                    out.push(norm);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Alias tokens that survived the population probe: they name real symbols
+/// (df > 0) without being so common they only add noise (df <= ceiling).
+#[derive(Default)]
+struct AliasExpansion {
+    /// Lowercased alias tokens appended to the discovery (LIKE/contains) set.
+    discovery: Vec<String>,
+    /// Same tokens appended to the normalized scoring set.
+    score: Vec<String>,
+    /// Discounted IDF weights aligned with `score`.
+    weights: Vec<f64>,
+}
+
+fn kept_verb_aliases(
+    norm_terms: &[String],
+    cooccurrences: &[u64],
+    probe: impl FnOnce(&[String]) -> Result<(Vec<f64>, Vec<u64>)>,
+) -> Result<AliasExpansion> {
+    let candidates = verb_alias_candidates(norm_terms, cooccurrences);
+    if candidates.is_empty() {
+        return Ok(AliasExpansion::default());
+    }
+    let (alias_weights, alias_dfs) = probe(&candidates)?;
+    let mut expansion = AliasExpansion::default();
+    for (cand, (weight, df)) in candidates
+        .iter()
+        .zip(alias_weights.iter().zip(alias_dfs.iter()))
+    {
+        if *df == 0 || *df > ALIAS_DF_CEILING {
+            continue;
+        }
+        expansion.discovery.push(cand.clone());
+        expansion.score.push(cand.clone());
+        expansion.weights.push(weight * ALIAS_DISCOUNT);
+    }
+    Ok(expansion)
+}
+
+/// Per-term co-occurrence counts over symbol names: how many names contain
+/// this term AND at least one other query term. One streamed pass; the
+/// per-name cost is one substring check per term — the same class as the
+/// df sweep in [`name_table_idf_weights_with_dfs`].
+fn cooccurrences_over_names(
+    norm_terms: &[String],
+    names: impl Iterator<Item = impl AsRef<str>>,
+) -> Vec<u64> {
+    let mut co = vec![0u64; norm_terms.len()];
+    let mut contains: Vec<bool> = Vec::with_capacity(norm_terms.len());
+    for name in names {
+        let lower = name.as_ref().to_lowercase();
+        contains.clear();
+        let mut count = 0usize;
+        for (i, term) in norm_terms.iter().enumerate() {
+            let hit = lower.contains(term.as_str());
+            contains.push(hit);
+            count += hit as usize;
+        }
+        if count >= 2 {
+            for (i, hit) in contains.iter().enumerate() {
+                if *hit {
+                    co[i] += 1;
+                }
+            }
+        }
+    }
+    co
+}
+
+/// Cold lane: co-occurrence counts streamed from the symbols table.
+fn name_table_term_cooccurrences(store: &IndexStore, norm_terms: &[String]) -> Result<Vec<u64>> {
+    if norm_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (source, column) = crate::names_sidecar::NamePopulation::Symbols.sql_source_and_column();
+    let sql = format!("SELECT {column} FROM {source}");
+    let conn = store.connection();
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(cooccurrences_over_names(
+        norm_terms,
+        names.into_iter().map(|r| r.unwrap_or_default()),
+    ))
+}
+
+/// Query-level verb-alias enrichment for lexical FILE discovery: the same
+/// static table and co-occurrence gate as the def lane, exposed for the
+/// hybrid cascade entry. The gold file for a verb query (`check`→
+/// `types.rs::matched`) often has NO literal foothold on the query's own
+/// terms, so unless the alias tokens join the prefilter's discovery set the
+/// file never enters the cascade and the def lane's alias expansion can
+/// never see it.
+pub(crate) fn user_verb_aliases(store: &IndexStore, terms: &[String]) -> Result<Vec<String>> {
+    let norm_terms = normalize_query_terms(terms);
+    if !has_aliasable_verb(&norm_terms) {
+        return Ok(Vec::new());
+    }
+    let cooccurrences = name_table_term_cooccurrences(store, &norm_terms)?;
+    let out = kept_verb_aliases(&norm_terms, &cooccurrences, |candidates| {
+        name_table_idf_weights_with_dfs(
+            store,
+            crate::names_sidecar::NamePopulation::Symbols,
+            candidates,
+        )
+    })?;
+    Ok(out.discovery)
+}
+
+/// Symbol-nominated alias files: files whose SYMBOL names carry an alias
+/// token. This is the file-discovery channel a verb query actually needs —
+/// content-level alias scans are hopeless on code corpora (`match` names
+/// 4.5k lines in the rg corpus and the rarity cap drops it), while the
+/// symbol surface is small and precise (`Types::matched` → `types.rs`).
+/// Bounded by `cap`; empty when no aliases.
+pub(crate) fn alias_nominated_files(
+    store: &IndexStore,
+    aliases: &[String],
+    cap: usize,
+) -> Result<HashSet<String>> {
+    if aliases.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let (where_clause, bind) = like_terms_filter("s.name", aliases, None);
+    let sql = format!(
+        "SELECT DISTINCT f.path FROM symbols s JOIN files f ON f.id = s.file_id\
+         {where_clause} ORDER BY f.path LIMIT ?{}",
+        bind.len() + 1
+    );
+    let conn = store.connection();
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(
+        bind.iter().chain([cap.to_string()].iter()),
+    ))?;
+    let mut files = HashSet::new();
+    while let Some(row) = rows.next()? {
+        files.insert(row.get::<_, String>(0)?);
+    }
+    Ok(files)
+}
+
 pub(crate) fn def_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
@@ -932,17 +1317,35 @@ pub(crate) fn def_hits_for_terms(
     if parsed.terms.is_empty() {
         return Ok(vec![]);
     }
-    let (where_clause, bind) =
-        like_terms_filter("s.name", &parsed.terms, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_KIND_ORDER, limit)?;
     let norm_terms = normalize_query_terms(&parsed.terms);
     let idf_weights = name_table_idf_weights(
         store,
         crate::names_sidecar::NamePopulation::Symbols,
         &norm_terms,
     )?;
+    let aliases = if has_aliasable_verb(&norm_terms) {
+        let cooccurrences = name_table_term_cooccurrences(store, &norm_terms)?;
+        kept_verb_aliases(&norm_terms, &cooccurrences, |candidates| {
+            name_table_idf_weights_with_dfs(
+                store,
+                crate::names_sidecar::NamePopulation::Symbols,
+                candidates,
+            )
+        })?
+    } else {
+        AliasExpansion::default()
+    };
+    let mut discovery_terms = parsed.terms.clone();
+    discovery_terms.extend(aliases.discovery.iter().cloned());
+    let (where_clause, bind) =
+        like_terms_filter("s.name", &discovery_terms, options.lang_filter.as_deref());
+    let rows = query_symbol_spans(store, &where_clause, bind, SYMBOL_KIND_ORDER, limit)?;
+    let mut score_terms = norm_terms;
+    let mut score_weights = idf_weights;
+    score_terms.extend(aliases.score);
+    score_weights.extend(aliases.weights);
     symbol_span_rows_to_hits(store, rows, options, parsed, HitKind::Def, |name| {
-        score_def_weighted(&norm_terms, &idf_weights, name)
+        score_def_weighted(&score_terms, &score_weights, name)
     })
 }
 fn exact_eq_filter(column: &str, value: &str, lang: Option<&str>) -> (String, Vec<String>) {

@@ -254,7 +254,7 @@ fn structural_fallback_error(pattern: &str) -> crate::StoreError {
         "structural fallback is disabled or unavailable"
     };
     crate::StoreError::Other(format!(
-        "pattern requires structural fallback ({state}; fail-closed): {pattern}"
+        "pattern requires structural fallback ({state}; fail-closed): {pattern} — working spellings: 'fn $NAME($$$)' (every fn-shaped item), a no-parens name ('fn plain_name' filters by name), or 'defs:NAME' for the definition site; rust bodyless concrete names answer trait signatures only"
     ))
 }
 

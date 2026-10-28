@@ -6,7 +6,9 @@ use ast_sgrep_core::{
     canonicalize_affected_path, expand_incremental_path_list, IndexOptions, Indexer, Language,
     SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
 };
-use ast_sgrep_plugins::{format_response_with, OutputFormat};
+use ast_sgrep_plugins::{
+    format_response_with, is_bodyless_fn_args_pattern, MissContext, OutputFormat,
+};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -48,9 +50,7 @@ impl Default for SessionConfig {
             ),
             use_embed: std::env::var("ASGREP_NO_EMBED").ok().as_deref() != Some("1"),
             default_format: OutputFormat::AgentCapsule,
-            ambient_freshness: std::env::var("ASGREP_NO_AMBIENT_FRESHNESS")
-                .ok()
-                .as_deref()
+            ambient_freshness: std::env::var("ASGREP_NO_AMBIENT_FRESHNESS").ok().as_deref()
                 != Some("1"),
         }
     }
@@ -386,13 +386,41 @@ impl CodeModeSession {
             searcher.search(&query)?
         };
         // Searcher may be wider than this call's limit (warm-cache reuse).
+        // A cut here is as real as the finish layer's (br-tvv) — the
+        // envelope must own it too (br-tku). The limit echo is this call's
+        // contract in EVERY branch: an untruncated warm result otherwise
+        // echoes the searcher's gather limit (the session default), which
+        // is not what the caller asked for.
+        response.limit = limit;
         if response.hits.len() > limit {
+            response.truncated = true;
             response.hits.truncate(limit);
-            response.limit = limit;
         }
         ensure_render_input_bounded(&response, format, excerpt_lines)?;
         let mut value = format_response_with(&response, format, excerpt_lines);
         drop(guard);
+        // Zero-hit answers classify the miss (CLI parity, 6a3i + br-yjw): a
+        // bodyless-args pattern miss teaches its contract instead of a bare
+        // empty list. Runs before the render-cache clone so cached takes
+        // carry it; why/next derive from the query alone, so the cached
+        // render stays deterministic per render key.
+        if response.hits.is_empty() {
+            let reason = MissContext {
+                pattern_miss: is_bodyless_fn_args_pattern(&query),
+                ..Default::default()
+            }
+            .reason();
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "why".to_string(),
+                    serde_json::Value::String(reason.as_str().to_owned()),
+                );
+                object.insert(
+                    "next".to_string(),
+                    serde_json::Value::String(reason.next_step(None)),
+                );
+            }
+        }
         // Cache the maintenance-free render: the notice is per-call state and
         // must never leak into a later identical query via the render cache.
         let cacheable = value.clone();

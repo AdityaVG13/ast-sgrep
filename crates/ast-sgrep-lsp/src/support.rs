@@ -249,15 +249,15 @@ pub fn uri_to_rel_path(uri: &str, root: &Path) -> anyhow::Result<String> {
     // A not-yet-created document has no canonical path; canonicalize its
     // parent and re-attach the file name so symlinked roots (macOS
     // /var -> /private/var) still resolve inside the workspace.
-    let cabs = abs.canonicalize().unwrap_or_else(|_| {
-        match (abs.parent(), abs.file_name()) {
+    let cabs = abs
+        .canonicalize()
+        .unwrap_or_else(|_| match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => parent
                 .canonicalize()
                 .map(|cparent| cparent.join(name))
                 .unwrap_or_else(|_| abs.clone()),
             _ => abs.clone(),
-        }
-    });
+        });
     if !cabs.starts_with(&croots) {
         anyhow::bail!("document URI outside workspace root");
     }

@@ -811,9 +811,9 @@ fn fuse_stage_explicit_rrf_deterministic_across_sets() {
     hits.extend(searcher.search_lexical("refresh_token").unwrap().hits);
     assert!(!hits.is_empty(), "fuse drill needs channel hits");
     let mut first = hits.clone();
-    apply_weighted_rrf(&mut first, &weights);
+    apply_weighted_rrf(&mut first, &weights, "");
     let mut second = hits.clone();
-    apply_weighted_rrf(&mut second, &weights);
+    apply_weighted_rrf(&mut second, &weights, "");
     let encode = |hs: &[ast_sgrep_core::SearchHit]| hs.iter().map(HitId::of).collect::<Vec<_>>();
     assert_eq!(
         encode(&first),

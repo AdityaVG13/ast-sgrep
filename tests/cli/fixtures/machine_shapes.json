@@ -71,6 +71,7 @@
     "stack_hint",
     "suggested_next",
     "tool",
+    "truncated",
     "version"
   ],
   "agent-capsule": [
@@ -89,7 +90,8 @@
     "returned_excerpt_bytes",
     "schema_version",
     "suggested_next",
-    "tool"
+    "tool",
+    "truncated"
   ],
   "compact": [
     "command",
@@ -102,6 +104,7 @@
     "tool",
     "v",
     "zb",
+    "zc",
     "zn",
     "zt"
   ],
@@ -117,7 +120,8 @@
     "returned_excerpt_bytes",
     "schema_version",
     "snapshot",
-    "tool"
+    "tool",
+    "truncated"
   ],
   "github": [
     "command",

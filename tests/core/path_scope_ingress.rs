@@ -202,3 +202,46 @@ fn quoted_in_text_stays_in_pattern() {
         parsed.raw
     );
 }
+
+/// br-f5q (live 2026-10-27 Hermes stress): a typo'd channel prefix used to
+/// degrade silently to a weak semantic free-text answer. A channel ATTEMPT
+/// (alias or ≤2-edit near-miss of a real channel, single token, lowercase
+/// identifier prefix) must refuse with a teaching error naming the fix and
+/// the quoted-literal escape for genuine colon text.
+#[test]
+fn typoed_channel_prefix_refuses_with_teaching() {
+    let (_t, searcher) = indexed_scope_corpus();
+    let err = searcher
+        .search("def:calc_one")
+        .expect_err("alias channel typo must refuse, not answer noise");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("did you mean \"defs:\""),
+        "teaching must name the canonical spelling: {msg}"
+    );
+    assert!(
+        msg.contains("literal:'"),
+        "teaching must show the quoted-colon escape: {msg}"
+    );
+}
+
+/// The false-positive guard for br-f5q: ordinary single-token colon text
+/// that is NOT a channel attempt (URLs, key:value, rust `mod::path`) stays
+/// a valid query — the teaching refusal is reserved for aliases and
+/// near-misses only.
+#[test]
+fn ordinary_colon_text_stays_searchable() {
+    let (_t, searcher) = indexed_scope_corpus();
+    searcher
+        .search("key:value")
+        .expect("plain colon token stays free text");
+    searcher
+        .search("http://example.com")
+        .expect("url stays free text");
+    searcher
+        .search("fmt::Debug")
+        .expect("double-colon rust path stays free text");
+    searcher
+        .search("in:src calc")
+        .expect("path-scope syntax is never hijacked by channel teaching");
+}

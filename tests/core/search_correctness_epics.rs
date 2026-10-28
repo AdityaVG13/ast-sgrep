@@ -129,7 +129,7 @@ fn s7jw2_empty_sidecar_falls_back_to_sql_lexical() {
     for schema_only in [false, true] {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
-        let store = IndexStore::open(root, None).unwrap();
+        let store = IndexStore::open(root, Some(&root.join("index.db"))).unwrap();
         let lines = [(1u32, "unique_sidecar_fallback_token appears here".into())];
         store
             .upsert_file(base("src/a.rs", Some("rust"), &lines, "h1"))
@@ -170,7 +170,7 @@ fn s7jw2_empty_sidecar_falls_back_to_sql_lexical() {
 fn fresh_sidecar_filters_language_before_its_candidate_limit() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    let store = IndexStore::open(root, None).unwrap();
+    let store = IndexStore::open(root, Some(&root.join("index.db"))).unwrap();
     let mut rows: Vec<ast_sgrep_core::store::IndexedLineRow> = Vec::new();
     for (language, count, prefix, extension) in [("python", 99, "a", "py"), ("rust", 2, "r", "rs")]
     {
@@ -271,7 +271,7 @@ fn s7jw1_lexical_pool_respects_options_limit() {
 
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    let store = IndexStore::open(root, None).unwrap();
+    let store = IndexStore::open(root, Some(&root.join("index.db"))).unwrap();
     // 150 distinct matching lines; with limit=150 the pool must not hard-cap at 100.
     for i in 0..150u32 {
         let content = format!("needle_pool_token line_{i}");
@@ -327,6 +327,54 @@ fn iva9_2_invalid_file_filter_errors_via_searcher() {
     assert!(
         err.contains("invalid file_filter"),
         "expected invalid file_filter error, got {err}"
+    );
+}
+
+/// INTENT: a noise file of repeated matching lines cannot bury a single
+/// implementation hit in another file — the 2026-10-02 candidate probe
+/// scenario (`perf-negative-results.md`, "Distinct-file admission
+/// candidate": one file with 150 identical `quartz notes` lines crowded the
+/// line-capped candidate pool until the lone `quartz_resolve` implementation
+/// was absent entirely, recall 0). The pool must stay file-diverse enough
+/// that the implementation surfaces near the top, not beneath the noise wall.
+/// KILLS: any regression back to a line-count-only pool cap that re-admits
+/// single-file burial.
+#[test]
+fn repeated_noise_lines_cannot_bury_another_files_hit() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let noise = "quartz notes\n".repeat(150);
+    write_src(root, "a_noise.md", &noise);
+    write_src(root, "z_impl.rs", "pub fn quartz_resolve() {}\n");
+    let index_path = root.join("index.db");
+    let mut indexer = Indexer::new(IndexOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path.clone()),
+        force_reindex: true,
+        embed_semantic: false,
+        ..IndexOptions::default()
+    })
+    .unwrap();
+    indexer.index_all().unwrap();
+    let searcher = Searcher::new(SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(index_path),
+        use_embed: false,
+        limit: 16,
+        ..SearchOptions::default()
+    })
+    .unwrap();
+    let resp = searcher.search("quartz").unwrap();
+    let rank = resp
+        .hits
+        .iter()
+        .position(|hit| hit.file == "z_impl.rs")
+        .expect("implementation hit must not be buried by repeated noise lines");
+    assert!(
+        rank < 5,
+        "implementation must surface near the top (rank {rank}), not beneath \
+         the noise wall: {:#?}",
+        resp.hits.iter().map(|h| h.file.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -541,7 +589,7 @@ fn iva9_6_ann_sufficiency_contract() {
 fn iva9_7_exotic_pattern_fail_closed_without_ast_grep() {
     let temp = TempDir::new().unwrap();
     write_src(temp.path(), "a.rs", "fn alpha() { if cond { body(); } }\n");
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let old = std::env::var_os("ASGREP_DISABLE_AST_GREP");
     std::env::set_var("ASGREP_DISABLE_AST_GREP", "1");
     // Multi-statement template: single-statement `{ $BODY }` is native since
@@ -570,7 +618,7 @@ fn iva9_7_exotic_pattern_fail_closed_without_ast_grep() {
 fn iva9_7_classifiable_native_empty_is_match_none() {
     let temp = TempDir::new().unwrap();
     write_src(temp.path(), "a.rs", "fn alpha() {}\n");
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let hits = search_pattern(
         "fn missing_name($$$)",
         &store,
@@ -586,7 +634,7 @@ fn iva9_7_classifiable_native_empty_is_match_none() {
 #[test]
 fn iva9_8_chain_edges_subset_and_callee_seed() {
     let temp = TempDir::new().unwrap();
-    let store = IndexStore::open(temp.path(), None).unwrap();
+    let store = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).unwrap();
     let symbols_a = [SymbolRow {
         name: "alpha".into(),
         kind: "function".into(),

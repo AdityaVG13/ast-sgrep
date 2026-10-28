@@ -378,18 +378,21 @@ fn indexed_single_file_fixture(
     (temp, root, index_path)
 }
 
-/// P1-1 (H-AUDIT-52-1, pass 56): a concrete decl pattern (`fn old_name`) is
-/// served from the INDEX by search (`pattern_nodes` decl rows), but the native
-/// matcher codemod plans with answers match-none for that shape. The plan must
-/// therefore FAIL LOUDLY (usage-class error naming the limitation) instead of
-/// returning ok:true with zero edits while search answers hits
-/// (H-CONF-023 honesty class). Pre-fix this returned Ok with zero edits.
+/// P1-1 (H-AUDIT-52-1, pass 56) — br-osk reconciled (2026-10-27): the
+/// concrete decl name (`fn old_name`) moved into the matcher-spanned class
+/// (reference parity: every fn-shaped node with that name answers), so the
+/// fresh-index served-but-blind class this test pinned is CLOSED — the
+/// honest answer for that face is now a 1-edit plan, and the loud-refusal
+/// gate (still live for the stale-index and depth-truncated classes, see
+/// plan.rs and the reconcile coverage in tests/core/pattern_routing.rs)
+/// must NOT fire on it. The parity witness (search serves the face from
+/// the index) stays: it proves the plan is honest against real hits.
 #[test]
 fn codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits() {
     let content = "fn old_name() { legacy(alpha); }\n";
     let (_temp, root, index_path) = indexed_single_file_fixture("lib.rs", content);
 
-    // Parity witness: search answers the same pattern from the same index.
+    // Parity witness: search serves the decl pattern from the index.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_asgrep"))
         .args([
             "--index-path",
@@ -397,7 +400,7 @@ fn codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits() {
             "--no-embed",
             "search",
             "--json",
-            "pattern:fn old_name",
+            "pattern:'fn old_name'",
             root.to_str().unwrap(),
         ])
         .output()
@@ -409,25 +412,13 @@ fn codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits() {
         "search must serve hits for the decl pattern (index lane): {stdout}"
     );
 
-    let result = plan_codemod(&root, Some(&index_path), None, "fn old_name", "fn new_name");
-    match result {
-        Err(error) => {
-            let text = format!("{error:#}");
-            assert!(
-                text.contains("fn old_name"),
-                "refusal must name the unsupported pattern: {text}"
-            );
-            assert!(
-                text.contains("index") || text.contains("structural matcher"),
-                "refusal must name the limitation (index-served vs native matcher): {text}"
-            );
-        }
-        Ok(plan) => panic!(
-            "codemod must not silently plan zero edits for a pattern search \
-             answers: got files_changed={} edit_count={}",
-            plan.files_changed, plan.edit_count
-        ),
-    }
+    // br-osk: the matcher spans the decl name — a 1-edit plan is the
+    // honest answer; the former loud refusal on this face is the stale
+    // contract.
+    let plan = plan_codemod(&root, Some(&index_path), None, "fn old_name", "fn new_name")
+        .expect("matcher spans the decl name: honest 1-edit plan");
+    assert_eq!(plan.edit_count, 1);
+    assert_eq!(plan.files_changed, 1);
 }
 
 /// P1-1 flip side: when the index holds NO rows for the decl pattern (the

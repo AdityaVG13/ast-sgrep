@@ -132,6 +132,29 @@ fn search_returns_capsule_by_default() {
     assert!(out["hits"].as_array().unwrap().len() <= 5);
 }
 
+/// The envelope's `limit` must echo THIS call's limit even when a warm,
+/// wider searcher (opened by an earlier call) returns a result set at or
+/// under the limit — the no-re-cut twin of the br-tku truncated echo.
+/// Live defect (2026-10-27 Hermes stress): warm session + `defs:` query
+/// with a single hit echoed the searcher's gather limit instead.
+#[test]
+fn warm_untruncated_search_echoes_caller_limit() {
+    let (_tmp, mut session) = indexed_session();
+    // Warm the searcher with a broader call first.
+    session
+        .call("search", json!({"query": "auth", "limit": 8}))
+        .expect("warm search");
+    let out = session
+        .call("search", json!({"query": "defs:fetchToken", "limit": 3}))
+        .expect("untruncated search");
+    assert_eq!(
+        out["limit"].as_i64(),
+        Some(3),
+        "limit echo must be this call's limit, not the searcher's: {out}"
+    );
+    assert!(out["hits"].as_array().unwrap().len() <= 3);
+}
+
 #[test]
 fn defs_and_filter_compose_without_model() {
     let (_tmp, mut session) = indexed_session();
@@ -855,10 +878,41 @@ fn search_injects_in_and_fail_closes_unknown_lang() {
 
 #[test]
 fn unknown_tool_suggests_a_close_name() {
+    // 80924ef2: a close typo of a non-mutating tool dispatches the canonical
+    // and stamps `recovered` — the suggestion became self-healing.
     let (_tmp, mut session) = indexed_session();
-    let err = session
+    let ok = session
         .call("searc", json!({"query": "auth"}))
-        .expect_err("typo");
-    let message = err.to_string();
-    assert!(message.contains("Did you mean search"), "{message}");
+        .expect("typo recovers into search");
+    assert_eq!(ok["recovered"], serde_json::json!("search"), "{ok}");
+}
+
+/// INTENT: the session-level re-cut of a warm searcher's wider result must
+/// not silently clear the truncation truth (br-tku). A search served from a
+/// searcher cached at a higher limit re-cuts hits to the call's limit at
+/// session.rs; the envelope must flag that cut exactly like the core finish
+/// layer does (br-tvv).
+/// KILLS: re-cut-without-flag (session truncate that leaves truncated=false),
+/// core-flag-overwrite (assign instead of |=).
+#[test]
+fn warm_cache_re_cut_flags_truncation() {
+    let (_tmp, mut session) = indexed_session();
+    // process_request answers 21 hits in the sample. Widen first: the
+    // searcher caches at limit 32 with the full set and no flag.
+    let wide = session
+        .call("search", json!({"query": "process_request", "limit": 32}))
+        .expect("wide search");
+    assert_eq!(wide["hit_count"].as_u64(), Some(21), "{wide}");
+    assert!(wide.get("truncated").is_none(), "full set, no flag: {wide}");
+    // Narrow re-use: the warm searcher (32) serves, the session re-cuts to
+    // 4 — the cut the envelope MUST own.
+    let narrow = session
+        .call("search", json!({"query": "process_request", "limit": 4}))
+        .expect("narrow search");
+    assert_eq!(narrow["hit_count"].as_u64(), Some(4), "{narrow}");
+    assert_eq!(
+        narrow["truncated"],
+        serde_json::json!(true),
+        "re-cut from the warm searcher must flag: {narrow}"
+    );
 }

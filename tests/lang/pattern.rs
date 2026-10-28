@@ -138,14 +138,424 @@ fn malformed_metavariable_patterns_fall_back_without_panicking() {
     }
 }
 
+// br-f4w (2026-10-27): oracle-corrected. On this fixture (function items
+// only, no trait signatures) the reference answers `fn $NAME($$$)` with
+// NOTHING (ast-grep 0.45.2 + 0.51.0 probes — body-less patterns answer
+// signature items only; see bodyless_fn_patterns_match_reference below).
+// The native-lane smoke keeps its intent via the body-having form, which
+// the reference answers with all four definitions.
 #[test]
 fn structural_fn_pattern_matches_rust_source() {
     use ast_sgrep_lang::match_pattern;
     let source = sample_file("src/main.rs");
-    let hits = match_pattern(Language::Rust, &source, "fn $NAME($$$)").unwrap();
+    let hits = match_pattern(Language::Rust, &source, "fn $NAME($$$) { $$$B }").unwrap();
     assert!(
         !hits.is_empty(),
-        "expected native structural matches for fn $NAME($$$)"
+        "expected native structural matches for fn $NAME($$$) {{ $$$B }}"
+    );
+    assert_eq!(
+        hits.len(),
+        4,
+        "main.rs has four definitions; the reference answers all four"
+    );
+}
+
+// br-f4w (2026-10-27): body-less fn patterns (argument list present, no
+// `{...}` section) follow the reference's grammar-specific recovery, probed
+// against ast-grep 0.45.2 AND 0.51.0 (3 stable rounds, fixtures in the
+// 2026-10-27 matrix): rust answers `function_signature_item` nodes ONLY
+// (trait method declarations; a pattern-absent return type wildcards),
+// go answers `function_declaration` (body AND return wildcarded; params
+// strict), ts and php answer nothing. Body-having patterns keep the
+// function-item lane pinned above (return-type agreement unchanged).
+// INTENT: per-grammar reference parity for the body-less family.
+// KILLS: function_item candidates answering rust body-less queries,
+// go decls being dropped by the return gate, ts/php inventing
+// no-return function matches the reference never returns.
+#[test]
+fn bodyless_fn_patterns_match_reference_grammar_specific_kinds() {
+    use ast_sgrep_lang::match_pattern;
+    let lines = |lang: Language, src: &str, pat: &str| {
+        match_pattern(lang, src, pat)
+            .unwrap()
+            .iter()
+            .map(|h| h.line_start)
+            .collect::<Vec<_>>()
+    };
+
+    // rust: sig items only — return-typed or not; concrete names bind;
+    // function_items (with bodies) never answer a body-less pattern.
+    let rust = "trait T {\n    fn sig_ret(&self) -> u32;\n    fn sig_noret(&self);\n}\nfn plain_ret() -> u32 {\n    1\n}\nfn plain_noret() {\n    let _ = 2;\n}\n";
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$)"), vec![2, 3]);
+    assert_eq!(lines(Language::Rust, rust, "fn sig_ret($$$)"), vec![2]);
+    assert_eq!(lines(Language::Rust, rust, "fn sig_noret($$$)"), vec![3]);
+    assert_eq!(
+        lines(Language::Rust, rust, "fn plain_noret($$$)"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(lines(Language::Rust, rust, "fn $A()"), Vec::<u32>::new());
+    // generic signatures are refused — the reference requires spelled type
+    // parameters to align (probed: warp body.rs decode sig, go [T any]).
+    let rust_gen =
+        "trait Decoder {\n    fn decode<B: Copy>(buf: B) -> Result<u32, u32>;\n    fn plain(&self);\n}\n";
+    assert_eq!(
+        lines(Language::Rust, rust_gen, "fn $A($$$)"),
+        vec![3],
+        "generic sig refused, plain sig answers"
+    );
+    // body-having control: unchanged function-item lane — return gate
+    // still refuses the return-typed fn at line 5.
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) { $$$B }"), vec![8]);
+
+    // go: function_declaration answers with body and return wildcarded.
+    let go =
+        "package p\n\nfunc plain(a int) int {\n    return a\n}\n\nfunc nop() {\n    return\n}\n";
+    assert_eq!(lines(Language::Go, go, "func $A($$$)"), vec![3, 7]);
+    assert_eq!(lines(Language::Go, go, "func plain($$$)"), vec![3]);
+    assert_eq!(lines(Language::Go, go, "func $A()"), vec![7]);
+    // generic go declarations are refused for the same reason as rust sigs.
+    let go_gen = "package p\n\nfunc generic[T any](a T) T {\n    return a\n}\n\nfunc nop() {\n    return\n}\n";
+    assert_eq!(
+        lines(Language::Go, go_gen, "func $A($$$)"),
+        vec![7],
+        "generic func refused, plain func answers"
+    );
+
+    // ts / php: the reference answers nothing; parity is empty, not
+    // fail-closed, and not the no-return function matches of the old lane.
+    let ts = "function plain(a: number): number {\n    return a;\n}\nfunction keep(a: number) {\n    return a;\n}\n";
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A($$$)"),
+        Vec::<u32>::new()
+    );
+    let php = "<?php\ninterface I {\n    public function m($x);\n}\nfunction plain($a) {\n    return $a;\n}\n";
+    assert_eq!(
+        lines(Language::Php, php, "function $A($$$)"),
+        Vec::<u32>::new()
+    );
+}
+
+// br-osk (2026-10-27): no-parens decl patterns — `fn $A` / `fn name` with
+// NO argument list — answer per 0.45.2: every fn-shaped node of the
+// grammar (rust: trait sigs ∪ function items, GENERICS INCLUDED), and any
+// spelled section on a no-parens form answers EMPTY except go's bare
+// metavar result, which the reference treats as no section at all.
+// Fixtures/line maps mirror the live probe (4 stable rounds per cell,
+// harness hs1_probe_osk.py in .internal/oracle-452-probe/).
+#[test]
+fn no_parens_decl_patterns_match_reference_grammar_specific_kinds() {
+    use ast_sgrep_lang::match_pattern;
+    let lines = |lang: Language, src: &str, pat: &str| {
+        match_pattern(lang, src, pat)
+            .unwrap()
+            .iter()
+            .map(|h| h.line_start)
+            .collect::<Vec<_>>()
+    };
+    // rust main fixture: sigs 2-4, plain_ret 6, plain_noret 9.
+    let rust = "trait T {\n    fn sig_r(&self) -> u32;\n    fn sig_n(&self);\n    fn sig_g(&self) -> Option<u32>;\n}\nfn plain_ret() -> u32 {\n    1\n}\nfn plain_noret() {\n    2\n}\n";
+    // pure name: ALL fn-shaped nodes — sigs AND function items.
+    assert_eq!(lines(Language::Rust, rust, "fn $A"), vec![2, 3, 4, 6, 9]);
+    assert_eq!(lines(Language::Rust, rust, "fn plain_ret"), vec![6]);
+    assert_eq!(lines(Language::Rust, rust, "fn sig_r"), vec![2]);
+    // generics answer on the name lane (gen 1, plain 4, generic sig 8).
+    let rust_gen = "fn gen<T>(x: T) -> T {\n    x\n}\nfn plain() {\n    let _ = 1;\n}\ntrait Tr {\n    fn sig<T>(&self) -> T;\n}\n";
+    assert_eq!(lines(Language::Rust, rust_gen, "fn $A"), vec![1, 4, 8]);
+    assert_eq!(lines(Language::Rust, rust_gen, "fn gen"), vec![1]);
+    // any section on a no-parens form: EMPTY (concrete, metavar, `;`).
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A -> u32"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A -> $R"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Rust, rust, "fn sig_r -> u32"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(lines(Language::Rust, rust, "fn $A;"), Vec::<u32>::new());
+
+    // go: decls 3,7; generics answer too (gen 3, plain 6).
+    let go = "package p\n\nfunc ret(a int) int {\n    return a\n}\n\nfunc nop() {\n    return\n}\n";
+    assert_eq!(lines(Language::Go, go, "func $A"), vec![3, 7]);
+    assert_eq!(lines(Language::Go, go, "func ret"), vec![3]);
+    let go_gen =
+        "package p\n\nfunc gen[T any](x T) T {\n    return x\n}\nfunc plain() {\n    return\n}\n";
+    assert_eq!(lines(Language::Go, go_gen, "func $A"), vec![3, 6]);
+    assert_eq!(lines(Language::Go, go_gen, "func gen"), vec![3]);
+    // go sections: concrete EMPTY; bare metavar = no section (all decls).
+    assert_eq!(lines(Language::Go, go, "func $A int"), Vec::<u32>::new());
+    assert_eq!(lines(Language::Go, go, "func $A $R"), vec![3, 7]);
+
+    // ts: fns 1,4; sections EMPTY.
+    let ts = "function plain(a: number): number {\n    return a;\n}\nfunction keep(a: number) {\n    return a;\n}\n";
+    assert_eq!(lines(Language::TypeScript, ts, "function $A"), vec![1, 4]);
+    assert_eq!(lines(Language::TypeScript, ts, "function plain"), vec![1]);
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A: number"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A: $R"),
+        Vec::<u32>::new()
+    );
+
+    // php: fns 2,5.
+    let php =
+        "<?php\nfunction plain($a) {\n    return $a;\n}\nfunction keep($a) {\n    return $a;\n}\n";
+    assert_eq!(lines(Language::Php, php, "function $A"), vec![2, 5]);
+    assert_eq!(lines(Language::Php, php, "function plain"), vec![2]);
+
+    // py: defs 1,4 (blank line at 3); sections EMPTY.
+    let py = "def plain(a) -> int:\n    return a\n\ndef keep(a):\n    return a\n";
+    assert_eq!(lines(Language::Python, py, "def $A"), vec![1, 4]);
+    assert_eq!(lines(Language::Python, py, "def plain"), vec![1]);
+    assert_eq!(
+        lines(Language::Python, py, "def $A -> int"),
+        Vec::<u32>::new()
+    );
+
+    // no-parens + ANY body template answers EMPTY (probed rust/go/ts/php/py,
+    // brace and colon bodies, concrete names too).
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A { $$$B }"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A { $STMT }"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(lines(Language::Rust, rust, "fn $A {}"), Vec::<u32>::new());
+    assert_eq!(
+        lines(Language::Rust, rust, "fn plain_ret { $$$B }"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Go, go, "func $A { $$$B }"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A { $$$B }"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Python, py, "def $A: $$$B"),
+        Vec::<u32>::new()
+    );
+
+    // ts/php no-parens answers FREE FUNCTIONS only — class methods and
+    // arrows never answer the `function` keyword face (meth 2, arrow 4,
+    // plain 7).
+    let ts_meth = "class C {\n    meth(a: number): number {\n        return a;\n    }\n}\nconst arrow = (a: number): number => a;\nfunction plain(a: number): number {\n    return a;\n}\n";
+    assert_eq!(lines(Language::TypeScript, ts_meth, "function $A"), vec![7]);
+    assert_eq!(
+        lines(Language::TypeScript, ts_meth, "function plain"),
+        vec![7]
+    );
+    let php_meth = "<?php\nclass C {\n    public function meth($a): int {\n        return $a;\n    }\n}\nfunction plain($a): int {\n    return $a;\n}\n";
+    assert_eq!(lines(Language::Php, php_meth, "function $A"), vec![7]);
+    assert_eq!(lines(Language::Php, php_meth, "function plain"), vec![7]);
+
+    // go bare metavar: $R BINDS the parameter-list text, parens included
+    // (`(a int)` / `()` for the empty list).
+    let bound = match_pattern(Language::Go, go, "func $A $R")
+        .unwrap()
+        .into_iter()
+        .map(|h| (h.line_start, h.captures.get("R").cloned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bound,
+        vec![
+            (3, Some("(a int)".to_string())),
+            (7, Some("()".to_string()))
+        ]
+    );
+}
+
+// br-hs1 (2026-10-27): spelled return-type sections and `;`-completed forms
+// follow the reference's per-grammar semantics, probed against ast-grep
+// 0.45.2 (3 stable rounds every cell; 0.51.0 agreed on the shared matrix).
+// Receipt set: rust, go, ts, php, py — other languages keep the loud
+// fail-closed class via the answerability gate.
+// INTENT: every assertion below is an oracle-backed row.
+// KILLS: silent wildcarding of the return section, method candidates
+// answering ts/php return-bearing forms, php body-less+return staying
+// empty, the rust `;` strictness being flattened to the no-`;` wildcard.
+#[test]
+fn spelled_return_and_semicolon_forms_match_reference_grammar_specific_kinds() {
+    use ast_sgrep_lang::match_pattern;
+    let lines = |lang: Language, src: &str, pat: &str| {
+        match_pattern(lang, src, pat)
+            .unwrap()
+            .iter()
+            .map(|h| h.line_start)
+            .collect::<Vec<_>>()
+    };
+
+    // rust: fixture 2=sig_r -> u32, 3=sig_n, 4=sig_g -> Option<u32>,
+    // 6=plain_ret -> u32, 9=plain_noret.
+    let rust = "trait T {\n    fn sig_r(&self) -> u32;\n    fn sig_n(&self);\n    fn sig_g(&self) -> Option<u32>;\n}\nfn plain_ret() -> u32 {\n    1\n}\nfn plain_noret() {\n    let _ = 2;\n}\n";
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) -> $R"), vec![2, 4]);
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) -> u32"), vec![2]);
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A($$$) -> Option<u32>"),
+        vec![4]
+    );
+    assert_eq!(lines(Language::Rust, rust, "fn sig_r($$$) -> u32"), vec![2]);
+    // the strict `;` form: no return section + `;` => sigs WITHOUT returns.
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$);"), vec![3]);
+    // metavar return + `;` keeps the present-required reading.
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) -> $R;"), vec![2, 4]);
+    // concrete return + `;` is a no-op terminator: the `-> u32` sigs answer
+    // (re-probed on THIS fixture 2026-10-27 — an earlier probe's empty came
+    // from a fixture with no `-> u32` sig, a misread not a quirk).
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) -> u32;"), vec![2]);
+    // body + spelled return: function items with return agreement.
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A($$$) -> $R { $$$B }"),
+        vec![6]
+    );
+    assert_eq!(
+        lines(Language::Rust, rust, "fn $A($$$) -> u32 { $$$B }"),
+        vec![6]
+    );
+    // named-multi argument metavariables compose with the return section
+    // (0.45.2: `fn $A($$$B) -> $C { $$$D }` answers function items with a
+    // return; the body-less spelling stays sigs-only, probed 2026-10-27).
+    let multi_args = "fn plain(a: u32) -> u32 {\n    let b = a + 1;\n    b\n}\nfn keep(a: u32) {\n    let _ = a;\n}\n";
+    assert_eq!(
+        lines(Language::Rust, multi_args, "fn $A($$$B) -> $C { $$$D }"),
+        vec![1]
+    );
+    assert_eq!(
+        lines(Language::Rust, multi_args, "fn $A($$$B) -> $C"),
+        Vec::<u32>::new()
+    );
+    // controls: br-f4w semantics unchanged (no-section wildcards returns —
+    // sig_g included, probed on this fixture).
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$)"), vec![2, 3, 4]);
+    assert_eq!(lines(Language::Rust, rust, "fn $A($$$) { $$$B }"), vec![9]);
+    // the return metavariable binds the return text.
+    let bound = match_pattern(Language::Rust, rust, "fn $A($$$) -> $R")
+        .unwrap()
+        .into_iter()
+        .map(|h| (h.line_start, h.captures.get("R").cloned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bound,
+        vec![(2, Some("u32".into())), (4, Some("Option<u32>".into()))]
+    );
+
+    // go: 3=ret(a int) int, 7=nop(). Body-less metavar wildcards absent
+    // returns; body + metavar requires presence.
+    let go = "package p\n\nfunc ret(a int) int {\n    return a\n}\n\nfunc nop() {\n    return\n}\n";
+    assert_eq!(lines(Language::Go, go, "func $A($$$) $R"), vec![3, 7]);
+    assert_eq!(lines(Language::Go, go, "func $A($$$) int"), vec![3]);
+    assert_eq!(
+        lines(Language::Go, go, "func $A($$$) int { $$$B }"),
+        vec![3]
+    );
+    assert_eq!(lines(Language::Go, go, "func $A($$$) $R { $$$B }"), vec![3]);
+    assert_eq!(
+        lines(Language::Go, go, "func $A($$$);"),
+        Vec::<u32>::new(),
+        "go `;`-form answers empty (pinned)"
+    );
+    // go receiver methods never answer (free fns only; meth at 4, free at 9).
+    let go_meth = "package p\n\ntype R struct{}\n\nfunc (r R) meth(a int) int {\n    return a\n}\n\nfunc free(a int) int {\n    return a\n}\n";
+    assert_eq!(lines(Language::Go, go_meth, "func $A($$$) int"), vec![9]);
+
+    // ts: body-less answers nothing (with or without return); body +
+    // return binds the return-typed function; class methods never answer.
+    let ts = "function plain(a: number): number {\n    return a;\n}\nfunction keep(a: number) {\n    return a;\n}\n";
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A($$$): $R"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A($$$): number"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(
+            Language::TypeScript,
+            ts,
+            "function $A($$$): number { $$$B }"
+        ),
+        vec![1]
+    );
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A($$$): $R { $$$B }"),
+        vec![1]
+    );
+    assert_eq!(
+        lines(Language::TypeScript, ts, "function $A($$$);"),
+        Vec::<u32>::new()
+    );
+    let ts_meth = "class C {\n    meth(a: number): number {\n        return a;\n    }\n}\n\nfunction free(a: number): number {\n    return a;\n}\n";
+    assert_eq!(
+        lines(
+            Language::TypeScript,
+            ts_meth,
+            "function $A($$$): number { $$$B }"
+        ),
+        vec![7],
+        "ts methods never answer the function pattern"
+    );
+
+    // php: body-less WITH a spelled return answers function definitions
+    // (the no-return body-less lane stays empty); methods never answer.
+    let php = "<?php\nfunction plain($a): int {\n    return $a;\n}\nfunction keep($a) {\n    return $a;\n}\n";
+    assert_eq!(lines(Language::Php, php, "function $A($$$): $R"), vec![2]);
+    assert_eq!(lines(Language::Php, php, "function $A($$$): int"), vec![2]);
+    assert_eq!(
+        lines(Language::Php, php, "function $A($$$): int { $$$B }"),
+        vec![2]
+    );
+    assert_eq!(
+        lines(Language::Php, php, "function $A($$$): $R { $$$B }"),
+        vec![2]
+    );
+    assert_eq!(
+        lines(Language::Php, php, "function $A($$$);"),
+        Vec::<u32>::new()
+    );
+    let php_meth = "<?php\nclass C {\n    public function meth($a): int {\n        return $a;\n    }\n}\n\nfunction free($a): int {\n    return $a;\n}\n";
+    assert_eq!(
+        lines(Language::Php, php_meth, "function $A($$$): int"),
+        vec![8],
+        "php methods never answer the function pattern"
+    );
+    assert_eq!(
+        lines(Language::Php, php_meth, "function $A($$$): int { $$$B }"),
+        vec![8]
+    );
+
+    // py: `-> ret:` with an empty suite answers nothing (suite semantics);
+    // `-> ret: $$$B` binds defs and class methods alike (same node kind).
+    let py = "def plain(a) -> int:\n    return a\n\ndef keep(a):\n    return a\n";
+    assert_eq!(
+        lines(Language::Python, py, "def $A($$$) -> $R:"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Python, py, "def $A($$$) -> int:"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        lines(Language::Python, py, "def $A($$$) -> int: $$$B"),
+        vec![1]
+    );
+    assert_eq!(
+        lines(Language::Python, py, "def $A($$$) -> $R: $$$B"),
+        vec![1]
+    );
+    let py_meth = "class C:\n    def meth(self, a) -> int:\n        return a\n\ndef free(a) -> int:\n    return a\n";
+    assert_eq!(
+        lines(Language::Python, py_meth, "def $A($$$) -> int: $$$B"),
+        vec![2, 5]
     );
 }
 
@@ -688,8 +1098,12 @@ fn dupmeta_rust_nested_call_with_literal_arg() {
 /// gate), and the walk-only assertion below still pins the rust face empty.
 #[test]
 fn registered_fail_closed_spellings_stay_fail_closed() {
+    // br-hs1 reversal (2026-10-27): `fn $A($$$B) -> $C { $$$D }` left this
+    // list — the 0.45.2 oracle ANSWERS it (function items with a return;
+    // probed on the named-multi-args fixture in
+    // `spelled_return_and_semicolon_forms_match_reference_grammar_specific_kinds`).
+    // The remaining entries are still refusals.
     for pattern in [
-        "fn $A($$$B) -> $C { $$$D }",
         "RETURN $A",
         "return $B// noteA",
         "def $A($B):\n    return $C",

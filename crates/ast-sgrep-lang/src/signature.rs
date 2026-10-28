@@ -433,6 +433,10 @@ const CACHED_DECL_KIND_TABLE: &[(&str, &[&str])] = &[
         "fn ",
         &[
             "function_item",
+            // br-tvv: rust trait method signature files — the matcher's
+            // bodyless and name lanes answer `function_signature_item`
+            // nodes, so the walk must be able to admit sig-only files.
+            "function_signature_item",
             // MoonBit `fn` / `impl ... with fn` share C/Python's
             // `function_definition` kind; omitting them here silently empties
             // indexed `fn $NAME` search. Over-broad is sound.

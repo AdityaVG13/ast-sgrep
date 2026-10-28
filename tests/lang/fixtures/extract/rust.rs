@@ -27,3 +27,8 @@ pub enum GoldenState {
 pub trait GoldenRender {
     fn render_widget(&self) -> String;
 }
+
+/// Static docs mention GLOSSARY_TABLE.
+pub static GLOSSARY_TABLE: &[(&str, &str)] = &[("rust", "*.rs")];
+/// Const docs mention MAX_RETRIES.
+pub const MAX_RETRIES: usize = 3;

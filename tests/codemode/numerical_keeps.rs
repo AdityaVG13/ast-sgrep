@@ -11,21 +11,30 @@ use ast_sgrep_testkit as testkit;
 use ast_sgrep_testkit::{indexed_session_at, scored_hits6};
 use serde_json::json;
 
-/// INTENT=typo within len/3 Levenshtein budget suggests (`serach`), far name (`xyzq`) does not.
-/// KILLS=distance-threshold (budget-formula).
+/// INTENT=typo within len/3 Levenshtein budget recovers (80924ef2: dispatch
+/// the non-mutating canonical and stamp `recovered`), far name (`xyzq`) does
+/// not, and mutating suggestions never execute.
+/// KILLS=distance-threshold (budget-formula), mutating-guess-execution.
 /// ABSORBS=none (KEEP standalone)
 #[test]
 fn unknown_tool_suggestion_threshold() {
     // Threshold is (len/3).max(1). "serach" (len 6 -> dist budget 2,
-    // Levenshtein 2 from "search" via the a/r swap) suggests; "xyzq"
-    // (len 4 -> budget 1, distance >1 from every tool) does not.
+    // Levenshtein 2 from "search" via the a/r swap) recovers into search;
+    // "edt" (len 3 -> budget 1, distance 1 from "edit") SUGGESTS edit but
+    // mutating tools are never guessed into execution; "xyzq" (len 4 ->
+    // budget 1, distance >1 from every tool) stays unknown.
     let temp = tempfile::tempdir().expect("tempdir");
-    let mut session = testkit::session_at(temp.path());
+    std::fs::write(temp.path().join("seed.py"), "def seed():\n    pass\n").expect("fixture");
+    let (_index, mut session) = indexed_session_at(temp.path());
+    let ok = session
+        .call("serach", json!({"query": "word:seed"}))
+        .expect("typo recovers into the non-mutating canonical");
+    assert_eq!(ok["recovered"], json!("search"), "{ok}");
     let err = session
-        .call("serach", json!({}))
-        .expect_err("typo is unknown");
+        .call("edt", json!({"path": "seed.py"}))
+        .expect_err("mutating guesses refuse");
     assert!(matches!(err, CallError::UnknownTool(_)), "got {err:?}");
-    assert!(err.to_string().contains("Did you mean search"), "{err}");
+    assert!(err.to_string().contains("never guessed"), "{err}");
     let err = session.call("xyzq", json!({})).expect_err("far is unknown");
     assert!(matches!(err, CallError::UnknownTool(_)), "got {err:?}");
     assert!(!err.to_string().contains("Did you mean"), "{err}");

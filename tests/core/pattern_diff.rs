@@ -27,8 +27,6 @@ const SUPPORTED: &[&str] = &[
 /// - `if ($COND) { $BODY }` / `if $COND: $BODY`: paren/colon forms only match
 ///   that literal syntax in ast-grep; the native engine normalizes them so one
 ///   template works across all indexed languages.
-/// - `fn $NAME($$$)`: ast-grep parses the bodyless form as a trait
-///   `function_signature_item`, so it matches no `fn` declarations at all.
 /// - `fn $N($$$) { $STMT }`: ast-grep is visibility-exact (`pub fn` does not
 ///   match a pattern without `pub`); the native engine matches any function.
 /// - `struct AppContext`: the bodyless struct pattern does not match
@@ -38,10 +36,18 @@ const SUPPORTED: &[&str] = &[
 ///   predates that expansion (Aug 15). ast-grep answers [] (paren-form is
 ///   token-exact there), so it stays out of the equality list with its
 ///   `$COND` sibling.
+///
+/// br-f4w (2026-10-27): `fn $NAME($$$)` was REMOVED from this list. The
+/// native engine used to normalize the body-less form onto function
+/// declarations while ast-grep answered trait signature items only; the
+/// lanes now follow the reference per grammar (rust signature items, go
+/// declarations, ts/php empty — ast-grep 0.45.2 + 0.51.0 probes), pinned
+/// in tests/lang/pattern.rs `bodyless_fn_patterns_match_reference_
+/// grammar_specific_kinds`. This fixture has no trait signatures, so the
+/// body-less spelling correctly answers nothing here.
 const SUPPORTED_NATIVE_NORMALIZED: &[&str] = &[
     "if ($COND) { $BODY }",
     "if $COND: $BODY",
-    "fn $NAME($$$)",
     "fn $N($$$) { $STMT }",
     "struct AppContext",
     "if (x > 0) { $BODY }",

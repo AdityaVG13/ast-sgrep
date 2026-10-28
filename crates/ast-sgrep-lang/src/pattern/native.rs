@@ -33,9 +33,17 @@ pub enum IfAlternative {
 pub enum NativeKind {
     /// Function-like declaration; `name == None` means any name (`$NAME`).
     /// `body` constrains the statement count of the body (`fn $N($$$) { $STMT }`).
+    /// `return_spec` carries a spelled return-type section (br-hs1:
+    /// `fn $A($$$) -> u32`, `func $A($$$) int`, `function $A($$$): T`,
+    /// `def $A($$$) -> T:`) — receipted grammars only at the lane; other
+    /// languages keep the loud class via the answerability gate.
+    /// `semicolon` marks a `;`-completed form (`fn $A($$$);`): rust keeps
+    /// grammar-specific strictness, go/ts/php answer empty (probed).
     Function {
         name: Option<String>,
         body: Option<BodyTemplate>,
+        return_spec: Option<ReturnSpec>,
+        semicolon: bool,
     },
     /// Class/struct/type declaration. `keyword` is the pattern prefix
     /// (`class`, `struct`, `interface`, or `type`) so queries stay kind-specific.
@@ -516,10 +524,13 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
             } else {
                 (tail, prefix.trim())
             };
-            let body = if is_class {
-                parse_body_template(tail)?
+            // br-hs1: function families parse an optional spelled return
+            // section and an optional `;` terminator between the argument
+            // list and the body; class families keep the plain body parse.
+            let (return_spec, semicolon, body) = if is_class {
+                (None, false, parse_body_template(tail)?)
             } else {
-                parse_function_tail(tail)?
+                parse_function_tail_sections(tail, prefix.trim())?
             };
             return Some(if is_class {
                 // Statement-count templates on type bodies are language-specific
@@ -544,7 +555,12 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
                     body,
                 }
             } else {
-                NativeKind::Function { name, body }
+                NativeKind::Function {
+                    name,
+                    body,
+                    return_spec,
+                    semicolon,
+                }
             });
         }
     }

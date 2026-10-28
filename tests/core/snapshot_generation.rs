@@ -192,8 +192,8 @@ fn deferred_read_snapshot_hides_a_concurrent_commit() {
     corpus(temp.path(), 2);
     index_at(temp.path());
 
-    let reader = IndexStore::open(temp.path(), None).expect("reader");
-    let writer = IndexStore::open(temp.path(), None).expect("writer");
+    let reader = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).expect("reader");
+    let writer = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).expect("writer");
 
     // Pin a snapshot: the first read inside the transaction fixes it.
     reader
@@ -252,7 +252,7 @@ fn snapshot_setup_failure_does_not_leave_a_read_transaction_open() {
     // writes), so break the schema through a separate writable handle; the
     // searcher must still observe the committed DROP at its next query.
     {
-        let writer = IndexStore::open(temp.path(), None).expect("writable handle");
+        let writer = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).expect("writable handle");
         writer
             .connection()
             .execute_batch("DROP TABLE meta")
@@ -325,7 +325,7 @@ fn stale_semantic_sidecar_is_reported_as_a_degraded_channel() {
     // bump, and the fresh Searcher below must observe the advanced generation
     // against the now-stale sidecar manifest.
     {
-        let writer = IndexStore::open(temp.path(), None).expect("writable bump handle");
+        let writer = IndexStore::open(temp.path(), Some(&temp.path().join("index.db"))).expect("writable bump handle");
         writer
             .connection()
             .execute_batch(

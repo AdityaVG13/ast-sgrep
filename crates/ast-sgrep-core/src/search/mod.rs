@@ -808,6 +808,12 @@ impl Searcher {
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
+        // br-f5q: channel ATTEMPTS (alias / ≤2-edit near-miss prefixes) refuse
+        // with a teaching error instead of degrading to semantic free-text
+        // noise; ordinary colon text (URLs, key:value, mod::path) passes.
+        if let Some(teaching) = ParsedQuery::unknown_channel_teaching(query_str) {
+            return Err(crate::StoreError::Other(teaching));
+        }
         let _perf_run = crate::perf_profile::Run::start("search_query");
         let _span = crate::perf_profile::Span::start(
             "search_query",
@@ -892,7 +898,7 @@ impl Searcher {
                         literal_pass(&self.store, &self.options, &ParsedQuery::literal(phrase))?
                     } else {
                         let mut hits = self.search_hybrid(&parsed)?;
-                        crate::intent::route_hits(&parsed, &mut hits);
+                        crate::intent::route_hits_opts(&parsed, &mut hits, !self.options.use_embed);
                         let intent = crate::intent::classify(&parsed);
                         let weights = crate::intent::weights_for(intent);
                         {
@@ -901,7 +907,8 @@ impl Searcher {
                                 "search",
                                 "weighted RRF + critic",
                             );
-                            let magnitudes = crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+                            let magnitudes =
+                                crate::fusion::apply_weighted_rrf(&mut hits, &weights, &parsed.raw);
                             critic::apply_critic(
                                 &parsed,
                                 intent,
@@ -966,6 +973,9 @@ impl Searcher {
                 None => merged = Some(response),
                 Some(acc) => {
                     acc.hits.extend(response.hits);
+                    // A merged envelope is truncated when ANY constituent
+                    // pattern's answer set was cut (br-tvv).
+                    acc.truncated |= response.truncated;
                     acc.read_bytes_estimate = acc
                         .read_bytes_estimate
                         .saturating_add(response.read_bytes_estimate);
@@ -1039,6 +1049,11 @@ impl Searcher {
     }
     pub fn search_semantic(&self, query_str: &str) -> Result<SearchResponse> {
         validate_query_arg(query_str)?;
+        // br-f5q twin of the `search` guard (the semantic_only path parses
+        // the same way; a typo'd channel must refuse here too).
+        if let Some(teaching) = ParsedQuery::unknown_channel_teaching(query_str) {
+            return Err(crate::StoreError::Other(teaching));
+        }
         let _perf_run = crate::perf_profile::Run::start("search_semantic");
         self.cached("sem", query_str, || {
             let mut parsed = ParsedQuery::parse(query_str);
@@ -1161,6 +1176,32 @@ impl Searcher {
         } else {
             semantic_query.clone()
         };
+        // Verb-alias enrichment (same static table + co-occurrence gate as
+        // the def lane, see `user_verb_aliases`): a verb query's gold file
+        // often has no literal foothold on the query's own terms
+        // (`check a file against the type filter` → `types.rs::matched`),
+        // so the alias tokens must join lexical FILE discovery — and as
+        // USER evidence, or the cascade constrains structural stages to
+        // files the un-aliased terms found and the def lane never sees the
+        // target. Filtered by the same predicate the prefilter applies to
+        // terms (generic/stopword tokens are dead weight there); embed
+        // query stays untouched (measured regression when polluted).
+        let verb_aliases = if intent == crate::intent::QueryIntent::Conceptual {
+            passes::symbol::user_verb_aliases(&self.store, &parsed.terms)?
+                .into_iter()
+                .filter(|alias| {
+                    alias.chars().count() >= 3
+                        && !cascade_stopword(alias)
+                        && !critic::is_generic_concept_token(alias)
+                        && !discovery.terms.contains(alias)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        for alias in verb_aliases.iter() {
+            discovery.terms.push(alias.clone());
+        }
         // User evidence is the query's own terms. Learned borrows (and the
         // concept-group extras added below) are "extra" terms in the prefilter,
         // which reserves budget for them instead of letting them spend the
@@ -1168,8 +1209,15 @@ impl Searcher {
         // user evidence: with embeddings on, three borrowed terms consumed the
         // 100-file cascade budget and a structurally exact target fell out of
         // the cascade entirely (measured: embed-on gold MRR 0.850 vs 1.000).
+        // Verb aliases ARE user evidence: they are deterministic surface
+        // forms of the user's own verb, not learned associations.
         let user_discovery: HashSet<String> = if intent == crate::intent::QueryIntent::Conceptual {
-            parsed.terms.iter().cloned().collect()
+            parsed
+                .terms
+                .iter()
+                .cloned()
+                .chain(verb_aliases.iter().cloned())
+                .collect()
         } else {
             discovery.terms.iter().cloned().collect()
         };
@@ -1254,6 +1302,14 @@ impl Searcher {
         };
         let (lexical, user_files) = lexical;
         let mut lexical = lexical;
+        // Symbol-nominated alias files join the USER file set: their
+        // evidence is the symbol surface (the def lane will rank it), not
+        // lexical content, so they must bypass the lexical retain below.
+        let mut user_files = user_files;
+        if !verb_aliases.is_empty() {
+            let nominated = passes::symbol::alias_nominated_files(&self.store, &verb_aliases, 64)?;
+            user_files.extend(nominated);
+        }
         let lexical_files = lexical
             .iter()
             .map(|hit| hit.file.clone())
@@ -1663,7 +1719,7 @@ fn pattern_hits_for_symbol(
     Ok(hits)
 }
 
-fn cascade_stopword(term: &str) -> bool {
+pub(crate) fn cascade_stopword(term: &str) -> bool {
     // English function words that match too many files and stall discovery
     // on the first 3+ character token ("how does hybrid search work").
     matches!(

@@ -175,8 +175,11 @@ fn signature_serve_and_prefilter_keys_are_byte_exact() {
         &["decl:fn:greet".to_string()]
     ));
     // Kind-only shapes always need native confirmation.
+    // br-tvv: `function_signature_item` joined the `fn ` candidate kinds —
+    // sig-only files must be admitted (trait-only fixtures answered 0).
     let kinds = vec![
         "kind:function_item".to_string(),
+        "kind:function_signature_item".to_string(),
         "kind:function_definition".to_string(),
         "kind:impl_definition".to_string(),
         "kind:named_lambda_expression".to_string(),

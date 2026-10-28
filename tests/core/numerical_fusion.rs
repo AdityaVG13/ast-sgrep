@@ -389,7 +389,7 @@ fn apply_weighted_rrf_contract() {
     // --- Exactness: single hit and two-channel merge.
     // Single hit: the only channel rank is 0 -> fused = 1*1/(60+0+1) = 1/61.
     let mut single = vec![mk_hit(HitKind::Asgrep, "a.rs", 1, 3.0)];
-    apply_weighted_rrf(&mut single, &weights);
+    apply_weighted_rrf(&mut single, &weights, "");
     assert_eq!(single.len(), 1);
     assert_eq!(single[0].score, 1.0 / 61.0);
     // Same (file, line), two kinds: each channel's rank is 0, fused is the
@@ -400,7 +400,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Caller, "m.rs", 7, 8.0),
         mk_hit(HitKind::Def, "m.rs", 7, 5.0),
     ];
-    apply_weighted_rrf(&mut merged, &weights);
+    apply_weighted_rrf(&mut merged, &weights, "");
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].score, 1.0 / 61.0 + 1.0 / 61.0);
     assert_eq!(merged[0].kind, HitKind::Def);
@@ -418,7 +418,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Def, "b.rs", 1, 8.0),
         mk_hit(HitKind::Def, "a.rs", 1, 9.0),
     ];
-    apply_weighted_rrf(&mut hits, &weights);
+    apply_weighted_rrf(&mut hits, &weights, "");
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].file, "a.rs");
     assert_eq!(hits[0].score, 1.0 / 61.0);
@@ -426,7 +426,7 @@ fn apply_weighted_rrf_contract() {
     assert_eq!(hits[1].score, 1.0 / 62.0);
     // Empty input is a no-op, not a panic.
     let mut empty: Vec<SearchHit> = vec![];
-    apply_weighted_rrf(&mut empty, &weights);
+    apply_weighted_rrf(&mut empty, &weights, "");
     assert!(empty.is_empty());
 
     // --- Totality: gate is `is_finite() && > 0.0`.
@@ -439,7 +439,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Def, "d.rs", 4, 0.0),
         mk_hit(HitKind::Def, "e.rs", 5, -1e308),
     ];
-    apply_weighted_rrf(&mut bad, &weights);
+    apply_weighted_rrf(&mut bad, &weights, "");
     assert!(bad.is_empty());
     // Subnormal and 1e308 are finite and positive -> kept. Fused scores depend
     // only on rank order, so each lone hit in its channel is rank 0 -> 1/61.
@@ -447,7 +447,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Def, "s.rs", 1, 5e-324),
         mk_hit(HitKind::Caller, "l.rs", 2, 1e308),
     ];
-    apply_weighted_rrf(&mut extreme, &weights);
+    apply_weighted_rrf(&mut extreme, &weights, "");
     assert_eq!(extreme.len(), 2);
     for hit in &extreme {
         assert_eq!(hit.score, 1.0 / 61.0);
@@ -459,7 +459,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Asgrep, "m.rs", 7, f64::INFINITY),
         mk_hit(HitKind::Def, "m.rs", 7, 0.5),
     ];
-    apply_weighted_rrf(&mut mixed, &weights);
+    apply_weighted_rrf(&mut mixed, &weights, "");
     assert_eq!(mixed.len(), 1);
     assert_eq!(mixed[0].score, 1.0 / 61.0);
     assert_eq!(mixed[0].contributors, vec![HitKind::Def]);
@@ -478,7 +478,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Def, "a.rs", 1, 3.0),
         mk_hit(HitKind::Caller, "b.rs", 2, 2.0),
     ];
-    apply_weighted_rrf(&mut hits, &hostile);
+    apply_weighted_rrf(&mut hits, &hostile, "");
     assert_eq!(hits.len(), 2);
     for hit in &hits {
         assert!(hit.score.is_finite() && hit.score > 0.0);
@@ -513,7 +513,7 @@ fn apply_weighted_rrf_contract() {
         mk_hit(HitKind::Caller, "a.rs", 2, 5.0),
         mk_hit(HitKind::Asgrep, "b.rs", 2, 5.0),
     ];
-    apply_weighted_rrf(&mut tied, &weights);
+    apply_weighted_rrf(&mut tied, &weights, "");
     assert_eq!(tied.len(), 5);
     let by_key = |f: &str, line: u32| {
         tied.iter()
@@ -549,7 +549,7 @@ fn apply_weighted_rrf_contract() {
         let mut lexical = mk_hit(HitKind::Asgrep, "declaration.rs", 7, 1.0);
         lexical.excerpt = declaration.into();
         let mut declaration_only = vec![definition.clone(), lexical.clone()];
-        apply_weighted_rrf(&mut declaration_only, &weights);
+        apply_weighted_rrf(&mut declaration_only, &weights, "");
         assert_eq!(declaration_only.len(), 1);
         assert_eq!(
             declaration_only[0].score,
@@ -565,7 +565,7 @@ fn apply_weighted_rrf_contract() {
         // the repeated record without eagerly loading the whole body.
         let mut lazy = vec![definition.clone(), lexical.clone()];
         lazy[0].excerpt.clear();
-        apply_weighted_rrf(&mut lazy, &weights);
+        apply_weighted_rrf(&mut lazy, &weights, "");
         assert_eq!(
             lazy[0].score,
             1.0 / 61.0,
@@ -581,7 +581,7 @@ fn apply_weighted_rrf_contract() {
             } else {
                 distinct[1].excerpt = "generation += 1".into();
             }
-            apply_weighted_rrf(&mut distinct, &weights);
+            apply_weighted_rrf(&mut distinct, &weights, "");
             assert_eq!(distinct[0].score, 1.0 / 61.0 + 1.0 / 61.0);
         }
     }
@@ -605,7 +605,7 @@ fn semantic_magnitude_vote_contract() {
         mk_hit(HitKind::Embed, "n.rs", 1, 0.3),
         mk_hit(HitKind::Embed, "g.rs", 1, 0.9),
     ];
-    apply_weighted_rrf(&mut hits, &weights);
+    apply_weighted_rrf(&mut hits, &weights, "");
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].file, "g.rs");
     assert_eq!(
@@ -624,7 +624,7 @@ fn semantic_magnitude_vote_contract() {
         mk_hit(HitKind::Embed, "n.rs", 1, 1.2),
         mk_hit(HitKind::Embed, "g.rs", 1, 3.6),
     ];
-    apply_weighted_rrf(&mut scaled, &weights);
+    apply_weighted_rrf(&mut scaled, &weights, "");
     assert_eq!(scaled[0].score.to_bits(), hits[0].score.to_bits());
     assert_eq!(scaled[1].score.to_bits(), hits[1].score.to_bits());
 
@@ -643,7 +643,7 @@ fn semantic_magnitude_vote_contract() {
         mk_hit(HitKind::Def, "w.rs", 1, 5.0),
         mk_hit(HitKind::Embed, "g.rs", 1, 0.9),
     ];
-    apply_weighted_rrf(&mut hits, &conceptual);
+    apply_weighted_rrf(&mut hits, &conceptual, "");
     let gold = hits.iter().find(|h| h.file == "g.rs").expect("gold kept");
     let wrong = hits.iter().find(|h| h.file == "w.rs").expect("wrong kept");
     assert!(
@@ -683,7 +683,7 @@ fn weak_cosine_loses_extra_channel_votes() {
         mk_hit(HitKind::Embed, "w.rs", 1, 0.5),
         mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
     ];
-    apply_weighted_rrf(&mut hits, &weights);
+    apply_weighted_rrf(&mut hits, &weights, "");
     let gold = hits.iter().find(|h| h.file == "g.rs").expect("gold");
     let weak = hits.iter().find(|h| h.file == "w.rs").expect("weak");
     assert!(
@@ -700,7 +700,7 @@ fn weak_cosine_loses_extra_channel_votes() {
         mk_hit(HitKind::Def, "d.rs", 1, 5.0),
         mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
     ];
-    apply_weighted_rrf(&mut absent, &weights);
+    apply_weighted_rrf(&mut absent, &weights, "");
     let def_only = absent.iter().find(|h| h.file == "d.rs").expect("def");
     assert_eq!(def_only.score, 1.35 * (1.0 / 61.0));
 
@@ -711,7 +711,7 @@ fn weak_cosine_loses_extra_channel_votes() {
         mk_hit(HitKind::Embed, "c.rs", 1, 0.95),
         mk_hit(HitKind::Embed, "g.rs", 1, 1.0),
     ];
-    apply_weighted_rrf(&mut close, &weights);
+    apply_weighted_rrf(&mut close, &weights, "");
     let close_hit = close.iter().find(|h| h.file == "c.rs").expect("close");
     assert_eq!(
         close_hit.score,
@@ -1041,4 +1041,156 @@ fn determinism_contract() {
             assert_eq!(sens, expected_sens, "sensitivity table must match serial");
         }
     });
+}
+
+/// INTENT: path-scope prior — for identical channel evidence (rank-0 in one
+/// channel each, equal weights), a production-source row must fuse strictly
+/// above a test-path row (segment `tests/`, filename `*_test.rs`), the
+/// demotion is bounded (scaled score lands in (0.35, 0.45) x its raw RRF
+/// value — never zeroed, so test-only matches still surface), and a
+/// production-named file is untouched (exact raw RRF bits). Semgrep-lane
+/// evidence: docs/progress/conformance-negative-results.md, scope-prior
+/// entry (same-baseline replay 0.554 -> 0.597, zero rank-1 losses).
+/// KILLS: scale-removed mutant (ties -> strict > fails), scale-0 mutant
+/// (lower band), scale-1 mutant (upper band), over-broad classifier
+/// (production row leaves exact raw bits), filename-blind classifier
+/// (widget_test.rs assert).
+#[test]
+fn scope_prior_demotes_test_paths_bounded() {
+    let mut hits = vec![
+        mk_hit(HitKind::Asgrep, "src/widget.rs", 10, 1.0),
+        mk_hit(HitKind::Def, "tests/test_widget.py", 4, 1.0),
+        mk_hit(HitKind::Def, "src/widget_test.rs", 7, 1.0),
+    ];
+    let _ = ast_sgrep_core::fusion::apply_weighted_rrf(&mut hits, &ChannelWeights::default(), "");
+    let by_file = |f: &str| {
+        hits.iter()
+            .find(|h| h.file == f)
+            .expect("row survives fusion")
+    };
+    let prod = by_file("src/widget.rs");
+    let seg = by_file("tests/test_widget.py");
+    let fname = by_file("src/widget_test.rs");
+
+    // Production row keeps the exact raw single-channel rank-0 RRF value.
+    assert_eq!(
+        prod.score.to_bits(),
+        (1.0f64 / 61.0f64).to_bits(),
+        "production path must not be scaled"
+    );
+
+    // Identical evidence, test path -> strictly lower, bounded to the
+    // (0.35, 0.45) band around the raw value.
+    assert!(
+        prod.score > seg.score,
+        "tests/ segment path must fuse below production"
+    );
+    assert!(
+        prod.score > fname.score,
+        "*_test.rs filename must fuse below production"
+    );
+    for row in [seg, fname] {
+        let raw = 1.0f64 / 61.0f64;
+        assert!(
+            row.score > 0.35 * raw && row.score < 0.45 * raw,
+            "demotion must stay bounded (got {} vs raw {})",
+            row.score,
+            raw
+        );
+    }
+
+    // Query-side test intent disables the prior entirely: a query asking
+    // to test/verify behavior must keep test-path golds competitive
+    // (frozen RepoQA: lazydocker-06, croc-06, go-zero-06, lux-05/06 all
+    // name testing in the query and regressed under the unconditional
+    // prior). KILLS: guard-dead mutant (guarded row loses exact raw bits).
+    let mut guarded = vec![
+        mk_hit(HitKind::Asgrep, "src/widget.rs", 10, 1.0),
+        mk_hit(HitKind::Def, "tests/test_widget.py", 4, 1.0),
+    ];
+    let _ = ast_sgrep_core::fusion::apply_weighted_rrf(
+        &mut guarded,
+        &ChannelWeights::default(),
+        "please test the widget dispatcher",
+    );
+    let g_prod = guarded.iter().find(|h| h.file == "src/widget.rs").unwrap();
+    let g_test = guarded
+        .iter()
+        .find(|h| h.file == "tests/test_widget.py")
+        .unwrap();
+    assert_eq!(
+        g_test.score.to_bits(),
+        g_prod.score.to_bits(),
+        "test-seeking query must disable the scope prior (raw RRF bits on both rows)",
+    );
+}
+
+/// INTENT: C/C++ declaration-stub demotion — when a 1-line header
+/// prototype stub outranks a multi-line header block in the same channel
+/// (the round-H regression shape: oatpp-01 5->12, oatpp-04 6->22,
+/// node-sass-07 13->22 — 1-line stubs like `tcp.h:101-101` insert above
+/// doc-rich golds), the multi-line block must fuse strictly above the
+/// stub. Demotion is bounded: scaled score in (0.45, 0.55) x its raw RRF
+/// value. Classifier is scoped: a 1-line non-C/C++ hit and a multi-line
+/// C/C++ hit keep exact raw RRF bits (never demoted).
+/// KILLS: scale-removed mutant (flip fails), off-mutant (band fails),
+/// over-broad family classifier (rust row loses exact bits), span-blind
+/// classifier (multi-line row loses exact bits).
+/// Kill switch for paired arms: `ASGREP_DECL_STUB_SCALE=1.0`.
+#[test]
+fn decl_stub_demotion_bounded() {
+    // One Def channel; raw scores give channel ranks lib.rs (1) >
+    // Pool.hpp stub (2) > Provider.hpp block (3), so pre-lever the stub
+    // fuses above the block — exactly the regression shape.
+    let mut hits = vec![
+        mk_hit(HitKind::Def, "src/lib.rs", 10, 1.0),
+        mk_hit(HitKind::Def, "src/Pool.hpp", 75, 0.99),
+    ];
+    let mut block = mk_hit(HitKind::Def, "src/Provider.hpp", 144, 0.98);
+    block.line_end = 147; // 4-line doc-rich declaration block
+    hits.push(block);
+    let _ = ast_sgrep_core::fusion::apply_weighted_rrf(&mut hits, &ChannelWeights::default(), "");
+
+    let stub = hits
+        .iter()
+        .find(|h| h.file == "src/Pool.hpp")
+        .expect("stub row survives fusion");
+    let block_row = hits
+        .iter()
+        .find(|h| h.file == "src/Provider.hpp")
+        .expect("block row survives fusion");
+    let rust = hits
+        .iter()
+        .find(|h| h.file == "src/lib.rs")
+        .expect("rust row survives fusion");
+
+    // Scoped classifier: non-C/C++ 1-liner and multi-line C/C++ keep the
+    // exact raw single-channel RRF bits.
+    assert_eq!(
+        rust.score.to_bits(),
+        (1.0f64 / 61.0f64).to_bits(),
+        "non-C/C++ 1-line hit must not be scaled"
+    );
+    assert_eq!(
+        block_row.score.to_bits(),
+        (1.0f64 / 63.0f64).to_bits(),
+        "multi-line C/C++ hit must not be scaled"
+    );
+
+    // The flip: the doc-rich block fuses strictly above the stub.
+    assert!(
+        block_row.score > stub.score,
+        "multi-line block must fuse above the 1-line stub (block {} vs stub {})",
+        block_row.score,
+        stub.score
+    );
+
+    // Bounded demotion: (0.45, 0.55) x raw rank-2 RRF.
+    let raw = 1.0f64 / 62.0f64;
+    assert!(
+        stub.score > 0.45 * raw && stub.score < 0.55 * raw,
+        "stub demotion must stay bounded (got {} vs raw {})",
+        stub.score,
+        raw
+    );
 }

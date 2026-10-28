@@ -6,8 +6,10 @@
 //! (`ast_sgrep_codemode::io`), so all three surfaces answer identically.
 //! Read is an INDEX-COUPLED reader like outline: opening the store inherits
 //! the unindexed teaching error; windows fall back to a bounded disk scan
-//! for paths the index does not cover. Fail-closed: jail escapes, inverted
-//! ranges, and ref floods are usage errors before any file is opened.
+//! the index does not cover. Fail-closed: jail escapes, inverted ranges,
+//! and ref floods are usage errors before any file is opened; string refs
+//! whose claimed lines lie past EOF are rejected with the file's real
+//! bound after opening (MCP `read_node` parity).
 use crate::cli_args::ReadArgs;
 use crate::Cli;
 use anyhow::Context;
@@ -48,14 +50,18 @@ pub(crate) fn run_read(cli: &Cli, args: &ReadArgs) -> anyhow::Result<()> {
             Ok(spec)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let context_lines = args
-        .context_lines
-        .min(ast_sgrep_core::MAX_EXCERPT_LINES);
+    let context_lines = args.context_lines.min(ast_sgrep_core::MAX_EXCERPT_LINES);
     let max_chars = args.max_chars.clamp(1, MAX_READ_CHARS);
     let store = crate::index_cmd::open_readonly_store(&root, cli)?;
     let mut windows = Vec::with_capacity(specs.len());
     for spec in &specs {
-        windows.push(read_one_window(&store, &root, spec, context_lines, max_chars)?);
+        windows.push(read_one_window(
+            &store,
+            &root,
+            spec,
+            context_lines,
+            max_chars,
+        )?);
     }
     let count = windows.len();
     if cli.json {

@@ -132,7 +132,9 @@ public:
         .map(|s| (s.name.clone(), format!("{:?}", s.kind).to_lowercase()))
         .collect();
     assert!(
-        names.iter().any(|(n, k)| n == "parse_widget" && k == "function"),
+        names
+            .iter()
+            .any(|(n, k)| n == "parse_widget" && k == "function"),
         "free-function prototype extracted: {names:?}"
     );
     assert!(
@@ -140,7 +142,9 @@ public:
         "class-method declaration extracted: {names:?}"
     );
     assert!(
-        !names.iter().any(|(n, k)| n == "cache_size" && (k == "function" || k == "method")),
+        !names
+            .iter()
+            .any(|(n, k)| n == "cache_size" && (k == "function" || k == "method")),
         "plain variable declaration must not become a function/method symbol: {names:?}"
     );
 

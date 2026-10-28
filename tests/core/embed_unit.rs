@@ -23,7 +23,6 @@ fn member_indices_match_linear_scan() {
     assert_eq!(got, expect);
 }
 
-
 #[test]
 fn python_docstring_below_def_populates_doc_field() {
     use ast_sgrep_core::semantic_chunk::build_semantic_chunks;

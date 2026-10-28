@@ -47,7 +47,10 @@ _SEARCH_SCHEMA = {
         "reading, no re-grepping. One grammar covers the ladder: "
         "parse_pattern (fused), defs:SYMBOL, callers:SYMBOL, "
         "imports:MODULE, word:TERM, pattern:'fn name($$$A)'. The index "
-        "persists per repo and warms as you work. For plain-text, log, or "
+        "persists per repo and warms as you work. A `truncated: true` "
+        "envelope means more true hits existed than the limit showed — "
+        "re-run with a higher limit before concluding a name is absent. "
+        "For plain-text, log, or "
         "config lookups, use your text search.",
     "parameters": {
         "type": "object",
@@ -58,7 +61,9 @@ _SEARCH_SCHEMA = {
                 "description": "Fused keyword/AST query: plain words, symbols, "
                                "snake_case fragments ('parse_pattern', 'auth refresh'), "
                                "structural patterns with metavariables "
-                               "('fn name($$$A)'), or a channel prefix — "
+                               "('fn $NAME($$$)' answers every fn-shaped item; "
+                               "concrete bodyless names answer trait signatures only) "
+                               "— or a channel prefix — "
                                "defs:SYMBOL, callers:SYMBOL, imports:MODULE, "
                                "word:TERM, pattern:PATTERN",
             },
@@ -203,6 +208,22 @@ def register(ctx):
         ) if k in args}
         if "query" not in forwarded:
             return _fail("query is required")
+        limit = forwarded.get("limit")
+        if isinstance(limit, bool):
+            limit = None
+        elif isinstance(limit, str) and limit.isdigit():
+            # Some hosts forward numerics as strings; accept the canonical ones.
+            limit = int(limit)
+        if limit is not None:
+            # br-m2b: the bridge does not enforce schema maximums (a live
+            # limit=500 call returned a 224KB envelope); the handler owns the
+            # contract its schema teaches. Clamp to the schema's 1..=200.
+            if not isinstance(limit, (int, float)):
+                limit = None
+            else:
+                forwarded["limit"] = max(1, min(200, int(limit)))
+        if limit is None and "limit" in forwarded:
+            del forwarded["limit"]
         return dispatch("search", forwarded)
 
     def read(params, **kwargs):
@@ -210,6 +231,14 @@ def register(ctx):
         forwarded = {k: args[k] for k in ("refs", "context_lines", "max_chars") if k in args}
         if "refs" not in forwarded:
             return _fail("refs is required", "Pass file refs or hit ids from asgrep_search.")
+        # Models repeat refs (search echo + copy-paste): every duplicate
+        # forwarded returned an identical window, paying window budget twice
+        # for zero information (br-puf). Dedupe order-preserving; first
+        # occurrence wins.
+        seen = set()
+        forwarded["refs"] = [
+            r for r in forwarded["refs"] if not (r in seen or seen.add(r))
+        ]
         return dispatch("read", forwarded)
 
     def status(params, **kwargs):

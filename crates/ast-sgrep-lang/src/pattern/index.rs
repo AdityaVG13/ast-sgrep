@@ -190,6 +190,11 @@ pub(crate) fn class_declaration_prefix(node: &Node, source: &str) -> Option<&'st
 /// AST node kind → short declaration prefix used in `decl:{prefix}:{name}` signatures.
 pub const DECL_KIND_PREFIXES: &[(&str, &str)] = &[
     ("function_item", "fn"),
+    // br-tvv: rust trait method signatures. Without this row the indexer
+    // emits no `kind:`/`decl:fn:` rows for sig-only files, and the `fn `
+    // candidate narrowing (CACHED_DECL_KIND_TABLE) excludes them entirely —
+    // `pattern:'fn $A($$$)'` answered 0 hits on a 3-trait fixture.
+    ("function_signature_item", "fn"),
     ("struct_item", "struct"),
     ("struct_declaration", "struct"),
     ("struct_specifier", "struct"),

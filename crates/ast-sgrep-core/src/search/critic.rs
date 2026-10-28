@@ -507,14 +507,54 @@ pub fn apply_critic(
         }),
     };
     let mut kept = Vec::with_capacity(hits.len());
+    let trace = std::env::var("ASGREP_CRITIC_TRACE").is_ok();
+    if trace {
+        eprintln!(
+            "[critic-trace] query_ident={:?} conceptual={} fragments={:?} expanded_len={}",
+            ctx.query_ident,
+            conceptual,
+            ctx.fragments.keys().collect::<Vec<_>>(),
+            ctx.expanded.as_ref().map_or(0, |e| e.len())
+        );
+    }
     for (index, mut hit) in hits.drain(..).enumerate() {
         if uncorroborated.contains(&index) {
             push_note(&mut hit, CriticNote::SemanticUncorroborated);
         }
+        let mut stages: Vec<(&'static str, f64)> = Vec::new();
+        let fused = hit.score;
+        let mut before = hit.score;
         stage_channel_agreement(&mut hit);
+        if trace && hit.score != before {
+            stages.push(("agreement", hit.score / before));
+        }
+        before = hit.score;
         stage_identifier_adjudication(&mut hit, &ctx);
+        if trace && hit.score != before {
+            stages.push(("identifier", hit.score / before));
+        }
+        before = hit.score;
         stage_context_penalties(&mut hit, &ctx);
+        if trace && hit.score != before {
+            stages.push(("context", hit.score / before));
+        }
+        before = hit.score;
         stage_concept_affinity(&mut hit, &ctx);
+        if trace && hit.score != before {
+            stages.push(("concept", hit.score / before));
+        }
+        if trace {
+            eprintln!(
+                "[critic-trace] hit idx={index} {}:{}-{} symbol={:?} kind={:?} fused={fused:.4} final={final:.4} stages={stages:?}",
+                hit.file,
+                hit.line_start,
+                hit.line_end,
+                hit.symbol,
+                hit.kind,
+                final = hit.score,
+                stages = stages
+            );
+        }
         kept.push(hit);
     }
     *hits = kept;

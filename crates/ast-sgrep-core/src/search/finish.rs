@@ -178,12 +178,18 @@ pub(crate) fn finish_response_checked_lazy(
             prevented_read_bytes: 0,
             // Stamped by the Searcher, which owns the snapshot (d3l5).
             snapshot: SnapshotStamp::default(),
+            // Count mode aggregates every hit pre-gates; nothing is cut.
+            truncated: false,
             query_expansions: Vec::new(),
         };
         super::record_ledger_from_env(&response);
         return Ok(response);
     }
     let gate_limit = options.retained_limit();
+    // br-tvv: hits are intact here (post dedup/filter, pre ranking gates).
+    // Any len above the gate budget here means the envelope cannot show the
+    // full answer set — the flag must say so.
+    let pre_gate_count = hits.len();
     let hybrid = parsed.mode == QueryMode::Hybrid;
     let best_definition_index = if hybrid {
         hits.iter()
@@ -273,6 +279,7 @@ pub(crate) fn finish_response_checked_lazy(
         prevented_read_bytes,
         // Stamped by the Searcher, which owns the snapshot (d3l5).
         snapshot: SnapshotStamp::default(),
+        truncated: pre_gate_count > gate_limit,
         query_expansions: Vec::new(),
     };
     super::record_ledger_from_env(&response);

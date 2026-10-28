@@ -130,6 +130,7 @@ fn kind_sort_key(kind: SymbolKind) -> &'static str {
         SymbolKind::Interface => "interface",
         SymbolKind::Enum => "enum",
         SymbolKind::Doc => "doc",
+        SymbolKind::Static => "static",
     }
 }
 

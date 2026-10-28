@@ -187,7 +187,7 @@ fn measure_hybrid_fusion(searcher: &Searcher, cfg: &Config) -> Result<PartTiming
         let mut hits = candidates.clone();
         intent::route_hits(&parsed, &mut hits);
         let weights = intent::weights_for(intent::classify(&parsed));
-        crate::fusion::apply_weighted_rrf(&mut hits, &weights);
+        crate::fusion::apply_weighted_rrf(&mut hits, &weights, &parsed.raw);
         Ok::<_, crate::StoreError>(
             crate::search::finish_response(&parsed, &opts, hits, true)
                 .hits

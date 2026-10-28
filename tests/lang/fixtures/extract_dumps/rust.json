@@ -24,6 +24,12 @@
   ],
   "pattern_nodes": [
     {
+      "excerpt": "GLOSSARY_TABLE",
+      "line_end": 32,
+      "line_start": 32,
+      "signature": "GLOSSARY_TABLE"
+    },
+    {
       "excerpt": "GoldenRender",
       "line_end": 27,
       "line_start": 27,
@@ -64,6 +70,12 @@
       "line_end": 13,
       "line_start": 13,
       "signature": "HashMap"
+    },
+    {
+      "excerpt": "MAX_RETRIES",
+      "line_end": 34,
+      "line_start": 34,
+      "signature": "MAX_RETRIES"
     },
     {
       "excerpt": "Ready",
@@ -168,6 +180,12 @@
       "signature": "decl:fn:process"
     },
     {
+      "excerpt": "fn render_widget(&self) -> String;",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "decl:fn:render_widget"
+    },
+    {
       "excerpt": "pub fn top_level_helper(input: &str) -> String {\n    input.to_string()\n}",
       "line_end": 10,
       "line_start": 8,
@@ -202,6 +220,12 @@
       "line_end": 19,
       "line_start": 17,
       "signature": "fn process"
+    },
+    {
+      "excerpt": "fn render_widget(&self) -> String;",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "fn render_widget"
     },
     {
       "excerpt": "pub fn top_level_helper(input: &str) -> String {\n    input.to_string()\n}",
@@ -274,6 +298,12 @@
       "line_end": 19,
       "line_start": 17,
       "signature": "kind:function_item"
+    },
+    {
+      "excerpt": "fn render_widget(&self) -> String;",
+      "line_end": 28,
+      "line_start": 28,
+      "signature": "kind:function_signature_item"
     },
     {
       "excerpt": "pub struct GoldenWidget {\n    labels: HashMap<String, String>,\n}",
@@ -356,6 +386,14 @@
   ],
   "symbols": [
     {
+      "byte_end": 903,
+      "byte_start": 838,
+      "kind": "static",
+      "line_end": 32,
+      "line_start": 32,
+      "name": "GLOSSARY_TABLE"
+    },
+    {
       "byte_end": 796,
       "byte_start": 731,
       "kind": "interface",
@@ -378,6 +416,14 @@
       "line_end": 6,
       "line_start": 4,
       "name": "GoldenWidget"
+    },
+    {
+      "byte_end": 973,
+      "byte_start": 940,
+      "kind": "static",
+      "line_end": 34,
+      "line_start": 34,
+      "name": "MAX_RETRIES"
     },
     {
       "byte_end": 474,

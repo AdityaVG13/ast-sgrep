@@ -124,3 +124,51 @@ fn long_query_drops_genre_boilerplate() {
     assert!(all_dead.terms.len() > 15);
     assert!(all_dead.terms.contains(&"purpose".to_string()));
 }
+
+/// INTENT: ONE balanced wrapping quote layer on a prefixed-mode target is a
+/// delimiter, not payload — the MCP/plugin tool schemas advertise the quoted
+/// spelling (`pattern:'fn name($$$A)'`), and agents habitually quote
+/// delimited payloads; retaining the quotes made every quoted query silently
+/// empty or die at the structural-fallback gate with an error that never
+/// mentioned quotes. Content quotes stay expressible by double-wrapping
+/// (`literal:'"fn"'` searches for the bytes `"fn"`); unbalanced or mixed
+/// pairs are payload and pass through untouched.
+/// KILLS: quote-retain (advertised form goes empty), double-strip (content
+/// quotes inexpressible), and strip-unbalanced mutants.
+#[test]
+fn prefixed_targets_strip_one_quote_layer() {
+    for (query, want) in [
+        ("pattern:'fn $A($$$)'", "fn $A($$$)"),
+        ("pattern:\"fn $A($$$)\"", "fn $A($$$)"),
+        ("defs:'plain'", "plain"),
+        ("callers:'Bar'", "Bar"),
+        ("imports:'os'", "os"),
+        ("regex:'A+'", "A+"),
+        ("word:'Foo'", "Foo"),
+        ("literal:'\"fn\"'", "\"fn\""),
+    ] {
+        let parsed = ParsedQuery::parse(query);
+        assert_eq!(parsed.target.as_deref(), Some(want), "target for {query:?}");
+    }
+    // terms follow the stripped target: pattern keeps its raw text, word
+    // lowercases AFTER the strip.
+    let pattern = ParsedQuery::parse("pattern:'fn $A($$$)'");
+    assert_eq!(pattern.terms, vec!["fn $A($$$)".to_string()]);
+    let word = ParsedQuery::parse("word:'Foo'");
+    assert_eq!(word.terms, vec!["foo".to_string()]);
+    // raw echoes the full query verbatim (QG-009): the strip is target-only.
+    assert_eq!(pattern.raw, "pattern:'fn $A($$$)'");
+    // Unbalanced or mixed quote pairs are payload, not delimiters.
+    for (query, want) in [
+        ("pattern:'fn", "'fn"),
+        ("pattern:\"a'", "\"a'"),
+        ("pattern:x'", "x'"),
+    ] {
+        let parsed = ParsedQuery::parse(query);
+        assert_eq!(
+            parsed.target.as_deref(),
+            Some(want),
+            "unbalanced quotes must stay untouched: {query}"
+        );
+    }
+}

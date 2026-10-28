@@ -306,6 +306,56 @@ pub(crate) fn scope_scale(path: &str) -> f64 {
     }
 }
 
+/// C/C++ declaration-stub demotion scale. Kept-on evidence 2026-10-26
+/// (round-H follow-up; full paired-arm numbers and retry predicates in
+/// docs/progress/perf-negative-results.md). Round-H header-prototype
+/// extraction floods header-heavy corpora with 1-line stub hits
+/// (`tcp.h:101-101`) that insert above doc-rich golds (oatpp-01 5->12,
+/// oatpp-04 6->22, node-sass-07 13->22). A hit in a C/C++-family file
+/// whose span is at most 2 lines is scaled by DEFAULT_SCALE; everything
+/// else is 1.0. Known residual: a gold file whose delegate row is an
+/// orphan stub sinks with the flood (oatpp-05 7->15). Two orphan-rescue
+/// witness variants — shortlist-membership and corpus-level index
+/// lookup — were both REJECTED 2026-10-26 (see ledger): un-demoting
+/// orphan stubs costs more mrr10 than it recovers. `ASGREP_DECL_STUB_
+/// SCALE` overrides the constant for paired arms (1.0 = off);
+/// unparseable values fall back to the default so a typo never
+/// silently disables the demotion.
+pub(crate) fn decl_stub_scale(path: &str, line_start: u32, line_end: u32) -> f64 {
+    const DEFAULT_SCALE: f64 = 0.5;
+    const MAX_STUB_SPAN_LINES: u32 = 2;
+    let mut scale = DEFAULT_SCALE;
+    if let Some(v) = std::env::var_os("ASGREP_DECL_STUB_SCALE") {
+        if let Ok(f) = v.to_string_lossy().parse::<f64>() {
+            if f.is_finite() && f > 0.0 {
+                scale = f;
+            }
+        }
+    }
+    if scale >= 1.0 {
+        return 1.0;
+    }
+    let span = line_end.saturating_sub(line_start) + 1;
+    if span <= MAX_STUB_SPAN_LINES && is_c_family_path(path) {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// Extension-only C/C++ family classification (headers and sources).
+pub(crate) fn is_c_family_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    match name.rsplit_once('.') {
+        Some((_, ext)) => matches!(
+            ext,
+            "h" | "hpp" | "hh" | "hxx" | "h++" | "c" | "cc" | "cpp" | "cxx" | "c++"
+        ),
+        None => false,
+    }
+}
+
 /// Whole-segment and filename test-path classification, ASCII-folded.
 /// Segments: tests/test/testing/testdata/spec/specs/fixtures/bench/benches/
 /// example/examples/sample/samples/demo/demos. Filenames: `test_*`,
@@ -569,6 +619,17 @@ pub fn apply_weighted_rrf(
         } else {
             scope_scale(&result.file)
         };
+        // C/C++ declaration-stub demotion: 1-2-line prototype stubs sink
+        // below doc-rich blocks (round-H follow-up; predicate in
+        // docs/progress/perf-negative-results.md). Paired-arm kill switch
+        // ASGREP_DECL_STUB_SCALE=1.0. Orphan-rescue witness variants
+        // (shortlist-membership AND corpus-level index lookup) were both
+        // REJECTED 2026-10-26 — un-demoting orphan stubs costs more mrr10
+        // than it recovers in either formulation. A per-file stub CAP
+        // (escalate a file's 4th-onward stub) was also REJECTED 2026-10-26:
+        // it sank gold-delegate stubs with the flood (uvw-01 1->3) for a
+        // net cpp mrr10 .6196->.6168 — same classifier-ambiguity root.
+        score *= decl_stub_scale(&result.file, result.line_start, result.line_end);
         result.score = score;
         if capture {
             dump_rows.push(FusionDumpRow {

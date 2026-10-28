@@ -396,7 +396,11 @@ fn help_markers_identical_across_sets() {
         assert!(output.status.success());
         let help = String::from_utf8_lossy(&output.stdout).into_owned();
         assert!(!help.is_empty(), "{argv:?} help empty");
-        assert_eq!(help.matches("neural-embed").count(), 0, "{argv:?} help={help}");
+        assert_eq!(
+            help.matches("neural-embed").count(),
+            0,
+            "{argv:?} help={help}"
+        );
         assert_eq!(help.matches("--rerank").count(), 0, "{argv:?} help={help}");
     }
 }

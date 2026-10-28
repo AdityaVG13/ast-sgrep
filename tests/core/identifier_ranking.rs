@@ -1090,3 +1090,344 @@ pub fn flush_pending_alerts() { let _ = 1; }
     warm.warm_search_path().expect("warm");
     assert_promoted(&warm, "warm");
 }
+
+// ---------------------------------------------------------------------------
+// Verb-alias discovery: NL verbs (check/parse/register) whose literal form
+// names no indexed symbol must still reach the code-verb surface
+// (matched/loads/add_url_rule) that implements them. Measured on the
+// semgrep-lane foreign corpora: all four gold-outside-top-10 misses
+// (rg-typesmatch, fl-routes, fl-json, fl-config) had a zero-population
+// query verb as the only handle on the gold symbol.
+// ---------------------------------------------------------------------------
+
+fn build_searcher(temp: &TempDir) -> Searcher {
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 10,
+        use_embed: false,
+        ..SearchOptions::default()
+    })
+    .expect("searcher")
+}
+
+fn verb_alias_corpus() -> (TempDir, Searcher) {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/types.rs",
+        r#"
+pub struct Types {
+    name: String,
+}
+
+impl Types {
+    pub fn matched(&self, path: &str) -> bool {
+        let _ = (self, path);
+        true
+    }
+}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/json_provider.rs",
+        r#"
+pub struct JsonProvider {
+    tag: u8,
+}
+
+impl JsonProvider {
+    pub fn loads(&self, raw: &str) -> u8 {
+        let _ = (self, raw);
+        0
+    }
+}
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/sansio_app.py",
+        r#"
+class SansioApp:
+    def add_url_rule(self, rule, endpoint):
+        return rule, endpoint
+"#,
+    );
+    // Corpus regression (lane-measured): a verb carried by UNRELATED symbol
+    // names (df > 0) with zero co-occurrence must still alias — the old
+    // zero-df gate never fired on real corpora for exactly this reason.
+    write_src(
+        temp.path(),
+        "src/unrelated.py",
+        r#"
+def unrelated_check_marker(x):
+    return x
+"#,
+    );
+    let searcher = build_searcher(&temp);
+    (temp, searcher)
+}
+
+fn literal_verb_corpus() -> (TempDir, Searcher) {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/guard.py",
+        r#"
+def check_all(items):
+    return items
+
+def matched_guard(items):
+    return items
+"#,
+    );
+    let searcher = build_searcher(&temp);
+    (temp, searcher)
+}
+
+fn assert_top_def_symbol(searcher: &Searcher, query: &str, want: &str) {
+    let resp = searcher.search(query).expect("search");
+    let hits: Vec<&str> = resp
+        .hits
+        .iter()
+        .filter_map(|h| h.symbol.as_deref())
+        .collect();
+    assert!(
+        hits.iter().take(6).any(|s| *s == want),
+        "query {query:?}: expected symbol {want:?} within the first symbols, got {hits:?}"
+    );
+}
+
+#[test]
+fn verb_alias_queries_reach_code_verb_symbols() {
+    let (_keep, searcher) = verb_alias_corpus();
+    // check -> matched
+    assert_top_def_symbol(
+        &searcher,
+        "where does the app check a file against the type filter",
+        "matched",
+    );
+    // parse -> loads
+    assert_top_def_symbol(
+        &searcher,
+        "where does the app parse json request bodies",
+        "loads",
+    );
+    // register -> add_url_rule
+    assert_top_def_symbol(
+        &searcher,
+        "where does the app register url routes",
+        "add_url_rule",
+    );
+}
+
+#[test]
+fn verb_alias_yields_to_literal_symbol_verb() {
+    let (_keep, searcher) = literal_verb_corpus();
+    // "check" IS a populated symbol prefix here (check_all): the literal
+    // surface must win and the alias target must not displace it.
+    let resp = searcher
+        .search("where does it check all the items")
+        .expect("search");
+    let ranked: Vec<&str> = resp
+        .hits
+        .iter()
+        .filter_map(|h| h.symbol.as_deref())
+        .collect();
+    let check_pos = ranked.iter().position(|s| *s == "check_all");
+    let matched_pos = ranked.iter().position(|s| *s == "matched_guard");
+    assert!(
+        check_pos.is_some(),
+        "literal verb symbol must be found: {ranked:?}"
+    );
+    if let (Some(c), Some(m)) = (check_pos, matched_pos) {
+        assert!(c < m, "literal {c:?} must outrank alias {m:?}: {ranked:?}");
+    }
+    // The zero-df gate: "check" names a symbol here, so no alias expansion
+    // may happen at all — the alias target must be absent from the symbol
+    // surface (embed off, no call sites: nothing else can carry it).
+    assert!(
+        !ranked.contains(&"matched_guard"),
+        "alias must not fire for a populated verb: {ranked:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Static-item indexing: a `static`/`const` table IS the answer to "where
+// does X map types to globs"-class queries. Measured on the semgrep lane
+// (rg-filetypes): `DEFAULT_TYPES` — the gold — was never a candidate
+// because the extractor dropped statics entirely; no def row can represent
+// a data table, so the def channel cannot see it at any rank.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn static_table_is_a_def_candidate() {
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/registry.rs",
+        r#"
+pub static DEFAULT_TYPE_GLOBS: &[(&str, &[&str])] = &[
+    ("rust", &["*.rs"]),
+    ("python", &["*.py"]),
+    ("ruby", &["*.rb"]),
+];
+"#,
+    );
+    write_src(
+        temp.path(),
+        "src/user.rs",
+        r#"
+pub fn describe_type(kind: &str) -> &'static str {
+    let _ = DEFAULT_TYPE_GLOBS;
+    kind
+}
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = build_searcher(&temp);
+    let resp = searcher
+        .search("where does the app map file types like rust to globs")
+        .expect("search");
+    let syms: Vec<&str> = resp
+        .hits
+        .iter()
+        .filter_map(|h| h.symbol.as_deref())
+        .collect();
+    assert!(
+        syms.iter().take(6).any(|s| *s == "DEFAULT_TYPE_GLOBS"),
+        "static data table must be a def candidate; symbols: {syms:?}"
+    );
+}
+
+#[test]
+fn def_row_file_stem_affinity_keeps_static_table_over_function_crowd() {
+    // rg-filetypes lane miss: the gold hit is a `static` table
+    // (DEFAULT_TYPES in default_types.rs). TYPE_SYMBOL_WEIGHT (0.65) puts
+    // every equal-term function def above it, so retain_scored_hits'
+    // top-32 window truncates it out of the def channel before fusion —
+    // the critic can never see it. A def row whose FILE STEM matches a
+    // distinctive query term ("types" in "default_types") must carry a
+    // stem-affinity multiplier strong enough to rank above the function
+    // crowd (0.65 * B > 1.0 => B > 1.54).
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/default_types.rs",
+        r#"
+// static table: map file types like rust and python to globs
+pub static DEFAULT_TYPES: &[(&str, &[&str])] = &[
+    ("rust", &["*.rs"]),
+    ("python", &["*.py"]),
+];
+
+pub fn default_types_are_sorted() -> bool { true }
+"#,
+    );
+    // 60 one-liner defs: the def channel's SQL window is 32 rows for
+    // limit 16, so the crowd must overflow it for truncation to bite.
+    for i in 0..60 {
+        write_src(
+            temp.path(),
+            &format!("src/table/f{i}.rs"),
+            &format!(r#"pub fn types_f{i}(t: &str) -> bool {{ t.contains("globs") }}"#),
+        );
+    }
+    // Minority-bucket pressure: the SQL quota reserves half the window for
+    // non-function kinds in PATH order, and `src/default_types.rs` sorts
+    // before `src/table/`. Without earlier-pathing type symbols the static
+    // rides a reserved slot and survives even without stem affinity.
+    for i in 0..20 {
+        write_src(
+            temp.path(),
+            &format!("src/a_types_table_{i}.rs"),
+            &format!(r#"pub struct TypesTable{i} {{ pub globs: Vec<String> }}"#),
+        );
+    }
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 16,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    let query = "where does the engine map types to globs";
+
+    // Contract: the stem-matching static def row must REACH FUSION (be
+    // emitted by the def channel with a definition rank) instead of being
+    // truncated by retain_scored_hits' retained window — the rg-filetypes
+    // lane miss class. Final response rank is NOT asserted: per-line RRF
+    // fusion needs cross-channel agreement a def-only row cannot earn, so
+    // the channel-survival contract is the honest boundary of this lever
+    // (fusion membership is observable via the ASGREP_FUSION_DUMP table).
+    let dump_path = std::env::temp_dir().join("asgrep_stem_affinity_fusion_dump.json");
+    let _ = std::fs::remove_file(&dump_path);
+    std::env::set_var("ASGREP_FUSION_DUMP", &dump_path);
+    let response = searcher.search(query).expect("search");
+    std::env::remove_var("ASGREP_FUSION_DUMP");
+    let _ = response;
+
+    // The dump is append-mode JSONL: one line per fusion invocation.
+    let mut saw_static_def = false;
+    let mut saw_function_def = false;
+    for line in std::fs::read_to_string(&dump_path)
+        .expect("fusion dump")
+        .lines()
+    {
+        let Ok(dump) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(results) = dump.get("results").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for row in results {
+            let file = row.get("file").and_then(|v| v.as_str()).unwrap_or("");
+            let line = row
+                .get("line_start")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            let def_rank = row
+                .get("ranks")
+                .and_then(|v| v.get("definition"))
+                .and_then(|v| v.as_u64());
+            // The fixture's static sits at line 3 (raw string starts with
+            // a newline); its sibling `default_types_are_sorted` is at 8.
+            if file.ends_with("default_types.rs") && line == Some(3) && def_rank.is_some() {
+                saw_static_def = true;
+            }
+            if file.ends_with("f1.rs") && def_rank.is_some() {
+                saw_function_def = true;
+            }
+        }
+    }
+    assert!(
+        saw_function_def,
+        "function def crowd must reach fusion for this test to discriminate"
+    );
+    assert!(
+        saw_static_def,
+        "stem-affinity must keep the static def row (default_types.rs:12 DEFAULT_TYPES) in the def channel's fused output; TYPE_SYMBOL_WEIGHT alone truncates it off the retained window"
+    );
+}

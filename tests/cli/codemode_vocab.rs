@@ -141,7 +141,11 @@ fn session_vocab_recovers_readonly_and_teaches_mutating() {
 
     // A near-miss naming a mutating tool never runs: it teaches.
     let near_miss = by_id("mut");
-    assert_eq!(near_miss["ok"], json!(false), "editt must not run: {near_miss}");
+    assert_eq!(
+        near_miss["ok"],
+        json!(false),
+        "editt must not run: {near_miss}"
+    );
     let error = near_miss["error"].as_str().unwrap_or_default();
     assert!(
         error.contains("mutating") || error.contains("never guessed"),

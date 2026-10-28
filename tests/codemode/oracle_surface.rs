@@ -50,6 +50,7 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
         limit: 5,
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
+        ambient_freshness: false,
     });
     assert_eq!(
         relative.config().index_path,
@@ -61,6 +62,7 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
         limit: 5,
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
+        ambient_freshness: false,
     });
     assert_eq!(
         absolute.config().index_path,
@@ -70,14 +72,29 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
     // Facet 2 (taxonomy): dispatch failures are UnknownTool; guard failures
     // are InvalidArgs; batch dispatch failures stay per-call (Ok envelope)
     // while validation failures are top-level Err. Discriminants only.
+    // 80924ef2: case/space typos of non-mutating tools RECOVER (dispatch the
+    // canonical, `recovered` stamped — happy path pinned in numerical_keeps)
+    // instead of dying as UnknownTool; only genuinely far names stay unknown.
     let mut session = session_at(temp.path());
-    for unknown in ["no-such-tool", "Search", " search", ""] {
+    for unknown in ["no-such-tool", ""] {
         let err = session
             .call(unknown, json!({"query": "x"}))
             .expect_err("unknown tool");
         assert!(
             matches!(err, CallError::UnknownTool(_)),
             "tool {unknown:?}: got {err:?}"
+        );
+    }
+    for typo in ["Search", " search"] {
+        // Pure session: the recovered dispatch resolves the name and fails
+        // downstream (empty index), proving the typo is no longer a
+        // taxonomy-level unknown.
+        let err = session
+            .call(typo, json!({"query": "x"}))
+            .expect_err("pure session has no index");
+        assert!(
+            !matches!(err, CallError::UnknownTool(_)),
+            "typo {typo:?} must recover, got {err:?}"
         );
     }
     let invalid: &[(&str, Value)] = &[
@@ -344,9 +361,11 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
     assert_eq!(projected, json!([]));
 
     // Facet 5 (unicode): unicode step ids roundtrip byte-exact; unicode tool
-    // names are UnknownTool; unicode queries are deterministic with a
-    // hand-computed empty match; batch ids echo byte-exact; the direct
-    // catalog fn agrees with the session path.
+    // names follow the same recovery rule as ASCII (80924ef2): within the
+    // distance budget they dispatch the canonical ("searχ" is one edit from
+    // "search"), far names stay UnknownTool; unicode queries are
+    // deterministic with a hand-computed empty match; batch ids echo
+    // byte-exact; the direct catalog fn agrees with the session path.
     let plan = parse_plan(&json!({"steps": [
         {"id": "étape-🔍", "tool": "catalog_search", "args": {"query": "search"}},
     ], "return": "$étape-🔍.tools.0.name"}))
@@ -355,9 +374,19 @@ fn helpers_anchor_golden_edges_and_transforms_agree_across_paths() {
     let result = run_plan(&mut session, &plan).expect("unicode plan runs");
     assert!(result.steps.contains_key("étape-🔍"));
     assert_eq!(result.return_value, json!("search"));
+    // "searχ" is one edit from "search" (χ→c): within budget, dispatches the
+    // canonical and fails downstream on this pure session (no index).
     let err = session
         .call("searχ", json!({"query": "x"}))
-        .expect_err("unicode tool unknown");
+        .expect_err("pure session has no index");
+    assert!(
+        !matches!(err, CallError::UnknownTool(_)),
+        "near unicode typo must recover, got {err:?}"
+    );
+    // Far unicode names have no suggestion and stay taxonomy-unknown.
+    let err = session
+        .call("🔍🔍", json!({"query": "x"}))
+        .expect_err("far unicode tool unknown");
     assert!(matches!(err, CallError::UnknownTool(_)), "got {err:?}");
     let v1 = session
         .call("catalog_search", json!({"query": "héllo"}))

@@ -183,6 +183,11 @@ pub enum SymbolKind {
     Interface,
     Enum,
     Doc,
+    /// Module-level data declarations (`static`/`const` items). Data tables
+    /// (`DEFAULT_TYPES`-style) are the answer surface for "where does X
+    /// map types to globs"-class queries; without this kind the def
+    /// channel cannot represent them at any rank.
+    Static,
 }
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CallSite {

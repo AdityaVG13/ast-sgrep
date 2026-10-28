@@ -159,6 +159,14 @@ pub(crate) fn captures_for_node(
     if !is_if_prefixed(pattern.trim()) {
         capture_arguments(node, source, pattern, &mut captures)?;
     }
+    // br-hs1: a metavariable return section (`-> $R` / `: $R` / go bare
+    // `$R`) binds the declared return text; the go body-less wildcard
+    // (absent results) simply leaves it unbound.
+    if let Some(variable) = function_return_metavar(pattern) {
+        if let Some(text) = function_return_type_text(node, source) {
+            bind_capture(&mut captures, &variable, text)?;
+        }
+    }
     if let Some((variable, multi)) = body_capture(pattern) {
         let body = if is_if_prefixed(pattern.trim()) {
             if_consequence(node)
@@ -346,9 +354,15 @@ pub(crate) fn body_capture(pattern: &str) -> Option<(&str, bool)> {
 }
 
 /// `(name, multi)` for `$$$NAME` / `$NAME` in the `: body` suite after a
-/// declaration's parameter list.
+/// declaration's parameter list. Scoped to `def` families: the colon-suite
+/// body spelling exists only there — ts/php spell the post-args colon as a
+/// RETURN section (br-hs1), and binding it as a body double-bound the
+/// return metavariable (unification rejected every candidate).
 pub(crate) fn suite_body_capture(pattern: &str) -> Option<(&str, bool)> {
     let (declaration, _) = strip_declaration_modifiers(pattern);
+    if !declaration.trim_start().starts_with("def") {
+        return None;
+    }
     let open = declaration.find('(')?;
     let close = open + declaration[open..].find(')')?;
     let after = declaration[close + 1..].trim();

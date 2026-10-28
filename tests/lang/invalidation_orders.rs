@@ -9,7 +9,12 @@
 use ast_sgrep_lang::{match_pattern, native_pattern_answerable, Language};
 use ast_sgrep_testkit::{match_lines as lines, run_in_fresh_thread};
 
-const RUST_FNS: &str = "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n";
+/// br-f4w reference parity: a BODY-LESS `fn $NAME($$$)` answers
+/// `function_signature_item`s only, so the fixture carries a trait sig —
+/// the wildcard's answer is the sig line (was non-empty on function items
+/// before the parity change; reconciled 2026-10-27).
+const RUST_FNS: &str =
+    "fn alpha() {}\nfn beta() {}\nfn gamma() {}\ntrait T {\n    fn sig(&self);\n}\n";
 
 /// INTENT: per-key results identical under order permutation, schedule
 /// interleave, consult-order permutation, and pairwise commutation.
@@ -55,7 +60,9 @@ fn panel_order_permutations_agree_across_fresh_threads() {
     assert_eq!(forward[0], vec![1]);
     assert_eq!(forward[1], vec![2]);
     assert_eq!(forward[2], vec![3]);
-    assert!(!forward[3].is_empty());
+    // br-f4w: the body-less wildcard answers the trait sig (line 5) —
+    // function items never answer it (reference parity, reconciled).
+    assert_eq!(forward[3], vec![5]);
 
     // Leg 2 (schedule interleave): batched vs round-robin over the
     // (language, pattern) matrix agree per cell.

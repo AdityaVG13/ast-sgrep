@@ -43,6 +43,7 @@ fn batch_req(
         limit: Some(5),
         parallel,
         parallel_mode: None,
+        ambient_freshness: None,
         calls,
     }
 }
@@ -96,6 +97,7 @@ fn batch_auto_never_opens_n_searchers() {
             limit: Some(5),
             parallel: None,
             parallel_mode: Some(ParallelMode::Auto),
+            ambient_freshness: None,
             calls,
         },
     )
@@ -156,6 +158,7 @@ fn batch_never_parallelizes_index_repo_with_readers() {
                     args: json!({"force": false}),
                 },
             ],
+            ambient_freshness: None,
         },
     )
     .expect("batch");
@@ -274,6 +277,7 @@ fn batch_beats_cold_sequential_sessions_on_wall_time() {
             limit: Some(3),
             parallel: Some(false),
             parallel_mode: Some(ParallelMode::Serial),
+            ambient_freshness: None,
             calls,
         },
     )

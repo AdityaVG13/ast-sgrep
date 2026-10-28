@@ -117,7 +117,10 @@ def main() -> None:
         scorer = rs.Scorer(bench)
         capture = not args.no_capture
         if capture:
-            os.environ["ASGREP_FUSION_DUMP"] = str(dump)
+            # Absolute path or the dump is lost: the CLI subprocess runs with
+            # cwd=<corpus root>, and the best-effort writer in apply_weighted_rrf
+            # cannot create missing parent dirs (errors are swallowed by design).
+            os.environ["ASGREP_FUSION_DUMP"] = str(dump.resolve())
         else:
             os.environ.pop("ASGREP_FUSION_DUMP", None)
 

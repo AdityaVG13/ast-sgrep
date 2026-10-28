@@ -71,23 +71,52 @@ fn read_answers_windows_in_both_formats() {
     let idx = s.index_path.to_str().unwrap();
 
     // Human format: `==> path#Ls-Le` header, then the exact lines.
-    let (code, stdout, stderr) = run(&["--index-path", idx, "read", "src/a.rs#L2-L3", "--root", root]);
+    let (code, stdout, stderr) = run(&[
+        "--index-path",
+        idx,
+        "read",
+        "src/a.rs#L2-L3",
+        "--root",
+        root,
+    ]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("==> src/a.rs#L2-L3"), "stdout={stdout}");
     assert!(stdout.contains("println!"), "stdout={stdout}");
-    assert!(!stdout.contains("fn one"), "window must not widen without --context: {stdout}");
+    assert!(
+        !stdout.contains("fn one"),
+        "window must not widen without --context: {stdout}"
+    );
 
     // Context lines widen the window; the reported ref covers the widened span.
     let (code, stdout, stderr) = run(&[
-        "--index-path", idx, "read", "src/a.rs#L2-L2", "--context-lines", "1", "--root", root,
+        "--index-path",
+        idx,
+        "read",
+        "src/a.rs#L2-L2",
+        "--context-lines",
+        "1",
+        "--root",
+        root,
     ]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("==> src/a.rs#L1-L3"), "context-widened ref={stdout}");
-    assert!(stdout.contains("fn one(x: i32) {"), "context adds line 1: {stdout}");
+    assert!(
+        stdout.contains("==> src/a.rs#L1-L3"),
+        "context-widened ref={stdout}"
+    );
+    assert!(
+        stdout.contains("fn one(x: i32) {"),
+        "context adds line 1: {stdout}"
+    );
 
     // JSON envelope: machine-readable stdout, windows carry path/ref/span/text.
     let (code, stdout, stderr) = run(&[
-        "--json", "--index-path", idx, "read", "src/a.rs#L1-L2", "--root", root,
+        "--json",
+        "--index-path",
+        idx,
+        "read",
+        "src/a.rs#L1-L2",
+        "--root",
+        root,
     ]);
     assert_eq!(code, 0, "stderr={stderr}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
@@ -105,7 +134,10 @@ fn read_answers_windows_in_both_formats() {
     // Bare path (no #L) reads the default bounded window.
     let (code, stdout, stderr) = run(&["--index-path", idx, "read", "src/a.rs", "--root", root]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("==> src/a.rs#L1-"), "default window={stdout}");
+    assert!(
+        stdout.contains("==> src/a.rs#L1-"),
+        "default window={stdout}"
+    );
 }
 
 #[test]
@@ -116,14 +148,24 @@ fn read_fails_closed_on_jail_bad_range_and_flood() {
 
     // Parent traversal is a usage error — refs stay inside the project root.
     let (code, _stdout, stderr) = run(&[
-        "--index-path", idx, "read", "../escape.rs#L1-L2", "--root", root,
+        "--index-path",
+        idx,
+        "read",
+        "../escape.rs#L1-L2",
+        "--root",
+        root,
     ]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(stderr.contains(".."), "{stderr}");
 
     // Inverted range is a usage error naming the ref contract.
     let (code, _stdout, stderr) = run(&[
-        "--index-path", idx, "read", "src/a.rs#L5-L2", "--root", root,
+        "--index-path",
+        idx,
+        "read",
+        "src/a.rs#L5-L2",
+        "--root",
+        root,
     ]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(stderr.contains("invalid"), "{stderr}");
@@ -147,7 +189,12 @@ fn code_read_vocab_recovers_into_read_and_reads() {
     let idx = s.index_path.to_str().unwrap();
     // An agent transferring the MCP tool name gets recovery + the real window.
     let (code, stdout, stderr) = run(&[
-        "--index-path", idx, "code_read", "src/a.rs#L1-L1", "--root", root,
+        "--index-path",
+        idx,
+        "code_read",
+        "src/a.rs#L1-L1",
+        "--root",
+        root,
     ]);
     assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
     assert!(

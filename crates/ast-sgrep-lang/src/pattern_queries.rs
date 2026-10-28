@@ -28,6 +28,95 @@ pub(crate) fn class_queries_for(lang: Language, keyword: &str) -> &'static [&'st
     &[]
 }
 
+/// Function-only queries for ts/php BODY templates carrying a spelled
+/// return section (br-hs1): the reference answers free functions only —
+/// class methods never (probed on class-method fixtures, 2026-10-27) —
+/// so the method rows of the legacy table are excluded on this lane.
+pub(crate) fn return_function_queries_for(lang: Language) -> &'static [&'static str] {
+    const TABLE: &[(&[Language], &[&str])] = &[
+        (
+            &[Language::TypeScript],
+            &["(function_declaration name: (identifier) @name) @match"],
+        ),
+        (
+            &[Language::Php],
+            &["(function_definition name: (name) @name) @match"],
+        ),
+    ];
+    queries_for(TABLE, lang)
+}
+
+/// Candidate queries for BODY-LESS fn patterns — argument list present, no
+/// `{...}` section. Reference semantics are grammar-specific because the
+/// reference's pattern parse recovery is: ast-grep 0.45.2 + 0.51.0 probes
+/// (2026-10-27, 3 stable rounds, br-f4w; spelled-return receipt br-hs1).
+///
+/// - Rust: a body-less `fn ...(...)` pattern answers `function_signature_item`
+///   nodes ONLY (trait method declarations; a pattern-absent return type is a
+///   wildcard). Body-having `function_item`s never answer it. A SPELLED
+///   return keeps the same query — the section filters per candidate.
+/// - Go: body-less `func ...(...)` is natively valid syntax; it answers
+///   `function_declaration` nodes with body AND return type wildcarded.
+/// - TypeScript: the reference's recovery yields nothing matchable — empty
+///   lane, with or without a spelled return.
+/// - Php: no-return body-less stays empty (br-f4w), but a SPELLED return
+///   answers `function_definition` nodes (probed: `function $A($$$): int`
+///   matched the return-typed free function; methods never answer).
+///
+/// Languages absent from this table keep the legacy FUNCTION_QUERY_TABLE
+/// path for body-less patterns (their reference behavior is unprobed; js/py
+/// are probed parity on that path).
+pub(crate) fn bodyless_function_queries_for(
+    lang: Language,
+    spelled_return: bool,
+) -> Option<&'static [&'static str]> {
+    if lang == Language::Php && spelled_return {
+        return Some(&["(function_definition name: (name) @name) @match"]);
+    }
+    const TABLE: &[(&[Language], &[&str])] = &[
+        (
+            &[Language::Rust],
+            &["(function_signature_item name: (identifier) @name) @match"],
+        ),
+        (
+            &[Language::Go],
+            &["(function_declaration name: (identifier) @name) @match"],
+        ),
+        // ts/php: the reference answers nothing; empty = silent parity.
+        (&[Language::TypeScript, Language::Php], &[]),
+    ];
+    for &(langs, queries) in TABLE {
+        if langs.contains(&lang) {
+            return Some(queries);
+        }
+    }
+    None
+}
+
+/// br-osk: the no-parens PURE-NAME lane (`fn $A` — argument list absent,
+/// no sections). The reference (0.45.2, probed 2026-10-27, 4 stable
+/// rounds/cell) answers every fn-shaped node of the grammar: rust =
+/// function items (impl-nested included, generics wildcarded) ∪ trait
+/// signature items. Other grammars keep the legacy FUNCTION_QUERY_TABLE
+/// rows — the probed fixtures' fn-shaped kinds are exactly those.
+pub(crate) fn name_only_function_queries_for(lang: Language) -> &'static [&'static str] {
+    if lang == Language::Rust {
+        return &[
+            "(function_item name: (identifier) @name) @match",
+            "(impl_item body: (declaration_list (function_item name: (identifier) @name) @match))",
+            "(function_signature_item name: (identifier) @name) @match",
+        ];
+    }
+    // ts/php: the no-parens face answers FREE FUNCTIONS only — class
+    // methods and arrows never answer the `function` keyword face
+    // (probed on method/arrow fixtures 2026-10-27; the legacy table's
+    // method rows serve other lanes, not this one).
+    if matches!(lang, Language::TypeScript | Language::Php) {
+        return return_function_queries_for(lang);
+    }
+    queries_for(FUNCTION_QUERY_TABLE, lang)
+}
+
 pub(crate) const FUNCTION_QUERY_TABLE: &[(&[Language], &[&str])] = &[
     (
         &[Language::Rust],

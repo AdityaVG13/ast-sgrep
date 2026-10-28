@@ -619,12 +619,20 @@ The acceptance predicate above is unchanged; this is not a release speed keep.
   the owner explicitly accepts the measured cold-latency cost, or a same-index
   paired candidate preserves the recovered recall without that regression.
   Do not raise thresholds, reweight channels, or relabel timing to pass it.
+  RESOLVED 2026-10-28 (br-9ds close): the predicate's recall arm is satisfied
+  by the tree itself — the literal pass's in-band distinct-file admission
+  (`search/passes/literal.rs`, cap counts distinct files) already preserves
+  the probe's recall (z_impl ranks #1, both embed modes, 2.6.x binary), so
+  the uncommitted candidate is unnecessary and no owner latency tradeoff
+  remains. Pinned by `repeated_noise_lines_cannot_bury_another_files_hit`
+  (tests/core/search_correctness_epics.rs), mutation-proven: neutering the
+  guard reintroduces the exact historical burial (hit absent entirely).
 
 - **lazy_framework link flags: product decision for the owner, not a rejection (skill-loop pass 4).** `ld -lazy_framework CoreFoundation/CoreServices` would defer framework load (faster startup for non-watch paths) but ld warns it needs a newer minimum deployment target, i.e. dropping old macOS. Untried; no perf claim for or against. Re-open as work only after the owner sets the minimum macOS version; then measure with a same-block order-swapped A/B before claiming.
 
 - **Flat-similarity kernel hoist + serial-size gate (2026-10-25, c1 campaign lever L1): measured within noise on the CLI surface, kept out of the tree.** Hoisting the query norm out of `top_k_flat_similarity` (one `f32::dot(a,a)` instead of one per chunk) plus a serial path below 8M floats was bit-identical on goldens (14/14) and green on `tests/embed/flat_rank.rs`, but interleaved min-of-15 hyperfine on the 19.8k-chunk self corpus showed no CLI-wall delta outside noise (base 30.55 ms vs candidate 30.95/46.33/55.43 across reps under external compile load): the kernel span (`semantic_ivf_search`) is 0.16-0.20 ms, ~1% of a 30 ms query, so the removed math is invisible at the CLI. Reverted from the tree (kernel restored; the `flat_rank` boundary-contract tests stay — they pin `exceeds_threshold`'s `sim > next_up(min)` admission edge, which admits only `min <= top-2ulp`). Retry predicate (form 1): re-land only when profiling shows `semantic_ivf_search` >= 1 ms per query on the target surface — i.e. a persistent in-process query loop (plugin serve path) or corpora >= 100k chunks — and the paired A/B then shows a keep-gate-clearing delta attributable to that span.
 
-- **v3 IVF sidecar format: old readers silently retrain (2026-10-25, decision OPEN before next release).** The v3 sidecar (trailing i64 chunk-id column, length-based detection in `semantic_ivf.rs::map_and_parse`) wins its keep gate (see `benchmarks/results/baselines.md`, `2026-10-25 v3 IVF sidecar ids`), but every binary whose reader still enforces the v2 exact-EOF check (`git show HEAD:crates/ast-sgrep-core/src/semantic_ivf.rs`, the `end == mmap.len()` filter at line ~544) rejects the longer file, treats the sidecar as absent, and rebuilds k-means from SQL — a fresh CLI invocation on a v3 index re-pays the full ANN build every query. Measured shape: base on the v3 corpus diverged on 12/12 non-literal golden lanes (retrained partition, valid ranking, different order) and adds the full build to cold start. Shipping v3 as the sole `semantic.ivf` shape is therefore gated on one of: (a) write the id column to a separate `semantic.ivf.ids` sidecar so `semantic.ivf` stays byte-compatible with v2 readers, or (b) an explicit owner decision that mixed fleets (2.6.x readers on 2.7.x indexes) are out of scope. Retry/resolve predicate (form 3): resolve before the next release tag cuts; until then the v3 writer stays local to dev trees and the compatibility constraint must be restated in the release checklist.
+- **v3 IVF sidecar format: old readers silently retrain (2026-10-25, RESOLVED 2026-10-28).** The v3 sidecar (trailing i64 chunk-id column, length-based detection in `semantic_ivf.rs::map_and_parse`) wins its keep gate (see `benchmarks/results/baselines.md`, `2026-10-25 v3 IVF sidecar ids`), but every binary whose reader still enforces the v2 exact-EOF check (`git show HEAD:crates/ast-sgrep-core/src/semantic_ivf.rs`, the `end == mmap.len()` filter at line ~544) rejects the longer file, treats the sidecar as absent, and rebuilds k-means from SQL — a fresh CLI invocation on a v3 index re-pays the full ANN build every query. Measured shape: base on the v3 corpus diverged on 12/12 non-literal golden lanes (retrained partition, valid ranking, different order) and adds the full build to cold start. Shipping v3 as the sole `semantic.ivf` shape is therefore gated on one of: (a) write the id column to a separate `semantic.ivf.ids` sidecar so `semantic.ivf` stays byte-compatible with v2 readers, or (b) an explicit owner decision that mixed fleets (2.6.x readers on 2.7.x indexes) are out of scope. RESOLVED 2026-10-28 via option (a), before any 2.7.0 tag: production saves now always write the v2-shaped main file (ends at the vector section, exact-EOF accepted by 2.6.x readers) and carry chunk ids in a separate fingerprint-bound `semantic.ivf.ids` sidecar (48-byte header, published before the main file so any crash window fails fingerprint-mismatched to the SQL id fallback, never wrong ids). Legacy embedded-v3 files remain readable. Pinned failure-first by `published_ivf_stays_v2_shaped_with_fingerprint_bound_ids_sidecar` (tests/core/semantic_ivf_roundtrip.rs); keep gate unchanged (baselines 2026-10-25 row). Retry-condition predicate retired with the decision.
 
 
 - **Small-corpus warm lexical gap.** 2026-08-28: asgrep p95 19.0 ms vs
@@ -937,3 +945,249 @@ differential over 3 real repos, p50/p99 vs rusqlite, 3 interleaved rounds.
   be rank-capped or deduped against their definitions (e.g. same-name
   decl+def in one corpus preferencing the def chunk), or when cpp mrr10
   >= .63 and the residual is re-swept.
+- **C/C++ declaration-stub demotion KEPT (competitor campaign round-H
+  follow-up, 2026-10-26).** First closure of the round-H follow-up
+  predicate's rank-cap clause. Round-H's new header-prototype symbols
+  flooded 1-line stub hits above doc-rich golds (verified from the outH
+  rows: oatpp-01 5->12, oatpp-04 6->22, node-sass-07 13->22) while
+  multi-line doc blocks were the winners (uvw-00 5->1, oatpp-05 lost->7).
+  Lever: `fusion::decl_stub_scale` scales fused scores of C/C++-family
+  hits whose span is <= 2 lines by 0.5 — ranking-time only, no reindex,
+  no extraction change; span and family bounds keep multi-line doc blocks
+  and non-C families untouched. Kill switch `ASGREP_DECL_STUB_SCALE`
+  (1.0 = off; unparseable values fall back to the default so a typo
+  cannot silently disable the demotion). Failure-first + mutation-proven
+  (`decl_stub_demotion_bounded`, tests/core/numerical_fusion.rs:
+  demotion-removed, env-off, over-broad-family, and span-blind mutants
+  each killed at distinct assertions). Paired frozen gate (same
+  release-perf binary, same indexes, env arms outS-* in the scope-suite
+  bench): cpp mrr10 .6123->**.6196** (+.0073) the only mover —
+  go/java/python/rust/ts and CoSQA-500 exactly 0.0. RepoQA total mrr10
+  .7212->.7224, hit1/hit100 exact, no gold lost (zero None transitions).
+  Membership: hit5 +1/−2 (net −1 query, .8700->.8683; cpp .78->.77),
+  hit10 +4/−2 (net +2, .9233->.9267; cpp .87->.89). Per-query: 23 cpp
+  movers, 15 wins / 8 losses; recoveries oatpp-04 22->4, node-sass-04
+  18->10, uvw-05 2->1, uvw-06 5->3, uvw-08 3->2; give-backs oatpp-05
+  7->15 and oatpp-09 8->11 (both short-header-stub golds demoted along
+  with the flood), uvw-07 4->9, node-sass-07 22->25 — the flat scale is
+  blind to whether the short hit IS the gold. Query latency unchanged
+  (p50 20.2->18.7 ms, noise); index cost unaffected (ranking-time lever).
+  Retry predicate (form 2): replace the flat scale when decl/def
+  same-name preferencing or per-hit doc-density ranking lands — rerun
+  this exact paired arm and keep the successor only if it holds total
+  mrr10 >= .7224 AND total hit5 >= .8700; reopen the 0.5 constant if any
+  non-C family ever moves or the cpp hit5 residual deepens past −.02.
+- **Decl-stub twin-guard REJECTED (round-H follow-up successor, 2026-10-26).**
+  Tested the successor the keep row's predicate named: demote a C/C++
+  stub only when a same-symbol multi-line row (definition witness) is in
+  the fused shortlist; orphan stubs (no witness — measured autopsy: the
+  gold file's only fused row in 6 of 8 flat-arm losses, e.g.
+  StatefulParser.hpp all-stub rows oatpp-05, util.h:586 uvw-07,
+  itemview.h:83 ClickHouse-08) keep raw score. Implemented
+  (`def_witnesses` set in apply_weighted_rrf, span>2 symbol-keyed),
+  failure-first + mutation-proven four ways (orphan-guard-removed,
+  any-span witness, twin-demotion-removed, file-keyed twin — each killed
+  at distinct assertions), then REVERTED after the gate. Paired frozen
+  gate (same binary, env arms outT-*, flat = ASGREP_DECL_STUB_ORPHAN_
+  SCALE=0.5 reproducing the keep exactly): total mrr10 .7224->.7213 —
+  FAILS the successor bar; hit5 .8683->.8700 and cpp hit5 .77->.78
+  recover, but hit1 −1 query and cpp mrr10 .6196->.6129 (−.0067). All
+  seven predicted loss-recoveries landed (oatpp-05 15->6, uvw-07 9->4,
+  node-sass-07 25->20, oatpp-09 11->8, oatpp-06 4->2, oatpp-07 7->5,
+  ClickHouse-08 7->6) — the mechanism is real — but 13 win-side queries
+  reverted (oatpp-04 4->6, node-sass-04 10->18, node-sass-08 11->14;
+  7W/13L net) because their flood stubs' definitions did not make the
+  page. Structural flaw: shortlist-membership witnessing makes demotion
+  dependent on page composition (a witness ranked just below the emit
+  cap does not count), coupling the lever to emit churn. Isolation
+  clean: go/java/python/rust/ts and CoSQA exactly 0.0. Retry predicate
+  (form 2): rebuild only with a CORPUS-level witness — the index knows
+  same-symbol def spans at query time (decl/def lookup, not shortlist
+  scan) — so orphan status is page-independent; keep bar unchanged
+  (total mrr10 >= .7224 AND total hit5 >= .8700 vs the flat keep).
+  CASS history lookup remains blocked (code 5 maintenance-required,
+  detached rebuild already spawned by cass itself; not waited on).
+- **Decl-stub corpus-witness guard REJECTED (second orphan-rescue
+  formulation, 2026-10-26).** Built exactly what the first rejection's
+  predicate prescribed: page-INDEPENDENT witnesses via a store lookup
+  (`definition_witness_names`: SELECT DISTINCT names with any span>2
+  symbol row, IN-lists chunked 500), wired into
+  `apply_weighted_rrf_with_witnesses` behind
+  `ASGREP_DECL_STUB_WITNESS=off`; failure-first + mutation-proven four
+  ways (witness-membership-ignored, None-arm-inverted, SQL span-blind,
+  inverted-membership), then REVERTED after the gate. Paired frozen gate
+  (env arms outU-*): total mrr10 .7224->.7214 — FAILS the unchanged
+  bar; hit5 .8683->.8700, hit1 −1, cpp mrr10 .6196->.6137, 7W/12L.
+  Same seven recoveries as the shortlist variant (oatpp-05 15->6,
+  node-sass-07 25->18, uvw-07 9->4, oatpp-09/06/07, ClickHouse-08) and
+  the same win-side reverts (oatpp-04 4->6, node-sass-04 10->14,
+  node-sass-08 11->13) — with corpus-level truth the win-side stubs
+  STILL have no multi-line same-symbol row in the index, so the rescue
+  fires for them too. Two formulations, one conclusion: the flood stubs
+  that hurt golds are themselves overwhelmingly orphan-class (decl-of-
+  nothing: using-decls, macros, forward decls, extraction gaps), so ANY
+  orphan-rescue un-demotes the flood along with the gold delegates.
+  Latency p50 19.2->18.9 ms (noise). Isolation clean (other five langs
+  and CoSQA exactly 0.0). Retry predicate (form 5 — direction closed
+  pending new evidence): do NOT rebuild decl-stub orphan rescue in any
+  witness formulation; a successor must change a different variable —
+  e.g. per-file stub CAPS (at most K stub rows per file above the emit
+  fold) or doc-density-aware span scaling that never leaves the 0-1
+  scale band — and must clear total mrr10 >= .7224 AND hit5 >= .8700
+  against the flat keep.
+- **Cold-prefilter static-bake scan order REJECTED (2026-10-26).** Root
+  cause was real and field-proven: cold one-shot processes never arm the
+  df vocabulary (the ~93ms preload was itself measured lethal), so
+  `discovery_df` returns i64::MAX for EVERY term, the rarest-first sort
+  degenerates to alphabetical, and early-alphabet common terms spend the
+  75-file user budget before the discriminative term scans (frozen-suite
+  nuclei-01: `access/adds/attempts/checks` starved the gold's
+  `downloading`, lexical rank 2; 13/44 RepoQA misses attributed
+  absent-family). Lever: sort cold-unknown terms by min static
+  TRIGRAM_BAKE count (in-binary prior, zero store I/O) behind
+  ASGREP_PREFILTER_STATIC_ORDER. Mechanism CONFIRMED in the paired gate:
+  log4cxx-08 gold absent->rank 6, node-sass-07 25->7, fzf-05 13->8,
+  28W/27L — but REJECTED on the pre-registered bars: repoqa mrr10
+  .7224->.7222, hit5 .8683->.8667 (two top-1 demotions: ClickHouse-05
+  1->2, go-zero-01 1->2 — page-composition coupling again, the same
+  signature that killed both orphan-rescue rounds), and the decisive
+  cost: repoqa p50 20.8->25.9 ms, p95 36.4->52.7 ms (rare-first spends
+  budget slower, so MORE terms hit SQL per query; cosqa p50 +2.0 ms).
+  cosqa improved everywhere (mrr10 .3319->.3366, hit5 +.0140) — not
+  enough to carry repoqa+latency. Failure-first test was itself fixed
+  twice for tautology holes BEFORE trusting green: the gold containing
+  `workflow` admitted it via the rarest-by-both-min-and-max term
+  (mutant survived), then `orchestra` sorted alphabetically 3rd
+  (off-arm survived); final fixture uses `zorchestra` (min 5.0k / max
+  9.2M / alphabet-last three-way disagreement) — 3-arm proof: mutant
+  RED, lever GREEN, off RED. Reverted byte-clean; fusion_capture.py
+  dump-path `.resolve()` harness fix kept (real bug: relative dump path
+  against a cwd=corpus-root subprocess never wrote the dump). Retry
+  predicate (form 5): do NOT reorder user-term scan order by a static
+  prior again; a successor must (a) make admission ADDITIVE (a small
+  extra-reserve slot for the statically-rarest user term, leaving
+  user-term order untouched — kills the top-1 composition coupling) or
+  arm df for one-shots at <=2 ms (persist a per-term df summary into
+  index meta read as one row, replacing the 93 ms vocabulary preload),
+  AND (b) bound total scanned terms so repoqa p50 stays <=21 ms, AND
+  clear total mrr10 >= .7224, hit5 >= .8683, hit1 no-regression.
+- **Semantic-wall miss family EXPLORED, no gate-clearing lever (2026-10-26).**
+  Fresh attribution on the control arm (outX-attrib, parity 0/600 vs
+  outW-control): 44 repoqa misses = 13 absent-family (closed, see static
+  order row) + 25 wall (gold in pool, best channel rank 4-55, final >10)
+  + 6 fusion_loss (best <=3) overlapping the wall. Wall decomposed into
+  three measured sub-families, each with its own dead-end evidence:
+  (a) SIBLING-MODULE FLOODS (langchainjs-02, nom-09, reactpy-03): generic
+  conceptual queries where sibling implementations all plausibly match
+  (`structured_chat/`, `tool_calling/`, `react/` vs gold
+  `openai_tools/index.ts`); the gold's distinguishing path token appears
+  literally in the query for only 2/31 present-misses — a
+  directory-segment concept boost has no signal to use. (b) NOUN-CLASS
+  TOKEN ECHO (karate-04: `Command.java` field-decl rows at 0.125 vs gold
+  `execInternal` — which literally contains exec+command+options+collect
+  in a 5-line span — at 0.047): span term-coverage density measured
+  CONSISTENT but ~10x too weak (gold beats top-10 avg by +0.05-0.08
+  median, 1/31 above +0.15; needed flips are 2-3x score multiples);
+  a field-decl def-kind penalty clears only 2/14 rows in the best
+  specimen. (c) DEEP EVIDENCE (sem 11-50, 12 misses): genuine embed
+  weakness, no structural signal. Channel-champion page guarantees
+  (sem-rank<=2 capped into top-10) rejected by precedent: same
+  page-composition species as the twin-guard closure (7W/13L coupling).
+  Retry predicates: (a) sibling floods reopen only when >=8/31 gold-path
+  tokens appear in queries (lexical distinguishability) or an index-side
+  role signal lands; (b) span-coverage reopens only paired with an
+  embed-cosine-margin term sufficient for 2x flips; (c) champion caps
+  reopen only under the twin-guard golden-adjudication predicate. Family
+  CLOSED pending those; successor per the orphan-rescue form-5
+  predicates: per-file stub caps or doc-density span scaling.
+- **Per-file declaration-stub cap REJECTED (2026-10-26, the sanctioned
+  per-file-caps successor).** Built exactly what the orphan-rescue form-5
+  predicate prescribed: a file's stub rows beyond the first K=3 escalate
+  to base-scale squared (0.25x), rolling per-file counter over the
+  sorted (file,line) fused emission, `ASGREP_STUB_FILE_CAP` paired-arm
+  switch. Load-bearing assumption VERIFIED first from the control
+  capture — same-file stub floods are real (node-sass-08: 81 stub rows
+  above gold, binding.cpp alone 51, ast_fwd_decl.hpp 13; node-sass-07:
+  context.h 29 + binding.cpp 27; WasmEdge-08: wasmedge.cpp 22). Scoping
+  was perfect: cosqa and every non-cpp language byte-identical, hit1/
+  hit5/hit100 all unchanged. But the TARGET population regressed:
+  cpp mrr10 .6196->.6168, total .7224->.7220, paired 1W/2L — the win
+  seastar-05 2->1, the losses uvw-07 9->11 and uvw-01 1->3 (a top-1
+  demotion). Mechanism: skypjack/uvw gold delegates are themselves
+  <=2-line spans (inline wrappers, using-declarations), so the gold's
+  own file hits the cap and sinks with the flood — the SAME
+  classifier-ambiguity root as both orphan-rescue rejections, now
+  measured from the demotion direction: any stub-classifier-dependent
+  shaping (rescue OR escalation) moves gold-delegate stubs and flood
+  stubs together. Failure-first test (multi-channel binding.cpp flood
+  fixture) was mutation-proven four ways before the gate (off-arm,
+  K=1 arm, counting-disabled, cross-file-scoping mutants all RED);
+  reverted byte-clean after the gate with the rejection noted at the
+  decl_stub_scale call site. Retry predicate (form 5): the span<=2
+  c-family classifier is CLOSED for both rescue and escalation
+  shaping; a successor must discriminate gold-delegate stubs from
+  flood stubs by a signal the classifier lacks — doc-density span
+  scaling (the other sanctioned variant, 0-1 scale band) or an
+  index-side role/kind signal — and must clear total mrr10 >= .7224
+  with hit1 no-regression and cpp mrr10 >= .6196.
+- **Doc-density span scaling REJECTED (2026-10-26, the LAST sanctioned
+  stub-shaping variant — campaign lever list now exhausted).** Built
+  exactly what the stub-cap form-5 predicate prescribed: index-side
+  doc-above annotation in the def pass (<=3 lines above each
+  stub-candidate row via `indexed_excerpt_in_range`, comment-prefix
+  predicate `//`/`/*`/`*`, one shared `is_decl_stub_candidate`
+  classifier for annotate+demote so the row sets cannot diverge),
+  carried through the fusion merge (any-member OR), doc'd stubs scale
+  0.5->0.65 (lift-only, `.min(0.99)`, never un-demotes to neutral),
+  `ASGREP_DECL_STUB_DOC_BOOST=1.0` paired-arm kill switch.
+  Failure-first test red (no field) -> green; mutation-proven both
+  ways (boost-ignored mutant RED; inverted mutant killed BOTH stub
+  tests). Field discriminator was real but the population estimate was
+  BIASED: uvw-01/07 and node-sass-08 golds are doc'd, but the "flood
+  is bare" 3/15 estimate came from the POST-demotion top-40 — on
+  doxygen-heavy cpp repos the flood is doc'd too. Paired gate (env
+  arms, same binary): repoqa mrr10 .7224->.7220, hit5 .8683 hold,
+  hit1 hold, cpp mrr10 .6196->.6173 — 3 queries moved, ALL worse,
+  zero recoveries (uvw-07 9->11 — the doc'd gold itself sank under
+  doc'd competitors; node-sass-04 10->11; oatpp-07 7->8). cosqa and
+  all non-cpp languages byte-identical. p50 19.9->18.9 ms (noise).
+  Mechanism: fifth confirmation of the root law — doc presence is not
+  sparse in the flood population, so any doc-presence-conditioned
+  shaping moves gold-delegate stubs and flood stubs together
+  (page-composition coupling). Reverted byte-clean (grep 0 residue,
+  suites green, binary rebuilt marker-free). Retry predicate (form 5):
+  doc-PRESENCE is closed for stub shaping; a successor must FIRST
+  measure doc-density sparsity gold-vs-flood on the CONTROL arm
+  (pre-demotion, unbiased sample) and show >=2x separation, then still
+  clear total mrr10 >= .7224, cpp mrr10 >= .6196, hit1 no-regression.
+  Method note for all future levers: flood-population statistics must
+  be taken from control-arm captures, never from post-shaping output
+  (the shaping itself selects the survivors you sample).
+- **Usage-graph caller-liveness discriminator MEASURED AND REJECTED
+  BEFORE BUILD (2026-10-26).** The one index-side signal the stub/wall
+  closures left open ("role/kind signal"): is the row's symbol CALLED
+  anywhere (`callers.callee > 0` OR `scip_facts` is_def=0 refs)?
+  Measured on the doc-density gate's CONTROL arm (out-flat, pre-shaping,
+  unbiased — the method this ledger now mandates): 44 repoqa misses
+  split 26 absent-from-top-50 / 18 wall (gold in pool, rank>10). Raw
+  separation: gold live 11/18 (61%) vs flood live 350/564 (62%) =
+  0.98x — no signal. Per-repo NORMALIZED (gold callee count vs same
+  repo's flood-median, n=11 with both sides >0): median ratio 0.50x —
+  the WRONG DIRECTION; golds are called LESS than their floods
+  (gold-dead-while-flood-alive 7 cases, reverse 0). scip_facts
+  reference counts were uniformly 0 across all 18 repos (extraction
+  absent — a second, independent null). Mechanism: liveness tracks
+  repo STYLE, not relevance — test-heavy Go repos call everything
+  (lux-01: gold 54 callees, flood 47/48 live), header-heavy C++ calls
+  nothing (log4cxx-07: gold dead, flood 31/36 dead), and within a wall
+  miss the gold is often a leaf handler the flood wraps. No code was
+  written; no failure-first test needed (the measurement IS the
+  rejection). Retry predicate (form 5): raw caller-liveness is closed
+  for wall-miss shaping in both raw and per-repo-normalized forms; a
+  successor must (a) first demonstrate >=2x gold-vs-flood separation
+  on a control-arm capture with a signal measured WITHIN each repo
+  (not cross-repo), and (b) survive the direction check — the
+  normalized gold/flood ratio must exceed 1.0 median before any build.
+  With this row the wall family's open doors reduce to embed-cosine
+  margin + span-coverage pairing; absent-family reduces to additive
+  cold admission.

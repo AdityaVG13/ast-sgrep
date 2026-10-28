@@ -27,6 +27,25 @@ fn fn_pattern_candidates_cover_rust_and_moonbit_function_kinds() {
     has("fn $NAME", "kind:function_definition");
     has("fn $NAME", "kind:impl_definition");
     has("fn $NAME", "kind:named_lambda_expression");
+    // br-tvv: rust trait method signatures index as
+    // `function_signature_item`; a file whose only fn-shaped content is
+    // trait sigs must still be admitted as a candidate.
+    has("fn $NAME", "kind:function_signature_item");
+}
+
+#[test]
+fn rust_trait_signatures_emit_fn_decl_rows() {
+    // br-tvv: the sig-only-file admission defect — an index without
+    // `function_signature_item` rows emptied `fn ` pattern search on
+    // trait-only files (repro: 3 one-line traits, `pattern:'fn $A($$$)'`
+    // -> 0 hits; the narrowing allowlist had no row for the file).
+    let src =
+        "trait Sendable {\n    fn send(&self, buf: &[u8]) -> bool;\n    fn flush(&self);\n}\n";
+    let got = signatures(Language::Rust, src);
+    has_sig(&got, "kind:function_signature_item");
+    has_sig(&got, "decl:fn:send");
+    has_sig(&got, "decl:fn:flush");
+    has_sig(&got, "fn send");
 }
 
 #[test]

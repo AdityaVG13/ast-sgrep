@@ -630,7 +630,10 @@ fn grep_noop_flags_teach_the_default() {
     for flag in ["-i", "-n", "--ignore-case", "--line-number"] {
         let (code, stdout, stderr) = run(&["search", "flurbify_widget", flag, "--root", &root]);
         assert_eq!(code, 0, "flag={flag} stderr={stderr}");
-        assert!(stdout.contains("flurbify_widget"), "flag={flag} stdout={stdout}");
+        assert!(
+            stdout.contains("flurbify_widget"),
+            "flag={flag} stdout={stdout}"
+        );
         assert!(
             stderr.contains("ignored"),
             "noop flags must teach the default: flag={flag} stderr={stderr}"
@@ -684,7 +687,10 @@ fn cross_surface_vocab_recovers_to_cli_subcommands() {
             "token={token} stderr={stderr}"
         );
         if *expect_hits {
-            assert!(stdout.contains("flurbify_widget"), "token={token} stdout={stdout}");
+            assert!(
+                stdout.contains("flurbify_widget"),
+                "token={token} stdout={stdout}"
+            );
         }
     }
 }
@@ -714,7 +720,12 @@ fn mutating_vocab_never_runs_from_a_guess() {
 fn format_json_detached_and_json_value_flags_recover() {
     let (_temp, root) = habit_fixture("flurbify_widget");
     let (code, stdout, stderr) = run(&[
-        "search", "flurbify_widget", "--root", &root, "--format", "json",
+        "search",
+        "flurbify_widget",
+        "--root",
+        &root,
+        "--format",
+        "json",
     ]);
     assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
@@ -726,7 +737,11 @@ fn format_json_detached_and_json_value_flags_recover() {
     );
 
     let (code, stdout, stderr) = run(&[
-        "search", "flurbify_widget", "--root", &root, "--json=pretty",
+        "search",
+        "flurbify_widget",
+        "--root",
+        &root,
+        "--json=pretty",
     ]);
     assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
     let _: Value = serde_json::from_str(&stdout).expect("json stdout");
@@ -741,7 +756,11 @@ fn format_json_detached_and_json_value_flags_recover() {
 fn root_level_pattern_flag_routes_to_search() {
     let (_temp, root) = habit_fixture("flurbify_widget");
     let (code, stdout, stderr) = run(&[
-        "--pattern", "flurbify_widget($$$A)", "--root", &root, "--json",
+        "--pattern",
+        "flurbify_widget($$$A)",
+        "--root",
+        &root,
+        "--json",
     ]);
     assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
     assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
@@ -751,7 +770,9 @@ fn root_level_pattern_flag_routes_to_search() {
     );
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert!(
-        value["hits"].as_array().is_some_and(|hits| !hits.is_empty()),
+        value["hits"]
+            .as_array()
+            .is_some_and(|hits| !hits.is_empty()),
         "structural pattern must hit the fixture call: {value}"
     );
 }
@@ -867,7 +888,11 @@ fn semgrep_verbs_recover_onto_search() {
     let root_s = root.to_str().unwrap();
 
     let (code, stdout, stderr) = run(&[
-        "--json", "run", "--pattern", "fn cross_dialect_target", root_s,
+        "--json",
+        "run",
+        "--pattern",
+        "fn cross_dialect_target",
+        root_s,
     ]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("lib.rs"), "must run the pattern: {stdout}");
@@ -892,15 +917,13 @@ fn lsp_colon_refs_recover_in_read() {
     let (_temp, root) = round6_repo();
     let root_s = root.to_str().unwrap();
 
-    let (code, stdout, stderr) =
-        run(&["--json", "--root", root_s, "read", "src/lib.rs:1"]);
+    let (code, stdout, stderr) = run(&["--json", "--root", root_s, "read", "src/lib.rs:1"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["ok"], true, "{value}");
     assert!(stdout.contains("cross_dialect_target"), "{stdout}");
 
-    let (code, stdout, stderr) =
-        run(&["--json", "--root", root_s, "read", "src/lib.rs:1-2"]);
+    let (code, stdout, stderr) = run(&["--json", "--root", root_s, "read", "src/lib.rs:1-2"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["ok"], true, "{value}");
@@ -932,7 +955,10 @@ fn indexed_tree() -> IndexedTree {
     .expect("write caller");
     let (code, _stdout, stderr) = run(&["index", root.to_str().unwrap()]);
     assert_eq!(code, 0, "index failed: {stderr}");
-    IndexedTree { root, _guard: guard }
+    IndexedTree {
+        root,
+        _guard: guard,
+    }
 }
 
 fn hits(stdout: &str) -> Vec<Value> {
@@ -952,7 +978,8 @@ fn defs_callers_imports_verbs_route_through_grammar_channels() {
     assert_eq!(code, 0, "stderr={stderr}");
     let defs = hits(&stdout);
     assert!(
-        defs.iter().any(|hit| hit["file"].as_str().unwrap_or("").ends_with("widget.rs")),
+        defs.iter()
+            .any(|hit| hit["file"].as_str().unwrap_or("").ends_with("widget.rs")),
         "defs should hit the definition site: {stdout}"
     );
 
@@ -991,7 +1018,10 @@ fn ast_grep_run_scan_and_short_p_recover_to_search() {
         root,
     ]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(!hits(&stdout).is_empty(), "run --pattern should hit: {stdout}");
+    assert!(
+        !hits(&stdout).is_empty(),
+        "run --pattern should hit: {stdout}"
+    );
     let notes = envelope_notes(&stdout);
     assert!(
         notes.contains("recovered `run` as `search`"),
@@ -1007,20 +1037,13 @@ fn ast_grep_run_scan_and_short_p_recover_to_search() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(!hits(&stdout).is_empty(), "scan should hit: {stdout}");
     assert!(
-        envelope_notes(&stdout)
-            .contains("recovered `scan` as `search`"),
+        envelope_notes(&stdout).contains("recovered `scan` as `search`"),
         "notes should teach the verb: {stdout}"
     );
 
     // Root-level `-p PATTERN` (no subcommand) bridges into the search
     // subcommand exactly like the long form.
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "--root",
-        root,
-        "-p",
-        "fn cross_dialect_target",
-    ]);
+    let (code, stdout, stderr) = run(&["--json", "--root", root, "-p", "fn cross_dialect_target"]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(!hits(&stdout).is_empty(), "-p should hit: {stdout}");
     assert!(
@@ -1055,7 +1078,10 @@ fn lsp_style_colon_refs_read_same_window_as_hash_refs() {
         "{colon}"
     );
     // Both spellings normalize to the same canonical ref inside the window.
-    assert_eq!(colon["windows"][0]["ref"], hash["windows"][0]["ref"], "{colon}");
+    assert_eq!(
+        colon["windows"][0]["ref"], hash["windows"][0]["ref"],
+        "{colon}"
+    );
 
     // Range form and its failures stay usage errors.
     let (code, stdout, _stderr) = run(&["--json", "--root", root, "read", "widget.rs:2-1"]);
@@ -1117,8 +1143,7 @@ fn ast_and_structural_verbs_recover_onto_search() {
         assert_eq!(code, 0, "{verb}: {stderr}");
         assert!(!hits(&stdout).is_empty(), "{verb}: {stdout}");
         assert!(
-            envelope_notes(&stdout)
-                .contains(&format!("recovered `{verb}` as `search`")),
+            envelope_notes(&stdout).contains(&format!("recovered `{verb}` as `search`")),
             "{verb} should teach the reroute: {stdout}"
         );
     }
@@ -1146,8 +1171,7 @@ fn c_short_and_count_flag_print_per_file_counts() {
         assert!(!counts.is_empty(), "counts must be present: {value}");
         for entry in &counts {
             assert!(
-                entry["file"].is_string()
-                    && entry["count"].as_u64().unwrap_or(0) >= 1,
+                entry["file"].is_string() && entry["count"].as_u64().unwrap_or(0) >= 1,
                 "each entry needs a file and a positive count: {entry}"
             );
         }
@@ -1333,7 +1357,9 @@ fn hermes_install_target_embeds_the_native_plugin() {
 
     let manifest = std::fs::read_to_string(plugins.join("asgrep/plugin.yaml")).unwrap();
     assert!(manifest.contains("name: asgrep"), "{manifest}");
-    assert!(plugins.join("asgrep/asgrep_hermes/serve_client.py").is_file());
+    assert!(plugins
+        .join("asgrep/asgrep_hermes/serve_client.py")
+        .is_file());
     assert!(plugins.join("asgrep/asgrep_hermes/eager.py").is_file());
     // Every module plugin.py imports must ship: a missing one kills the
     // whole plugin at load on installed copies (dev-live symlinks hide it).
@@ -1360,7 +1386,10 @@ fn hermes_install_refuses_to_write_through_a_symlink() {
     let out = hermes_install_env(&plugins).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("symlink"), "must name the symlink refusal: {stderr}");
+    assert!(
+        stderr.contains("symlink"),
+        "must name the symlink refusal: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,7 +1407,10 @@ fn m_short_recovers_to_limit() {
     let capped = hits(&stdout);
     assert!(!capped.is_empty() && capped.len() <= 2, "{stdout}");
     let notes = envelope_notes(&stdout);
-    assert!(notes.contains("`-m`") && notes.contains("--limit"), "{stdout}");
+    assert!(
+        notes.contains("`-m`") && notes.contains("--limit"),
+        "{stdout}"
+    );
     // Attached form `-m2` is the same recovery.
     let (code, stdout, stderr) = run(&["--json", "-m2", "cross_dialect_target", root]);
     assert_eq!(code, 0, "{stderr}");
@@ -1389,8 +1421,14 @@ fn m_short_recovers_to_limit() {
 fn chain_to_recovers_onto_call_path() {
     let tree = indexed_tree();
     let root = tree.root.to_str().unwrap();
-    let (code, stdout, stderr) =
-        run(&["--json", "chain", "caller", "--to", "cross_dialect_target", root]);
+    let (code, stdout, stderr) = run(&[
+        "--json",
+        "chain",
+        "caller",
+        "--to",
+        "cross_dialect_target",
+        root,
+    ]);
     assert_eq!(code, 0, "{stderr}");
     let envelope: Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("json: {e}: {stdout}"));

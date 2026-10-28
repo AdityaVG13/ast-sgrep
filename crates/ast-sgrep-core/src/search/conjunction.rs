@@ -22,7 +22,7 @@
 //! - Empty channels stay honest: an empty left result is empty; an empty
 //!   right result makes `AND` empty and `AND NOT` a no-op.
 
-use crate::query::{ParsedQuery, QueryMode};
+use crate::query::{strip_wrapping_quotes, ParsedQuery, QueryMode};
 use crate::search::types::{merge_channel_evidence, SearchHit};
 use crate::Result;
 
@@ -65,17 +65,6 @@ pub(crate) struct Conjunction {
     pub right: ChannelQuery,
     /// True for `AND NOT`: subtract the right channel instead of intersecting.
     pub negated: bool,
-}
-
-fn strip_wrapping_quotes(s: &str) -> &str {
-    let s = s.trim();
-    let quoted =
-        (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''));
-    if s.len() >= 2 && quoted {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    }
 }
 
 /// True when `needle` occurs in `s` OUTSIDE double-quoted spans. A `"`

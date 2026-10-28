@@ -53,6 +53,7 @@ fn drill_batch_request() -> BatchRequest {
         limit: None,
         parallel: None,
         parallel_mode: Some(ParallelMode::Serial),
+        ambient_freshness: None,
         calls: vec![
             BatchCall {
                 id: "b1".into(),

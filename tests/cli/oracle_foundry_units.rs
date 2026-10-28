@@ -415,7 +415,10 @@ fn lsp_initialize_rejects_retired_embed_selectors() {
     use std::io::Cursor;
 
     let dir = tempfile::tempdir().unwrap();
-    for (key, value) in [("neuralEmbed", json!(true)), ("embedBackend", json!("static"))] {
+    for (key, value) in [
+        ("neuralEmbed", json!(true)),
+        ("embedBackend", json!("static")),
+    ] {
         let mut options = json!({"noEmbed": true});
         options
             .as_object_mut()

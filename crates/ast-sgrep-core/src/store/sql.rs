@@ -449,9 +449,13 @@ fn configure_connection_inner(
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     } else {
         let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-        if !journal_mode.eq_ignore_ascii_case("wal") {
-            let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
-        }
+        let effective_mode = if !journal_mode.eq_ignore_ascii_case("wal") {
+            // For :memory: targets this is a no-op that keeps reporting
+            // "memory" — memdb has no journal file to switch.
+            conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?
+        } else {
+            journal_mode
+        };
         conn.execute_batch(&format!(
             "PRAGMA foreign_keys = ON; PRAGMA synchronous = {}; PRAGMA wal_autocheckpoint = 1000; PRAGMA journal_size_limit = 67108864;",
             durability.steady_pragma()
@@ -467,7 +471,15 @@ fn configure_connection_inner(
         // in-process connections). Persisting the WAL keeps the -wal/-shm
         // inodes stable for the db's lifetime, which is the same
         // keep-the-inode contract the extension's reindex already relies on.
-        persist_wal_on_close(conn)?;
+        // Only a WAL journal has a -wal inode to persist. The memdb VFS
+        // behind `:memory:` stores (the foreign-root inert swap in
+        // `Searcher::new`) answers SQLITE_FCNTL_PERSIST_WAL with
+        // SQLITE_NOTFOUND ("unknown operation"), which would fail every
+        // `IndexStore::open_in_memory` — gate on the effective mode instead
+        // of touching the file control unconditionally.
+        if effective_mode.eq_ignore_ascii_case("wal") {
+            persist_wal_on_close(conn)?;
+        }
     }
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         // A serve session's p99/p100 is cold-page btree I/O for each

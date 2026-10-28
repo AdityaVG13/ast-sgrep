@@ -556,10 +556,7 @@ pub(crate) enum Commands {
     },
     /// Sticky NDJSON session worker — the agent front door (one warm
     /// Searcher, ambient freshness, session memory for a whole program).
-    #[command(
-        alias = "codemode-serve",
-        about = "Sticky NDJSON Code Mode worker"
-    )]
+    #[command(alias = "codemode-serve", about = "Sticky NDJSON Code Mode worker")]
     Serve {
         #[arg(long, env = "ASGREP_NO_EMBED", action = clap::ArgAction::SetTrue,
             value_parser = clap::builder::BoolishValueParser::new(),
@@ -769,8 +766,7 @@ impl Cli {
         t.no_embed |= matches!(
             self.command.as_ref(),
             Some(
-                Commands::CodemodeBatch { no_embed: true, .. }
-                    | Commands::Serve { no_embed: true }
+                Commands::CodemodeBatch { no_embed: true, .. } | Commands::Serve { no_embed: true }
             )
         );
         t

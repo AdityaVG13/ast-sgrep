@@ -23,6 +23,23 @@ pub enum ArgumentTemplate {
     Exactly(usize),
 }
 
+/// A spelled return-type section on a function declaration template
+/// (br-hs1, probed 2026-10-27 against ast-grep 0.45.2, 3 stable rounds).
+/// Receipted grammars only — rust `-> T`, py `-> T`, go bare `T` after the
+/// argument list, ts/php `: T`. Per-grammar lane rules live with the
+/// structural matcher; the classifier only records the section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnSpec {
+    /// Metavariable return (`-> $R` / `: $R` / bare `$R`): binds the return
+    /// text. Presence is required everywhere except go body-less, where the
+    /// reference wildcards absent results as well (probed: `func $A($$$) $R`
+    /// matched both the `int`-returning and the no-result declarations).
+    Metavar(String),
+    /// Concrete return text (`-> u32`, `-> Option<u32>`, `int`, `: number`):
+    /// exact text equality.
+    Concrete(String),
+}
+
 /// One per-position slot in a php member-call argument list that mixes
 /// literal tokens with canonical metas — the reference binds metas
 /// positionally and matches literal tokens byte-exactly, and a `$$$NAME`

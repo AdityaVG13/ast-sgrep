@@ -1144,12 +1144,19 @@ pub(crate) fn if_consequence<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 /// translation.
 pub(crate) const RETURN_TYPE_FIELDS: &[&str] = &["return_type", "result", "returns"];
 
-/// Return-type presence agreement between the template and the matched
-/// declaration node.
-pub(crate) fn function_return_type_absent(node: &Node) -> bool {
+/// The declared return-type text of a function-like node, if any grammar
+/// return field is present (br-hs1). Shared by the section matcher and the
+/// capture binder.
+pub(crate) fn function_return_type_text<'a>(node: &Node<'a>, source: &'a str) -> Option<&'a str> {
+    // The ts/php `return_type` field node spans the separator too
+    // (`: number` — type_annotation includes the colon); rust/go field
+    // nodes carry the bare type. Strip a leading `:` so concrete
+    // comparisons see the type text alone.
     RETURN_TYPE_FIELDS
         .iter()
-        .all(|field| node.child_by_field_name(field).is_none())
+        .find_map(|field| node.child_by_field_name(field))
+        .and_then(|n| node_text(&n, source))
+        .map(|s| s.trim_start_matches(':').trim())
 }
 
 pub(crate) fn function_body_matches(node: &Node, template: &BodyTemplate) -> bool {

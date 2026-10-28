@@ -39,6 +39,12 @@ regex:foo.*bar
 word:token
 ```
 
+A prefixed target may carry ONE balanced `'...'`/`"..."` wrapper — it is a
+delimiter, not payload (`pattern:'fn $A($$$)'` ≡ `pattern:fn $A($$$)`), so
+schema-advertised quoted spellings resolve to the same query. Content quotes
+stay expressible by double-wrapping (`literal:'"fn"'` searches for the bytes
+`"fn"`); unbalanced or mixed pairs are payload and pass through untouched.
+
 ## Root-relative `in:` scope
 
 A whitespace-delimited `in:path` token outside double quotes scopes the query
@@ -87,6 +93,10 @@ Unprefixed Hybrid sets `target: None`.
 | QG-010 | `parse` never panics | arbitrary-string property remains a contract, not certified coverage | No mapped property regression |
 | QG-011 | Empty target after a prefix is well-defined | `callers:` / `pattern:` → `target: Some("")`, mode still prefixed | No mapped empty-prefixed-target regression |
 | QG-012 | Target remainder is trimmed | `defs:  auth` → target `auth` | `oracle_query::parsed_query_modes_scopes_and_targets` (Callers trim control) |
+| QG-013 | Prefixed targets tolerate one quote layer | a balanced `'...'`/`"..."` wrapper around any prefixed target is a delimiter, not payload (`pattern:'fn $A($$$)'` ≡ `pattern:fn $A($$$)`); content quotes via double-wrap (`literal:'"fn"'` searches for `"fn"`); unbalanced/mixed pairs stay payload | `oracle_query::prefixed_targets_strip_one_quote_layer` |
+| QG-014 | Spelled return sections parse per decl family | `fn`/`def` spell `-> T`, `function` spells `: T`, `func` spells bare `T`; `$R` binds the return, concrete (path idents + one generic layer) must match exactly; receipted to rust/go/ts/php/py, other grammars stay loud fail-closed | `tests/lang/pattern.rs::spelled_return_and_semicolon_forms_match_reference_grammar_specific_kinds` |
+| QG-015 | `;`-completed fn forms are well-defined | rust no-return `;` = sigs WITHOUT returns (strict); with a return spelled `;` is a no-op terminator; go/ts/php `;` forms answer empty | same test (semicolon cells) |
+| QG-016 | No-parens decl forms are well-defined | a pure name (`fn $A`, `fn plain_ret`) answers every fn-shaped node (rust: sigs ∪ items, generics wildcarded; ts/php free functions only); any section OR body template on a no-parens form answers EMPTY except go's bare metavar (`func $A $R` ≡ no section, `$R` binds the parameter list with parens) | `no_parens_decl_patterns_match_reference_grammar_specific_kinds` |
 
 ## Unsupported / negative matrix
 

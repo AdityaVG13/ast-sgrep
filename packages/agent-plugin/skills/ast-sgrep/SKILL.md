@@ -36,7 +36,7 @@ Start with small limits and `preview: "short"`. Use `code_read` only for IDs wor
 
 ## Query grammar (works in every search tool's `query`)
 
-Plain words, symbols, and snake_case fragments (`auth refresh`, `parse_pattern`) fuse lexical + structural + semantic channels. Prefix the query to pin a channel: `defs:SYMBOL`, `callers:SYMBOL`, `imports:MODULE`, `word:TERM`, `literal:TEXT`, `regex:PATTERN`, `pattern:'fn name($$$A)'` (metavariables; bare `$VAR` patterns auto-route). Scope inside the query with `in:PATH`.
+Plain words, symbols, and snake_case fragments (`auth refresh`, `parse_pattern`) fuse lexical + structural + semantic channels. Prefix the query to pin a channel: `defs:SYMBOL`, `callers:SYMBOL`, `imports:MODULE`, `word:TERM`, `literal:TEXT`, `regex:PATTERN`, `pattern:'fn name($$$A)'` (metavariables; bare `$VAR` patterns auto-route). Function patterns may spell a return section — `pattern:'fn $A($$$) -> $R'` binds the declared return (rust/go/ts/php/py; `fn $A($$$);` = signatures without returns). Body-less `fn $A($$$)` follows the reference per grammar: rust answers trait method signatures only, go answers declarations, ts/php answer nothing — spell `fn name($$$A) { $$$B }` when you want function bodies. A no-parens bare name (`pattern:'fn $A'`, `fn sig_r`) answers EVERY fn-shaped node — rust function items and trait signatures both, generics wildcarded — while a section on a no-parens form (`fn $A -> u32`) answers nothing. Scope inside the query with `in:PATH`. A quoted `pattern:`/`word:`/`regex:` target works as-is.
 
 `code_read` accepts compact IDs (`p3:120-145`), explicit refs (`src/a.rs#L120-L145`), single-line refs (`src/a.rs#L120`), and LSP-style (`src/a.rs:120`).
 

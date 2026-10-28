@@ -27,6 +27,41 @@ fn pattern_prefix_routes_to_native_or_index_hits() {
     );
 }
 
+// br-tvv (2026-10-27): the envelope must say when the limit cut true hits.
+// The warp E2E "miss" (transport.rs:10, 16/17 rows) was a LIMIT truncation,
+// not an admission cut — `--limit 51` returns all 17 rows including it. An
+// agent reading a full-looking envelope must be told the answer set was cut
+// (3 trait sigs, limit 2 -> 2 hits + truncated:true; limit 3 -> no flag).
+#[test]
+fn pattern_envelope_flags_limit_truncation() {
+    let session = indexed_rs(
+        "trait A { fn a(&self) -> u32; }\ntrait B { fn b(&self) -> u32; }\ntrait C { fn c(&self) -> u32; }\n",
+    );
+    let cut = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 2,
+        ..session.search_options()
+    });
+    let response = cut.search("pattern:'fn $A($$$)'").unwrap();
+    assert_eq!(response.hits.len(), 2, "limit 2 of 3 true hits");
+    assert!(
+        response.truncated,
+        "3 true hits existed, limit 2 kept 2: the envelope must flag the cut"
+    );
+
+    let full = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 3,
+        ..session.search_options()
+    });
+    let response = full.search("pattern:'fn $A($$$)'").unwrap();
+    assert_eq!(response.hits.len(), 3, "limit 3 covers all 3 true hits");
+    assert!(
+        !response.truncated,
+        "no hit was cut; the truncation flag must stay false"
+    );
+}
+
 #[test]
 fn rust_function_body_template_matches_without_external_ast_grep() {
     let session = indexed_rs("fn alpha() { beta(); }\nfn beta() {}\n");
@@ -82,6 +117,17 @@ fn exotic_pattern_fails_closed_loudly_not_panic() {
     assert!(
         format!("{err:#}").contains("fail-closed"),
         "rejection message must state fail-closed: {err:#}"
+    );
+    // br-ao2 (live 2026-10-27 Hermes stress): a bare refusal teaches nothing.
+    // The message must name working spellings so a model can self-correct.
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("fn $NAME($$$)"),
+        "rejection must teach the metavar form: {msg}"
+    );
+    assert!(
+        msg.contains("defs:"),
+        "rejection must teach the def-lane alternative: {msg}"
     );
 }
 
@@ -962,31 +1008,34 @@ fn f64_codemod_honesty_gate_reconciles_stale_index() {
     assert_eq!(plan.edit_count, 0, "stale hit must not plan an edit");
     assert_eq!(plan.files_changed, 0);
 
-    // Control: a fresh index serving the DECL face (search serves it, the
-    // in-process matcher produces no edit span) keeps the H-CONF-023 loud
-    // refusal — the registered true-positive contract
-    // (`codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits`,
-    // tests/cli/codemod_crash_windows.rs). The bare identifier is the wrong
-    // control shape: the matcher spans it fine, so a 1-edit plan is the
-    // honest answer there and no refusal may fire.
+    // Control: a fresh index serving the DECL face. br-osk moved the
+    // concrete decl name (`fn old_name`) into the matcher-spanned class
+    // (reference parity: every fn-shaped node with that name answers),
+    // so this face joins the bare identifier: a 1-edit plan is the
+    // honest answer and no refusal may fire. The H-CONF-023 loud refusal
+    // itself is re-pinned on the matcher-BLIND face in
+    // `codemod_loudly_refuses_index_served_decl_pattern_that_plans_zero_edits`
+    // (tests/cli/codemod_crash_windows.rs).
     let fresh = isolated_index_session();
     fresh.write("mod.rs", "fn old_name() {}\n");
     fresh.index_all(IndexOptions {
         embed_semantic: false,
         ..fresh.index_options()
     });
-    let err = plan_codemod(
+    // br-osk reconciliation: the matcher now ANSWERS the concrete decl
+    // name (`fn old_name` → every fn-shaped node with that name,
+    // reference parity), so this face is the bare-identifier class —
+    // a 1-edit plan is the honest answer and no refusal may fire.
+    let plan = plan_codemod(
         &fresh.corpus_root,
         Some(&fresh.index_path),
         None,
         "fn old_name",
         "fn new_name",
     )
-    .expect_err("fresh index serving the decl face must still refuse loudly");
-    assert!(
-        format!("{err:#}").contains("search serves it from the index"),
-        "{err:#}"
-    );
+    .expect("matcher spans the decl name: honest 1-edit plan");
+    assert_eq!(plan.edit_count, 1);
+    assert_eq!(plan.files_changed, 1);
 }
 
 /// P9d (pass 65, LOW d): the unanswerable-language census must classify

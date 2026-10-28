@@ -366,7 +366,8 @@ pub(crate) enum KindRule {
 fn declarator_is_function(node: &Node) -> bool {
     let mut cur = node.child_by_field_name("declarator");
     while let Some(d) = cur {
-        if d.kind() == "function_declarator" {            return true;
+        if d.kind() == "function_declarator" {
+            return true;
         }
         cur = d.child_by_field_name("declarator");
     }

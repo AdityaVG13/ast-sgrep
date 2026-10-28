@@ -295,14 +295,28 @@ fn fast_lookups_render_contract_shapes() {
         .is_some_and(|d| !d.is_empty()));
     assert_eq!(session.call_count(), 2);
 
-    // Before any db exists the readonly Searcher fails closed (discriminant
-    // only: the reason text is core's, not the NAPI contract). Still counts:
-    // bump precedes dispatch.
+    // Fresh-root lookup contract, post-ambient (the ambient-freshness lane):
+    // with ambient freshness ON (the default), a fresh root is auto-indexed
+    // on first lookup, so `find` answers a classified zero-hit miss instead
+    // of erroring — absence is resolved by building, not trusted. The
+    // ASGREP_NO_AMBIENT_FRESHNESS valve restores the pre-ambient readonly
+    // fail-closed contract (error before any db exists). Both modes are
+    // pinned; the call-count invariant (bump precedes dispatch) holds in
+    // either mode. Discriminant only: the reason text is core's, not the
+    // NAPI contract.
     let temp = empty_root();
     let session = session_on(temp.path(), "ffi_surface.db");
-    assert!(session
-        .call_now("find".to_string(), Some(json!({"query": "x"})))
-        .is_err());
+    let ambient_default = std::env::var("ASGREP_NO_AMBIENT_FRESHNESS").is_err();
+    if ambient_default {
+        let found = session
+            .call_now("find".to_string(), Some(json!({"query": "x"})))
+            .expect("ambient default answers a fresh root");
+        assert_eq!(found["hit_count"], json!(0), "{found}");
+    } else {
+        assert!(session
+            .call_now("find".to_string(), Some(json!({"query": "x"})))
+            .is_err());
+    }
     assert_eq!(session.call_count(), 1);
     let status = session
         .call_now("index_status".to_string(), None)

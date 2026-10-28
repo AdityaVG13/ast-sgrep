@@ -85,8 +85,10 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
             "symbol": hit.symbol, "caller": hit.caller, "callee": hit.callee, }
     })).collect();
     let incomplete = response.limit > 0 && items.len() >= response.limit;
+    // br-tku: the real answer-set cut (br-tvv) must not be diluted by the
+    // page-full heuristic.
     serde_json::json!({
-        "total_count": items.len(), "incomplete_results": incomplete, "items": items, "query": response.query, "provider": "ast-sgrep"
+        "total_count": items.len(), "incomplete_results": incomplete || response.truncated, "items": items, "query": response.query, "provider": "ast-sgrep"
     })
 }
 /// Project local results into a GitLab-like shape. This adapter has no repository context,
@@ -124,12 +126,17 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
     let has_semantic = hits.iter().any(|h| h["semantic"] == true);
     // Causal planner: suggested_next is derived from the actual top hit.
     let suggested = plan_suggested_next(response);
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "provider": "ast-sgrep", "version": env!("CARGO_PKG_VERSION"), "query": response.query, "limit": response.limit, "hit_count": hits.len(),
         "read_bytes_estimate": response.read_bytes_estimate, "returned_excerpt_bytes": response.returned_excerpt_bytes,
         "prevented_read_bytes": response.prevented_read_bytes, "has_semantic_hits": has_semantic,
         "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.", "suggested_next": suggested, "hits": hits,
-    })
+    });
+    // br-tku: skip-when-false keeps untruncated wire bytes identical.
+    if response.truncated {
+        envelope["truncated"] = serde_json::Value::Bool(true);
+    }
+    envelope
 }
 const PREVIEW_MAX_CHARS: usize = 120;
 pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) -> serde_json::Value {
@@ -157,14 +164,27 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
         .map(|e| e.len() as u64)
         .sum();
     let suggested = plan_suggested_next(response);
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "provider": "ast-sgrep", "mode": "capsule", "query": response.query, "limit": response.limit,
         "hit_count": hits.len(), "read_bytes_estimate": response.read_bytes_estimate,
         "returned_excerpt_bytes": returned, "prevented_read_bytes": response.prevented_read_bytes,
-        "expand_hint": "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)",
         "suggested_next": suggested,
         "hits": hits,
-    })
+    });
+    // br-puf: zero-hit envelopes drop the read-more hint — there is nothing
+    // to expand. The miss keeps `suggested_next` so it still teaches its
+    // next step.
+    if !hits.is_empty() {
+        envelope["expand_hint"] = serde_json::Value::String(
+            "re-run with --excerpt-lines N for bodies, or read each ref span with your file reader (path + line window)".into(),
+        );
+    }
+    // br-tku: this is the serve/plugin default render — the flag MUST
+    // survive here or every model consumer downstream is blind to cuts.
+    if response.truncated {
+        envelope["truncated"] = serde_json::Value::Bool(true);
+    }
+    envelope
 }
 /// Compact envelope whose per-result detail is chosen under a token budget
 /// (m38g), instead of truncating every excerpt to the same ceiling.
@@ -262,6 +282,11 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
     });
     if !roots.is_empty() {
         envelope["r"] = serde_json::Value::from(roots);
+    }
+    // br-tku: the answer-set cut rides the z* tail (z-indexed, absent when
+    // false) so compact consumers can drop it with the rest of the tail.
+    if response.truncated {
+        envelope["zc"] = serde_json::Value::Bool(true);
     }
     envelope
 }
@@ -467,6 +492,11 @@ pub enum MissReason {
     FiltersExcludedAll,
     /// A channel the query needed could not run.
     ChannelUnavailable,
+    /// The query is a bodyless-args pattern (`fn NAME($$$)`): those shapes
+    /// answer signatures only — fn items with bodies never match — so a
+    /// zero-hit answer is contract-correct but reads as "no such function
+    /// anywhere" without this teaching (br-yjw).
+    PatternShapeContract,
     /// The index is populated and unfiltered: the term simply is not there.
     NoMatch,
 }
@@ -477,6 +507,7 @@ impl MissReason {
             Self::EmptyIndex => "empty_index",
             Self::FiltersExcludedAll => "filters_excluded_all",
             Self::ChannelUnavailable => "channel_unavailable",
+            Self::PatternShapeContract => "pattern_shape_contract",
             Self::NoMatch => "no_match",
         }
     }
@@ -492,9 +523,38 @@ impl MissReason {
             Self::ChannelUnavailable => {
                 "retry on another channel, or repair the unavailable one".to_owned()
             }
+            Self::PatternShapeContract => "bodyless fn patterns answer signatures only — fn \
+                                           items with bodies never match; try the no-parens \
+                                           name form (pattern:fn NAME) or spell a body"
+                .to_owned(),
             Self::NoMatch => "try a shorter or more distinctive term".to_owned(),
         }
     }
+}
+
+/// True for `pattern:` queries whose shape is a bodyless function with an
+/// argument list — `fn NAME($$$)`, `fn $A($B)`, `fn $A($$$) -> $R`, any
+/// fn-family keyword, quoted or bare, NO body brace. These shapes answer
+/// signatures only (fn items with bodies never match them), so their
+/// zero-hit answers carry the PatternShapeContract teaching.
+///
+/// Textual trigger ONLY: it decides whether a teaching string rides the
+/// envelope, never which hits answer — a false positive teaches a true
+/// contract sentence, a false negative merely omits the note (br-yjw).
+pub fn is_bodyless_fn_args_pattern(query: &str) -> bool {
+    let Some(pat) = query.trim().strip_prefix("pattern:") else {
+        return false;
+    };
+    let pat = pat.trim().trim_matches('\'').trim_matches('"').trim();
+    if pat.contains('{') || pat.contains('}') {
+        return false;
+    }
+    let Some((keyword, rest)) = pat.split_once(' ') else {
+        return false;
+    };
+    matches!(keyword, "fn" | "def" | "func" | "function")
+        && rest.contains('(')
+        && rest.contains(')')
 }
 
 /// Everything known about a zero-hit search (6a3i).
@@ -508,12 +568,17 @@ pub struct MissContext {
     pub scope: Vec<(String, String)>,
     /// Indexed file count when known; `None` means not consulted.
     pub indexed_files: Option<usize>,
+    /// The query was a bodyless-args pattern whose zero-hit answer teaches
+    /// its contract (br-yjw). Refines the terminal no-match case only.
+    pub pattern_miss: bool,
 }
 
 impl MissContext {
     /// Classify the miss from the signals available. Order matters: an empty
     /// index explains everything else, and filters explain a miss before a
-    /// genuine absence does.
+    /// genuine absence does. The pattern-shape contract refines only the
+    /// terminal case — it never masks an empty index, a dead channel, or
+    /// filters.
     pub fn reason(&self) -> MissReason {
         if self.indexed_files == Some(0) {
             return MissReason::EmptyIndex;
@@ -523,6 +588,9 @@ impl MissContext {
         }
         if !self.scope.is_empty() {
             return MissReason::FiltersExcludedAll;
+        }
+        if self.pattern_miss {
+            return MissReason::PatternShapeContract;
         }
         MissReason::NoMatch
     }

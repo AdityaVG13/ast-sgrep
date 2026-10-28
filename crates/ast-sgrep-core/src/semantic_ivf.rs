@@ -10,10 +10,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 const MAGIC: &[u8; 6] = b"ASIVF\0";
-/// v3 appends the chunk-id column after the vectors (see
-/// [`save_semantic_ivf_with_ids`]). Readers accept v2 and v3: a v2 file has
-/// no ids section and the embed pass falls back to SQL id resolution, so an
-/// older sidecar degrades to the old path instead of failing.
+/// v3 stays the file version for reader-range reasons, but production saves
+/// never append the embedded ids column anymore (see
+/// [`save_semantic_ivf_with_ids`]): the main file is always v2-shaped and
+/// chunk ids ride a separate fingerprint-bound `semantic.ivf.ids` sidecar.
+/// Readers accept all three artifacts: v2 main + ids sidecar (current
+/// production), embedded-v3 main (legacy dev trees), and plain v2 (older
+/// sidecars — the embed pass falls back to SQL id resolution, so an older
+/// artifact degrades to the old path instead of failing).
 const VERSION: u32 = 3;
 const MIN_READER_VERSION: u32 = 2;
 const HEADER_SIZE: usize = 80;
@@ -32,6 +36,17 @@ pub fn semantic_ivf_path(index_db: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|| Path::new(SEMANTIC_IVF_FILE).to_path_buf())
 }
 
+/// Path of the fingerprint-bound chunk-ids sidecar for an IVF file
+/// (`semantic.ivf` -> `semantic.ivf.ids`).
+pub fn semantic_ivf_ids_path(ivf_path: &Path) -> std::path::PathBuf {
+    let mut name = ivf_path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".ids");
+    ivf_path.with_file_name(name)
+}
+
 pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
     // An in-memory store has NO filesystem surface.
     // `Path::new(":memory:").parent()` is `Some("")`, so the historical path
@@ -43,6 +58,14 @@ pub fn invalidate_semantic_ivf(index_db: &Path) -> Result<()> {
         return Ok(());
     }
     let path = semantic_ivf_path(index_db);
+    // The ids sidecar is only ever consumed alongside its main file; removing
+    // both keeps an invalidated pair from being re-associated by a later
+    // reader.
+    if let Err(error) = fs::remove_file(semantic_ivf_ids_path(&path)) {
+        if !benign_invalidation_error(&error) {
+            return Err(error.into());
+        }
+    }
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if benign_invalidation_error(&error) => Ok(()),
@@ -154,9 +177,9 @@ struct MappedVectors {
     bytes: Range<usize>,
 }
 
-/// Trailing v3 ids section: the chunk-id column in the same order the
-/// vectors were flattened (`SELECT id ... ORDER BY id`). v2 sidecars load
-/// with `None` and callers fall back to SQL id resolution.
+/// Chunk ids, in the order the vectors were flattened (`SELECT id ...
+/// ORDER BY id`), carried by the ids sidecar or the legacy embedded column.
+/// Absent ids load as `None` and callers fall back to SQL id resolution.
 #[derive(Debug, Clone)]
 struct MappedIds {
     mmap: Arc<Mmap>,
@@ -267,11 +290,14 @@ pub fn save_semantic_ivf_with_publication(
     save_semantic_ivf_with_ids(path, fingerprint, dim, vectors, index, None)
 }
 
-/// v3 save: append the chunk-id column (the `SELECT id ... ORDER BY id`
-/// order the vectors were flattened in) so the embed pass resolves IVF
-/// positions from the mmap instead of a full-table SQL load. `None` writes
-/// a file without the section (v2 shape, v3 version); a length mismatch
-/// with the vector population is rejected before any file is created.
+/// Save with chunk ids (`SELECT id ... ORDER BY id` order the vectors were
+/// flattened in) so the embed pass resolves IVF positions from a mmap
+/// instead of a full-table SQL load. The main file is ALWAYS the v2 shape
+/// (ends at the vector section) and the ids ride a fingerprint-bound
+/// `semantic.ivf.ids` sidecar published before it — 2.6.x exact-EOF readers
+/// accept the main file untouched. `None` publishes a plain v2 file and
+/// removes any stale ids sidecar; a length mismatch with the vector
+/// population is rejected before any file is created.
 pub fn save_semantic_ivf_with_ids(
     path: &Path,
     fingerprint: [u8; 32],
@@ -311,17 +337,25 @@ pub fn save_semantic_ivf_with_ids(
         VECTOR_ALIGNMENT,
     )
     .ok_or_else(|| crate::StoreError::Other("semantic IVF alignment overflow".into()))?;
-    let vector_len = vectors.len() * std::mem::size_of::<f32>();
-    // i64 alignment for the trailing ids section; only padding between
-    // vectors and ids ever exists, never after ids.
-    let ids_offset = align_up(
-        vector_offset
-            .checked_add(vector_len)
-            .ok_or_else(|| crate::StoreError::Other("semantic IVF size overflow".into()))?,
-        std::mem::align_of::<i64>(),
-    )
-    .ok_or_else(|| crate::StoreError::Other("semantic IVF alignment overflow".into()))?;
+    // Old-reader compatibility (ledger: perf-negative-results "v3 IVF sidecar
+    // format", resolve-before-release row, option (a)): the main file is
+    // ALWAYS the v2 shape — it ends exactly at the vector section, so 2.6.x
+    // exact-EOF readers accept it instead of silently retraining k-means on
+    // every fresh invocation. Chunk ids ride a separate fingerprint-bound
+    // `semantic.ivf.ids` sidecar, published BEFORE the main file: any crash
+    // window leaves the pair fingerprint-mismatched (sidecar rejected, the
+    // reader degrades to the SQL id fallback) and never serves wrong ids.
+    // Legacy embedded-v3 files from dev trees remain readable.
+    let ids_sidecar = semantic_ivf_ids_path(path);
     reap_stale_temporaries(path);
+    reap_stale_temporaries(&ids_sidecar);
+    if let Some(ids) = ids {
+        write_ids_sidecar(&ids_sidecar, fingerprint, chunk_count, ids)?;
+    } else if let Err(error) = fs::remove_file(&ids_sidecar) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error.into());
+        }
+    }
     let temporary = temporary_path(path);
     let result = write_ivf_temporary(
         &temporary,
@@ -336,8 +370,6 @@ pub fn save_semantic_ivf_with_ids(
         },
         &index_bytes,
         vectors,
-        ids,
-        ids_offset,
     );
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -345,16 +377,55 @@ pub fn save_semantic_ivf_with_ids(
     result
 }
 
+/// `IDS1` native-endian ids-sidecar header: magic u32, fingerprint, chunk
+/// count u32, 8 reserved bytes — 48 bytes total, chosen so the i64 payload
+/// that follows is naturally aligned for zero-copy casting.
+const IDS_SIDECAR_MAGIC: u32 = 0x3153_4449;
+const IDS_SIDECAR_HEADER_SIZE: usize = 48;
+
+/// Publish the chunk-ids sidecar with the same create-new + fsync + atomic
+/// replace discipline as the main file.
+fn write_ids_sidecar(
+    path: &Path,
+    fingerprint: [u8; 32],
+    chunk_count: usize,
+    ids: &[i64],
+) -> Result<()> {
+    let temporary = temporary_path(path);
+    let written = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&IDS_SIDECAR_MAGIC.to_ne_bytes())?;
+        file.write_all(&fingerprint)?;
+        file.write_all(&(chunk_count as u32).to_ne_bytes())?;
+        file.write_all(&[0u8; 8])?;
+        file.write_all(bytemuck::cast_slice(ids))?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    match written {
+        Ok(()) => {
+            replace_file(&temporary, path)?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+
 /// Write IVF payload to a create-new temporary, fsync, then atomically replace `path`.
-#[allow(clippy::too_many_arguments)]
+/// Always the v2 shape: the file ends exactly at the vector section (see
+/// [`save_semantic_ivf_with_ids`] for the old-reader contract).
 fn write_ivf_temporary(
     temporary: &Path,
     path: &Path,
     header: IvfHeader,
     index_bytes: &[u8],
     vectors: &[f32],
-    ids: Option<&[i64]>,
-    ids_offset: usize,
 ) -> Result<bool> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -367,11 +438,6 @@ fn write_ivf_temporary(
         header.vector_offset - HEADER_SIZE - index_bytes.len(),
     )?;
     file.write_all(bytemuck::cast_slice(vectors))?;
-    if let Some(ids) = ids {
-        let vector_end = header.vector_offset + vectors.len() * std::mem::size_of::<f32>();
-        write_zeros(&mut file, ids_offset - vector_end)?;
-        file.write_all(bytemuck::cast_slice(ids))?;
-    }
     file.sync_all()?;
     Ok(replace_file(temporary, path)?)
 }
@@ -387,8 +453,9 @@ pub struct LazySemanticIvf {
 }
 
 impl LazySemanticIvf {
-    /// Chunk ids in flatten order, when the sidecar carries the v3 ids
-    /// section. `None` on v2 sidecars — callers resolve ids from SQL.
+    /// Chunk ids in flatten order, when the ids sidecar (or the legacy
+    /// embedded-v3 column) is present. `None` otherwise — callers resolve
+    /// ids from SQL.
     pub fn ids(&self) -> Option<&[i64]> {
         self.mapped_ids.as_ref().map(MappedIds::as_slice)
     }
@@ -495,9 +562,9 @@ pub fn load_semantic_ivf_index(
     let Some(mapped) = map_and_parse(path, Some(expected_fingerprint))? else {
         return Ok(None);
     };
-    let mapped_ids = mapped.ids_bytes.map(|bytes| MappedIds {
-        mmap: Arc::clone(&mapped.mmap),
-        bytes,
+    let mapped_ids = mapped.ids.map(|ids| MappedIds {
+        mmap: ids.mmap,
+        bytes: ids.bytes,
     });
     let mapped_vectors = MappedVectors {
         mmap: mapped.mmap,
@@ -557,7 +624,16 @@ struct ParsedMapping {
     header: IvfHeader,
     index: SemanticAnnIndex,
     vector_bytes: Range<usize>,
-    ids_bytes: Option<Range<usize>>,
+    ids: Option<IdsMapping>,
+}
+
+/// Chunk ids in flatten order from whichever carrier parsed: the legacy
+/// embedded-v3 trailing column (same mmap as the main file) or the
+/// fingerprint-bound `semantic.ivf.ids` sidecar (its own mmap).
+#[derive(Debug, Clone)]
+struct IdsMapping {
+    mmap: Arc<Mmap>,
+    bytes: Range<usize>,
 }
 
 fn load_semantic_ivf_inner(
@@ -622,10 +698,11 @@ fn map_and_parse(
     else {
         return Ok(None);
     };
-    // v3 trailing ids section: chunk_count i64s at i64 alignment past the
-    // vectors, present iff the file ends exactly there. A file ending at
-    // vector_end is the v2 shape (no ids). Anything else is truncated or
-    // corrupt: reject rather than guess.
+    // Trailing ids section (legacy embedded-v3 shape): chunk_count i64s at
+    // i64 alignment past the vectors, present iff the file ends exactly
+    // there. A file ending at vector_end is the v2 shape — the ids then ride
+    // the separate `semantic.ivf.ids` sidecar (see map_ids_sidecar). Anything
+    // else is truncated or corrupt: reject rather than guess.
     let Some(ids_start) = align_up(vector_end, std::mem::align_of::<i64>()) else {
         return Ok(None);
     };
@@ -633,16 +710,26 @@ fn map_and_parse(
         .chunk_count
         .checked_mul(std::mem::size_of::<i64>())
         .and_then(|len| ids_start.checked_add(len));
-    let ids_bytes = match ids_end {
+    let embedded_ids = match ids_end {
         Some(ids_end) if ids_end == mmap.len() => {
             let range = ids_start..ids_end;
             if bytemuck::try_cast_slice::<u8, i64>(&mmap[range.clone()]).is_err() {
                 return Ok(None);
             }
-            Some(range)
+            Some(IdsMapping {
+                mmap: Arc::clone(&mmap),
+                bytes: range,
+            })
         }
         _ if vector_end == mmap.len() => None,
         _ => return Ok(None),
+    };
+    // The sidecar only fills in when the main file carries no embedded
+    // column; a fingerprint-bound mismatch yields None (SQL fallback), never
+    // wrong ids.
+    let ids = match embedded_ids {
+        Some(mapping) => Some(mapping),
+        None => map_ids_sidecar(&semantic_ivf_ids_path(&path), &header)?,
     };
     if header.vector_offset % VECTOR_ALIGNMENT != 0 {
         return Ok(None);
@@ -666,8 +753,51 @@ fn map_and_parse(
         header,
         index,
         vector_bytes,
-        ids_bytes,
+        ids,
     }))
+}
+
+/// Map and validate the chunk-ids sidecar for a parsed v2 main file: magic,
+/// fingerprint, chunk count, and exact length must all match the main
+/// header. A missing, foreign, or stale sidecar yields `None` — never wrong
+/// ids; the SQL fallback path resolves them instead.
+fn map_ids_sidecar(path: &Path, header: &IvfHeader) -> Result<Option<IdsMapping>> {
+    let file = match open_mappable_file(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let Some(expected_len) = header
+        .chunk_count
+        .checked_mul(std::mem::size_of::<i64>())
+        .and_then(|len| IDS_SIDECAR_HEADER_SIZE.checked_add(len))
+    else {
+        return Ok(None);
+    };
+    if metadata.len() != expected_len as u64 {
+        return Ok(None);
+    }
+    let mmap = Arc::new(map_readonly(&file)?);
+    let header_bytes = &mmap[..IDS_SIDECAR_HEADER_SIZE];
+    let fingerprint_matches = header_bytes[4..36] == header.fingerprint;
+    let count_matches = header_bytes[36..40] == (header.chunk_count as u32).to_ne_bytes();
+    if header_bytes[..4] != IDS_SIDECAR_MAGIC.to_ne_bytes()
+        || !fingerprint_matches
+        || !count_matches
+    {
+        return Ok(None);
+    }
+    let bytes = IDS_SIDECAR_HEADER_SIZE..expected_len;
+    if bytemuck::try_cast_slice::<u8, i64>(&mmap[bytes.clone()]).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(IdsMapping { mmap, bytes }))
 }
 
 fn read_header(bytes: &[u8], expected_fingerprint: Option<[u8; 32]>) -> Option<IvfHeader> {

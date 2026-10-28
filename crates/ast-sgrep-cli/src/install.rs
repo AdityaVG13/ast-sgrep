@@ -181,19 +181,16 @@ fn install_hermes_plugin(force: bool) -> anyhow::Result<PathBuf> {
         for (rel, _) in HERMES_PLUGIN_FILES {
             let file = dest.join(rel);
             if file.symlink_metadata().is_ok() {
-                fs::remove_file(&file)
-                    .with_context(|| format!("replace {}", file.display()))?;
+                fs::remove_file(&file).with_context(|| format!("replace {}", file.display()))?;
             }
         }
     }
     for (rel, content) in HERMES_PLUGIN_FILES {
         let file = dest.join(rel);
         if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
-        fs::write(&file, content)
-            .with_context(|| format!("write {}", file.display()))?;
+        fs::write(&file, content).with_context(|| format!("write {}", file.display()))?;
     }
     // Best-effort enable: the hermes CLI may be absent (headless installs).
     match which("hermes") {
