@@ -16,6 +16,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub const DEFAULT_ANN_THRESHOLD: usize = 2_000;
 /// Measured minimum satisfying recall@10 >= 0.99 at 2,048 and 10,000 vectors.
 pub const DEFAULT_ADAPTIVE_PROBE_PERCENT: usize = 90;
+
+/// Default ANN admission target, in candidate members, for n>10_000
+/// corpora. Measured saturation point on the 19k-chunk CoSQA fixture
+/// (2026-10-29 probe sweep; see `candidate_indices`).
+pub const PROBE_MEMBER_BUDGET: usize = 4_096;
 #[derive(Debug, Clone)]
 pub struct SemanticAnnIndex {
     centroids: Vec<Vec<f32>>,
@@ -201,15 +206,22 @@ impl SemanticAnnIndex {
                     .div_euclid(100)
                     .clamp(1, populated - 1);
                 // 90% at 54k is nearly exhaustive (~49k candidates). Keep the
-                // published 2048/10000 recall gate, but bound nprobe once the
-                // corpus is larger than that fixture.
+                // published 2048/10000 recall gate, but bound the admitted
+                // member count once the corpus is larger than that fixture.
                 let n = self.clusters.iter().map(Vec::len).sum::<usize>();
                 if n > 10_000 {
-                    // 8 probes: ~1.8k members at 54k / k~234. 16 probes was
-                    // unique-query p90 1.2 ms; 8 probes measured p90 0.63 ms
-                    // on the same 54k shape (n=25). 2048/10k fixtures stay
-                    // on the 90% path below.
-                    pct.min(8).clamp(1, populated - 1)
+                    // Member-budget probe targeting: admission recall
+                    // saturated at ~4k members on the 19k-chunk CoSQA
+                    // fixture (32 probes, 2026-10-29 sweep: .4023 -> .4254
+                    // MRR; flat 64/exact added <= .002). A flat probe count
+                    // floods large near-duplicate corpora (date-fns rank-1
+                    // demoted past 100 at flat 32), so nprobe scales
+                    // inversely with average cluster population and never
+                    // drops below the measured 8-probe floor (54k p90
+                    // 0.63 ms). 2048/10k fixtures stay on the 90% path.
+                    let avg_cluster = n / populated.max(1);
+                    let budget = (PROBE_MEMBER_BUDGET / avg_cluster.max(1)).max(8);
+                    pct.min(budget).clamp(1, populated - 1)
                 } else {
                     pct
                 }
