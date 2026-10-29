@@ -1210,3 +1210,38 @@ path shows pagerStress/unixWrite as ≥20% of cold-build samples on a corpus
 whose index database exceeds 2× the 70 MiB cache AND the tokenizer/bind
 CPU share is below 30%; then A/B `cache_size` on that corpus with ≥10 runs
 per arm and keep only on a median win outside the envelope.
+
+## Rejected: deferred FTS/trigram wholesale rebuild for full-tree index waves
+
+Measured 2026-10-28, interleaved A/B (5 pairs, same binary, env-gated arm,
+self corpus 726 files / 420k lines, M5 Max 18c under load ~25, release-perf):
+arming full-tree waves to skip per-line lines_fts/lines_code_fts/
+lines_trigram inserts and repopulate wholesale at commit
+(trigram 'delete-all' + INSERT..SELECT, FTS 'rebuild') came out SLOWER:
+DEFER median 5.58s / mean 5.90s vs NODEFER median 5.43s / mean 5.51s, with
+two 6.3s+ outlier runs from the rebuild path. Behavior was proven
+isomorphic first (8/8 corpus query-hash equality, armed-vs-per-file
+equivalence test with mutation-proven MATCH probes) — the rejection is
+purely on wall. The statement-dispatch hypothesis (~1.7us x 1.26M per-line
+statements dominating the lexical write floor) failed: per-line inserts
+are tokenization/page-write bound, and the wholesale rebuild re-tokenizes
+the same corpus plus a full delete-all pass. External-content FTS5 lesson:
+SQL `DELETE FROM` on these tables corrupts (SQLITE_CORRUPT 267); only the
+'delete-all' command is legal. No code kept. Retry predicate (form 2):
+reopen when a cold-build profile attributes >=15% of samples to
+statement bind/step dispatch (not tokenization or page writes) on a
+corpus >=2M lines, or when sqlite gains a batched external-content FTS
+population API that skips re-tokenization of already-tokenized content.
+
+Re-measured same day (user-requested retry under lighter load; machine never
+dropped below load ~21 in 4h, so a counterbalanced bash re-run with CPU time
+as primary instrument, 8 pairs): wall arm medians DEFER 7.99s vs NODEFER
+7.12s (+0.87 slower), paired wall median +0.25s; CPU arm medians 14.17s vs
+13.13s (+1.04s MORE cpu). Mechanism settled: the wholesale rebuild repeats
+the same tokenization volume and adds a full 'delete-all' pass, so it does
+strictly more work than per-line inserts; the ~1us/statement dispatch
+overhead it eliminates is far cheaper than estimated. Rejection confirmed
+under both protocols; two earlier defects found on the way (zsh does not
+word-split unquoted loop variables — silent single-arm A/B; /usr/bin/time
+user+sys on a rayon workload varies with pool sizing under load, so CPU
+totals are comparable only within a pair).
