@@ -30,3 +30,7 @@ path = "../../tests/embed/static_engine.rs"
 [[test]]
 name = "flat_rank"
 path = "../../tests/embed/flat_rank.rs"
+
+[[test]]
+name = "lazy_table"
+path = "../../tests/embed/lazy_table.rs"

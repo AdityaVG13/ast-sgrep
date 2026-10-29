@@ -2918,3 +2918,42 @@ measured and rejected as immaterial).
 CoSQA totals match the offline reconstruction exactly on both levers.
 Supersedes the leader-only row. Evidence:
 `benchmarks/results/internal/frozen-repin-20261028/lever2-*`.
+
+## 2026-10-29 rg lane re-pin + lazy f16 row decode (competitor campaign round 2)
+
+**Status: measured, reproducible-in-tree (self corpus workdir, tracked files
+only; load ~5 during lanes — interleaved single-binary arms, ratios
+directional). Machine Apple M5 Max, macOS 26.6.2, rg 15.1.0, hyperfine
+min-of-15 warm.**
+
+Re-pin (pre-lever binary `16eae7c06a153e6c…`, 795-file tracked corpus,
+index 14.5 s): the two round-1 losses persist — default needle 40.9 ms vs
+rg 19.7 (0.48x), `-l` default 41.0 vs 22.1 (0.54x) — while the `literal:`
+lanes win 3.6-4.2x. Profile (`ASGREP_PERF_PROFILE`, warm): the default
+lane's excess was `embed_query` = 20.6 ms of `hybrid_embed_pass`'s 41.8 ms
+— `weights_f32()` materializing all 63,457 x 256 f16 rows (65 MB f32) per
+process to embed a ~10-token query, plus the faulted f16 pages (234.5 MiB
+RSS vs 11.1 on the literal lane).
+
+**Lever (KEPT): query-path row decode.** `StaticEmbedder::embed` (single
+text — the only query-path caller, `search/passes/embed.rs`) now decodes
+just the token rows it pools, straight from the f16 bytes; `embed_batch`
+(indexing, `store/embed_support.rs`) keeps the one-shot full
+materialization. f16→f32 widening is exact and summation order is shared,
+so vectors are bit-identical by construction — parity suite 3/3, goldens
+byte-identical, frozen-suite ranks unchanged. The thin-page guard is
+untouched: the restricted embed pass still runs on every non-conceptual
+query (its +.012 RepoQA keep stands); only the decode cost moved.
+Failure-first: `tests/embed/lazy_table.rs` (red: embed materialized;
+green after split; mutation = the old delegation). Dual-path bit parity
+pinned in `tests/embed/static_engine.rs`
+(`lazy_row_embed_matches_materialized_table_bit_for_bit`).
+
+Post-lever (binary `a5ad90cf40897905…`): default needle **30.9 ms**
+(was 40.9; min 27.2), `-l` default **27.5 ms** (was 41.0), RSS
+**141.7 MiB** (was 234.5, −93 MiB). Remaining default-lane gap to rg
+(~10 ms) is SQLite row/blob fetch work inside the embed pass that backs
+the guarded quality keep — next candidate only with a span-level profile
+naming its cost, per round-1c discipline. Lanes:
+`~/.hermes/cache/scratch/asgrep-rg-repin-20261029/` (spans
+`/tmp/span[1-4].jsonl`).

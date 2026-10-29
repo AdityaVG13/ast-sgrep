@@ -16,7 +16,7 @@ pub use math::{
     cosine_similarity, dot_similarity, normalize_vec, normalize_vec_in_place, top_by_similarity,
     top_k_flat_similarity, top_k_similarity, MIN_SIMILARITY, PARALLEL_CHUNK_THRESHOLD,
 };
-pub use static_engine::{StaticEmbedder, STATIC_DIM, STATIC_MODEL_ID};
+pub use static_engine::{table_is_materialized, StaticEmbedder, STATIC_DIM, STATIC_MODEL_ID};
 pub use text::{expand_concepts, split_ident, tokenize};
 pub fn embed_to_bytes(vec: &[f32]) -> Vec<u8> {
     vec.iter().flat_map(|f| f.to_le_bytes()).collect()

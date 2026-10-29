@@ -32,8 +32,9 @@ static WEIGHTS: &[u8] = include_bytes!("../assets/potion-code-16m-v2.f16.bin");
 /// is bit-identical to decoding per element in the hot loop — which cost
 /// ~1.2G byte-pair loads + conversions on a full corpus build because the
 /// mean-pool loop touches every weight element per token per field.
+static DECODED: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+
 fn weights_f32() -> &'static [f32] {
-    static DECODED: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
     DECODED.get_or_init(|| {
         let rows = WEIGHTS.len() / 2;
         let mut out = Vec::with_capacity(rows);
@@ -43,6 +44,13 @@ fn weights_f32() -> &'static [f32] {
         }
         out
     })
+}
+
+/// Test observable: whether the full f32 table has been materialized.
+/// One-shot query processes must stay `false` (see `tests/embed/lazy_table.rs`).
+#[doc(hidden)]
+pub fn table_is_materialized() -> bool {
+    DECODED.get().is_some()
 }
 /// Layout: `[u32 n][u32 offsets (n+1)][u32 ids (n)][token bytes]`, tokens
 /// sorted by byte order. Produced by `assets/convert_potion.py`.
@@ -248,37 +256,53 @@ impl StaticEmbedder {
 }
 
 impl StaticEmbedder {
+    /// Mean-pool `text`'s token rows and L2-normalize.
+    ///
+    /// `table: Some(_)` pools from the materialized f32 table (the batch /
+    /// indexing path). `table: None` decodes each pooled row straight from
+    /// the f16 bytes — the one-shot query path, which touches only the
+    /// rows its tokens need instead of decoding 63,457 x 256 floats
+    /// (~65 MB) per process. f16→f32 is exact widening and the summation
+    /// order is identical, so both sources yield bit-identical vectors
+    /// (pinned by `tests/embed/static_engine.rs` dual-path parity).
+    fn pool(&self, text: &str, table: Option<&[f32]>) -> Vec<f32> {
+        let ids = self.token_ids(text);
+        let mut v = vec![0.0f32; STATIC_DIM];
+        for id in &ids {
+            let base = *id as usize * STATIC_DIM;
+            for (d, x) in v.iter_mut().enumerate() {
+                let p = match table {
+                    Some(w) => w[base + d],
+                    None => {
+                        let b = (base + d) * 2;
+                        f16_to_f32(u16::from_le_bytes([WEIGHTS[b], WEIGHTS[b + 1]]))
+                    }
+                };
+                *x += p;
+            }
+        }
+        if !ids.is_empty() {
+            let n = ids.len() as f32;
+            for x in &mut v {
+                *x /= n;
+            }
+        }
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt() + 1e-32;
+        for x in &mut v {
+            *x /= norm;
+        }
+        v
+    }
+
     /// Embed one text: mean-pool its token rows, L2-normalize.
     /// Infallible; text with no known tokens yields the zero vector.
+    /// Never materializes the f32 table (see `pool`).
     pub fn embed(&self, text: &str) -> Vec<f32> {
-        self.embed_batch(&[text]).pop().unwrap_or_default()
+        self.pool(text, None)
     }
 
     pub fn embed_batch(&self, texts: &[&str]) -> Vec<Vec<f32>> {
-        texts
-            .iter()
-            .map(|text| {
-                let ids = self.token_ids(text);
-                let w = weights_f32();
-                let mut v = vec![0.0f32; STATIC_DIM];
-                for id in &ids {
-                    let row = &w[*id as usize * STATIC_DIM..*id as usize * STATIC_DIM + STATIC_DIM];
-                    for (x, p) in v.iter_mut().zip(row) {
-                        *x += *p;
-                    }
-                }
-                if !ids.is_empty() {
-                    let n = ids.len() as f32;
-                    for x in &mut v {
-                        *x /= n;
-                    }
-                }
-                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt() + 1e-32;
-                for x in &mut v {
-                    *x /= norm;
-                }
-                v
-            })
-            .collect()
+        let w = weights_f32();
+        texts.iter().map(|text| self.pool(text, Some(w))).collect()
     }
 }

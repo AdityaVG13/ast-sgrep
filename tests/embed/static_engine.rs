@@ -120,3 +120,33 @@ embed_parallel(conn: &Connection, chunks: &[SemanticChunkInput], source_path: &s
         "per-text embed cost {per_text_us:.1}us regressed past the 8ms tripwire"
     );
 }
+
+/// The two pooling sources must agree bit-for-bit: `embed` decodes f16 rows
+/// on demand (no table materialization), `embed_batch` pools from the
+/// materialized f32 table. f16→f32 widening is exact and the summation
+/// order is shared, so any divergence is a decode or pooling bug on one of
+/// the paths. Edge texts cover empty input, unknown-only text (zero
+/// vector), subword-heavy identifiers, accents, CJK, and a long body.
+/// KILLS: a change to either path's decode or accumulation order.
+#[test]
+fn lazy_row_embed_matches_materialized_table_bit_for_bit() {
+    let e = ast_sgrep_embed::StaticEmbedder::new();
+    let cases = [
+        "",
+        "zzzzqqqqxxxx",
+        "semantic_ivf search",
+        "hybrid_lexical_prefilter::cascade_prefers_file()",
+        "café naïve résumé",
+        "配置文件与中间件",
+        "The function is designed to select the appropriate middleware stack \
+         for a Web3.js provider, combining multiple layers of interceptors.",
+    ];
+    for text in cases {
+        let lazy = e.embed(text);
+        let materialized = e.embed_batch(&[text]).pop().expect("batch result");
+        assert_eq!(
+            lazy, materialized,
+            "lazy row-decode diverged from the materialized table for {text:?}"
+        );
+    }
+}
