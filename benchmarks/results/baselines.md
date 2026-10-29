@@ -2844,3 +2844,58 @@ vs 435), so it is noise-bound. `ASGREP_WALK_THREADS=12` measured SLOWER
 host; raising it stays a duty-cycle policy call, not taken here. Supersedes
 the 2026-09-20 latency-only row (9.5 vs 61.3 ms) with a same-protocol
 battery plus match-set parity and a walk face.
+
+## 2026-10-28 frozen-suite quality re-pin at HEAD (post L-Q1c, br-f4w)
+
+Provenance: commit `560780e6`, clean worktree, `cargo build --release`
+binary sha256 `e471ec234d3a7215…`, harness `benchmarks/frozen_suite/`
+(prep: RepoQA-2024-06-23 release JSON + CoCLR `14ebcacf` pinned fetch),
+default flags only, backend `static`. Arms: default and search-side
+ablation `ASGREP_NO_EMBED=1`, fresh out-dirs (no resume), one fresh CLI
+process per query. Machine under load ~21-28 (timing fields not
+certifiable; ranking metrics are deterministic). CASS history-mining
+unavailable this session (exit-5, archive over budget — ledger rows
+stand); no prior closure on these candidates exists in the ledger.
+
+| arm | RepoQA-600 MRR@10 | Hit@1/10/100 | CoSQA-500 MRR@10 | Hit@1/10/100 |
+|---|---:|---|---:|---|
+| default | **.7224** | .617/.927/.975 | **.3319** | .234/.590/.906 |
+| no-embed | .3463 | .200/.715/.907 | .1107 | .038/.288/.730 |
+
+Reading: vs the 2026-10-17 Stage-1 lever-1 rows (RepoQA .719, CoSQA
+.317) and the L-Q1c keep arm (CoSQA .3271), HEAD carries +.003 RepoQA
+(noise; expected — L-Q1c was bit-identical on RepoQA) and +.015 CoSQA
+over Stage-1, +.005 over the L-Q1c arm itself. No-embed arm drifted
++.009 RepoQA / +.003 CoSQA vs the nocascade-fix rows (.337/.108).
+Semantic lane contribution at HEAD: +.376 RepoQA / +.221 CoSQA MRR.
+Per-language RepoQA (default): ts .780, go .761, py .757, rust .725,
+java .692, cpp .620; cpp trails on both arms (.620/.304).
+
+Local evidence: `benchmarks/results/internal/frozen-repin-20261028/`
+(summaries + full per-query rows for both arms); scratch bench dir
+`asgrep-frozen-20261028` (prunable). This row is the frozen-suite
+baseline for the Q1 (def-ceiling) quality pass.
+
+## 2026-10-28 semantic-leader clamp keep: new default-arm baseline
+
+Provenance: lever commit (this change), clean `cargo build --release`
+binary sha256 `d5cf44be2458a7cb…`, harness frozen_suite (same corpus
+digests as the re-pin row above; capture parity 0/1100).
+
+Engine: critic-side `clamp_boost_overrides_of_semantic_leader`
+(`SEMANTIC_LEADER_MARGIN` 0.02, order-preserving staircase under the
+embed leader) — caps hits whose only path above the embed channel's
+decisive leader is a critic boost. Fusion-level corroboration caps were
+measured structurally dead against this class (gold already wins fusion;
+the critic reverses it).
+
+| arm | RepoQA MRR@10 | CoSQA MRR@10 |
+|---|---:|---:|
+| default (lever) | **.7302** (was .7224, +.0078) | **.3920** (was .3319, +.0601) |
+| no-embed ablation | bit-identical to the re-pin row (0/1100 rank diffs) | same |
+
+CoSQA delta matches the offline reconstruction to the fourth decimal
+(+.0601 predicted, +.0601 measured); RepoQA beat its prediction (+.002
+predicted, +.0078 measured, hit@1 .6167→.6333). This row supersedes the
+re-pin row above as the current default baseline. Evidence:
+`benchmarks/results/internal/frozen-repin-20261028/lever-*`.

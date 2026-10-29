@@ -840,3 +840,78 @@ pub fn clamp_far_cosine_on_description(
         hit.score = floor;
     }
 }
+
+/// Minimum cosine gap between the semantic leader and an overrider before
+/// the leader counts as decisive (see
+/// [`clamp_boost_overrides_of_semantic_leader`]). Frozen-suite failure
+/// modes split exactly on this: decisive gaps (>= ~0.1) mark
+/// boost-manufactured overrides; magnitude ties (< 0.02) are
+/// near-duplicate docs where the boost is earned.
+pub const SEMANTIC_LEADER_MARGIN: f64 = 0.02;
+
+/// After the critic, the embed channel's own top answer stays above hits
+/// whose placement above it exists only through critic boosts.
+///
+/// Fusion already ordered the embed leader (rank 0 by magnitude) first;
+/// concept-symbol and agreement boosts can then carry a corroborated hit
+/// over it. When the leader's cosine beats the overrider's by
+/// [`SEMANTIC_LEADER_MARGIN`] or more, and fusion itself had not already
+/// scored the overrider higher (`fused` is the pre-critic score of each
+/// hit, aligned with `hits`), cap the overrider just under the leader.
+/// Capped overriders keep their relative order as a descending staircase
+/// (never a shared tie score: tie blobs made final order arbitrary).
+/// Hits the embed never scored are never capped (zeroing them fails
+/// Hit@100), and magnitude ties never fire (near-duplicates embed
+/// equally; there the boost is earned).
+///
+/// Measured on the frozen suites (2026-10-28 offline reconstruction over
+/// the embed-on capture, then paired arms): CoSQA +0.060 MRR@10,
+/// RepoQA +0.002 (15 flips / 2 drops vs 1 / 3).
+pub fn clamp_boost_overrides_of_semantic_leader(
+    hits: &mut [SearchHit],
+    magnitudes: &[Option<f64>],
+    fused: &[f64],
+) {
+    if hits.len() != magnitudes.len() || hits.len() != fused.len() {
+        return;
+    }
+    let leader = magnitudes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, magnitude)| magnitude.map(|value| (i, value)))
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let Some((leader_index, leader_magnitude)) = leader else {
+        return;
+    };
+    let leader_final = hits[leader_index].score;
+    if !(leader_final > 0.0) {
+        return;
+    }
+    let mut overriders: Vec<usize> = (0..hits.len())
+        .filter(|&i| {
+            if i == leader_index {
+                return false;
+            }
+            let Some(magnitude) = magnitudes[i] else {
+                return false;
+            };
+            if leader_magnitude - magnitude < SEMANTIC_LEADER_MARGIN {
+                return false;
+            }
+            // Only a boost-manufactured override: fusion had the leader
+            // first (fused below the leader's final) while the critic
+            // put this hit above it.
+            hits[i].score > leader_final && fused[i] < leader_final
+        })
+        .collect();
+    overriders.sort_by(|&a, &b| {
+        hits[b]
+            .score
+            .partial_cmp(&hits[a].score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let step = leader_final * 0.002;
+    for (rank, index) in overriders.into_iter().enumerate() {
+        hits[index].score = leader_final - step * (rank as f64 + 1.0);
+    }
+}

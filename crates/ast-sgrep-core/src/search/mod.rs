@@ -909,6 +909,10 @@ impl Searcher {
                             );
                             let magnitudes =
                                 crate::fusion::apply_weighted_rrf(&mut hits, &weights, &parsed.raw);
+                            // Pre-critic fused scores: the leader clamp must
+                            // distinguish boost-manufactured overrides (fusion
+                            // had the leader first) from earned ones.
+                            let fused: Vec<f64> = hits.iter().map(|hit| hit.score).collect();
                             critic::apply_critic(
                                 &parsed,
                                 intent,
@@ -922,6 +926,14 @@ impl Searcher {
                                 &parsed,
                                 &mut hits,
                                 &magnitudes,
+                            );
+                            // The same reversal happens off-description when
+                            // boosts carry a corroborated hit over the embed
+                            // channel's own decisively-leading answer.
+                            critic::clamp_boost_overrides_of_semantic_leader(
+                                &mut hits,
+                                &magnitudes,
+                                &fused,
                             );
                         }
                         hits

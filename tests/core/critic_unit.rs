@@ -299,3 +299,77 @@ fn description_keeps_best_cosine_above_a_far_hit() {
         "a phrase must not clamp an embed-absent def"
     );
 }
+
+/// The embed channel's own leader is the evidence: when its cosine beats an
+/// overrider's by the leader margin, no critic boost may place that
+/// overrider above it -- unless fusion itself scored the overrider higher
+/// (an earned override). Magnitude ties do not fire: near-duplicates embed
+/// equally and there the boost is earned (the frozen-suite failure mode).
+/// Hits the embed never scored are never capped. Capped overriders keep
+/// their relative order as a staircase under the leader, never a tie blob.
+/// KILLS: clamping fusion-earned overrides, clamping on magnitude ties,
+/// or collapsing capped overriders onto one score.
+#[test]
+fn decisive_semantic_leader_keeps_boosted_overriders_below_it() {
+    // Leader: embed rank 0 by magnitude, no critic boost. Overrider: weaker
+    // cosine by more than the margin, critic boost put it above.
+    let leader = hit(HitKind::Embed, "1089.py", Some("numpy"), 0.0464);
+    let overrider = hit(HitKind::Embed, "3731.py", Some("read"), 0.0755);
+    // Arrays align with the hits vector: [overrider, leader].
+    let mags = [Some(0.528), Some(0.640)]; // gap 0.112 >= margin
+    let fused = [0.0399, 0.0464]; // fusion ordered the leader first
+
+    let mut hits = vec![overrider.clone(), leader.clone()];
+    clamp_boost_overrides_of_semantic_leader(&mut hits, &mags, &fused);
+    assert!(
+        hits[1].score > hits[0].score,
+        "a decisive leader must stay above a boost-manufactured override"
+    );
+
+    // Fusion itself scored the overrider higher: earned, stands.
+    let mut earned = vec![overrider.clone(), leader.clone()];
+    clamp_boost_overrides_of_semantic_leader(
+        &mut earned,
+        &[Some(0.528), Some(0.640)],
+        &[0.0500, 0.0464],
+    );
+    assert!(
+        earned[0].score > earned[1].score,
+        "an override fusion itself scored higher must stand"
+    );
+
+    // Magnitude tie: near-duplicate embeddings, boost is earned, stands.
+    let mut tie = vec![overrider.clone(), leader.clone()];
+    clamp_boost_overrides_of_semantic_leader(&mut tie, &[Some(0.635), Some(0.640)], &fused);
+    assert!(
+        tie[0].score > tie[1].score,
+        "a magnitude tie must not fire the clamp"
+    );
+
+    // The embed channel never scored the overrider: never capped.
+    let mut absent = vec![overrider.clone(), leader.clone()];
+    clamp_boost_overrides_of_semantic_leader(&mut absent, &[None, Some(0.640)], &fused);
+    assert!(
+        absent[0].score > absent[1].score,
+        "an embed-absent hit must never be capped"
+    );
+
+    // Two overriders: both capped under the leader, relative order kept.
+    let second = hit(HitKind::Def, "0456.py", Some("get_list_index"), 0.0700);
+    let mut many = vec![overrider.clone(), second, leader.clone()];
+    let many_mags = [Some(0.528), Some(0.605), Some(0.640)];
+    let many_fused = [0.0399, 0.0414, 0.0464];
+    clamp_boost_overrides_of_semantic_leader(&mut many, &many_mags, &many_fused);
+    assert!(
+        many[2].score > many[0].score && many[2].score > many[1].score,
+        "the leader must top both capped overriders"
+    );
+    assert!(
+        many[0].score > many[1].score,
+        "capped overriders keep their relative order (staircase, not a tie blob)"
+    );
+    assert!(
+        many[0].score != many[1].score,
+        "capped overriders must not land on one shared score"
+    );
+}
