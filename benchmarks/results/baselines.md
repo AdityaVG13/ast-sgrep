@@ -2899,3 +2899,22 @@ CoSQA delta matches the offline reconstruction to the fourth decimal
 predicted, +.0078 measured, hit@1 .6167→.6333). This row supersedes the
 re-pin row above as the current default baseline. Evidence:
 `benchmarks/results/internal/frozen-repin-20261028/lever-*`.
+
+## 2026-10-28 semantic top-2 protection: current default baseline
+
+Provenance: extension commit (this change), clean `cargo build
+--release` binary sha256 `16eae7c06a153e6c…`, harness frozen_suite
+(same corpora; capture parity 0/1100). Extends the leader clamp to the
+embed channel's second answer (`SEMANTIC_LEADER_TOP` 2, symmetric
+`SEMANTIC_LEADER_MARGIN` 0.02 — an asymmetric rank-1 margin was
+measured and rejected as immaterial).
+
+| arm | RepoQA MRR@10 | CoSQA MRR@10 |
+|---|---:|---:|
+| default (top-2) | **.7296** | **.4023** |
+| vs leader-only | −.0006 (hit1 +.0034, hit10 net +1) | **+.0104** (sim-exact) |
+| vs pre-lever baseline | +.0072 | **+.0704** |
+
+CoSQA totals match the offline reconstruction exactly on both levers.
+Supersedes the leader-only row. Evidence:
+`benchmarks/results/internal/frozen-repin-20261028/lever2-*`.

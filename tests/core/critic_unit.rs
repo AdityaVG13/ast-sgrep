@@ -373,3 +373,36 @@ fn decisive_semantic_leader_keeps_boosted_overriders_below_it() {
         "capped overriders must not land on one shared score"
     );
 }
+
+/// The protection generalizes past the leader: the embed channel's second
+/// answer (semantic rank 1) also keeps its fusion order against a
+/// boost-manufactured override, under the same decisive-margin rule. The
+/// near-miss stays honest: a rank-1 hit only just above the overrider in
+/// magnitude is still protected (the margin is against the OVERRIDER, not
+/// the leader) -- the frozen-suite K-grid showed protecting rank 1 adds
+/// +.010 CoSQA / +.003 RepoQA with only borderline drops.
+/// KILLS: protecting only the argmax (shipped behavior), or gating the
+/// rank-1 protection on a margin against the leader.
+#[test]
+fn semantic_second_answer_also_keeps_boosted_overriders_below_it() {
+    // Magnitudes: leader .640, second .600, overrider .528.
+    let leader = hit(HitKind::Embed, "1089.py", Some("numpy"), 0.0464);
+    let second = hit(HitKind::Embed, "0512.py", Some("pandas"), 0.0420);
+    let overrider = hit(HitKind::Embed, "3731.py", Some("read"), 0.0755);
+    let mut hits = vec![overrider.clone(), leader.clone(), second.clone()];
+    let mags = [Some(0.528), Some(0.640), Some(0.600)];
+    let fused = [0.0399, 0.0464, 0.0420];
+    clamp_boost_overrides_of_semantic_leader(&mut hits, &mags, &fused);
+    assert!(
+        hits[1].score > hits[0].score,
+        "the leader must stay above the overrider"
+    );
+    assert!(
+        hits[2].score > hits[0].score,
+        "the semantic second answer must also stay above a boost-manufactured override"
+    );
+    assert!(
+        hits[1].score > hits[2].score,
+        "the staircase keeps the leader above the second answer"
+    );
+}
