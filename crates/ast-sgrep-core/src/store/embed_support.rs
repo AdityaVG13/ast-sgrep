@@ -233,7 +233,13 @@ fn embed_parallel(
         jobs.push((
             i,
             EmbedSlot::Primary,
-            crate::semantic_chunk::render_chunk_text(chunk),
+            if crate::env_flag::env_flag("ASGREP_PATH_WORDS") {
+                // Candidate arm; see render_chunk_text_with_path for the
+                // keep gate. Primary vector only — field texts unchanged.
+                crate::semantic_chunk::render_chunk_text_with_path(chunk, source_path)
+            } else {
+                crate::semantic_chunk::render_chunk_text(chunk)
+            },
         ));
         let fields = crate::semantic_chunk::chunk_field_texts_for_path(chunk, source_path);
         for (slot, text) in [

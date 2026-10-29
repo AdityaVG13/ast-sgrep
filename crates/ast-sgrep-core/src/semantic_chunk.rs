@@ -354,9 +354,34 @@ impl FieldVectorMask {
 }
 
 pub fn render_chunk_text(chunk: &SemanticChunkInput) -> String {
+    render_chunk_text_inner(chunk, "")
+}
+
+/// Path-words arm (`ASGREP_PATH_WORDS=1`, index time): the primary embed
+/// text additionally carries the chunk's file-path tokens the way sgrep
+/// counts the path into every chunk. Candidate arm status — the same
+/// shape was rejected 2026-10-15 (conformance ledger) under a fusion
+/// where the embed channel was inert (kept arm was embed-absent .698);
+/// retried under the post-clamp fusion where embed is load-bearing and
+/// leader-protected. Keep gate per the rejection's predicate: beats the
+/// control on BOTH frozen datasets and drops no RepoQA language.
+pub fn render_chunk_text_with_path(chunk: &SemanticChunkInput, path: &str) -> String {
+    render_chunk_text_inner(chunk, path)
+}
+
+fn render_chunk_text_inner(chunk: &SemanticChunkInput, path: &str) -> String {
     // Body first (7d5x.1): metadata used to precede the excerpt, so a long
     // graph/doc prefix was what survived when embedders truncated.
-    let mut raw = format!("excerpt: {}", chunk.excerpt);
+    let mut raw = if path.is_empty() {
+        format!("excerpt: {}", chunk.excerpt)
+    } else {
+        let mut tokens: Vec<&str> = path
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.chars().any(|c| c.is_alphabetic()))
+            .collect();
+        tokens.dedup();
+        format!("path: {} excerpt: {}", tokens.join(" "), chunk.excerpt)
+    };
     raw.push_str(&format!(
         " symbol: {} kind: {}",
         chunk.symbol_name, chunk.kind
