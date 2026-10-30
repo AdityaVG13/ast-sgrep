@@ -103,7 +103,7 @@ Build or incrementally update the index. Pass `force: true` for full reindex.
 
 **Concurrency and cancel (intentional limits for trusted local agents):**
 
-- stdio is official [`rmcp`](https://crates.io/crates/rmcp) (tokio). The
+- stdio is [`fastmcp-rust`](https://crates.io/crates/fastmcp) 0.13 (since 2.7.0; `rmcp` before). The
   reader stays live while search/index run on blocking threads, so `ping`
   and `notifications/cancelled` are not stuck behind `index_repo`.
 - Concurrent `index_repo` calls still share a process-wide single-flight lock;

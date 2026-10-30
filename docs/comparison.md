@@ -24,15 +24,20 @@ For **searching an indexed repo**, ast-sgrep replaces the scan tools. Identifier
 
 Latency cells are the released **2.6.0** (2026-10-19 release-paired
 measurement) on a frozen 740-file corpus (678 indexed), versus published 2.5.4
-and pinned scan/server references.
+and pinned scan/server references — the last full self-corpus latency matrix.
 [Canonical results and limitations](../benchmarks/results/baselines.md#self-corpus-surfaces-2026-10-19-published-254-bytes-vs-260).
-2.6.0 keeps exact-token, structural, and defs surfaces flat, indexes faster,
-and repairs the 2026-10-11 candidate's ranking regression (self-gold MRR
-.847→.882). It deliberately pays an always-on embed channel on conceptual
-queries (~25–34 ms vs 6–9 ms) and warm navigation (~4.3–4.8 ms vs ~0.7 ms
-rounds); the frozen external suite shows what that buys (RepoQA/CoSQA MRR
-2.4×/3.1× over 2.5.4). A fresh process, warm source pages and a reused server
-are different contests.
+**2.7.0 status** (2026-10-28/30 measured deltas, same host class): the
+exact-token lane gets faster (fresh `literal:` 40.9 → 30.9 ms, RSS −40%, lazy
+f16 pooling), serve-path stalls are fixed (stale-root serve calls 8.3 s → <6 ms
+steady; warm literal 4.7 ms p50, within noise of the 2.6.0 cells), and the
+frozen external suite banks the ranking keeps — RepoQA/CoSQA MRR@10
+.719 → .732 / .327 → .423. 2.6.0 kept exact-token, structural, and defs
+surfaces flat, indexed faster, and repaired the 2026-10-11 candidate's ranking
+regression (self-gold MRR .847→.882), deliberately paying an always-on embed
+channel on conceptual queries (~25–34 ms vs 6–9 ms) and warm navigation
+(~4.3–4.8 ms vs ~0.7 ms rounds); the frozen external suite showed what that
+bought (RepoQA/CoSQA MRR 2.4×/3.1× over 2.5.4). A fresh process, warm source
+pages and a reused server are different contests.
 
 ### Also in the arena: tgrep and fff
 

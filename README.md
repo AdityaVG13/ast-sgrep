@@ -64,6 +64,8 @@ Paste into your agent:
 Clone https://github.com/AdityaVG13/ast-sgrep, cd into it, run `cargo build --release -p ast-sgrep-cli`.
 Register target/release/asgrep-mcp as a stdio MCP server named "ast-sgrep" (build with: cargo build --release -p ast-sgrep-mcp).
 Verify: run ./target/release/asgrep index . then search for defs: of a symbol in this repo.
+Running Hermes? ./target/release/asgrep install --target hermes --yes registers native
+asgrep_search / asgrep_read / asgrep_status tools — no MCP registration needed.
 ```
 
 ---
@@ -71,12 +73,17 @@ Verify: run ./target/release/asgrep index . then search for defs: of a symbol in
 ## What's new in 2.7.0
 
 2.7.0 is the agent-native release: asgrep ships inside the Hermes agent
-harness as first-class tools, and the CLI absorbs the grep/rg habits coding
-models actually type. Full notes: [CHANGELOG](CHANGELOG.md#270---2026-10-23).
+harness as first-class tools, the CLI absorbs the grep/rg habits coding
+models actually type, and the ranking engine banks its measured keeps —
+CoSQA-500 MRR@10 .327 → .423, RepoQA-600 .719 → .732 on the frozen suites.
+Full notes: [CHANGELOG](CHANGELOG.md#270---2026-10-30).
 
 | You can now... | How |
 |----------------|-----|
 | Use asgrep natively inside Hermes | `asgrep install --target hermes --yes` writes an embedded native plugin to `~/.hermes/plugins/`: eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — zero process spawn per call, channels (`defs:`, `callers:`, `pattern:`…) taught in the schema itself. Hermes gets the plugin, not the MCP server. |
+| Trust the ranking keeps | The semantic channel's own top-2 answers are protected from boost overrides, ANN probe depth scales with a constant admission budget, and hybrid pages emit file-firsts (an N-row page covers up to N distinct files) — CoSQA-500 MRR@10 .327 → **.423**, RepoQA-600 .719 → **.732** on the frozen suites. |
+| Read without re-searching | `asgrep read path#L12-L40` (or `path:12`) returns exact bounded source from the shared reader — same surface as serve/MCP/Pi. |
+| Serve without stalls | WAL close folds bounded to 250 ms plus a stat-fingerprint ambient memo: stale-root serve calls 8.3 s → <6 ms steady; the query path pools f16 weights lazily (RSS −40%, literal lane 40.9 → 30.9 ms). |
 | Type grep/rg habits and have them recover | `-A/-B/-C N` → `--excerpt-lines`, `-m N` → `--limit`, the `-l -i -n -w -F -c -g -t -e` short flags, `-p PATTERN` and repeatable `--pattern` batches, bare metavariable patterns (`asgrep 'fn parse($$$A)'`), and grep's `asgrep QUERY FILE` shape (the file root walks to the indexed ancestor). Each recovery prints the canonical form. |
 | Count matches like `grep -c` | `--count` / `-c` prints `path:count` lines; `--json` envelopes carry a `counts[]` array derived from the same hit set as `files`. |
 | Quote a patterned query like the docs show | `pattern:'fn name($$$A)'`, `word:'auth refresh'`, `regex:'a|b'` — one balanced quote layer around a prefixed target parses (and the note teaches the canonical form). |
@@ -211,23 +218,30 @@ After fusion, the critic reviews the shortlist in-process. Agent envelopes expos
 
 These are **checked-in run summaries**, not portable guarantees. Hardware, corpus, cache state, and flags all matter. Status vocabulary: [benchmarks/README.md](benchmarks/README.md).
 
-**Latest: 2.6.0 release-paired measurement, 2026-10-19**, against published
-2.5.4 on frozen RepoQA-600 / CoSQA-500 corpora: identical harness, one idle
-host (Apple M5 Max), fresh indexes per arm, 0 errors across 4,400 query runs.
+**Latest: 2.7.0 shipped measurement, 2026-10-30** — same frozen RepoQA-600 /
+CoSQA-500 corpora and scorer as the 2026-10-19 release pairing, 0 errors
+(Apple M5 Max). Fresh-process query p50 18.0 ms RepoQA / 13.2 ms CoSQA; the
+old 2.6.0 latency column was a warm-panel protocol, so it is dropped here
+rather than compared across protocols.
 
-| RepoQA-600 | MRR@10 | Hit@1 | Hit@10 | ≥50%@8k | panel p50 |
-|---|---:|---:|---:|---:|---:|
-| asgrep 2.5.4 | .297 | .190 | .563 | .340 | 16.6 ms |
-| asgrep 2.6.0 | **.719** | .608 | **.928** | **.790** | 22.2 ms |
-
-| CoSQA-500 | MRR@10 | Hit@1 | Hit@10 | panel p50 |
+| RepoQA-600 | MRR@10 | Hit@1 | Hit@10 | ≥50%@8k |
 |---|---:|---:|---:|---:|
-| asgrep 2.5.4 | .104 | .054 | .240 | 13.8 ms |
-| asgrep 2.6.0 | **.327** | .234 | **.588** | 22.1 ms |
+| asgrep 2.5.4 | .297 | .190 | .563 | .340 |
+| asgrep 2.6.0 | .719 | .608 | .928 | .790 |
+| asgrep 2.7.0 | **.732** | **.637** | **.935** | **.815** |
 
-Honest summary: 2.6.0 more than doubles 2.5.4's MRR (2.4×/3.1×) with fully
-offline operation. RepoQA index gets 37% faster (817 vs 1,296 ms median);
-the flat CoSQA corpus pays the embed cost (7.4 vs 5.5 s); storage 2.58→3.35 GB.
+| CoSQA-500 | MRR@10 | Hit@1 | Hit@10 |
+|---|---:|---:|---:|
+| asgrep 2.5.4 | .104 | .054 | .240 |
+| asgrep 2.6.0 | .327 | .234 | .588 |
+| asgrep 2.7.0 | **.423** | **.316** | **.662** |
+
+Honest summary: 2.7.0's gains are ranking-side keeps (semantic top-2
+protection, member-budget ANN probes, grammar keeps) — CoSQA +.096, RepoQA
++.013 over published 2.6.0 — plus index CPU −63%, ~−101 MB index size, and
+serve-path stalls measured out. The 2.6.0-vs-2.5.4 pairing (MRR 2.4×/3.1×,
+fully offline; 2.58→3.35 GB storage) remains the release-paired certificate
+in baselines.md.
 
 Self-corpus surfaces (same-day companion on the frozen 740-file bundle corpus):
 
@@ -246,9 +260,14 @@ symbol-heavy self fixture the embed channel alone is mildly negative (no-embed
 .924 vs hybrid .882); on the external NL suites it is the whole gain. Neither
 corpus alone describes the product.
 
+2.7.0 self-corpus deltas (same host class): literal-lane fresh queries
+40.9 → 30.9 ms with RSS −40% (lazy f16 pooling), codemode-serve stale-root
+calls 8.3 s → <6 ms steady, warm literal 4.7 ms p50 — canonical rows in
+baselines.md.
+
 Canonical fingerprints, full matrices, raw sample bundles and regeneration
 protocol:
-[baselines.md](benchmarks/results/baselines.md#260-release-paired-benchmark-254-vs-260-2026-10-19).
+[baselines.md](benchmarks/results/baselines.md#270-shipped-benchmark-2026-10-30).
 Previous speedups remain [dated historical rows](benchmarks/results/speed.md).
 Foreign-corpus/neural bakeoffs, 23k/100k scale, watch-speed, intent-routing,
 prevented-read and `idx_big` studies could not be refreshed because original
@@ -261,6 +280,7 @@ inputs are missing; their records remain explicitly historical/UNREPRODUCIBLE.
 | Interface | Build | Use case |
 |-----------|-------|----------|
 | **CLI** | `cargo build --release -p ast-sgrep-cli` | Terminal, scripts, `call-path`, `codemod` |
+| **Hermes plugin** | `asgrep install --target hermes` | Native in-harness agent tools (eager, persistent serve worker) |
 | **MCP** | `cargo build --release -p ast-sgrep-mcp` | AI agents (stdio); `structuredContent` / `outputSchema` |
 | **Code Mode** | `ast-sgrep-codemode` | Programmatic tool-calling / multi-step plans (Pi) |
 | **LSP** | `cargo build --release -p ast-sgrep-lsp` | Editor navigation |
@@ -312,7 +332,7 @@ inputs are missing; their records remain explicitly historical/UNREPRODUCIBLE.
 
 ## Project status and verification
 
-**v2.5.4.** Native and Pi boundary fixes preserve source/path identity, cancellation, scoped lookup, and explicitly returned data. Local-first embeddings, index schema 16, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Pi Code Mode (results on the model path) are in place. 15 languages (Dart, MoonBit newest), fusion-normalized ranking, and the hashed semantic layer remain. Search is read-only by default; MCP runs on official rmcp.
+**v2.7.0.** Native Hermes plugin (`asgrep install --target hermes`), grep-habit CLI recovery with teaching refusals, reference-parity pattern grammar (return-type sections, no-parens names, bodyless `fn`), truthful truncation envelopes, measured ranking keeps (CoSQA .423 / RepoQA .732 MRR@10 on the frozen suites), and the fastmcp-rust MCP server. Local-first static embeddings, index schema 18, two-channel conjunction, post-fusion critic, causal follow-ups, SCIP overlay, `call-path`, indexed `codemod`, and Code Mode are in place. 15 languages. Search stays read-only by default.
 
 GitHub Actions workflows are **manual-only** (`workflow_dispatch`) to control Actions minutes. Local quality bar for contributors:
 

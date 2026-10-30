@@ -1,89 +1,148 @@
-[CHANGELOG.md#C07C]
 # Changelog
 
 All notable changes to **ast-sgrep** — hybrid code search that understands intent (lexical FTS + AST graph + offline semantic ranking).
 
-This changelog follows [Keep a Changelog](https://keepachangelog.com/) conventions. Version numbering follows the project release policy in [`docs/RELEASING.md`](docs/RELEASING.md): additive, backward-compatible functionality increments the minor version after 1.0.
+Keep-a-Changelog conventions. Version policy: [`docs/RELEASING.md`](docs/RELEASING.md). Scope window: v1.0.0-alpha (2026-07-11) → v2.7.0 (2026-10-30). Measured claims trace to [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md).
 
-**Scope window:** v1.0.0-alpha (2026-07-11) → v2.0.0 (2026-08-15). The v1.4.0 section covers seven earlier PRs plus direct-to-main commits since v1.3.2; research evidence is logged in [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
+---
 
-## [2.7.0] - 2026-10-23
+## [2.7.0] — 2026-10-30
 
-The agent-native release: asgrep runs as first-class tools inside the Hermes
-agent harness, and the CLI absorbs the grep/rg invocation habits coding
-models actually type — each habit recovers to the canonical form with a note
-that names the difference.
+The agent-native release. asgrep runs as first-class tools inside the Hermes agent harness, the CLI speaks the grep/rg habits coding models actually type, and the ranking engine banks its measured quality keeps: **CoSQA-500 MRR@10 .327 → .4230, RepoQA-600 .719 → .7319** on the frozen suites, with serve-path stalls measured out (8.3 s → 0.1–5.8 ms).
 
-### Added
+| Theme | What shipped |
+|---|---|
+| **Hermes-native** | Eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — installed by `asgrep install --target hermes --yes`. |
+| **The CLI speaks grep** | `-A/-B/-C/-m`, the short-flag cluster, `-p/--pattern`, `--count`, `asgrep read`, grep's `QUERY FILE` shape, bare metavariable patterns — every habit recovers to the canonical form with a note naming the difference. |
+| **Pattern grammar parity** | Return-type sections, no-parens names, and body-less `fn` forms follow the reference per grammar — probed against ast-grep 0.45.2/0.51.0. |
+| **Truthful envelopes** | `truncated: true` on every surface, zero-hit `why`/`next`, channel did-you-mean at the refusal boundary, quoted prefixed targets. |
+| **Ranking keeps (measured)** | Semantic-leader + top-2 clamps, member-budget ANN probes, file-firsts hybrid pages. |
+| **Performance (measured)** | Hybrid lane 2.35× median, −63% index CPU, ~−101 MB index, query RSS −40%, stale-root serve calls 8.3 s → <6 ms. |
+| **Measurement hardened** | Frozen structural-intent suite (596 queries, ALL MRR@10 .9847), cross-surface parity gate, repin regression gate. |
 
-- Repin regression gate (br-zvh code remainder): `npm run test:repin-gate` exercises the live lock-repin predicate (`validateNativeLock`) against the historical 2.5.4 incomplete-lock class — versionless optional stubs, link stubs, mismatched integrity, stale resolved URLs, and missing native entries are all rejected; only the complete candidate passes. Mutation-proven (dropping the link rejection fails the gate). The release-evidence remainder of br-zvh closes on the next owner-authorized release.
-- Honest truncation + sig-only-file admission (br-tvv): search envelopes carry `truncated: true` whenever the answer set exceeded the limit (previously the 17th hit of a 17-row answer silently vanished at the default limit 16); rust trait method signatures are indexed (`kind:function_signature_item` / `decl:fn:` rows), so pattern search admits files whose only fn-shaped content is trait sigs (previously 0 hits); the multi-pattern envelope ORs the flag. Upgrade note: run `asgrep reindex <root>` once to gain signature rows on unchanged files.
-- Spelled return-type sections on function patterns (br-hs1, reference parity): `fn $A($$$) -> u32`, `-> $R` (binds the declared return text), go bare results (`func $A($$$) int`), ts/php `: T`, and py `-> T:` before the suite — for the receipted grammars (rust/go/ts/php/py). `;`-completed forms included: rust `fn $A($$$);` answers signatures WITHOUT returns (the strict reading), and with a return spelled the `;` is a no-op terminator; go/ts/php `;` forms answer empty. Concrete returns are path identifiers plus one generic layer (`Option<u32>`); everything louder stays fail-closed. Probed against ast-grep 0.45.2 (3 stable rounds per cell; harness in `.internal/oracle-452-probe/`).
-- No-parens decl patterns (br-osk, reference parity): a pure name (`fn $A`, `fn plain_ret`) answers every fn-shaped node — rust trait signatures AND function items, generics wildcarded; concrete names filter by name across both kinds (`fn sig_r` answers the trait sig). Any section spelled on a no-parens form answers empty (`fn $A -> u32`, `function $A: number`, `fn $A;`), except go's bare metavar result (`func $A $R` behaves as no section AND binds `$R` to the parameter-list text, parens included). No-parens forms with a BODY template answer empty everywhere (`fn $A { $$$B }`, `def $A: $$$B`); ts/php answer free functions only on this face (methods and arrows never). Name-lane answers are document-ordered. Probed 4 stable rounds per cell (harness `hs1_probe_osk.py` in `.internal/oracle-452-probe/`).
-- Native Hermes plugin, embedded in the binary and installed by `asgrep install --target hermes --yes`: writes `~/.hermes/plugins/asgrep` (self-contained, refuses to write through a dev symlink, `--force` replaces a prior install, best-effort `hermes plugins enable`). The plugin registers eager `asgrep_search` / `asgrep_read` / `asgrep_status` tools over one persistent `asgrep serve` worker — zero process spawn per call, tool errors pass through verbatim with their recovery commands. Hermes installs the plugin, not the MCP server. Tool schemas teach the query channels (`defs:` / `callers:` / `imports:` / `word:` / `pattern:`), metavariable patterns, `excerpt_lines` (bodies in the hit set), `semantic_only`, and LSP-style `path:line` refs.
-- grep/rg habit recovery at the argv layer: `-A N` / `-B N` / `-C N` (and attached `-A3`) map to `--excerpt-lines N` with the one-window approximation named; `-m N` maps to `--limit N` (global hit cap, no per-file mode); the short-flag cluster letters (`-l -i -n -w -F -c -g -t -e`) recover; `-p PATTERN` and root-level repeatable `--pattern` route onto `search`; bare metavariable patterns (`asgrep 'fn parse($$$A)'`) hit the pattern channel; `chain SYM --to TARGET` rewrites onto `call-path SOURCE SINK`.
-- `--count` / `-c`: `path:count` lines on the human path; `counts[]` array in `--json` envelopes, derived from the same hit set as `files`.
-- File-as-root searches: passing a file as the search root walks ancestors nearest-first to the enclosing indexed root and scopes to an exact-path filter (stale candidate indexes are skipped, proven live against a leftover schema-v16 index).
-- Teaching at the refusal boundary: unquoted multi-word queries (`asgrep auth refresh`) name the quoted form; a flag landing after `--` teaches flag order; missing verbs and mode words name the canonical subcommand. All recovery notes ride the machine JSON envelope.
-- Error boundaries teach the working form (br-ao2/br-f5q, found live in the 2026-10-27 Hermes plugin stress): the structural-fallback refusal names the answering spellings (`fn $NAME($$$)` for every fn-shaped item, no-parens names for name-filtered answers, `defs:NAME` for the definition site); a channel ATTEMPT — a single-token alias (`def:`, `import:`, `sem:`, …) or ≤2-edit near-miss of a real channel — refuses with a `did you mean` plus the `literal:'…'` escape for genuine colon text, instead of degrading to semantic free-text noise. Ordinary colon text is never hijacked: URLs, `key:value`, rust `mod::path` double-colons, and `in:` path scopes keep their free-text/scope semantics. The Hermes plugin's search schema teaches the answering pattern form (the old example fail-closed on polyglot repos), and the handler clamps `limit` to the schema's 1..=200 (br-m2b: bridge maximums are unenforced — a live `limit=500` call returned a 224KB envelope; the envelope's limit echo reports the clamped value).
-- Quoted prefixed targets parse (QG-013): `pattern:'fn name($$$A)'`, `word:'auth refresh'`, `regex:'a|b'` — prefixed targets tolerate one balanced layer of single or double quotes (the tool schemas have always shown the quoted form; the parser now accepts it, teaching the canonical unquoted form in its note). One layer only; nested or unbalanced quotes fail closed with a parse error, and quotes around an unprefixed query are preserved as literal content.
-- Native-feel parity across every agent surface, not just Hermes: the MCP server's `query` schema now teaches the channel grammar (`defs:`/`callers:`/`imports:`/`word:`/`literal:`/`regex:`/`pattern:` prefixes, metavariable auto-routing, `in:` scoping) — pinned by a protocol contract test so the teaching cannot silently regress. `code_read` accepts single-line `path#L12` and LSP-style `path:12` refs (parity with the CLI/serve/Pi read surfaces; previously only `#Lstart-Lend` ranges parsed). The Pi extension's tool schemas describe `query`, `mode`, `limit`, `excerptLines`, and both `ref` spellings. The Agent Plugins skill documents the grammar and ref forms in prose.
-- MCP serve layer moved from rmcp 3.7.0 to fastmcp-rust 0.13.0 (workspace toolchain: stable → `nightly` >= 1.101.0, pinned with the port named). Every tool keeps spec-current `annotations` (read-only hints for all retrieval tools; `index_repo` is the one declared mutator) and the five search tools keep `outputSchema` — pinned by goldens and a cross-process byte-identity test. Single-era serve: `initialize` negotiates the exact 2024-11-05 revision for every offered version; the rmcp-era 2026-07-28 stateless experiment (per-request `_meta`, `server/discover`, `ttlMs`/`cacheScope`) is retired. Argument admission is framework-owned: schema violations (bounds, types, unknown keys, arity, empty or non-lowercase `preview`) fail fast as JSON-RPC -32602 naming the offending path — stronger than the old uniform tool-error envelope, and it closes the empty-query gap; unknown tools are -32601, unparsable lines draw one -32700, and handler-level faults (stale ranges, escaped roots, corrupt index) keep the tool-error envelope with an actionable message. EOF mid-call exits 1 (shutdown cancellation of the in-flight request); idle EOF exits 0. Every delta is pinned by the 22 wire-level suites (142 tests) reconciled against live probes.
+### Hermes-native
 
-### Changed
+- **Embedded plugin** — `asgrep install --target hermes --yes` writes `~/.hermes/plugins/asgrep`: self-contained, refuses dev symlinks, `--force` replaces, best-effort `hermes plugins enable`. One persistent `asgrep serve` worker answers eager tools — zero process spawn per call; tool errors pass through verbatim with their recovery commands. Hermes gets the plugin, not the MCP server.
+- **Schemas teach the grammar** — tool schemas describe `defs:` / `callers:` / `imports:` / `word:` / `pattern:` channels, metavariable patterns, `excerpt_lines`, `semantic_only`, and LSP-style `path:line` refs, so models learn the query grammar from the tool list itself. Tool copy across surfaces is trigger-first and agent-accretive.
+- **One grammar, every surface** — the MCP `query` schema, Pi tool schemas, and the Agent Plugins skill teach the same channel grammar and both ref spellings (`path#L12`, `path:12`), pinned by protocol contract tests; `code_read` accepts single-line and LSP-style refs everywhere.
+- **Live-stress hardening** (found in the 2026-10-27 Hermes plugin stress): busy serve workers survive call timeouts and stay warm; a wedged-worker shutdown deadlock is fixed; the dormant `search_files` habit-lane takeover serves only provably-rg-identical answers and prewarms only repo-like roots; `limit` is clamped to the schema's 1..=200 (bridge maximums are unenforced — a live `limit=500` returned a 224 KB envelope).
 
-- Mixed-fleet IVF compatibility (the pre-tag resolve row in `docs/progress/perf-negative-results.md`): the semantic IVF sidecar's chunk-id fast path moves out of the main file — `save_semantic_ivf_with_ids` now always writes the v2-shaped `semantic.ivf` (ends exactly at the vector section) and carries chunk ids in a separate fingerprint-bound `semantic.ivf.ids` sidecar (48-byte header: magic, fingerprint, chunk count, reserved; published before the main file so any crash window fails fingerprint-mismatched to the SQL id fallback, never wrong ids). 2.6.x exact-EOF readers accept the main file untouched instead of silently retraining k-means on every fresh invocation; legacy embedded-v3 files from dev trees keep reading; an ids-less republish removes a stale sidecar; invalidation removes both. Pinned failure-first by `published_ivf_stays_v2_shaped_with_fingerprint_bound_ids_sidecar`. The -27% fresh-CLI keep is unchanged (ids still mmap-resolved; the carrier moved).
-- Truncation truth survives every render (br-tku): the `truncated: true` contract from br-tvv now reaches every model-facing envelope — `agent` and `agent-capsule` (the serve/plugin default) carry the flag skip-when-false, `compact` rides it as `zc` on the z-tail, `github`'s `incomplete_results` ORs the real flag instead of relying on the page-full heuristic alone, and the serve session's warm-cache re-cut (a wider cached searcher narrowed to a lower call limit) sets the flag instead of silently clearing it. The Hermes plugin's `asgrep_search` schema teaches the meaning: `truncated: true` = more true hits existed than the limit showed, re-run with a higher limit before concluding a name is absent. Untruncated envelopes stay byte-lean (no key). Native `gitlab` keeps its upstream shape (GitLab's search API has no incomplete flag). The re-cut's `limit` echo is the call's limit in every branch (br-ksx): an untruncated warm result previously echoed the searcher's gather limit (the session default), misreporting the contract the model was promised; found live in the 2026-10-27 Hermes plugin stress pass.
-- Fixed a regression from the WAL-persist change (d99e4343): `persist_wal_on_close` called `sqlite3_file_control(SQLITE_FCNTL_PERSIST_WAL)` unconditionally, and the in-memory VFS answers that op with `SQLITE_NOTFOUND` — so every `IndexStore::open_in_memory` failed, which hard-failed every foreign-root search (the inert degradation in `Searcher::new`, and `asgrep --index-path <other-root>` at the CLI) with a raw `Error code 12: unknown operation`. The persist now gates on the connection's effective journal mode being WAL; file-db behavior is unchanged.
-- The persistent Code Mode front door is `asgrep serve` (the old `codemode-serve` name remains an alias); the session protocol and tool table are unchanged.
-- Missing-index errors name the enclosing indexed ancestor and the `--auto-index` in-place recovery, in both the plain and enclosing-index forms.
-- Body-less fn patterns (`fn $NAME($$$)` — argument list, no `{...}`) now answer per grammar instead of normalizing onto function declarations, matching the reference's parse recovery (ast-grep 0.45.2 + 0.51.0 probes, 3 stable rounds): Rust answers trait method signature items only (return type wildcarded, function items with bodies never answer); Go answers `function_declaration` nodes with body and return wildcarded; TypeScript and PHP answer empty (not fail-closed); Rust and Go both refuse generic candidates (`fn f<T>(...)`, `func f[T any](...)`). JavaScript, Python, and no-argument-list spellings (`fn $NAME`) keep the previous behavior — unprobed, deliberately unchanged. Semantics pinned in `tests/lang/pattern.rs::bodyless_fn_patterns_match_reference_grammar_specific_kinds`; narrative in `docs/structural-patterns.md`.
+### The CLI speaks grep
 
-## [2.6.0] - 2026-10-19
+- `-A N` / `-B N` / `-C N` (attached `-A3` too) map to `--excerpt-lines N` — one window around the hit; `-m N` maps to `--limit N` (global hit cap; queries are fused, no per-file mode). Approximations are named in the note.
+- The short-flag cluster (`-l -i -n -w -F -c -g -t -e`) recovers; `-p PATTERN` and repeatable `--pattern` batch onto `search`; `chain SYM --to TARGET` rewrites onto `call-path SYM TARGET`.
+- Bare metavariable patterns (`asgrep 'fn parse($$$A)'`) route onto the pattern channel.
+- `--count` / `-c`: `path:count` lines on the human path; `counts[]` in `--json` envelopes.
+- A file as the search root walks ancestors nearest-first to the enclosing indexed root and scopes to that exact path (stale candidate indexes skipped).
+- New `asgrep read` subcommand (shared reader: `path#L12-L40`, `path:12`, bare-path windows) matching the serve/MCP/Pi read surfaces.
 
-Local-first semantic search: a native static embed engine ships as the default
-backend, the hybrid channel mix is re-tuned for it, and retrieval quality is
-measured on a frozen RepoQA/CoSQA suite against the previous release (canonical
-rows and harness in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md)):
-RepoQA-600 MRR@10 .297→.719 and CoSQA-500 .104→.327 over 2.5.4, with every
-warm latency metric faster and fully offline operation.
+### Pattern grammar (reference parity)
 
-### Added
+- **Return-type sections**: `fn $A($$$) -> u32`, `-> $R` (binds the declared text), go bare results, ts/php `: T`, py `-> T:`; `;`-completed forms follow each grammar's strict reading. Concrete returns are path identifiers plus one generic layer (`Option<u32>`); anything louder stays fail-closed.
+- **No-parens names**: `fn $A` / `fn plain_ret` answer every fn-shaped node — rust trait signatures AND function items, generics wildcarded; ts/php free functions only. Any section on a no-parens form (`fn $A -> u32`) answers empty, except go's bare metavar result.
+- **Body-less `fn $NAME($$$)`** follows the reference's per-grammar parse recovery: rust answers trait method signatures only, go answers declarations, ts/php answer empty. Spell `{ $$$B }` when you mean bodies.
+- Rust trait method signatures are indexed (`decl:fn:` rows), so `fn` patterns admit sig-only files. **Upgrade note:** run `asgrep reindex <root>` once to gain signature rows on unchanged files.
 
-- Native static embed engine: deterministic 256-d static (Model2Vec-style) embeddings compiled into the binary from a vendored MIT table. No model download, no ONNX runtime, no API key; the embed channel is ungated in hybrid fusion with magnitude fusion, so offline semantic ranking is part of every default search.
-- Model-identity index migration: indexes record their embedding model identity and re-embed automatically on the next index run when it changes. Retired engines (`hashed`, `neural`) fail closed; `--neural-embed` / `ASGREP_EMBED_BACKEND` error explicitly instead of silently switching.
-- Hybrid retrieval quality pass, measured per lever on the frozen suite with a held-out set: short natural-language questions drop boilerplate before embedding (kept: CoSQA MRR@10 +.0102, holdout clean). Rejected levers and their retry conditions are recorded in the negative ledgers under `docs/progress/`.
-- Frozen-suite measurement harness additions under `benchmarks/frozen_suite/` (fusion capture, paired arm drivers) so quality claims are reproducible from the tree.
-- Bound graph-chain exploration with `max_work` and expose work/truncation diagnostics; retain disambiguated call-path evidence without claiming value flow.
+### Envelopes that tell the truth
+
+- `truncated: true` whenever the answer set exceeded the limit, on every model-facing render — `agent`, `agent-capsule`, `compact`, `github`'s `incomplete_results` — and warm-cache re-cuts set it instead of silently clearing it. The `limit` echo is always the call's limit. Previously the 17th hit of a 17-row answer silently vanished at the default limit 16.
+- Zero hits carry `why` + a next step (`pattern_shape_contract` teaches that bodyless patterns match signatures only) — a bare `0` a model reads as "nowhere" is a bug.
+- Channel near-misses — single-token aliases (`def:`, `import:`, `sem:`) or ≤2-edit misspellings — refuse with a did-you-mean plus the `literal:'…'` escape, instead of degrading to semantic free-text noise. Ordinary colon text (URLs, `key:value`, rust `mod::path`, `in:` scopes) is never hijacked.
+- Quoted prefixed targets parse: `pattern:'fn name($$$A)'`, `word:'auth refresh'` — one balanced quote layer; nested or unbalanced quotes fail closed.
+
+### Ranking keeps (measured on the frozen suites)
+
+| Frozen-suite arm — MRR@10 (CoSQA-500 / RepoQA-600) | CoSQA | RepoQA |
+|---|---:|---:|
+| 2.6.0 published (2026-10-19 pairing) | .3271 | .7194 |
+| + grammar keeps: scope prior for test/example trees, PEP 257 docstrings, C/C++ prototype declarations | .3319 | .7224 |
+| + semantic-leader clamp (boost-manufactured overrides capped) | .3920 | .7302 |
+| + top-2 semantic protection (rescues sem-rank-1/2 gold) | .4023 | .7296 |
+| + member-budget ANN probes (constant ~4k admission budget replaces the flat 8-probe cap) | .4230 | .7319 |
+| **2.7.0 shipped** — file-firsts pages land MRR-identical (file-diversity@10 .612 → .992) | **.4230** | **.7319** |
+
+Shipped control detail (2026-10-30 HEAD run): CoSQA hit@1 .316 / hit@10 .662; RepoQA hit@1 .637 / hit@10 .935; fresh-process p50 13.2 ms / 18.0 ms; ≥50%@8k page coverage .815. Structural-intent suite: callers .9846 (hit@10 1.000), defs 1.0000, imports .9617, ALL .9847.
+
+- **File-firsts hybrid pages** — an N-row page covers up to N distinct files instead of ~0.6 N; the page you read stops spending ~40% of its slots on files it already showed. MRR bit-identical, and ≥50%@8k page coverage rises .797 → .815 (more distinct files early covers more needle lines within budget); structural modes skip the cap.
+- Closed with retry predicates in [`docs/progress/`](docs/progress/README.md): path-words embedding (re-rejected under the transformed engine), query-side observable gates (degenerate oracle), index-side centrality priors (inverted — the noise outranking gold is *more* central), offline fusion replay (infeasible: the shipped score is not globally linear in RRF terms; weight work now requires in-engine paired arms), directory-level page caps (gold legitimately clusters in its home dir).
+- Wall decomposition (QVEC dump + dump rows): all 173 remaining misses are in-pool scoring losses, not table depth — the wall is ranking, not recall.
+
+### Performance (measured)
+
+**Search path** — the c1 campaign, closed at 2.35× median hybrid-lane speedup (2× target met; 1.69× under load):
+
+- Embed+fanout channel forked onto a sibling read-only store: −19.9% under-load wall.
+- IDF document frequencies counted in Rust over one vocabulary scan, then served from a `names.v1` sidecar without SQL row streaming.
+- Query path pools straight from f16 bytes, touching only the rows its tokens need: default needle 40.9 → 30.9 ms, `-l` 41.0 → 27.5 ms, RSS 234.5 → 141.7 MiB — vectors bit-identical.
+
+**Index path**:
+
+- IVF seeding O(n·k²) → O(n·k) incremental nearest-max: **−63% index CPU**; Lloyd assignment over a flat centroid buffer: −4% index wall — both bit-identical.
+- v3 IVF sidecar carries chunk ids; the query path mmaps them: −27% fresh-CLI.
+- Schema 18 slimming: FTS line analyzers bound to external content (−32 MB), redundant `idx_pattern_nodes_file` dropped (−6.1 MB), static-embedder `embed_cache` dropped (−63 MB reclaimed on reindex).
+- Embedding hoisted into the parallel prepare phase — the serial write loop only binds rows (7.0 s → 5.3–6.2 s span on the self corpus); the f16 weight table decodes to f32 once. Digests bit-identical.
+
+**Serve path**:
+
+- WAL close fold bounded to 250 ms — a serve session's pinned WAL no longer sleeps out the 5 s busy timeout per ambient drop: stale-root calls 8.3 s → 1.05–1.46 s.
+- Stat-fingerprint ambient memo skips the full probe on unchanged trees (~3 ms stat walk vs 1.0–1.5 s probe): steady-state 0.1–5.8 ms; `index_status` surfaces `ambient_refreshes`.
+- Rejected with retry predicate: deferred FTS/trigram wholesale rebuild for index waves (+0.25 s wall / +1.04 s CPU median — the rebuild repeats the tokenization volume).
+
+### Measurement
+
+- Frozen structural-intent suite (`benchmarks/frozen_suite/struct_gen.py`, sha-pinned corpora, 596 deterministic queries across callers/defs/imports).
+- `ASGREP_QVEC_DUMP` query-vector dump hook (default off, `ASGREP_FUSION_DUMP` precedent) for offline wall decomposition.
+- Cross-surface parity gate: CLI vs serve vs MCP on shared fixtures.
+- Repin regression gate (`npm run test:repin-gate`), mutation-proven, pinning the lock-repin predicate against the 2.5.4 incomplete-lock class.
+- Release engineering: Linux preflight e2e + starved-Actions fallback publisher; the public reference-tool comparison retired (suite harness renamed `frozen_suite`; internal rows stay gitignored).
 
 ### Fixed
 
-- Reject past-EOF string line refs in the shared reader (`path#L999999-L999999`, `path:9999`) with the file's real line bound instead of answering `ok` with a phantom empty window — serve `read`, CLI `read`, and codemode now match MCP `code_read`'s pinned fail-closed contract. Bare-path default windows and Value-form `{path, start, end}` reads keep their clamp-at-EOF semantics; an in-range empty line still answers a legitimate empty window (br-puf).
-- Agent-ergonomics trim (br-puf): the Hermes plugin dedupes repeated `asgrep_read` refs order-preserving before forwarding (duplicate refs previously returned identical windows, paying window budget twice); zero-hit `agent-capsule` envelopes drop the read-more `expand_hint` (nothing to expand — `suggested_next` still teaches the next step).
-- Zero-hit misses classify their reason on every machine surface (br-yjw): `MissReason` gains `pattern_shape_contract` — a zero-hit bodyless-args pattern (`pattern:fn NAME($$$)`) on a fully-answerable corpus now answers `why: "pattern_shape_contract"` + a next step teaching that those shapes match signatures only (fn items with bodies never match), instead of a bare 0 a model reads as "no such function anywhere". The serve/agent path gains the same zero-hit `why`/`next` classification the CLI already had; polyglot pattern misses keep their loud fail-closed teaching. The gate-on canary test now skips on runners without a reference ast-grep instead of failing.
-- Classify rejected query scopes as `INVALID_ARGUMENTS` on Pi's native and CLI transports, preserve structured diagnostics, and keep recovery hints in bounded model-visible errors without relaxing root confinement.
-- Name stale CLI binary environment overrides and explain how to clear them, while preserving strict override validation and Pi's existing missing-file recovery.
-- Preserve literal, word, and regex answers across warm/cold search, Unicode and embedded-NUL boundaries, language filtering, and candidate admission.
-- Repair multilingual structural matching, including repeated metavariable binding, qualified C# imports, optional/nullsafe calls, and fail-closed unsupported patterns.
-- Bound codemod apply rereads, confine orphan recovery, and preserve concurrent writes and their capture-sidecar evidence on refusal.
-- Preserve bounded Code Mode reads/batches and structured CLI/watch/MCP failures; repair LSP protocol errors and edits against exact open-buffer text.
-- Anchor Pi startup warmups to the authoritative checkout and cancel late startup/index work when its host session retires. Keep tool-definition text within its existing budget.
-- Preserve large integers in native and CLI Pi results and nested tool output. Use the host-owned TypeBox peer and explicitly admit Pi 1.x; the peer range is not certification of future hosts.
-- Compare annotated release tags by their peeled commit, reject malformed tag lookups, and refuse lookup failures before authorizing release actions. Retry delayed npm metadata and reject versionless native lock entries.
-- Keep SQLite WAL sidecars alive: writer connections now set `SQLITE_FCNTL_PERSIST_WAL`, so one-shot writer CLIs (reindex, targeted updates) can no longer trigger SQLite's last-close deletion of the shared `-wal`/`-shm` underneath live in-process sessions — the Linux "database disk image is malformed" failure after `/asgrep-reindex` + edit (release-gate e2e, strace-confirmed).
+- **In-memory VFS regression** from the 2.6.0 WAL-persist change: every `IndexStore::open_in_memory` (foreign-root searches, `--index-path`) failed with a raw `SQLITE_NOTFOUND` — the persist now gates on WAL journal mode.
+- **Mixed-fleet IVF compatibility**: the semantic IVF sidecar stays v2-shaped with chunk ids in a fingerprint-bound `semantic.ivf.ids` sidecar — 2.6.x readers accept the main file instead of silently retraining k-means per invocation; crash windows fail to the SQL id fallback, never wrong ids.
+- The persistent Code Mode front door is `asgrep serve` (`codemode-serve` remains an alias); missing-index errors name the enclosing indexed ancestor and the `--auto-index` recovery.
+- Index-format contract layer catches up to core schema 18; test suite reconciled (shared `.asgrep` indexes for generation harnesses, umask-proof apply fixtures).
+
+### Upgrade notes
+
+- Run `asgrep reindex <root>` once to gain trait-signature rows on unchanged files.
+- The MCP serve layer moved rmcp → **fastmcp-rust 0.13** (nightly toolchain pinned): single-era serve (2024-11-05 revision), framework-owned argument admission (`-32602` naming the offending path), 22 wire-level suites (142 tests) reconciled against live probes.
+- Dependencies: clap 4.6, tree-sitter 0.27, notify 8, cap-std 4.0.3, toolchain pin.
+- The public Rust `ChainConfig`/`ChainResponse` literal break from 2.6.0 stands; 2.7.0 adds no new required fields.
+- Hermes plugin tool schemas freeze per agent session — a plugin upgrade needs a new session.
+
+---
+
+## [2.6.0] — 2026-10-19
+
+The static-engine release: offline semantic ranking in every default search, embedding table compiled into the binary. Frozen-suite pairing against published 2.5.4: RepoQA-600 MRR@10 .297 → .719, CoSQA-500 .104 → .327, fully offline (canonical rows: [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md)).
+
+### Added
+
+- Native static embed engine: deterministic 256-d static (Model2Vec-style) embeddings compiled into the binary from a vendored MIT table — no model download, no ONNX runtime, no API key; the embed channel runs ungated in hybrid fusion, so offline semantic ranking is part of every default search.
+- Model-identity index migration: indexes record their embedding model identity and re-embed automatically on the next index run when it changes; retired engines (`hashed`, `neural`) fail closed.
+- Hybrid retrieval quality pass, measured per lever on the frozen suite with a held-out set (short NL questions drop boilerplate before embedding — kept at CoSQA +.0102); rejected levers and retry conditions live in the [`docs/progress/`](docs/progress/README.md) negative ledgers.
+- Frozen-suite measurement harness under `benchmarks/frozen_suite/` (fusion capture, paired arm drivers) so quality claims are reproducible from the tree.
+- Bound graph-chain exploration with `max_work`, with work/truncation diagnostics.
+
+### Fixed
+
+- Past-EOF string line refs rejected with the file's real line bound (`path#L999999`, `path:9999`) — serve `read`, CLI `read`, and codemode now match MCP `code_read`'s pinned fail-closed contract; in-range empty lines stay legitimate empty windows.
+- Agent-ergonomics: the Hermes plugin dedupes repeated `asgrep_read` refs; zero-hit `agent-capsule` envelopes drop the pointless read-more hint.
+- Zero-hit misses classify their reason on every machine surface (`MissReason::pattern_shape_contract` + a teaching next step, instead of a bare `0`).
+- Pi transports classify rejected query scopes as `INVALID_ARGUMENTS`; stale CLI binary overrides are named and explained; literal/word/regex answers stay identical across warm/cold search, Unicode and embedded-NUL boundaries, and language filtering; multilingual structural matching repaired (repeated metavariable binding, qualified C# imports, fail-closed unsupported patterns); codemod apply rereads bounded; concurrent writes preserve their capture-sidecar evidence on refusal; LSP protocol errors and edits repair against exact open-buffer text; Pi startup warmups anchor to the authoritative checkout and cancel on retirement; large integers preserved in native results; annotated release tags compared by peeled commit; delayed npm metadata retried, versionless native lock entries rejected.
+- SQLite WAL sidecars stay alive: writer connections set `SQLITE_FCNTL_PERSIST_WAL`, so one-shot writer CLIs (reindex, targeted updates) can no longer trigger SQLite's last-close deletion of the shared `-wal`/`-shm` underneath live in-process sessions — the Linux "database disk image is malformed" release-gate failure, strace-confirmed.
 
 ### Changed
 
-- Retain scoped search, indexing, and structural-matcher optimizations with frozen-response evidence. Measurements and tradeoffs remain in [`benchmarks/results/baselines.md`](benchmarks/results/baselines.md); no universal speedup is claimed.
-- Public Rust `ChainConfig` and `ChainResponse` gained required fields. Existing exhaustive struct literals need updating. This release includes the planned Rust source-compatibility break; downstream users must update those literals. 2.6.0 is not fully Rust source-compatible with 2.5.x.
-- The Pi extension (`pi-ast-sgrep`) rides lockstep at 2.6.0. `launcherRange` stays `>=2.5.4 <3` by judgment: the extension degrades gracefully on 2.5.4 launchers via runtime schema guards and no 2.6-only native surface is required, so no floor raise is warranted.
+- Public Rust `ChainConfig` and `ChainResponse` gained required fields — the planned Rust source-compatibility break; exhaustive struct literals need updating. 2.6.0 is not fully Rust source-compatible with 2.5.x.
+- The Pi extension (`pi-ast-sgrep`) rides lockstep at 2.6.0; `launcherRange` stays `>=2.5.4 <3` by judgment (runtime schema guards degrade gracefully on 2.5.4 launchers).
+
+---
 
 ## [2.5.4] - 2026-09-22
 
-Native-inclusive release: all five platform packages, the launcher, and the Pi
-extension ship together. Pi now requires launcher `>=2.5.4 <3` so updates cannot
-retain native packages that predate these fixes. Reindex affected projects to
-restore any terminal carriage returns discarded by an older indexer.
+Native-inclusive release: all five platform packages, the launcher, and the Pi extension ship together. Pi now requires launcher `>=2.5.4 <3` so updates cannot retain native packages that predate these fixes. Reindex affected projects to restore any terminal carriage returns discarded by an older indexer.
 
 ### Fixed
 
@@ -169,222 +228,36 @@ Extension-only patch; the CLI, launcher, and native packages remain at 2.5.2.
 - Extension publish lanes (local dogfood + signed `pi-v` tag) refuse to publish when `launcherRange` resolves to no published launcher version.
 - Release gates follow the severed version model: the e2e asserts per-layer versions, `check-contract` verifies the registered Pi tool surface against the contract, the inventory drops the removed `asgrep_status` tool, and the retired two-version upgrade path is deleted from the e2e harness.
 
-## Version Timeline
+---
+
+## Earlier releases
 
 | Version | Date | Summary |
 |---------|------|---------|
-| [v2.0.2](#v202-2026-08-16) | 2026-08-16 | Pi package: first search no longer full-walks a ready index; cancel stops in-flight index |
-| [v2.0.1](#v201-2026-08-16) | 2026-08-16 | Pi package: truncate asgrep TUI chrome so long queries no longer crash Pi |
-| [v2.0.0](#v200-2026-08-15) | 2026-08-15 | Local-first major: five PRs (#27, #29–#32). Remote embed APIs removed; critic, conjunction, SCIP, Pi results |
-| [v1.4.0](#v140-2026-08-06) | 2026-08-06 | 7-PR release: Code Mode (PTC), 13-language pattern surface, search/ranking correctness, LSP symbol fixes, watch freshness, durability hardening, quality gates + anti-bloat |
-| [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — "Out of the Alpha and into the Light" |
-| [v1.2.0-alpha](#v120-alpha-draft-superseded) | 2026-07-21 | *The Fast Update* — draft release, superseded by 1.3.2 |
-| [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification |
-| [v1.1.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.1.0-alpha) | 2026-07-12 | FTS per-file delete hardening |
-| [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha |
-
----
-
-## v2.0.2 (2026-08-16)
-
-`pi-ast-sgrep` 2.0.2. Native CLI, launcher, and platform packages stay at 2.0.0.
-
-### Fixed
-
-- Pi first search no longer walks a ready, clean index. The refresh interval re-checks status instead of hashing the tree.
-- Last cancelled search waiter aborts the shared in-flight index so workers cannot keep running after Pi moves on.
-- Incremental `index_all` skips unchanged files by stored mtime before read/hash. Code Mode indexing uses host parallelism by default (`ASGREP_INDEX_THREADS` still caps). Native mtime skip and cancel polling land in the next family rebuild; this patch ships the Pi freshness coordinator immediately.
-
-## v2.0.1 (2026-08-16)
-
-`pi-ast-sgrep` 2.0.1. Native CLI, launcher, and platform packages stay at 2.0.0.
-
-### Fixed
-
-- Pi TUI no longer exits when asgrep renders a long search query. `AsgrepText.render()` now truncates to the terminal width.
-
----
-
-## v2.0.0 (2026-08-15)
-
-2.0 is a direct, stable major release. It makes ast-sgrep local-first, fixes the Pi result path, and lands five merged PRs on top of v1.4.0: [#27](https://github.com/AdityaVG13/ast-sgrep/pull/27), [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29), [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30), [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31), and [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32), plus stacked and follow-on commits.
-
-### Breaking changes
-
-Cloud (`--cloud-embed`, `ASGREP_EMBED_API_KEY`, OpenAI-compatible HTTP) and Ollama (`--ollama-embed`, `ASGREP_OLLAMA_URL`) embedding clients are gone. Embeddings are in-process only: hashed semantic (default) and optional ONNX neural (`--features neural-embed`). Indexes that still store `embed_backend=cloud|ollama` fail closed until `asgrep reindex`. The Cloudflare Code Mode adapter is unrelated and stays.
-
-The associated CLI flags, environment settings, configuration variants, and public Rust APIs were removed. Pi users can update the package normally, but this API removal and the index-format update make 2.0 a breaking semver release.
-
-### Capability map
-
-| Track | What landed | Evidence |
-|-------|-------------|----------|
-| [#27](https://github.com/AdityaVG13/ast-sgrep/pull/27) Index / retrieval / agents | Atomic index generations and durability profiles; separate code vs prose FTS; repository-learned PPMI expansions; graph resolution tiers; staged planner; IVF k-means; MCP `structuredContent` / `outputSchema`; Agent Plugins package | `00c430ba` and the #27 merge |
-| [#29](https://github.com/AdityaVG13/ast-sgrep/pull/29) Maintainability + Pi | Isomorphic store/index/search/MCP splits behind façades; native hybrid search off the Node event loop; writer-generation advertised after partial watch-batch errors | `778caec5` |
-| [#30](https://github.com/AdityaVG13/ast-sgrep/pull/30) Honesty + local embed | Golden asserts; default-on keep-gates vs committed benches; per-field semantic vectors + intent weighting; SCIP JSON overlay (`index\|reindex --scip`); HTTP embed clients removed | `38960f02` |
-| [#31](https://github.com/AdityaVG13/ast-sgrep/pull/31) Critic / planner / conjunction | Deterministic post-fusion critic; causal `follow_up_queries`; two-channel `AND` / `AND NOT`; native nested structural templates | `80c8f3f2` |
-| [#32](https://github.com/AdityaVG13/ast-sgrep/pull/32) Gates / freshness / joins | Pattern-1 vs pinned ast-grep and `literal:` vs pinned ripgrep keep-gates (Not-run unless provisioned); watch freshness bound under sustained writes; `pattern:`+`callers:` span joins; `call-path` and indexed `codemod` on the stacked branch | `9a3b4cd6` |
-
-### Fixed and improved
-
-- **Pi results reach the model:** one-shot tools now serialize bounded hits into `content`, and Code Mode places its rendered final result in `content` instead of leaving useful output only in display-only `details`.
-- **Clean, user-controlled indexing:** `.git` and `.asgrep` are the only unconditional directory skips. Repository ignore rules remain authoritative; dotfiles and user-specific directories are not silently hardcoded. Binary source-looking files are skipped without noisy failures, and stale rows are removed.
-- **Index compatibility:** Pi and the native engine now agree on index schema 12, with controlled rebuilds for older formats.
-- **Retrieval and graph quality:** semantic field vectors, SCIP facts, critic/planner routing, graph joins, keep-gates, span handling, and blank-line excerpt safety are integrated.
-- **Storage maintainability:** the SQLite store is split into focused modules without changing its public ownership boundary.
-
----
-
-## v1.4.0 (2026-08-06)
-
-The next release ships **seven pull requests** plus direct-to-main hardening. Highlights in one line: a new in-process **Code Mode (PTC)** API, a **13-language** pattern/extraction surface with native C# and Swift grammars, **search and ranking correctness** (fusion normalization, coverage-aware ranking), **LSP symbol navigation** that finally handles case-mismatched identifiers, **bounded watch freshness**, **durability/cache correctness**, and a large **quality + anti-bloat** wave with measured release gates.
-
-### Capability map
-
-| PR | Theme | Files changed |
-|----|-------|---------------|
-| [#14](https://github.com/AdityaVG13/ast-sgrep/pull/14) | LSP symbol correctness & compatibility | 36 |
-| [#20](https://github.com/AdityaVG13/ast-sgrep/pull/20) | P1 store & search correctness | 43 |
-| [#21](https://github.com/AdityaVG13/ast-sgrep/pull/21) | Quality & compatibility batch (measured gates) | 159 |
-| [#22](https://github.com/AdityaVG13/ast-sgrep/pull/22) | Fusion normalization & ranking correctness | 47 |
-| [#23](https://github.com/AdityaVG13/ast-sgrep/pull/23) | C# + 13-language pattern correctness | 54 |
-| [#25](https://github.com/AdityaVG13/ast-sgrep/pull/25) | Anti-bloat cleanup & compatibility hardening | 62 |
-| [#26](https://github.com/AdityaVG13/ast-sgrep/pull/26) | **ast-sgrep-codemode** scaffold (Code Mode / PTC) | 976* |
-
-\* #26's file count is dominated by ~867 fuzz corpus fixtures; the feature surface is ~90 source files.
-
----
-
-### PR #26 — Code Mode (PTC): in-process programmatic search
-
-**Delivered capability:** a new in-process `ast-sgrep-codemode` NAPI addon that turns ast-sgrep into a programmatic tool-calling surface for coding agents — warm sessions, typed tool catalog, zero CLI spawn.
-
-Ships a new **`ast-sgrep-codemode`** crate and its NAPI addon (`ast-sgrep-codemode.node`) inside the existing five `@ast-sgrep/<platform>` npm packages — same install path as the CLI binary, so `pi install` gets **zero-spawn Code Mode** out of the box.
-
-- `CodeModeSession`: warm, stateful search session over `ast-sgrep-core` with a sticky `Searcher` cache, per-call limits (clamped 1–500), and a soft call budget (default 64) that fails closed.
-- Typed, stringly-dispatched tool catalog: `search`, `semantic`, `chain`, `defs`, `callers`, `imports`, `index_status`, `index_repo`, `filter_hits`, `select`, `catalog_search`, `catalog_describe`.
-- In-plan transforms (`filter_hits`, `select`) run as pure JSON projections — no shell, no code execution outside the sandbox.
-- Pi extension integration: Code Mode JS sandbox as primary agent execution, warm parallel batching, session-scoped sticky pool, hardened execution paths.
-
-Representative commits: [`4873c0e`](https://github.com/AdityaVG13/ast-sgrep/commit/4873c0e), [`47d595c`](https://github.com/AdityaVG13/ast-sgrep/commit/47d595c), [`5aab31d`](https://github.com/AdityaVG13/ast-sgrep/commit/5aab31d).
-
-### PR #23 — C# correctness and the 13-language pattern surface
-
-**Delivered capability:** native C# and Swift grammar support plus a shared nine-language conformance contract, delivered through a table-driven 13-language pattern/extraction surface.
-
-- **Native C# grammar**: structural patterns and calls now use real `tree-sitter-c-sharp` instead of a Java stand-in, covering declarations, properties, local functions, constructors, and invocation expressions ([difu.5](https://github.com/AdityaVG13/ast-sgrep/commit/6c3151f)).
-- **Complete Swift support**: grammar registration, symbol and import extraction, call ownership, structural patterns, source discovery, module resolution, editor activation ([difu.2](https://github.com/AdityaVG13/ast-sgrep/commit/c4cddcc)).
-- **More grammars**: C/C++/Kotlin/PHP grammars and Ruby `singleton_method` coverage ([difu.3/4/6](https://github.com/AdityaVG13/ast-sgrep/commit/2ded187)).
-- **One shared conformance contract** across all nine languages: parse fidelity, symbols, imports, callers, patterns, spans, and false-positive suppression ([difu.1](https://github.com/AdityaVG13/ast-sgrep/commit/59ac840)), plus a table-driven 13-language pattern/extract surface.
-- Post-review hardening (pushed during this session): literal `LIKE`/`GLOB` metacharacter escaping already landed on main ([c2j5](https://github.com/AdityaVG13/ast-sgrep/commit/23ce658)); single-character hybrid terms stay substantive and embedding switched to **full-rank XOF feature hashing** ([`4e9c981`](https://github.com/AdityaVG13/ast-sgrep/commit/4e9c981)); P0 durability/agent/LSP crash paths hardened ([`fb2cc6b`](https://github.com/AdityaVG13/ast-sgrep/commit/fb2cc6b)).
-
-### PR #22 — Fusion normalization and ranking correctness
-
-**Delivered capability:** hybrid scores that respect each producer's real scoring contract — no more dilution by unrelated query terms, with coverage-aware, threshold-safe ranking.
-
-- **Lexical fusion normalization**: hybrid scores are normalized against the producer's actual rank-zero RRF ceiling instead of being diluted by total query terms ([e2hc.14](https://github.com/AdityaVG13/ast-sgrep/commit/d7f3ea9)).
-- **Single-character queries stay searchable**: every non-empty query term is treated as substantive ([`945bec3`](https://github.com/AdityaVG13/ast-sgrep/commit/945bec3)).
-- **Def/Caller ceilings** derive from the terms that actually match each hit's symbol/callee, removing unmatched-term dilution ([u9fj]).
-- **Coverage-aware ranking**: pre-truncation keeps coverage in the sort key with a `keep*4` pool ([8mb8]), rerank writes consistent scores back into hits ([iva9.8]), zero/non-finite scores can no longer fill the limit ([iva9.4]), and invalid `file_filter` globs error instead of silently skipping the filter ([iva9.2]).
-- Quoted hybrid queries route to a literal pass; structural-index fused scores are bounded at a calibrated fraction of the pattern channel ([noik]).
-
-Representative commits: [`d7f3ea9`](https://github.com/AdityaVG13/ast-sgrep/commit/d7f3ea9), [`a9860de`](https://github.com/AdityaVG13/ast-sgrep/commit/a9860de), [`b470c6e`](https://github.com/AdityaVG13/ast-sgrep/commit/b470c6e).
-
-### PR #20 — P1 store & search correctness
-
-**Delivered capability:** monotonic generation counters that kill stale cache/IVF identities, full 256-bit semantic projections, and a bounded max-latency watch pipeline.
-
-- **Monotonic generations**: `semantic_data_version` and searchable-index generations defeat stale semantic cache and IVF identities after delete/re-add, across connections ([44a4](https://github.com/AdityaVG13/ast-sgrep/commit/2c6d700)).
-- **All 256 BLAKE3 sign bits** consumed in semantic projection instead of tiling the first 32 ([e2hc.13](https://github.com/AdityaVG13/ast-sgrep/commit/36212e3)).
-- **Bounded watch freshness**: a max-latency debounce state machine (quiet-gap coalescing + `3×` max-latency bound + `.asgrep`/sidecar self-event filtering) replaces the unbounded-sustained-stream stall ([jsfn](https://github.com/AdityaVG13/ast-sgrep/commit/01cdaad)).
-- Nested-file-transaction depth tracking with poisoned rollback and `synchronous=NORMAL` restore on end; meta preserved across clears; UTF-8 path handling.
-
-Representative commits: [`100424a`](https://github.com/AdityaVG13/ast-sgrep/commit/100424a), [`01cdaad`](https://github.com/AdityaVG13/ast-sgrep/commit/01cdaad), [`fe0e655`](https://github.com/AdityaVG13/ast-sgrep/commit/fe0e655).
-
-### PR #14 — LSP symbol correctness & compatibility
-
-**Delivered capability:** reliable definition/reference navigation for uppercase and case-mismatched symbols, with hardened UTF-16 spans and multi-root handling.
-
-- **Case-insensitive symbol navigation**: definition/reference lookup routes through case-insensitive indexed resolution, so uppercase and mixed-case symbols resolve reliably ([nuli](https://github.com/AdityaVG13/ast-sgrep/commit/b3f6236), [z47q](https://github.com/AdityaVG13/ast-sgrep/commit/35207af)).
-- **Call-chain nodes** with source spelling differing from stored symbol case resolve through the real chain expansion path.
-- **UTF-16 span fixes**: `utf16_span_end` no longer eats the next character on pure insertion with a zero-length range ([c9os](https://github.com/AdityaVG13/ast-sgrep/commit/e61b2a8)).
-- Multi-root folder binding, readiness, dirty-buffer and sync-error hardening ([zblv/x46g](https://github.com/AdityaVG13/ast-sgrep/commit/bd882e0), [ei0i](https://github.com/AdityaVG13/ast-sgrep/commit/bc019ae)).
-
-### PR #21 — Quality & compatibility batch
-
-**Delivered capability:** measured quality gates, SIMD-accelerated literal search, weighted RRF fusion with learned weights, mmap-backed IVF, and a typed TypeScript Code Mode API — all backed by hard test evidence.
-
-- **Measured quality gates replace vacuous gates**: intended-hit and rank contracts, repaired shared-subset rank correlation, ANN quality exercised on the indexed path ([e2hc.19]).
-- **Performance**: SIMD literal prefiltering + Rayon work stealing with measured work-span profiling ([e2hc.1]); ~60% faster pipeline and ~60% fewer crates LOC.
-- **Ranking honesty**: immutable signal provenance and within-signal score margins on every result/JSON surface ([e2hc.2]); weighted RRF runtime fusion with learned weights and Fisher-style sensitivity ([e2hc.4]); strict literal → AST → semantic constraint cascade for unprefixed queries ([e2hc.3]).
-- **Retrieval**: bounded AST-child embeddings with nearest function/file parent mapping ([e2hc.6]); nonfused hierarchical keyword/AST/semantic agent retrieval with stable node refs ([k7l8.4]); pinned caller/import normalization contract ([7uz6]).
-- **Freshness & memory**: monotonic freshness identity across caches, sidecars, models, bulk/watch indexing ([e2hc.15]); aligned read-only mmap IVF layout with measured cold/fresh/warm open p99 ([e2hc.9]); minified compact output with deduped paths and hard snippet budgets ([k7l8.7]).
-- **Security hardening**: MCP sandbox/env-trust and poison fail-closed patterns ([436d5c3](https://github.com/AdityaVG13/ast-sgrep/commit/436d5c3)); `forbid(unsafe_code)` restored via sealed mmap ([96e26af](https://github.com/AdityaVG13/ast-sgrep/commit/96e26af)); doctor envelope fails closed when unhealthy ([eb5577e](https://github.com/AdityaVG13/ast-sgrep/commit/eb5577e)).
-- **Delivery**: independent verification of native npm delivery across macOS arm64/x64, Linux arm64/x64, Windows x64 ([ls6.1]); graph retrieval oracle across four languages and four naming styles ([55hl]); case-equivalent retrieval verified against the real senpi monorepo ([oxbj]).
-
-### PR #25 — Anti-bloat cleanup & compatibility hardening
-
-**Delivered capability:** a Zero Tech Debt sweep that deletes dead surfaces, documents honest performance/grammar facts, and hardens compatibility — while preserving every public API.
-
-- **Zero Tech Debt wave**: dead surfaces deleted (orphan `passes/` tooling, dead re-export shims, `ast_grep_pattern_for_query` with zero callers), `module_resolve` split, CLI/search/store surfaces table-driven.
-- **Honesty infrastructure**: accurate `QUERY_GRAMMAR.md`, `PERF_INVENTORY.md` + docs index, benchmark honesty rules, EPIC evidence records.
-- **Pi workflow checker** moves to `python3` YAML (no Ruby): `check:pi-contract`, `check:pi-release`, `test:pi-release-gate` all green.
-- Public APIs preserved during cleanup ([8a96bd5](https://github.com/AdityaVG13/ast-sgrep/commit/8a96bd5)).
-
-### Also landing on main since v1.3.2 (ships in v1.4.0)
-
-- `fix(store+search)`: monotonic `semantic_data_version` defeats cache+IVF collision ([44a4](https://github.com/AdityaVG13/ast-sgrep/commit/2c6d700))
-- `fix(store)`: `symbols_named` case-insensitive + functional index ([z47q](https://github.com/AdityaVG13/ast-sgrep/commit/35207af))
-- `fix(store)`: language-aware `resolve_module_path` ([5wkz](https://github.com/AdityaVG13/ast-sgrep/commit/a79c35f))
-- `fix(embed)`: probe and cache Ollama/Cloud embedding dim ([tmy6](https://github.com/AdityaVG13/ast-sgrep/commit/e3abc9a)); language-aware doc comment markers ([pwfm](https://github.com/AdityaVG13/ast-sgrep/commit/d30b4c6))
-- `fix(literal)`: escape GLOB/LIKE metacharacters in needles ([c2j5](https://github.com/AdityaVG13/ast-sgrep/commit/23ce658))
-- Tests: graph query oracle ([55hl](https://github.com/AdityaVG13/ast-sgrep/commit/41ccd6b)), imports mixed-case parity ([oxbj](https://github.com/AdityaVG13/ast-sgrep/commit/0870cba)), uppercase LSP navigation pins ([nuli](https://github.com/AdityaVG13/ast-sgrep/commit/b3f6236))
-- CI: durable release assets + cross-compile smoke test, idempotent publish + local preflight
-
----
-
-## v1.3.2 — The Pi Package Update
-
-Released 2026-07-23 — *"Out of the Alpha and into the Light."*
-
-- **ast-sgrep is now a pi package**: the `pi-ast-sgrep` extension and `ast-sgrep` launcher, published as one atomic npm family at `1.3.2` with five host-constrained native packages (`@ast-sgrep/darwin-arm64`, `darwin-x64`, `linux-arm64-gnu`, `linux-x64-gnu`, `win32-x64-msvc`).
-- **Performance & LOC**: ≥60% faster pipeline and ≥60% fewer crates LOC ([55c2eb8](https://github.com/AdityaVG13/ast-sgrep/commit/55c2eb8)); sub-1ms core pipeline gate on warm sample fixture ([6d3eb0b](https://github.com/AdityaVG13/ast-sgrep/commit/6d3eb0b)).
-- Watcher paths normalized against canonical roots ([5480cf7](https://github.com/AdityaVG13/ast-sgrep/commit/5480cf7)); full LSP/MCP/eval/embed surfaces restored with densify-only LOC cuts ([857cd43](https://github.com/AdityaVG13/ast-sgrep/commit/857cd43)).
-- Release train hardening: pinned publish npm, debug CLI for packaged e2e, partial-publish recovery (1.3.0 → 1.3.1 → 1.3.2).
-
-## v1.2.0-alpha — (draft, superseded)
-
-The "Fast Update" release exists only as a **draft GitHub release** (2026-07-21); no tag was published and it was superseded by v1.3.2. It is listed here for history only.
-
-## v1.1.0-alpha.1
-
-- Pi npm bootstrap: first npm publication, `pi-ast-sgrep` package workspace and release train ([008ff1a](https://github.com/AdityaVG13/ast-sgrep/commit/008ff1a)).
-- Verify SSH-signed release tags ([e6b6a27](https://github.com/AdityaVG13/ast-sgrep/commit/e6b6a27)); release workflows made manual-only.
-- Fused scores preserved through rerank ([22781f5](https://github.com/AdityaVG13/ast-sgrep/commit/22781f5)); release/machine contract hardening.
-
-## v1.1.0-alpha — FTS per-file delete hardening
-
-- **Rowid-based FTS deletes**: replace O(N²) deletes with rowids collected from `lines`, then chunked deletes on `lines_trigram`, plus missing `file_id` indexes ([37f6920](https://github.com/AdityaVG13/ast-sgrep/commit/37f6920), [4817889](https://github.com/AdityaVG13/ast-sgrep/commit/4817889)).
-
-## v1.0.0-alpha
-
-- First alpha release: hybrid code search — lexical FTS + AST graph + offline semantic ranking. Alpha quality; APIs subject to change.
-
----
-
-## Workstreams
-
-Durable workstream anchors live in the project tracker (`.beads/issues.jsonl`, managed via `br`). The v1.4.0 window closes these workstream groups:
-
-- **Ranking & retrieval correctness**: `ast-sgrep-e2hc.14`, `ast-sgrep-u9fj`, `ast-sgrep-s7jw`, `ast-sgrep-8mb8`, `ast-sgrep-iva9`, `ast-sgrep-noik`, `ast-sgrep-hhca`
-- **Store & cache correctness**: `ast-sgrep-44a4`, `ast-sgrep-e2hc.13`, `ast-sgrep-jsfn`, `ast-sgrep-naiv`, `ast-sgrep-c2j5`, `ast-sgrep-z47q`, `ast-sgrep-5wkz`, `ast-sgrep-tmy6`, `ast-sgrep-pwfm`
-- **LSP**: `ast-sgrep-nuli`, `ast-sgrep-zblv`, `ast-sgrep-x46g`, `ast-sgrep-c9os`, `ast-sgrep-ei0i`
-- **Language surface**: `ast-sgrep-difu.1` – `ast-sgrep-difu.6`
-- **Quality & delivery**: `ast-sgrep-e2hc.1` – `ast-sgrep-e2hc.22`, `ast-sgrep-k7l8.*`, `ast-sgrep-7uz6`, `ast-sgrep-oxbj`, `ast-sgrep-55hl`, `ast-sgrep-ls6.1`, `ast-sgrep-tk4c`, `ast-sgrep-7m36`, `ast-sgrep-kp3e`, `ast-sgrep-56w1.3`
-- **Code Mode (PTC)**: `ast-sgrep-k7l8.1`, `ast-sgrep-k7l8.4`, `ast-sgrep-k7l8.7`, `ast-sgrep-codemode-9228`
-
-## Notes for agents
-
-- PR bodies cite **bead ids** (`ast-sgrep-<slug>`) that map to records in `.beads/issues.jsonl`; the bead ids above are the durable workstream anchors.
-- The seven v1.4.0 PRs are open at the time of writing and reference the pre-merge branch state; representative commits are from each PR's head branch.
-- Research memo: [`CHANGELOG_RESEARCH.md`](CHANGELOG_RESEARCH.md).
+| [v2.0.2](https://github.com/AdityaVG13/ast-sgrep/releases) | 2026-08-16 | `pi-ast-sgrep` patch: first search no longer full-walks a ready index; cancelled search aborts the shared in-flight index; incremental `index_all` skips unchanged files by stored mtime |
+| [v2.0.1](https://github.com/AdityaVG13/ast-sgrep/releases) | 2026-08-16 | `pi-ast-sgrep` patch: TUI query rendering truncates to terminal width so long queries no longer crash Pi |
+| [v2.0.0](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v2.0.0) | 2026-08-15 | **Local-first major** — five PRs (#27, #29–#32). Breaking: cloud/Ollama embed clients removed (embeddings in-process only; `cloud|ollama` indexes fail closed until reindex). Landed: atomic index generations + durability profiles, separate code/prose FTS, PPMI expansions, graph resolution tiers, staged planner, IVF k-means, MCP `structuredContent`/`outputSchema`, Agent Plugins package, deterministic critic, causal `follow_up_queries`, two-channel `AND`/`AND NOT`, SCIP JSON overlay, per-field semantic vectors, keep-gates vs pinned ast-grep/ripgrep, watch freshness bound, `pattern:`+`callers:` span joins, `call-path`, indexed `codemod`, Pi results reaching the model via `content` |
+| [v1.4.0](https://github.com/AdityaVG13/ast-sgrep/releases) | 2026-08-06 | Seven-PR release — see below |
+| [v1.3.2](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.3.2) | 2026-07-23 | **The Pi Package Update** — atomic npm family with five host-constrained native packages; ≥60% faster pipeline and ≥60% fewer crates LOC; sub-1 ms warm core gate; release-train hardening (partial-publish recovery 1.3.0 → 1.3.1 → 1.3.2) |
+| v1.2.0-alpha | 2026-07-21 | "Fast Update" — draft release only, superseded by v1.3.2 |
+| [v1.1.0-alpha.1](https://github.com/AdityaVG13/ast-sgrep/tree/v1.1.0-alpha.1) | 2026-07-17 | Pi npm bootstrap, SSH-signed tag verification, fused scores preserved through rerank |
+| [v1.1.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.1.0-alpha) | 2026-07-12 | FTS per-file delete hardening (rowid-based chunked deletes replace O(N²)) |
+| [v1.0.0-alpha](https://github.com/AdityaVG13/ast-sgrep/releases/tag/v1.0.0-alpha) | 2026-07-11 | First alpha: hybrid code search — lexical FTS + AST graph + offline semantic ranking |
+
+### v1.4.0 in one paragraph
+
+Seven PRs plus direct-to-main hardening: in-process **Code Mode (PTC)** API (`ast-sgrep-codemode`, warm sessions, typed tool catalog, pure-JSON in-plan transforms); a **13-language** pattern/extraction surface with native C# and Swift grammars; fusion normalization and coverage-aware ranking correctness; LSP symbol navigation fixed for case-mismatched identifiers; bounded watch freshness; monotonic store generations defeating stale cache/IVF identities; measured quality gates replacing vacuous ones; and an anti-bloat sweep preserving every public API.
+
+| PR | Theme |
+|----|-------|
+| [#14](https://github.com/AdityaVG13/ast-sgrep/pull/14) | LSP symbol correctness & compatibility |
+| [#20](https://github.com/AdityaVG13/ast-sgrep/pull/20) | P1 store & search correctness |
+| [#21](https://github.com/AdityaVG13/ast-sgrep/pull/21) | Quality & compatibility batch (measured gates) |
+| [#22](https://github.com/AdityaVG13/ast-sgrep/pull/22) | Fusion normalization & ranking correctness |
+| [#23](https://github.com/AdityaVG13/ast-sgrep/pull/23) | C# + 13-language pattern correctness |
+| [#25](https://github.com/AdityaVG13/ast-sgrep/pull/25) | Anti-bloat cleanup & compatibility hardening |
+| [#26](https://github.com/AdityaVG13/ast-sgrep/pull/26) | **ast-sgrep-codemode** scaffold (Code Mode / PTC) |
+
+### Workstream anchors
+
+PR bodies cite bead ids (`ast-sgrep-<slug>`) mapping to records in `.beads/issues.jsonl` — the durable workstream anchors for the v1.4.0 window (ranking `e2hc.*`/`u9fj`/`iva9.*`, store `44a4`/`jsfn`/`c2j5`, LSP `nuli`/`zblv`, languages `difu.1–6`, Code Mode `k7l8.*`). Representative commits are live-linked in each PR body.

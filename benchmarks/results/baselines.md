@@ -4,9 +4,9 @@
 > `UNREPRODUCIBLE` / `reproducible-in-tree`). Vocabulary:
 > [`benchmarks/README.md`](../README.md). A section tagged
 > `UNREPRODUCIBLE` cannot be regenerated from this tree. The latest release
-> comparison fingerprint is the 2026-10-19 paired benchmark section; historical
-> sections below are their own dated fingerprints and do not certify the
-> current candidate.
+> fingerprint is the 2026-10-30 shipped 2.7.0 section; historical sections
+> below are their own dated fingerprints and do not certify the current
+> candidate.
 
 > External artifact location (historical dumps, not proof of regeneration):
 > [Speed benchmark workflow](https://github.com/AdityaVG13/ast-sgrep/actions/workflows/speed.yml).
@@ -15,6 +15,58 @@ Single source of truth for every MRR / recall / latency claim in this
 repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Each dated
 fingerprint owns its machine, corpus, configuration and sample-count limits.
+
+## 2.7.0 shipped benchmark (2026-10-30)
+
+**Status: canonical for shipped-2.7.0 claims; reproducible-in-tree.** Harness
+`benchmarks/frozen_suite/run_asgrep_arm.py` over the frozen RepoQA-600 /
+CoSQA-500 corpora and queries (unchanged bytes since the 2026-10-19 pairing;
+identical scorer). Binary sha256 `47dd0360316909dd…` (`asgrep 2.7.0`, HEAD
+`cec8d73d`), backend `static` (read back from index meta). Host: Apple M5
+Max. Corpus-repo indexes were last rebuilt 2026-10-29 by the shipped indexer
+(the 2.7.0 index-path changes are digest-bit-identical by proof in commits
+`7f502319` / `560780e6` / `d30a0128`); every query ran in a fresh CLI process
+with default flags. Regenerate: `python3 benchmarks/frozen_suite/run_asgrep_arm.py
+--bin <asgrep> --bench-dir <frozen suite> --out-dir <fresh out>` (fresh out-dir
+— the harness resumes from an existing rows file).
+
+| Frozen suite (0 errors, 0 timeouts) | MRR@10 | Hit@1 | Hit@5 | Hit@10 | Hit@100 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| RepoQA-600 (n=600) | .7319 | .6367 | .8600 | .9350 | .9833 | 18.0 ms | 30.8 ms | 40.9 ms |
+| CoSQA-500 (n=500) | .4230 | .3160 | .5620 | .6620 | .9380 | 13.2 ms | 17.9 ms | 20.9 ms |
+
+RepoQA budgeted coverage: ≥50%@2k .662, ≥50%@8k **.815** (file-firsts pages;
+the pre-cap control measured .797 — the page-composition keep raises budgeted
+coverage while ranking stays bit-identical). Published-2.6.0 comparison rows:
+.719 / .608 / .928 and .327 / .234 / .588 (2026-10-19 pairing, section below).
+
+Keep ladder (paired arms; evidence in commit bodies and
+`benchmarks/results/internal/frozen-repin-20261028/`):
+
+| Arm (CoSQA / RepoQA MRR@10) | CoSQA | RepoQA | Commit |
+|---|---:|---:|---|
+| 2.6.0 published | .3271 | .7194 | 2026-10-19 pairing |
+| + grammar keeps (scope prior, py docstrings, C/C++ prototype decls) | .3319 | .7224 | `e3ba9ce2` |
+| + semantic-leader clamp | .3920 | .7302 | `36b8e4e7` |
+| + top-2 semantic protection | .4023 | .7296 | `de913749` |
+| + member-budget ANN probes | .4230 | .7319 | `2b9031f1` |
+| + file-firsts pages | .4230 | .7319 | `ced4bf8a` (MRR-identical; coverage .797→.815, file-diversity@10 .612→.992) |
+
+Structural-intent suite (2026-10-30, corpus sha256 `231aec65…`, 596
+deterministic queries, `struct_arm.py`): callers .9846 (hit@10 1.0000) ·
+defs 1.0000 · imports .9617 · **ALL .9847**.
+
+2.7.0 self-corpus perf deltas (provenance = commit bodies; self corpus,
+M5 Max, min-of-15 unless noted): lazy f16 query pooling — default needle
+40.9→30.9 ms, `-l` 41.0→27.5 ms, RSS 234.5→141.7 MiB (`d30a0128`); serve
+stale-root calls 8.3 s→1.05–1.46 s via the 250 ms WAL-fold bound
+(`4a2750a8`), then 0.1–5.8 ms steady via the stat-fingerprint ambient memo
+(`7bbde4f3`, warm literal 4.7 ms p50 — within noise of the 2.6.0 cells);
+IVF seeding −63% index CPU (`06d84a97`) and −4% index wall (`ef0337c7`),
+bit-identical; schema-18 storage −32 MB FTS analyzers (`81aff176`), −6.1 MB
+pattern-node index (`fda6bb5e`), −63 MB `embed_cache` reclaimed on reindex
+(`95ad2e86`); c1 hybrid-lane campaign closed at 2.35× median / 1.69× under
+load (`9ee3cb73`, `694e3d38`, `67cba78c`).
 
 ## Engine-only campaign Stage 1: fusion capture + CoSQA loss attribution (2026-10-17)
 
