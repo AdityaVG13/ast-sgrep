@@ -31,7 +31,7 @@ for repo in REPOS:
     for callee, fid, line in conn.execute("SELECT callee, file_id, line_no FROM callers"):
         sites.setdefault(callee, []).append((fid, line))
     picked = 0
-    for callee in sorted(s for s in sites if s in sym_names):
+    for callee in sorted(s for s in sites if s in sym_names and s.strip()):
         if picked >= N_CALLERS:
             break
         s = sites[callee]
@@ -57,6 +57,9 @@ for repo in REPOS:
         picked += 1
 
     # imports
+    # Gold semantics match the engine's imports: channel: a file importing
+    # `X` in ANY qualified shape (`X`, `pkg::X`, `pkg::mod::X`) is a hit for
+    # `imports:X`. Exact-key-only gold under-credits and fake-penalizes.
     picked = 0
     imps = {}
     for mod, fid in conn.execute("SELECT module_path, file_id FROM imports"):
@@ -64,9 +67,13 @@ for repo in REPOS:
     for mod in sorted(m for m in imps if len(imps[m]) >= 2 and len(m) >= 4):
         if picked >= N_IMPORTS:
             break
+        gold = set(imps[mod])
+        for qual in imps:
+            if qual != mod and qual.endswith("::" + mod):
+                gold |= imps[qual]
         queries.append(dict(id=f"struct-{scope}-imports-{picked:02d}", type="imports",
                             scope=scope, query=f"imports:{mod}",
-                            gold=sorted(imps[mod]), symbol=mod, n_sites=len(imps[mod])))
+                            gold=sorted(gold), symbol=mod, n_sites=len(gold)))
         picked += 1
     conn.close()
 

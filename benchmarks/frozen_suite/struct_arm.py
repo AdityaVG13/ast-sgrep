@@ -8,9 +8,13 @@ sys.path.insert(0, str(SUITE))
 import run_suite as rs
 
 BENCH = Path("~/.hermes/cache/scratch/asgrep-frozen-20261028").expanduser()
-OUT = BENCH / "out-struct"
+ap = argparse.ArgumentParser()
+ap.add_argument("--out", default="out-struct")
+ap.add_argument("--bin", default="/Users/aditya/Developer/ast-sgrep/target/release/asgrep")
+args = ap.parse_args()
+OUT = BENCH / args.out
 OUT.mkdir(exist_ok=True)
-tools = rs.Tools(OUT, argparse.Namespace(asgrep="/Users/aditya/Developer/ast-sgrep/target/release/asgrep"))
+tools = rs.Tools(OUT, argparse.Namespace(asgrep=args.bin))
 qs = json.loads((BENCH / "struct-queries.json").read_text())
 rows_path = OUT / "retrieval-rows.jsonl"
 
