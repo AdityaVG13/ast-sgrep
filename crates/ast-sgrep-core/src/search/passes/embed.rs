@@ -963,6 +963,7 @@ fn embed_query_vector_from_meta(
         "static query embed (cache miss)",
     );
     let vector = ast_sgrep_embed::embed_text(query);
+    qvec_dump_if_set(query, &vector);
     {
         let mut guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
         if guard.len() < QUERY_EMBED_CACHE_CAP {
@@ -970,6 +971,26 @@ fn embed_query_vector_from_meta(
         }
     }
     Ok(vector)
+}
+
+/// Offline-analysis hook (default off): append the query embedding as one
+/// JSON line per process, mirroring the ASGREP_FUSION_DUMP contract
+/// (best-effort, errors swallowed). One CLI run = one query = one line, so
+/// line order joins to the driving harness's query order exactly.
+fn qvec_dump_if_set(query: &str, vector: &[f32]) {
+    use std::io::Write;
+    let Ok(path) = std::env::var("ASGREP_QVEC_DUMP") else {
+        return;
+    };
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let body = serde_json::json!({"q": query, "v": vector});
+    let _ = writeln!(f, "{body}");
 }
 fn field_rescore_pool(hit_limit: usize) -> usize {
     // IVF mmap already ranked candidates. Fetching 8× hit_limit (400 at the
