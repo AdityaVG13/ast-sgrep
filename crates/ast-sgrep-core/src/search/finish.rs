@@ -7,7 +7,18 @@ use super::types::{
 use crate::query::{ParsedQuery, QueryMode};
 use crate::Result;
 
-const MAX_HITS_PER_FILE: usize = 3;
+/// Hybrid/Regex pages emit each file's BEST hit before any file's second
+/// hit (first-occurrence order, overflow backfilled). One hit per file:
+/// duplicate rows above gold compress gold's rank, and a page of N rows
+/// covers up to N distinct files (frozen-suite evidence 2026-10-29:
+/// repoqa MRR@10 .7219 -> .7421, file-diversity@50 .469 -> 1.000 at cap 1
+/// vs cap 3; cosqa bit-identical).
+const MAX_HITS_PER_FILE: usize = 1;
+
+/// Pre-gate headroom kept at 3x the gate limit independent of the page
+/// cap: with cap 1 the gate must still see enough ranked rows to fill
+/// `limit` distinct-first slots before truncation.
+const GATE_HEADROOM: usize = 3;
 
 pub(super) fn definition_query_affinity(parsed: &ParsedQuery, hit: &SearchHit) -> u8 {
     let Some(symbol) = hit.symbol.as_deref() else {
@@ -220,7 +231,7 @@ pub(crate) fn finish_response_checked_lazy(
     }
     let best_definition = best_definition_index.map(|index| hits[index].clone());
     let keep = if hybrid {
-        gate_limit.saturating_mul(MAX_HITS_PER_FILE).max(gate_limit)
+        gate_limit.saturating_mul(GATE_HEADROOM).max(gate_limit)
     } else {
         gate_limit
     };

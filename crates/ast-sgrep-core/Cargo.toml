@@ -62,6 +62,9 @@ path = "../../tests/core/chain_case.rs"
 name = "dedup_identity"
 path = "../../tests/core/dedup_identity.rs"
 [[test]]
+name = "page_composition"
+path = "../../tests/core/page_composition.rs"
+[[test]]
 name = "code_prose_fields"
 path = "../../tests/core/code_prose_fields.rs"
 [[test]]
