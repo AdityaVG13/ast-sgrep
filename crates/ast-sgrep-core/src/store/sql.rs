@@ -482,13 +482,17 @@ fn configure_connection_inner(
         }
     }
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
-        // A serve session's p99/p100 is cold-page btree I/O for each
-        // first-touch needle's trigram doclists. The self-corpus
-        // index is ~58MB; a 70MB page cache makes the whole index
-        // page-cache-resident in one long-lived session, flattening the
-        // tail to memory speed after one warm pass. Read-path only; mmap
-        // stays on so anything beyond the cache is still syscall-free.
-        conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
+        // SQL control arm: 70 MiB page cache + 256 MiB mmap so trigram
+        // doclists stay resident across a serve session (self-corpus ~58MB).
+        // Bundle reads those lists from `read.v1`. Leaving the 256 MiB sqlite
+        // mmap on the bundle arm faults the whole DB into RSS (50→122 MiB
+        // across 25 unique conceptual queries). Leftover SQL is
+        // lexicon/defs/field blobs; 16 MiB matches `restore_synchronous`.
+        if crate::store::read_bundle::bundle_enabled() {
+            conn.execute_batch("PRAGMA cache_size = -16384;")?;
+        } else {
+            conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
+        }
     }
     Ok(())
 }

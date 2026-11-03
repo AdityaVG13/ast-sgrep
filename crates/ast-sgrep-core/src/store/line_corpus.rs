@@ -7,7 +7,7 @@
 use crate::Result;
 use ast_sgrep_embed::split_ident;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Skip the RAM corpus when packed source, lowercase bytes and file filters
@@ -29,14 +29,14 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn add_token_file(map: &mut HashMap<String, Vec<u32>>, token: String, fi: u32) {
-    let entry = map.entry(token).or_default();
-    if entry.last().copied() != Some(fi) {
-        entry.push(fi);
+fn add_token_file(pairs: &mut Vec<(String, u32)>, token: String, fi: u32) {
+    if pairs.last().is_some_and(|(t, f)| t == &token && *f == fi) {
+        return;
     }
+    pairs.push((token, fi));
 }
 
-pub fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u32) {
+pub fn push_ascii_tokens(pairs: &mut Vec<(String, u32)>, text: &str, fi: u32) {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -53,29 +53,86 @@ pub fn push_ascii_tokens(map: &mut HashMap<String, Vec<u32>>, text: &str, fi: u3
             continue;
         }
         let raw = &text[start..i];
-        // These spellings have exactly one split_ident component, identical
-        // to the full key. Reuse its posting directly; repeated occurrences
-        // in this file need neither another owned key nor another split.
         if raw
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         {
-            if let Some(files) = map.get_mut(raw) {
-                if files.last().copied() != Some(fi) {
-                    files.push(fi);
-                }
-            } else {
-                map.insert(raw.to_owned(), vec![fi]);
-            }
+            add_token_file(pairs, raw.to_owned(), fi);
             continue;
         }
         let token = raw.to_ascii_lowercase();
         for part in split_ident(raw) {
             if part.len() >= 3 {
-                add_token_file(map, part, fi);
+                add_token_file(pairs, part, fi);
             }
         }
-        add_token_file(map, token, fi);
+        add_token_file(pairs, token, fi);
+    }
+}
+
+/// Sorted token names + concatenated file ids. Lookup is binary search.
+#[derive(Debug)]
+pub struct TokenCsr {
+    tokens: Vec<String>,
+    offs: Vec<u32>,
+    files: Vec<u32>,
+}
+
+impl TokenCsr {
+    pub fn empty() -> Self {
+        Self {
+            tokens: Vec::new(),
+            offs: vec![0],
+            files: Vec::new(),
+        }
+    }
+
+    pub fn from_pairs(mut pairs: Vec<(String, u32)>) -> Self {
+        pairs.sort_unstable();
+        pairs.dedup();
+        let mut tokens = Vec::new();
+        let mut offs = vec![0u32];
+        let mut files = Vec::new();
+        let mut i = 0;
+        while i < pairs.len() {
+            let token = std::mem::take(&mut pairs[i].0);
+            files.push(pairs[i].1);
+            i += 1;
+            while i < pairs.len() && pairs[i].0 == token {
+                files.push(pairs[i].1);
+                i += 1;
+            }
+            tokens.push(token);
+            offs.push(files.len() as u32);
+        }
+        Self {
+            tokens,
+            offs,
+            files,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    pub fn get(&self, key: &str) -> &[u32] {
+        match self.tokens.binary_search_by(|token| token.as_str().cmp(key)) {
+            Ok(i) => {
+                let start = self.offs[i] as usize;
+                let end = self.offs[i + 1] as usize;
+                &self.files[start..end]
+            }
+            Err(_) => &[],
+        }
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &[u32])> {
+        self.tokens.iter().enumerate().map(|(i, token)| {
+            let start = self.offs[i] as usize;
+            let end = self.offs[i + 1] as usize;
+            (token.as_str(), &self.files[start..end])
+        })
     }
 }
 
@@ -127,10 +184,14 @@ pub struct CorpusFile {
 pub struct LineCorpus {
     pub index_data_version: i64,
     pub pragma_data_version: i64,
-    bytes: Vec<u8>,
+    /// Owned backing for the SQL fallback; empty when `bundle` is present.
+    bytes_owned: Vec<u8>,
+    /// Owned backing for the SQL fallback; empty when `bundle` is present.
+    folded_bytes_owned: Vec<u8>,
+    /// Published `read.v1` mapping (source/folded/offsets/postings).
+    bundle: Option<std::sync::Arc<crate::store::read_bundle::ReadBundle>>,
+    lines: usize,
     starts: Vec<u32>,
-    /// Record-local Unicode lowercase, cached under the same generation as source.
-    folded_bytes: Vec<u8>,
     folded_starts: Vec<u32>,
     line_nos: Vec<u32>,
     file_idx: Vec<u32>,
@@ -139,7 +200,7 @@ pub struct LineCorpus {
     file_first_line: Vec<u32>,
     /// Lowercased ASCII identifier -> file indexes. Unique-hybrid cascade
     /// looks up rare needles here instead of memchr-ing the whole blob.
-    token_files: HashMap<String, Vec<u32>>,
+    token_files: TokenCsr,
 }
 
 pub struct LineHit<'a> {
@@ -177,7 +238,7 @@ impl LineCorpus {
         let mut file_idx = Vec::new();
         let mut files = Vec::new();
         let mut current_path: Option<String> = None;
-        let mut token_files: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut token_files = Vec::new();
 
         for row in rows {
             let (path, language, line_no, content) = row?;
@@ -229,24 +290,126 @@ impl LineCorpus {
         Ok(Some(Arc::new(Self {
             index_data_version,
             pragma_data_version,
-            bytes,
+            bytes_owned: bytes,
+            folded_bytes_owned: folded_bytes,
+            bundle: None,
+            lines: starts.len(),
             starts,
-            folded_bytes,
             folded_starts,
             line_nos,
             file_idx,
             files,
             file_first_line,
-            token_files,
+            token_files: TokenCsr::from_pairs(token_files),
         })))
     }
 
+    /// Open the columnar `read.v1` materialization as a corpus view. Offsets
+    /// and postings are read from the mapping; only the small per-line start
+    /// tables and file metadata are decoded.
+    pub fn from_bundle(
+        bundle: std::sync::Arc<crate::store::read_bundle::ReadBundle>,
+        index_data_version: i64,
+        pragma_data_version: i64,
+    ) -> Result<Arc<Self>> {
+        let lines = bundle.line_count();
+        let n_files = bundle.file_count();
+        if lines > u32::MAX as usize || n_files > u32::MAX as usize {
+            return Err(crate::StoreError::Other(
+                "read.v1 counts exceed u32 ranges".into(),
+            ));
+        }
+        let file_first_line = (0..n_files).map(|i| bundle.file_first_line(i)).collect();
+        let mut files = Vec::with_capacity(n_files);
+        for fi in 0..n_files {
+            let path = bundle.path(fi).to_string();
+            let preferred = cascade_prefers_file(&path);
+            files.push(CorpusFile {
+                path,
+                language: bundle.language(fi).map(str::to_string),
+                preferred,
+                trigrams: [0u64; FILTER_WORDS],
+            });
+        }
+        Ok(Arc::new(Self {
+            index_data_version,
+            pragma_data_version,
+            bytes_owned: Vec::new(),
+            folded_bytes_owned: Vec::new(),
+            bundle: Some(bundle),
+            lines,
+            starts: Vec::new(),
+            folded_starts: Vec::new(),
+            line_nos: Vec::new(),
+            file_idx: Vec::new(),
+            files,
+            file_first_line,
+            token_files: TokenCsr::empty(),
+        }))
+    }
+
+    fn bytes(&self) -> &[u8] {
+        match &self.bundle {
+            Some(bundle) => bundle.source(),
+            None => &self.bytes_owned,
+        }
+    }
+
+    fn folded_bytes(&self) -> &[u8] {
+        match &self.bundle {
+            Some(bundle) => bundle.folded(),
+            None => &self.folded_bytes_owned,
+        }
+    }
+
+    fn token_postings(&self, key: &str) -> &[u32] {
+        match &self.bundle {
+            Some(bundle) => bundle.token_postings(key),
+            None => self.token_files.get(key),
+        }
+    }
+
     pub fn len(&self) -> usize {
-        self.starts.len()
+        self.lines
     }
 
     pub fn is_empty(&self) -> bool {
-        self.starts.is_empty()
+        self.lines == 0
+    }
+
+    fn line_start(&self, i: usize) -> u32 {
+        match &self.bundle {
+            Some(bundle) => bundle.line_start(i),
+            None => self.starts[i],
+        }
+    }
+
+    fn folded_start(&self, i: usize) -> u32 {
+        match &self.bundle {
+            Some(bundle) => bundle.folded_start(i),
+            None => self.folded_starts[i],
+        }
+    }
+
+    fn line_no_at(&self, i: usize) -> u32 {
+        match &self.bundle {
+            Some(bundle) => bundle.line_no(i),
+            None => self.line_nos[i],
+        }
+    }
+
+    fn file_idx_at(&self, i: usize) -> u32 {
+        match &self.bundle {
+            Some(bundle) => bundle.file_idx(i),
+            None => self.file_idx[i],
+        }
+    }
+
+    fn file_trigram(&self, file: usize, word: usize) -> u64 {
+        match &self.bundle {
+            Some(bundle) => bundle.file_trigram(file, word),
+            None => self.files[file].trigrams[word],
+        }
     }
 
     /// Distinct indexed files packed in this corpus (cascade file-cap).
@@ -254,26 +417,99 @@ impl LineCorpus {
         self.files.len()
     }
 
-    fn line_content_end(&self, i: usize) -> usize {
-        self.starts
-            .get(i + 1)
+    /// Join indexed lines `[line_start, line_end]` for `path`. `None` when
+    /// the path is not in this corpus (caller falls back to SQL).
+    pub fn excerpt(&self, path: &str, line_start: u32, line_end: u32) -> Option<String> {
+        let fi = self
+            .files
+            .binary_search_by(|file| file.path.as_str().cmp(path))
+            .ok()?;
+        let start = *self.file_first_line.get(fi)? as usize;
+        let stop = self
+            .file_first_line
+            .get(fi + 1)
             .copied()
-            .map(|s| s as usize)
-            .unwrap_or(self.bytes.len())
-            .saturating_sub(1)
+            .map(|n| n as usize)
+            .unwrap_or(self.lines);
+        let line_nos: &[u32] = match &self.bundle {
+            Some(bundle) => bundle.line_nos(),
+            None => &self.line_nos,
+        };
+        let mut lo = start;
+        let mut hi = stop;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if line_nos.get(mid).copied().unwrap_or(u32::MAX) < line_start {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let max = crate::limits::MAX_SEARCH_HIT_EXCERPT_BYTES;
+        let mut excerpt = String::new();
+        for i in lo..stop {
+            let no = line_nos.get(i).copied().unwrap_or(u32::MAX);
+            if no > line_end {
+                break;
+            }
+            let line = self.line_content(i);
+            let separator = usize::from(!excerpt.is_empty());
+            if excerpt
+                .len()
+                .saturating_add(separator)
+                .saturating_add(line.len())
+                <= max
+            {
+                if separator == 1 {
+                    excerpt.push('\n');
+                }
+                excerpt.push_str(line);
+                continue;
+            }
+            const MARKER: &str = "…";
+            let content_limit = max.saturating_sub(MARKER.len());
+            if excerpt.len() > content_limit {
+                let mut end = content_limit;
+                while end > 0 && !excerpt.is_char_boundary(end) {
+                    end -= 1;
+                }
+                excerpt.truncate(end);
+            }
+            let mut allowance = content_limit.saturating_sub(excerpt.len());
+            if separator == 1 && allowance > 0 {
+                excerpt.push('\n');
+                allowance -= 1;
+            }
+            let mut end = allowance.min(line.len());
+            while end > 0 && !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            excerpt.push_str(&line[..end]);
+            excerpt.push_str(MARKER);
+            break;
+        }
+        Some(excerpt)
+    }
+
+    fn line_content_end(&self, i: usize) -> usize {
+        if i + 1 < self.lines {
+            (self.line_start(i + 1) as usize).saturating_sub(1)
+        } else {
+            self.bytes().len().saturating_sub(1)
+        }
     }
 
     fn line_content(&self, i: usize) -> &str {
-        let start = self.starts[i] as usize;
-        std::str::from_utf8(&self.bytes[start..self.line_content_end(i)]).unwrap_or("")
+        let start = self.line_start(i) as usize;
+        std::str::from_utf8(&self.bytes()[start..self.line_content_end(i)]).unwrap_or("")
     }
 
     fn hit(&self, i: usize) -> LineHit<'_> {
-        let file = &self.files[self.file_idx[i] as usize];
+        let file = &self.files[self.file_idx_at(i) as usize];
         LineHit {
             path: &file.path,
             language: file.language.as_deref(),
-            line_no: self.line_nos[i],
+            line_no: self.line_no_at(i),
             content: self.line_content(i),
         }
     }
@@ -281,17 +517,21 @@ impl LineCorpus {
     /// Locate a match only when its whole byte span belongs to one stored line.
     /// Packing separators are not evidence, even when the needle contains LF.
     fn line_index_for_match(&self, abs: usize, match_len: usize) -> Option<usize> {
-        if self.starts.is_empty() {
+        if self.lines == 0 {
             return None;
         }
-        let i = match self
-            .starts
-            .binary_search(&(abs.min(u32::MAX as usize) as u32))
-        {
-            Ok(i) => i,
-            Err(i) => i.saturating_sub(1),
-        };
-        let start = self.starts[i] as usize;
+        let target = abs.min(u32::MAX as usize) as u32;
+        let (mut lo, mut hi) = (0usize, self.lines);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.line_start(mid) <= target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let i = lo.saturating_sub(1);
+        let start = self.line_start(i) as usize;
         let content_end = self.line_content_end(i);
         if abs >= start && abs < content_end && match_len <= content_end - abs {
             Some(i)
@@ -313,11 +553,84 @@ impl LineCorpus {
         if needle.is_empty() || cap == 0 {
             return Vec::new();
         }
+        // Rare identifier/substring needles: the per-file trigram certificate
+        // proves which files cannot contain the lowercased needle. Scan only
+        // those files instead of the whole arena; exact byte verification
+        // still owns every accepted line (trigram collisions only add scans).
+        if needle.is_ascii() && needle.len() >= 3 {
+            let lower = needle.to_ascii_lowercase();
+            let mut candidates = Vec::new();
+            for fi in 0..self.files.len() {
+                let mut possible = true;
+                for tri in lower.as_bytes().windows(3).take(32) {
+                    let (word, bit) = trigram_bit(tri);
+                    if self.file_trigram(fi, word) & bit == 0 {
+                        possible = false;
+                        break;
+                    }
+                }
+                if possible {
+                    candidates.push(fi);
+                }
+            }
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+            let mut hits = Vec::new();
+            let finder = memchr::memmem::Finder::new(needle.as_bytes());
+            let mut last_emitted = usize::MAX;
+            for fi in candidates {
+                let first = self.file_first_line[fi] as usize;
+                let end_line = self
+                    .file_first_line
+                    .get(fi + 1)
+                    .copied()
+                    .unwrap_or(self.len() as u32) as usize;
+                if first >= end_line {
+                    continue;
+                }
+                let start_byte = self.line_start(first) as usize;
+                let end_byte = if end_line < self.len() {
+                    self.line_start(end_line) as usize
+                } else {
+                    self.bytes().len()
+                };
+                let file = &self.files[fi];
+                if !lang_ok(file.language.as_deref(), lang_filter) {
+                    continue;
+                }
+                let mut pos = start_byte;
+                while let Some(rel) = finder.find(&self.bytes()[pos..end_byte]) {
+                    let abs = pos + rel;
+                    pos = abs + 1;
+                    let Some(i) = self.line_index_for_match(abs, needle.len()) else {
+                        continue;
+                    };
+                    if i == last_emitted {
+                        continue;
+                    }
+                    if word_mode {
+                        let start = self.line_start(i) as usize;
+                        let content = self.line_content(i);
+                        let local = abs - start;
+                        if !word_ok(content, local, needle.len()) {
+                            continue;
+                        }
+                    }
+                    last_emitted = i;
+                    hits.push(self.hit(i));
+                    if hits.len() >= cap {
+                        return hits;
+                    }
+                }
+            }
+            return hits;
+        }
         let mut hits = Vec::new();
         let finder = memchr::memmem::Finder::new(needle.as_bytes());
         let mut pos = 0usize;
         let mut last_emitted = usize::MAX;
-        while let Some(rel) = finder.find(&self.bytes[pos..]) {
+        while let Some(rel) = finder.find(&self.bytes()[pos..]) {
             let abs = pos + rel;
             pos = abs + 1;
             let Some(i) = self.line_index_for_match(abs, needle.len()) else {
@@ -326,12 +639,12 @@ impl LineCorpus {
             if i == last_emitted {
                 continue;
             }
-            let file = &self.files[self.file_idx[i] as usize];
+            let file = &self.files[self.file_idx_at(i) as usize];
             if !lang_ok(file.language.as_deref(), lang_filter) {
                 continue;
             }
             if word_mode {
-                let start = self.starts[i] as usize;
+                let start = self.line_start(i) as usize;
                 let content = self.line_content(i);
                 let local = abs - start;
                 if !word_ok(content, local, needle.len()) {
@@ -357,7 +670,7 @@ impl LineCorpus {
     ) -> Vec<LineHit<'a>> {
         let mut hits = Vec::new();
         for i in 0..self.len() {
-            let file = &self.files[self.file_idx[i] as usize];
+            let file = &self.files[self.file_idx_at(i) as usize];
             if !lang_ok(file.language.as_deref(), lang_filter) {
                 continue;
             }
@@ -400,12 +713,8 @@ impl LineCorpus {
             .take(32)
             .map(trigram_bit)
             .collect();
-        let postings = self
-            .token_files
-            .get(&key)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let mut seen = HashSet::new();
+        let postings = self.token_postings(&key);
+        let mut seen = vec![false; self.files.len()];
         let mut hits = Vec::new();
         for preferred in [true, false] {
             for fi in postings
@@ -417,13 +726,14 @@ impl LineCorpus {
                 if file.preferred != preferred
                     || required
                         .iter()
-                        .any(|&(word, bit)| file.trigrams[word] & bit == 0)
+                        .any(|&(word, bit)| self.file_trigram(fi, word) & bit == 0)
                     || already.contains(&file.path)
                     || !lang_ok(file.language.as_deref(), lang_filter)
-                    || !seen.insert(fi)
+                    || seen[fi]
                 {
                     continue;
                 }
+                seen[fi] = true;
                 let Some(line) = self.first_matching_line(fi, &finder, &matches) else {
                     continue;
                 };
@@ -448,25 +758,35 @@ impl LineCorpus {
             .get(fi + 1)
             .copied()
             .unwrap_or(self.len() as u32) as usize;
-        let bytes_end = self
-            .folded_starts
-            .get(end)
-            .copied()
-            .unwrap_or(self.folded_bytes.len() as u32) as usize;
-        let mut pos = self.folded_starts[start] as usize;
-        while let Some(offset) = finder.find(&self.folded_bytes[pos..bytes_end]) {
+        let bytes_end = if end < self.len() {
+            self.folded_start(end) as usize
+        } else {
+            self.folded_bytes().len()
+        };
+        let mut pos = self.folded_start(start) as usize;
+        while let Some(offset) = finder.find(&self.folded_bytes()[pos..bytes_end]) {
             let abs = pos + offset;
-            let line = self.folded_starts.partition_point(|&s| s as usize <= abs) - 1;
+            let target = abs.min(u32::MAX as usize) as u32;
+            let (mut lo, mut hi) = (0usize, self.len());
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if self.folded_start(mid) <= target {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            let line = lo.saturating_sub(1);
             // Reverify the original record: folds change byte offsets and packed
             // newlines are not evidence. One verification covers its occurrences.
             if matches(self.line_content(line)) {
                 return Some(line);
             }
-            pos = self
-                .folded_starts
-                .get(line + 1)
-                .copied()
-                .unwrap_or(self.folded_bytes.len() as u32) as usize;
+            pos = if line + 1 < self.len() {
+                self.folded_start(line + 1) as usize
+            } else {
+                self.folded_bytes().len()
+            };
         }
         None
     }

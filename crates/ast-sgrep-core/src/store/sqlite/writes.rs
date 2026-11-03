@@ -10,7 +10,6 @@ use super::{
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::params;
-use std::collections::HashMap;
 
 impl IndexStore {
     pub fn upsert_file(&self, input: UpsertFileInput<'_>) -> Result<i64> {
@@ -336,17 +335,20 @@ impl IndexStore {
                 )));
             }
         }
-        let name_to_id: HashMap<String, i64> = symbols
+        let mut name_to_id: Vec<(String, i64)> = symbols
             .iter()
             .zip(symbol_ids)
             .map(|(s, id)| (format!("{}:{}", s.name, s.line_start), *id))
             .collect();
+        name_to_id.sort_by(|left, right| left.0.cmp(&right.0));
         let mut st = self.conn.prepare_cached(
             "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)", )?;
         for (c, e) in chunks.iter().zip(emb.iter()) {
+            let key = format!("{}:{}", c.symbol_name, c.line_start);
             let sid = name_to_id
-                .get(&format!("{}:{}", c.symbol_name, c.line_start))
-                .copied();
+                .binary_search_by(|(name, _)| name.as_str().cmp(&key))
+                .ok()
+                .map(|i| name_to_id[i].1);
             st.execute(params![
                 file_id,
                 sid,

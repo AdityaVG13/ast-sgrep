@@ -12,8 +12,19 @@ use super::{
 use crate::{IndexStatus, Result};
 use rusqlite::types::{Type, ValueRef};
 use rusqlite::{params, ToSql};
-use std::collections::HashMap;
 use std::sync::Arc;
+
+const FILE_STAT_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+const FILE_STAT_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+pub(crate) fn fold_file_stat_identity(fp: &mut u64, path: &str, mtime_secs: i64, mtime_nanos: u32) {
+    let mut hash = FILE_STAT_SEED;
+    for &byte in path.as_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FILE_STAT_PRIME);
+    }
+    *fp ^= hash ^ (mtime_secs as u64) ^ (u64::from(mtime_nanos).rotate_left(17));
+}
 
 fn read_field_vector_row(
     row: &rusqlite::Row<'_>,
@@ -62,8 +73,8 @@ impl IndexStore {
         )
     }
 
-    pub(crate) fn file_identities(&self) -> Result<HashMap<String, super::FileIdentity>> {
-        let rows = query_cached_map(
+    pub(crate) fn file_identities(&self) -> Result<Vec<(String, super::FileIdentity)>> {
+        let mut rows = query_cached_map(
             &self.conn,
             "SELECT path, mtime_secs, mtime_nanos, content_hash FROM files",
             [],
@@ -78,8 +89,25 @@ impl IndexStore {
                 ))
             },
         )?;
-        Ok(rows.into_iter().collect())
+        rows.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(rows)
     }
+
+    /// Order-independent fingerprint of indexed path + mtime identities.
+    /// Matches the Code Mode ambient stat probe so an unchanged tree can skip
+    /// the writer without a session-side memo.
+    pub fn file_stat_fingerprint(&self) -> Result<u64> {
+        let mut fp = 0u64;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path, mtime_secs, mtime_nanos FROM files")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            fold_file_stat_identity(&mut fp, &row.get::<_, String>(0)?, row.get(1)?, row.get(2)?);
+        }
+        Ok(fp)
+    }
+
     pub fn all_file_paths(&self) -> Result<Vec<String>> {
         query_cached_map(
             &self.conn,
@@ -131,18 +159,14 @@ impl IndexStore {
     pub fn has_indexed_files(&self) -> Result<bool> {
         at_least_rows(&self.conn, "files", 1)
     }
-    /// True when indexed lines ≥ threshold (LIMIT probe; avoids full COUNT).
+    /// True when indexed lines ≥ threshold. Bundle header counts avoid the
+    /// COUNT/LIMIT probe; the SQL fallback (legacy/gate control) queries once
+    /// and does not memoize the answer.
     pub fn indexed_line_count_at_least(&self, threshold: usize) -> Result<bool> {
-        let gen = self.index_data_version()?;
-        if let Some((cached_gen, cached_threshold, cached)) = self.line_count_at_least.get() {
-            if cached_gen == gen && cached_threshold == threshold {
-                return Ok(cached);
-            }
+        if let Some(bundle) = self.read_bundle(None)? {
+            return Ok(bundle.line_count() >= threshold);
         }
-        let at_least = super::super::sql::at_least_rows(&self.conn, "lines", threshold)?;
-        self.line_count_at_least
-            .set(Some((gen, threshold, at_least)));
-        Ok(at_least)
+        super::super::sql::at_least_rows(&self.conn, "lines", threshold)
     }
     pub fn all_indexed_lines(&self) -> Result<Vec<IndexedLineRow>> {
         let mut stmt = self.conn.prepare_cached(
@@ -179,6 +203,13 @@ impl IndexStore {
         line_start: u32,
         line_end: u32,
     ) -> Result<String> {
+        if crate::store::read_bundle::bundle_enabled() {
+            if let Ok(Some(corpus)) = self.line_corpus() {
+                if let Some(excerpt) = corpus.excerpt(path, line_start, line_end) {
+                    return Ok(excerpt);
+                }
+            }
+        }
         let mut stmt = self.conn.prepare_cached(
             // COALESCE both columns: SQLite substr() over an empty BLOB
             // (a blank line) yields NULL, which must read as an empty
@@ -499,11 +530,11 @@ impl IndexStore {
         &self,
         ids: &[i64],
         mask: crate::semantic_chunk::FieldVectorMask,
-    ) -> Result<std::collections::HashMap<i64, crate::semantic_chunk::SemanticFieldVectors>> {
+    ) -> Result<Vec<(i64, crate::semantic_chunk::SemanticFieldVectors)>> {
         if ids.is_empty() || !mask.any() {
-            return Ok(std::collections::HashMap::new());
+            return Ok(Vec::new());
         }
-        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        let mut out = Vec::with_capacity(ids.len());
         for batch in ids.chunks(500) {
             let placeholders = std::iter::repeat_n("?", batch.len())
                 .collect::<Vec<_>>()
@@ -517,8 +548,7 @@ impl IndexStore {
                 read_field_vector_row,
             )?;
             for row in rows {
-                let (id, fields) = row?;
-                out.insert(id, fields);
+                out.push(row?);
             }
         }
         Ok(out)
@@ -781,6 +811,11 @@ impl IndexStore {
         .map(Option::flatten)
     }
     pub fn pattern_node_count(&self) -> Result<usize> {
+        if let Ok(Some(bundle)) = self.read_bundle(None) {
+            if let Some(n) = crate::store::bundle_graph::pattern_row_count(&bundle) {
+                return Ok(n);
+            }
+        }
         count_star(&self.conn, "pattern_nodes")
     }
     /// Does any indexed symbol carry this exact name? Ground-truth
@@ -866,6 +901,20 @@ impl IndexStore {
         lang: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<PatternNodeRow>> {
+        if let Ok(Some(bundle)) = self.read_bundle(None) {
+            return Ok(
+                crate::store::bundle_graph::patterns_exact(&bundle, signature, lang, limit)
+                    .into_iter()
+                    .map(|(path, language, line_start, line_end)| PatternNodeRow {
+                        path,
+                        language,
+                        line_start,
+                        line_end,
+                        excerpt: String::new(),
+                    })
+                    .collect(),
+            );
+        }
         let mut sql = String::from(
             "SELECT f.path, f.language, n.line_start, n.line_end, n.excerpt FROM pattern_nodes n JOIN files f ON f.id=n.file_id WHERE n.signature=?1",
         );
@@ -1054,6 +1103,11 @@ impl IndexStore {
         lang: Option<&str>,
         limit: usize,
     ) -> Result<Vec<ImportQueryRow>> {
+        if let Ok(Some(bundle)) = self.read_bundle(None) {
+            return Ok(crate::store::bundle_graph::imports_like(
+                &bundle, module, lang, limit,
+            ));
+        }
         let map = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
         let Some(m) = module.filter(|m| !m.is_empty()) else {
             let mut parts = Vec::new();

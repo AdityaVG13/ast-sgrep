@@ -5,7 +5,7 @@ use super::try_index_db_path;
 use crate::Result;
 use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection, OpenFlags};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 // 6 = symbols_name_lower. 7 = semantic-layout-v2 wipe. 8 = unstemmed code FTS.
@@ -268,22 +268,15 @@ pub struct IndexStore {
     cache_seq: std::cell::Cell<i64>,
     /// Write-durability profile for this connection.
     durability: crate::store::Durability,
-    /// Trigram document-frequency memo (rarest-trigram scan shortcut).
-    trigram_df: crate::store::trigram_df::TrigramDfCache,
-    /// Memo for `indexed_line_count_at_least`: (index_data_version, threshold, at_least).
-    /// Unique-hybrid prefilter called this once per discovery term (LIMIT 1000
-    /// probe). Keyed on generation so an external writer is not a stale routing
-    /// decision; `bump_index_data_version` also clears it.
-    line_count_at_least: std::cell::Cell<Option<(i64, usize, bool)>>,
-    /// `index_data_version` meta: unique hybrid called this once per df probe
-    /// (several times per conceptual query). Same invalidation as line corpus.
-    /// Memo of the `index_data_version` meta row, keyed on SQLite's
-    /// `PRAGMA data_version` so a commit from ANOTHER connection (a
-    /// concurrent CLI reindex) invalidates it. Keyed on nothing, a
-    /// long-lived process served stale-fresh forever.
-    index_data_version_memo: std::cell::Cell<(i64, Option<i64>)>,
     /// Packed indexed lines for unique-query literal. Cleared on generation bump.
     line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
+    /// Opened `read.v1` mapping. This is index materialization, not a
+    /// query-keyed memo: it is reopened whenever the store generation moves.
+    bundle: std::cell::RefCell<Option<std::sync::Arc<crate::store::read_bundle::ReadBundle>>>,
+    /// Identity of the file backing `bundle`; a publish replaces the inode, so
+    /// a long-lived reader cannot keep serving the old mapping by generation
+    /// alone.
+    bundle_file_stamp: std::cell::Cell<Option<(u64, u64)>>,
     line_corpus_disabled: std::cell::Cell<bool>,
     /// Opened names sidecar (folded idf vocabularies). Generation-gated by
     /// the reader; cleared implicitly by reopen on generation change.
@@ -421,10 +414,9 @@ impl IndexStore {
             bulk_tx_owns: std::cell::Cell::new(false),
             cache_seq: std::cell::Cell::new(0),
             durability,
-            trigram_df: crate::store::trigram_df::TrigramDfCache::new(),
-            line_count_at_least: std::cell::Cell::new(None),
-            index_data_version_memo: std::cell::Cell::new((0, None)),
             line_corpus: std::cell::RefCell::new(None),
+            bundle: std::cell::RefCell::new(None),
+            bundle_file_stamp: std::cell::Cell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             names_sidecar: std::cell::RefCell::new(None),
             read_only,
@@ -638,15 +630,73 @@ impl IndexStore {
         // the same db_path from agent surfaces.
         &self.conn
     }
-    /// Trigram document-frequency memo (rarest-trigram scan shortcut).
-    pub(crate) fn trigram_df(&self) -> &crate::store::trigram_df::TrigramDfCache {
-        &self.trigram_df
+    /// Open (or reuse) the published `read.v1` mapping. The handle is an index
+    /// materialization, not a query-keyed memo; a generation mismatch reopens
+    /// it. Explicit `bundle` fails closed when absent/stale; `auto` falls back
+    /// to SQL only when the file does not exist.
+    pub(crate) fn read_bundle(
+        &self,
+        generation: Option<i64>,
+    ) -> Result<Option<std::sync::Arc<crate::store::read_bundle::ReadBundle>>> {
+        if !crate::store::read_bundle::bundle_enabled()
+            || crate::semantic_ivf::is_in_memory_db(&self.db_path)
+        {
+            return Ok(None);
+        }
+        let bundle_path = crate::store::read_bundle::path_for(&self.db_path);
+        let stamp = crate::store::read_bundle::file_stamp(&bundle_path);
+        if let Some(cached) = self.bundle.borrow().as_ref() {
+            if stamp.is_some()
+                && self.bundle_file_stamp.get() == stamp
+                && generation.is_none_or(|generation| cached.generation() == generation)
+            {
+                return Ok(Some(std::sync::Arc::clone(cached)));
+            }
+        }
+        let path = crate::store::read_bundle::readpath();
+        let Some(bundle) = crate::store::read_bundle::ReadBundle::open(&self.db_path)? else {
+            if path == crate::store::read_bundle::ReadPath::Bundle {
+                return Err(crate::StoreError::Other(
+                    "ASGREP_READPATH=bundle but read.v1 is missing; run `asgrep index`".into(),
+                )
+                .into());
+            }
+            return Ok(None);
+        };
+        if let Some(generation) = generation {
+            if bundle.generation() != generation {
+                return Err(crate::StoreError::Other(format!(
+                    "read.v1 generation {} != store {generation}; reindex required",
+                    bundle.generation()
+                ))
+                .into());
+            }
+        }
+        let bundle = std::sync::Arc::new(bundle);
+        *self.bundle.borrow_mut() = Some(std::sync::Arc::clone(&bundle));
+        self.bundle_file_stamp.set(stamp);
+        Ok(Some(bundle))
     }
     pub(crate) fn line_corpus(
         &self,
     ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
-        if self.line_corpus_disabled.get() {
+        if self.line_corpus_disabled.get() || crate::env_flag::memo_off("corpus") {
             return Ok(None);
+        }
+        if crate::store::read_bundle::bundle_enabled() {
+            if let Some(bundle) = self.read_bundle(None)? {
+                let generation = bundle.generation();
+                if let Some(cached) = self.line_corpus.borrow().as_ref() {
+                    if cached.index_data_version == generation {
+                        return Ok(Some(std::sync::Arc::clone(cached)));
+                    }
+                }
+                let arc =
+                    crate::store::line_corpus::LineCorpus::from_bundle(bundle, generation, 0)?;
+                *self.line_corpus.borrow_mut() = Some(std::sync::Arc::clone(&arc));
+                return Ok(Some(arc));
+            }
+            // Auto with no bundle: use the SQL materialization below.
         }
         let index_v = self.index_data_version()?;
         let Ok(pragma_v) = self
@@ -683,7 +733,19 @@ impl IndexStore {
     pub(crate) fn line_corpus_if_cached(
         &self,
     ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
-        if self.line_corpus_disabled.get() {
+        if self.line_corpus_disabled.get() || crate::env_flag::memo_off("corpus") {
+            return Ok(None);
+        }
+        if crate::store::read_bundle::bundle_enabled() {
+            let cached = match self.line_corpus.borrow().as_ref() {
+                Some(cached) => std::sync::Arc::clone(cached),
+                None => return Ok(None),
+            };
+            if let Some(bundle) = self.read_bundle(None)? {
+                if cached.index_data_version == bundle.generation() {
+                    return Ok(Some(cached));
+                }
+            }
             return Ok(None);
         }
         let cached = match self.line_corpus.borrow().as_ref() {
@@ -805,17 +867,17 @@ impl IndexStore {
         index: &crate::scip::ScipIndex,
     ) -> Result<crate::scip::ScipApplyStats> {
         self.conn.execute("DELETE FROM scip_facts", [])?;
-        let mut files = HashMap::new();
+        let mut files = Vec::new();
         {
             let mut stmt = self.conn.prepare("SELECT id, path FROM files")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, String>(1)?, row.get::<_, i64>(0)?))
             })?;
             for row in rows {
-                let (id, path) = row?;
-                files.insert(path, id);
+                files.push(row?);
             }
         }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
         let mut symbols = Vec::new();
         {
             let mut stmt = self
@@ -856,9 +918,17 @@ impl IndexStore {
         for doc in &index.documents {
             // Indexed paths already have host-correct identity. Prefer an
             // exact document key before accepting alternate wire separators.
-            let Some(&file_id) = files
-                .get(doc.relative_path.trim_start_matches("./"))
-                .or_else(|| files.get(&crate::scip::normalize_scip_path(&doc.relative_path)))
+            let trimmed = doc.relative_path.trim_start_matches("./");
+            let normalized = crate::scip::normalize_scip_path(&doc.relative_path);
+            let Some(file_id) = files
+                .binary_search_by(|(path, _)| path.as_str().cmp(trimmed))
+                .ok()
+                .or_else(|| {
+                    files
+                        .binary_search_by(|(path, _)| path.as_str().cmp(&normalized))
+                        .ok()
+                })
+                .map(|i| files[i].1)
             else {
                 stats.skipped += doc.occurrences.len();
                 continue;
@@ -902,14 +972,14 @@ impl IndexStore {
         Ok(stats)
     }
 
-    pub fn scip_fact_set(&self, is_def: bool) -> Result<HashSet<(String, u32, String)>> {
+    pub fn scip_fact_set(&self, is_def: bool) -> Result<Vec<(String, u32, String)>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT f.path, s.line_no, s.name FROM scip_facts s JOIN files f ON f.id = s.file_id WHERE s.is_def = ?1",
+            "SELECT f.path, s.line_no, s.name FROM scip_facts s JOIN files f ON f.id = s.file_id WHERE s.is_def = ?1 ORDER BY f.path, s.line_no, s.name",
         )?;
         let rows = stmt.query_map(params![i64::from(u8::from(is_def))], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
-        rows.collect::<std::result::Result<HashSet<_>, _>>()
+        rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
 
@@ -930,20 +1000,25 @@ impl IndexStore {
     pub(crate) fn symbol_name_candidate_counts(
         &self,
         name: &str,
-    ) -> Result<(HashMap<String, usize>, usize)> {
+    ) -> Result<(Vec<(String, usize)>, usize)> {
+        if let Ok(Some(bundle)) = self.read_bundle(None) {
+            return Ok(crate::store::bundle_graph::symbol_name_counts(
+                &bundle, name,
+            ));
+        }
         let mut statement = self.conn.prepare_cached(
             "SELECT f.path, COUNT(*) FROM symbols s JOIN files f ON f.id = s.file_id
-             WHERE lower(s.name)=lower(?1) GROUP BY f.path",
+             WHERE lower(s.name)=lower(?1) GROUP BY f.path ORDER BY f.path",
         )?;
         let rows = statement.query_map(params![name], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
         })?;
-        let mut by_file = HashMap::new();
+        let mut by_file = Vec::new();
         let mut total = 0usize;
         for row in rows {
             let (file, count) = row?;
             total = total.saturating_add(count);
-            by_file.insert(file, count);
+            by_file.push((file, count));
         }
         Ok((by_file, total))
     }
@@ -1076,6 +1151,11 @@ impl IndexStore {
         &self,
         terms: &[String],
     ) -> Result<Vec<crate::lexicon::Association>> {
+        // Packed lexicon is not lockstep with the SQL control: SUBSTR /
+        // MAX_PER_TERM / ORDER BY term,related vs a full mmap scan. Hybrid
+        // critic concept-affinity therefore loads SQL. Dedicated graph tools
+        // still use the mmap table; this query-term load is the critic/expansion
+        // path.
         let mut unique: Vec<&str> = terms.iter().map(String::as_str).collect();
         unique.sort();
         unique.dedup();
@@ -1120,6 +1200,9 @@ impl IndexStore {
 
     /// Read a bounded lexicon (ufk7). Ordered so loads are deterministic.
     pub fn all_lexicon_rows(&self) -> Result<Vec<crate::lexicon::Association>> {
+        if let Ok(Some(bundle)) = self.read_bundle(None) {
+            return Ok(crate::store::bundle_graph::lexicon_for_terms(&bundle, &[]));
+        }
         let mut stmt = self.conn.prepare_cached(
             "SELECT SUBSTR(term, 1, ?1), SUBSTR(related, 1, ?1), ppmi, support,
                     LENGTH(term), LENGTH(related)
@@ -1184,24 +1267,12 @@ impl IndexStore {
     }
 
     pub fn index_data_version(&self) -> Result<i64> {
-        // PRAGMA data_version bumps when a DIFFERENT connection commits;
-        // same-connection writes already invalidate via bump_index_data_version.
-        let foreign_stamp: i64 = self
-            .conn
-            .query_row("PRAGMA data_version", [], |row| row.get(0))?;
-        let (cached_stamp, cached) = self.index_data_version_memo.get();
-        if cached_stamp == foreign_stamp {
-            if let Some(version) = cached {
-                return Ok(version);
-            }
-        }
-        let version = self
+        // The meta row is authoritative for both same-connection and foreign
+        // commits. No memo: the bundle header or one meta read is enough.
+        Ok(self
             .get_meta("index_data_version")?
             .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        self.index_data_version_memo
-            .set((foreign_stamp, Some(version)));
-        Ok(version)
+            .unwrap_or(0))
     }
 
     /// Indexed-content and lexicon generations used by long-lived search caches.
@@ -1251,9 +1322,9 @@ impl IndexStore {
             "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
             [],
         )?;
-        self.index_data_version_memo.set((0, None));
-        self.line_count_at_least.set(None);
         self.line_corpus.borrow_mut().take();
+        self.bundle.borrow_mut().take();
+        self.bundle_file_stamp.set(None);
         self.line_corpus_disabled.set(false);
         Ok(())
     }

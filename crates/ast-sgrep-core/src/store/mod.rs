@@ -4,11 +4,13 @@ pub(crate) use embed_support::embed_cache_enabled;
 pub(crate) use embed_support::embed_chunks_offline;
 pub(crate) use embed_support::EmbeddedChunks;
 pub mod line_corpus;
+pub mod read_bundle;
+pub(crate) mod bundle_graph;
+pub(crate) mod bundle_semantic;
 mod module_resolve;
 pub(crate) mod sql;
 mod sqlite;
 pub mod trigram_df;
-pub(crate) mod trigram_static_data;
 mod writer_generation;
 pub use sql::integrity_check;
 pub use sql::{

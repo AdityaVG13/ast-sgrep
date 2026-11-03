@@ -218,6 +218,7 @@ fn semantic_ann_build_does_not_upgrade_a_pinned_read_snapshot() {
         &rows[0].5,
         &rows,
         Some(&flat),
+        None,
         1,
         Some(1),
     )
@@ -385,5 +386,78 @@ fn foreign_raw_sql_mutation_invalidates_semantic_cache() {
     assert!(
         has_symbol(&after, "keeper_handler"),
         "the surviving chunk must still be served after the reload"
+    );
+}
+
+/// P4: packed semantic ids match SQL `ORDER BY id` after `write_for_store`.
+#[test]
+fn semantic_bundle_ids_match_sql_order() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    store
+        .upsert_file(base(
+            "a.py",
+            &[(1u32, "def alpha(): pass".into())],
+            "hash-a",
+            &[chunk("alpha", "def alpha(): pass")],
+        ))
+        .unwrap();
+    store
+        .upsert_file(base(
+            "b.py",
+            &[(1u32, "def beta(): pass".into())],
+            "hash-b",
+            &[chunk("beta", "def beta(): pass")],
+        ))
+        .unwrap();
+    let generation = store.index_data_version().unwrap();
+    ast_sgrep_core::store::read_bundle::write_for_store(&store, generation).unwrap();
+    let sql_ids = store.semantic_chunk_ids(None).unwrap();
+    assert_eq!(sql_ids.len(), 2, "fixture: two semantic chunks");
+    let bundle = ast_sgrep_core::store::read_bundle::ReadBundle::open(store.db_path())
+        .unwrap()
+        .expect("read.v1 after write_for_store");
+    let view = bundle
+        .semantic_view()
+        .expect("semantic view present after packing chunks");
+    assert_eq!(view.ids.as_slice(), sql_ids.as_slice());
+    assert_eq!(view.count, sql_ids.len());
+    assert_eq!(
+        view.f16_bytes(&bundle).map(|bytes| bytes.len()),
+        Some(view.dim * sql_ids.len() * 2),
+        "f16 payload stays in the mmap; decode must not copy it"
+    );
+    assert!(view.dim > 0);
+    let sql_chunks = store.all_semantic_chunks(None).unwrap();
+    assert_eq!(sql_chunks.len(), view.count);
+    for (i, sql) in sql_chunks.iter().enumerate() {
+        let packed = view.row(&bundle, i).expect("decoded semantic row");
+        assert_eq!(
+            packed.3, sql.3,
+            "packed symbol_name must match SQL"
+        );
+        assert_eq!(
+            packed.4, sql.4,
+            "packed excerpt must match sc.text so hybrid critic/finish see the same body"
+        );
+        assert!(
+            packed.5.is_empty(),
+            "row vector stays in mmap f16, not chunk.5"
+        );
+    }
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        index_path: Some(store.db_path().to_path_buf()),
+        use_embed: true,
+        use_semantic_only: true,
+        ann_threshold: Some(usize::MAX),
+        ..SearchOptions::default()
+    };
+    let searcher = Searcher::with_store(store, options);
+    let hits = searcher.search_semantic("alpha").unwrap();
+    assert!(
+        hits.hits.iter().any(|hit| hit.symbol.as_deref() == Some("alpha")),
+        "bundle embed must rank packed vectors, not fail closed on empty chunk.5; hits={:?}",
+        hits.hits.iter().map(|h| h.symbol.as_deref()).collect::<Vec<_>>()
     );
 }

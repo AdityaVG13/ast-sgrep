@@ -447,10 +447,14 @@ impl Indexer {
                         {
                             return PrepareOutcome::Failed(INDEX_CANCELLED.into());
                         }
+                        let identity = identities
+                            .binary_search_by(|(path, _)| path.as_str().cmp(&candidate.rel))
+                            .ok()
+                            .map(|i| &identities[i].1);
                         prepare_file(
                             &candidate.abs,
                             &candidate.rel,
-                            identities.get(&candidate.rel),
+                            identity,
                             candidate.mtime,
                             options,
                             root_dir,
@@ -809,7 +813,28 @@ impl Indexer {
             self.rebuild_semantic_ivf_sidecar()?;
         }
         self.rebuild_names_sidecar_if_stale()?;
+        self.rebuild_read_bundle_if_stale()?;
         Ok(())
+    }
+    /// Rebuild the `read.v1` columnar bundle when it does not reflect the
+    /// current index generation. Unchanged refresh walks skip it; any
+    /// mutation bumps `index_data_version` and the next finalize rewrites.
+    fn rebuild_read_bundle_if_stale(&self) -> Result<()> {
+        if crate::semantic_ivf::is_in_memory_db(self.store.db_path()) {
+            return Ok(());
+        }
+        // `auto` writes the bundle; explicit `sql` is the no-bundle control arm.
+        let armed = crate::store::read_bundle::readpath()
+            != crate::store::read_bundle::ReadPath::Sql
+            || crate::env_flag::env_flag("ASGREP_WRITE_READ_BUNDLE");
+        if !armed {
+            return Ok(());
+        }
+        let generation = self.store.index_data_version()?;
+        if crate::store::read_bundle::is_fresh(self.store.db_path(), generation) {
+            return Ok(());
+        }
+        crate::store::read_bundle::write_for_store(self.store(), generation)
     }
     /// Rewrite the names sidecar (folded idf vocabularies) when it does not
     /// reflect the current index generation. Same fresh-skip contract as the
@@ -911,8 +936,15 @@ impl Indexer {
                 "incremental update exceeds max {MAX_INCREMENTAL_PATHS} paths"
             )));
         }
-        // Single-file updates reuse the existing gitignore matcher.
-        if paths.len() != 1 {
+        // Ignore files change matcher contents; anything else can reuse the
+        // construction-time rule vector.
+        if paths.len() != 1
+            || paths.iter().any(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == ".gitignore" || name == ".asgrepignore")
+            })
+        {
             self.ignore.clear();
         }
         let mut stats = WatchUpdateStats::default();

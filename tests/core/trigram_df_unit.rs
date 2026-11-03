@@ -40,27 +40,11 @@ fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
 }
 
 #[test]
-fn static_bake_ranks_common_above_rare() {
-    // Triple-space tops every code corpus; 'ion' is common English;
-    // 'zzq' is absent-or-trace in a 10GB bake. Absent reads as 0.
-    let spaces = bake_count("   ");
-    let ion = bake_count("ion");
-    let zzq = bake_count("zzq");
-    assert!(spaces > ion, "triple-space must top the bake");
-    assert!(ion > zzq, "common English must beat rare 'zzq'");
-}
-
-#[test]
-fn unarmed_scan_uses_static_prior() {
+fn sql_control_arm_without_bundle_is_full_phrase() {
+    // P3 deleted the static prior. In-memory stores never publish read.v1,
+    // so the SQL control arm must not invent a shortcut.
     let store = IndexStore::open_in_memory(std::path::Path::new("mem")).expect("in-memory store");
-    let cache = TrigramDfCache::new();
-    assert!(!cache.is_armed(), "fresh cache starts unarmed");
-    match cache.scan_shortcut(&store, "zzquux") {
-        TrigramShortcut::Match(terms) => {
-            assert_eq!(terms[0], "zzq", "rarest static trigram leads");
-        }
-        TrigramShortcut::Full => {
-            panic!("cold one-shot must use the static prior, not Full")
-        }
-    }
+    assert!(!df_ready(&store));
+    assert_eq!(scan_shortcut(&store, "zzquux"), TrigramShortcut::Full);
+    assert_eq!(min_df(&store, "zzquux"), None);
 }
