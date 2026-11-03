@@ -339,19 +339,26 @@ def _takeover(host, pool, root_fn, args, task_id):
     return json.dumps(result_dict, ensure_ascii=False)
 
 
-def should_prewarm(root: Path) -> bool:
+def should_prewarm(root: Path, home: Optional[Path] = None) -> bool:
     """Prewarm is speculation: only repo-like roots earn it.
 
     A session opened in ``$HOME`` (the desktop default) must not kick off a
     background ambient index of the whole home tree — the worker caps
     per-file bytes, not tree size. A root is repo-like when it carries a
     ``.git`` (a checkout someone opened deliberately) or an existing
-    ``.asgrep`` index (asgrep was used here before). The power lane is
-    unaffected: explicit ``asgrep_*`` calls work on any root on demand;
-    only the speculative warm-up is scoped. Without a warm worker the
-    habit lane also stays inert on such roots — stock rg answers there.
+    ``.asgrep`` index (asgrep was used here before). The home tree and its
+    ancestors are excluded outright: asgrep's own index lives at
+    ``$HOME/.asgrep``, so the index marker alone would otherwise make $HOME
+    repo-like and reinstate exactly the ambient home scan this rule forbids.
+    The power lane is unaffected: explicit ``asgrep_*`` calls work on any
+    root on demand; only the speculative warm-up is scoped. Without a warm
+    worker the habit lane also stays inert on such roots — stock rg answers
+    there.
     """
-    root = Path(root)
+    root = Path(root).resolve()
+    home = (Path(home) if home is not None else Path.home()).resolve()
+    if root == home or root in home.parents:
+        return False
     return (root / ".git").exists() or (root / ".asgrep").is_dir()
 
 

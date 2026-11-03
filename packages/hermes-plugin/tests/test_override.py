@@ -523,9 +523,9 @@ class PrewarmScopeTest(OverrideTestBase):
     on any root on demand; only the speculation is scoped.
     """
 
-    def _should_prewarm(self, root):
+    def _should_prewarm(self, root, home=None):
         ov = self.load_override()
-        return ov.should_prewarm(Path(root))
+        return ov.should_prewarm(Path(root), home=Path(home) if home is not None else None)
 
     def test_git_repo_root_prewarms(self):
         (self.root / ".git").mkdir()
@@ -538,6 +538,25 @@ class PrewarmScopeTest(OverrideTestBase):
     def test_plain_directory_does_not_prewarm(self):
         # No .git, no .asgrep: a scratch/home-style tree — stock rg territory.
         self.assertFalse(self._should_prewarm(self.root))
+
+    def test_home_root_never_prewarms_even_when_indexed(self):
+        # asgrep's own index lives at ~/.asgrep, so the marker alone would
+        # make $HOME look repo-like and reinstate the ambient home scan.
+        fake_home = self.root / "home"
+        (fake_home / ".asgrep").mkdir(parents=True)
+        self.assertFalse(self._should_prewarm(fake_home, home=fake_home))
+
+    def test_repo_inside_home_still_prewarms(self):
+        fake_home = self.root / "home"
+        repo = fake_home / "proj"
+        (repo / ".git").mkdir(parents=True)
+        self.assertTrue(self._should_prewarm(repo, home=fake_home))
+
+    def test_ancestor_of_home_does_not_prewarm(self):
+        fake_home = self.root / "home"
+        fake_home.mkdir()
+        (self.root / ".git").mkdir()
+        self.assertFalse(self._should_prewarm(self.root, home=fake_home))
 
 
 class EagerGuardTest(OverrideTestBase):
