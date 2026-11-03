@@ -42,6 +42,15 @@ fn maybe_index(root: &Path, cli: &Cli, skip: bool) -> anyhow::Result<(Option<Ind
     ))
 }
 
+/// P0 census only: emit per-iteration samples when `ASGREP_BENCH_SAMPLES=1`.
+fn samples_json(samples: &[f64]) -> serde_json::Value {
+    if std::env::var("ASGREP_BENCH_SAMPLES").ok().as_deref() == Some("1") {
+        serde_json::json!(samples)
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Searcher> {
     let (resolved, index_path) = resolve_root_index(cli, root);
     let db = try_index_db_path(&resolved, index_path.as_deref())?;
@@ -56,7 +65,10 @@ fn bench_searcher(root: &Path, cli: &Cli, skip_index: bool) -> anyhow::Result<Se
     // 0.35ms vs a 3.45ms true first search). Bench measures search cost,
     // not cache hits. Methodology break vs pre-cache-off priors: re-delete
     // `.bench-history/*.latest.json` to re-establish baselines deliberately.
-    Ok(open_searcher(root, cli)?.with_response_cache(false))
+    // P0 census arm may re-enable the cache to measure its value on repeated
+    // identical queries; the default stays off so bench measures search cost.
+    let response_cache = std::env::var("ASGREP_BENCH_RESPONSE_CACHE").ok().as_deref() == Some("1");
+    Ok(open_searcher(root, cli)?.with_response_cache(response_cache))
 }
 
 /// Pin sticky-session state (read snapshot, line corpus, df vocab, symbols)
@@ -437,6 +449,7 @@ fn run_bench_suite(
             "query": case.query,
             "avg_search_ms": avg,
             "cv_pct": cv,
+            "samples_ms": samples_json(&times),
             "hits": hits,
             "min_hits": case.min_hits,
             "identity_ok": identity_ok,
@@ -498,6 +511,7 @@ fn run_bench_suite(
             results[i]["warmed"] = serde_json::json!({
                 "avg_search_ms": avg,
                 "cv_pct": cv,
+                "samples_ms": samples_json(&times),
                 "hits": hits,
                 "identity_ok": identity_ok,
                 "ok": case_ok,
