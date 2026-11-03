@@ -392,26 +392,25 @@ fn ambient_refreshes(session: &mut CodeModeSession) -> u64 {
         .expect("ambient_refreshes counter in index_status")
 }
 
-/// INTENT: stat-fingerprint memo for ambient freshness — an unchanged tree
-/// past the cooldown does not re-run the ambient refresh (counter frozen);
-/// a real edit busts the memo, the refresh runs, and the new token is
-/// served on the very next call.
-/// KILLS: drop-the-memo (every post-cooldown call re-pays the full delta
-/// scan — the serve-stall second act), memo-never-busts (stale forever).
+/// INTENT: stat-only ambient freshness — an unchanged tree never opens the
+/// writer (counter frozen at 0); a real edit past the cooldown opens it and
+/// the new token is served on that call.
+/// KILLS: always-open-writer (every post-cooldown call re-pays index_all),
+/// never-open-writer (stale forever).
 #[test]
-fn m_ambient_memo_skips_unchanged_tree() {
+fn m_ambient_stat_probe_skips_unchanged_tree() {
     let cooldown = std::time::Duration::from_millis(1100);
     let (root, _index, mut session) = setup();
 
-    // First post-index call: the ambient probe runs (tree already fresh,
-    // changed == 0) and captures the fingerprint.
     session
         .call("find", json!({ "query": ALPHA, "limit": 8 }))
         .expect("first find");
     let baseline = ambient_refreshes(&mut session);
-    assert_eq!(baseline, 1, "first post-index call runs exactly one probe");
+    assert_eq!(
+        baseline, 0,
+        "unchanged tree must not open the writer on the first probe"
+    );
 
-    // Past the cooldown on an UNCHANGED tree: the memo must skip the probe.
     std::thread::sleep(cooldown);
     session
         .call("find", json!({ "query": ALPHA, "limit": 8 }))
@@ -419,11 +418,9 @@ fn m_ambient_memo_skips_unchanged_tree() {
     assert_eq!(
         ambient_refreshes(&mut session),
         baseline,
-        "unchanged tree past cooldown must not re-run the ambient refresh \
-         (stat-fingerprint memo)"
+        "unchanged tree past cooldown must not open the writer"
     );
 
-    // A real edit busts the memo: the probe runs and BETA is served live.
     write_py(root.path(), "alpha.py", BETA);
     std::thread::sleep(cooldown);
     let fresh = session
@@ -433,6 +430,6 @@ fn m_ambient_memo_skips_unchanged_tree() {
     assert_eq!(
         ambient_refreshes(&mut session),
         baseline + 1,
-        "a changed tree must bust the memo and run the refresh"
+        "a changed tree must open the writer"
     );
 }
