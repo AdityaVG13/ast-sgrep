@@ -742,7 +742,7 @@ export function registerAstSgrepTools(
         const fresh = await freshRoot(ctx.cwd, signal);
         // The checkout owns the index; the caller's scope rides under it.
         const anchored = withAnchorScope(params, fresh.scope);
-        const [tool, args] = searchToolCall(anchored);
+        let [tool, args] = searchToolCall(anchored);
         const response = await machineCall(fresh.root, tool, args, searchArgs(anchored), rootedAt(fresh.root), options);
         const notes: string[] = [];
         if (fresh.freshness === "stale") {
@@ -750,15 +750,20 @@ export function registerAstSgrepTools(
         }
         let indexState: "empty" | "ready" | undefined;
         if (zeroHitResponse(response)) {
-          const probe = await probeIndexState(fresh.root, rootedAt(fresh.root), options);
-          if (probe) {
-            indexState = probe.files === 0 ? "empty" : "ready";
-            if (indexState === "empty") {
-              notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
-            } else if ((params.mode ?? "natural") === "semantic" && probe.semanticChunks === 0) {
-              // Freshness refreshes index lexical/AST only, so a semantic query
-              // on a cold repo has nothing to rank yet.
-              notes.push("no embeddings yet: this index was built lexical-only -- run /asgrep-index (or asgrep.indexRepo()) to build vectors");
+          if (response.why === "empty_index") {
+            indexState = "empty";
+            notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
+          } else {
+            const probe = await probeIndexState(fresh.root, rootedAt(fresh.root), options);
+            if (probe) {
+              indexState = probe.files === 0 ? "empty" : "ready";
+              if (indexState === "empty") {
+                notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
+              } else if ((params.mode ?? "natural") === "semantic" && probe.semanticChunks === 0) {
+                // Freshness refreshes index lexical/AST only, so a semantic query
+                // on a cold repo has nothing to rank yet.
+                notes.push("no embeddings yet: this index was built lexical-only -- run /asgrep-index (or asgrep.indexRepo()) to build vectors");
+              }
             }
           }
         }
@@ -829,13 +834,20 @@ export function registerAstSgrepTools(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "read", "started");
       try {
-        // Reading source must remain available when the binary or index is broken.
+        // Prefer the warm session (index-backed windows). Disk fallback stays
+        // for hosts with no backend, matching "works without a binary".
         const options = signal ? { signal } : {};
         const { root, scope } = await anchorRoot(ctx.cwd);
-        const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o) }, rootedAt(root), { ...options, localReads: true, ...(scope ? { scope } : {}) });
+        ensurePool();
+        const sticky = await pool.acquire(root).catch(() => null);
+        const bundle = createAsgrepConnector(
+          { run: (a, c, o) => runtime.run(a, c, o), ...(sticky ? { sticky } : {}) },
+          rootedAt(root),
+          { ...options, ...(sticky ? {} : { localReads: true }), ...(scope ? { scope } : {}) },
+        );
         const response = await bundle.asgrep.read(params);
         report(onUpdate, "read", "completed");
-        return success("read", response as MachineEnvelope, { backend: "filesystem" });
+        return success("read", response as MachineEnvelope, { backend: sticky ? pool.backend() : "filesystem" });
       } catch (cause) {
         return failure("read", cause, signal);
       }

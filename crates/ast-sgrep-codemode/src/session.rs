@@ -461,6 +461,8 @@ impl CodeModeSession {
             response.truncated = true;
             response.hits.truncate(limit);
         }
+        let indexed_empty = response.hits.is_empty()
+            && searcher.store().has_indexed_files().ok() == Some(false);
         ensure_render_input_bounded(&response, format, excerpt_lines)?;
         let mut value = format_response_with(&response, format, excerpt_lines);
         drop(guard);
@@ -472,6 +474,7 @@ impl CodeModeSession {
         if response.hits.is_empty() {
             let reason = MissContext {
                 pattern_miss: is_bodyless_fn_args_pattern(&query),
+                indexed_files: if indexed_empty { Some(0) } else { None },
                 ..Default::default()
             }
             .reason();
@@ -713,12 +716,14 @@ impl CodeModeSession {
     }
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let indexer = Indexer::new(IndexOptions {
-            root: self.root_arg(args)?,
-            index_path: self.config.index_path.clone(),
-            ..IndexOptions::default()
-        })?;
-        let mut value = serde_json::to_value(indexer.store().status()?)?;
+        let root = self.root_arg(args)?;
+        let mut guard = self.searcher_for(root, 1, None, None)?;
+        let searcher = guard
+            .as_mut()
+            .expect("searcher_for populates cache")
+            .for_read();
+        let mut value = serde_json::to_value(searcher.store().status()?)?;
+        drop(guard);
         value["ambient_refreshes"] = serde_json::json!(self.ambient_refreshes);
         Ok(value)
     }

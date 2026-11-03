@@ -182,6 +182,20 @@ struct WriterState {
     writer_generation: u64,
 }
 
+/// Warm Searcher for this MCP process. Invalidated on writer stamp change.
+/// `file_filter` is not part of the key: filtered calls open a one-shot Searcher.
+struct CachedSearcher {
+    root: PathBuf,
+    lang_filter: Option<String>,
+    open_limit: usize,
+    writer_generation: u64,
+    searcher: Searcher,
+}
+
+/// Compact path-id intern for this writer generation. Built once from indexed
+/// paths (sorted, first-id wins) so `code_read` does not reopen the store per id.
+type CompactPathIntern = (u64, PathBuf, HashMap<String, String>);
+
 /// Relative compact IDs are meaningful only within their canonical call root.
 type RootScopedId = (PathBuf, String);
 
@@ -200,6 +214,8 @@ pub struct McpServer {
     /// Bounded; cleared when the index changes, so an elision can never point
     /// at content from a previous index generation.
     emitted_snippets: Mutex<HashMap<RootScopedId, u64>>,
+    searcher_cache: Mutex<Option<CachedSearcher>>,
+    compact_paths: Mutex<Option<CompactPathIntern>>,
 }
 
 impl McpServer {
@@ -225,6 +241,8 @@ impl McpServer {
             writer_state: Mutex::new(WriterState::default()),
             index_lock: Mutex::new(()),
             emitted_snippets: Mutex::new(HashMap::new()),
+            searcher_cache: Mutex::new(None),
+            compact_paths: Mutex::new(None),
         })
     }
 
@@ -597,7 +615,40 @@ impl McpServer {
         };
         if stale {
             Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
+            self.drop_cached_searcher();
+            *Self::lock_or_recover(&self.compact_paths, |intern| *intern = None) = None;
         }
+    }
+
+    fn drop_cached_searcher(&self) {
+        if let Some(old) = Self::lock_or_recover(&self.searcher_cache, |_| {}).take() {
+            old.searcher.release_read_snapshot();
+        }
+    }
+
+    fn dispatch_search(
+        searcher: &Searcher,
+        mode: AgentSearchMode,
+        query: &str,
+    ) -> anyhow::Result<ast_sgrep_core::SearchResponse> {
+        Ok(match mode {
+            AgentSearchMode::Hybrid => searcher.search(query)?,
+            AgentSearchMode::Keyword => searcher.search_lexical(query)?,
+            AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}"))?,
+            AgentSearchMode::Semantic => searcher.search_semantic(query)?,
+        })
+    }
+
+    fn clamp_search_response(
+        mut response: ast_sgrep_core::SearchResponse,
+        limit: usize,
+    ) -> ast_sgrep_core::SearchResponse {
+        response.limit = limit;
+        if response.hits.len() > limit {
+            response.truncated = true;
+            response.hits.truncate(limit);
+        }
+        response
     }
 
     fn searcher_for(
@@ -616,6 +667,88 @@ impl McpServer {
         ))?)
     }
 
+    fn cached_searcher(
+        &self,
+        root: PathBuf,
+        needed_limit: usize,
+        lang_filter: Option<&str>,
+    ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<CachedSearcher>>> {
+        self.sync_writer_generation();
+        let needed = needed_limit.clamp(1, MAX_AGENT_LIMIT);
+        let writer_generation =
+            ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
+        let mut guard = Self::lock_or_recover(&self.searcher_cache, |slot| *slot = None);
+        let reuse = !ast_sgrep_core::env_flag::memo_off("warm")
+            && matches!(
+                guard.as_ref(),
+                Some(CachedSearcher { root: cached_root, lang_filter: cached_lang, open_limit, writer_generation: cached_gen, .. })
+                    if cached_root == &root
+                        && cached_lang.as_deref() == lang_filter
+                        && *open_limit >= needed
+                        && *cached_gen == writer_generation
+            );
+        if !reuse {
+            if let Some(old) = guard.take() {
+                old.searcher.release_read_snapshot();
+            }
+            let open_limit = needed.max(self.limit).clamp(1, MAX_AGENT_LIMIT);
+            let searcher = Searcher::new(self.search_options(
+                root.clone(),
+                open_limit,
+                None,
+                lang_filter.map(str::to_owned),
+            ))?;
+            let _ = searcher.hold_read_snapshot();
+            let _ = searcher.warm_search_path();
+            *guard = Some(CachedSearcher {
+                root,
+                lang_filter: lang_filter.map(str::to_owned),
+                open_limit,
+                writer_generation,
+                searcher,
+            });
+        }
+        Ok(guard)
+    }
+
+    fn run_search(
+        &self,
+        root: PathBuf,
+        limit: usize,
+        file_filter: Option<String>,
+        lang: Option<String>,
+        mode: AgentSearchMode,
+        query: &str,
+    ) -> anyhow::Result<(ast_sgrep_core::SearchResponse, Option<usize>)> {
+        if file_filter.is_some() || ast_sgrep_core::env_flag::memo_off("warm") {
+            let searcher = self.searcher_for(root, limit, file_filter, lang)?;
+            let response = Self::dispatch_search(&searcher, mode, query)?;
+            let indexed = if response.hits.is_empty() {
+                searcher
+                    .store()
+                    .has_indexed_files()
+                    .ok()
+                    .map(usize::from)
+            } else {
+                None
+            };
+            return Ok((Self::clamp_search_response(response, limit), indexed));
+        }
+        let guard = self.cached_searcher(root, limit, lang.as_deref())?;
+        let searcher = &guard.as_ref().expect("cached_searcher populates").searcher;
+        let response = Self::dispatch_search(searcher, mode, query)?;
+        let indexed = if response.hits.is_empty() {
+            searcher
+                .store()
+                .has_indexed_files()
+                .ok()
+                .map(usize::from)
+        } else {
+            None
+        };
+        Ok((Self::clamp_search_response(response, limit), indexed))
+    }
+
     fn tool_agent_search(
         &self,
         args: AgentSearchArgs,
@@ -631,28 +764,25 @@ impl McpServer {
             lang,
             preview,
         } = args;
-        let searcher =
-            match self.searcher_for(root.clone(), limit, file_filter.clone(), lang.clone()) {
-                Ok(searcher) => searcher,
+        let (response, indexed_files) =
+            match self.run_search(root.clone(), limit, file_filter, lang, mode, &query) {
+                Ok(pair) => pair,
                 Err(error) if error.to_string().contains("index is empty") => {
-                    let miss =
-                        to_compact_miss_json(&query, &self.diagnose_miss(&root, &query, mode));
+                    let miss = to_compact_miss_json(
+                        &query,
+                        &self.diagnose_miss(&root, &query, mode, Some(0)),
+                    );
                     return Ok(serde_json::to_string(&miss)?);
                 }
                 Err(error) => return Err(error),
             };
-        let response = match mode {
-            AgentSearchMode::Hybrid => searcher.search(&query),
-            AgentSearchMode::Keyword => searcher.search_lexical(&query),
-            AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
-            AgentSearchMode::Semantic => searcher.search_semantic(&query),
-        };
-        drop(searcher);
-        let response = response?;
         // 6a3i: a miss is the cheapest response we can send, and the one where
         // a vague answer costs the most in speculative agent retries.
         if response.hits.is_empty() {
-            let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, &query, mode));
+            let miss = to_compact_miss_json(
+                &query,
+                &self.diagnose_miss(&root, &query, mode, indexed_files),
+            );
             return Ok(serde_json::to_string(&miss)?);
         }
         // kxmc: compact key-free envelope, minified.
@@ -707,15 +837,21 @@ impl McpServer {
         }
     }
 
-    /// Gather what is known about a zero-hit search (6a3i).
-    ///
-    /// The index count is only consulted here, on the miss path, so a normal
-    /// search never pays for it.
-    fn diagnose_miss(&self, root: &Path, query: &str, mode: AgentSearchMode) -> MissContext {
-        let indexed_files = Indexer::new(self.base_index_options(root.to_path_buf()))
-            .ok()
-            .and_then(|indexer| indexer.store().status().ok())
-            .map(|status| status.file_count);
+    /// Classify a zero-hit search. `indexed_files` is the probe already taken
+    /// on the search path (`None` = not known; `Some(0)` = empty index).
+    fn diagnose_miss(
+        &self,
+        root: &Path,
+        query: &str,
+        mode: AgentSearchMode,
+        indexed_files: Option<usize>,
+    ) -> MissContext {
+        let indexed_files = indexed_files.or_else(|| {
+            IndexStore::open_readonly(root, self.index_path.as_deref())
+                .ok()
+                .and_then(|store| store.has_indexed_files().ok())
+                .map(usize::from)
+        });
         let channel = match mode {
             AgentSearchMode::Hybrid => "hybrid",
             AgentSearchMode::Keyword => "lexical",
@@ -765,18 +901,44 @@ impl McpServer {
             return id.to_owned();
         }
         let needle = path_id.split('~').next().unwrap_or(path_id);
-        let Ok(store) = IndexStore::open_readonly(root, self.index_path.as_deref()) else {
-            return id.to_owned();
-        };
-        let Ok(paths) = store.all_file_paths() else {
-            return id.to_owned();
-        };
-        for path in paths {
-            if compact_path_id(&path) == needle {
-                return format!("{path}#L{start}-L{end}");
+        match self.lookup_compact_path(root, needle) {
+            Some(path) => format!("{path}#L{start}-L{end}"),
+            None => id.to_owned(),
+        }
+    }
+
+    fn lookup_compact_path(&self, root: &Path, needle: &str) -> Option<String> {
+        let gen = ast_sgrep_core::read_writer_generation(root, self.index_path.as_deref());
+        {
+            let guard = Self::lock_or_recover(&self.compact_paths, |intern| *intern = None);
+            if let Some((cached_gen, cached_root, map)) = guard.as_ref() {
+                if *cached_gen == gen && cached_root == root {
+                    return map.get(needle).cloned();
+                }
             }
         }
-        id.to_owned()
+        let paths = self.indexed_paths_for(root)?;
+        let mut map = HashMap::with_capacity(paths.len());
+        for path in paths {
+            map.entry(compact_path_id(&path)).or_insert(path);
+        }
+        let found = map.get(needle).cloned();
+        *Self::lock_or_recover(&self.compact_paths, |intern| *intern = None) =
+            Some((gen, root.to_path_buf(), map));
+        found
+    }
+
+    fn indexed_paths_for(&self, root: &Path) -> Option<Vec<String>> {
+        if let Ok(guard) = self.searcher_cache.lock() {
+            if let Some(cached) = guard.as_ref() {
+                if cached.root == root {
+                    return cached.searcher.store().all_file_paths().ok();
+                }
+            }
+        }
+        IndexStore::open_readonly(root, self.index_path.as_deref())
+            .ok()
+            .and_then(|store| store.all_file_paths().ok())
     }
 
     fn tool_code_read(&self, args: CodeReadArgs) -> anyhow::Result<String> {
@@ -853,6 +1015,8 @@ impl McpServer {
             state.writer_generation = 0;
         }));
         Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
+        self.drop_cached_searcher();
+        *Self::lock_or_recover(&self.compact_paths, |intern| *intern = None) = None;
     }
 }
 

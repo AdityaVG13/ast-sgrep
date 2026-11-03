@@ -542,6 +542,36 @@ test("a zero-hit search on an empty index reports the repository as unindexed", 
   assert.ok(calls.includes("status"), "expected an index status probe, saw " + JSON.stringify(calls));
 });
 
+test("a zero-hit search with why empty_index skips the status probe", async () => {
+  const tools: Tool[] = [];
+  const calls: string[] = [];
+  const pi = {
+    registerTool(tool: Tool) { tools.push(tool); },
+    on() {},
+  } as unknown as ExtensionAPI;
+  const runtime = {
+    async resolveRoot(context: { cwd: string }) { return context.cwd; },
+    async run(args: readonly string[]): Promise<MachineEnvelope> {
+      calls.push(args[0]!);
+      if (args[0] === "status") {
+        throw new Error("status probe must not run when why is empty_index");
+      }
+      return { tool: "asgrep", schema_version: "1.0.0", ok: true, hits: [], why: "empty_index" };
+    },
+  };
+  const freshness = {
+    async ensureFresh() { return "/project"; },
+    markAffectedPath() {},
+  };
+  registerAstSgrepTools(pi, runtime as never, freshness as never);
+  const search = tools.find((t) => t.name === "asgrep_search")!;
+  const out = await search.execute("c1", { query: "sample_controlled" }, new AbortController().signal, () => {}, { cwd: "/project" });
+  assert.equal(out.details.ok, true);
+  assert.equal(out.details.indexState, "empty");
+  assert.match(out.content[0]!.text, /not indexed|0 files/i);
+  assert.ok(!calls.includes("status"), "status probe must be skipped, saw " + JSON.stringify(calls));
+});
+
 test("tool rows are one self-shelled card with no separate call line", () => {
   const { tools } = fixture();
   type Shellable = {
