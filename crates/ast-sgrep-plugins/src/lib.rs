@@ -222,7 +222,7 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
         .map(|hit| hit.file.as_str())
         .collect::<std::collections::BTreeSet<_>>()
     {
-        let base = base36(fnv1a64(path.as_bytes()));
+        let base = compact_path_id(path);
         let mut id = base.clone();
         let mut suffix = 1_u32;
         while paths.get(&id).is_some_and(|existing| existing != path) {
@@ -426,6 +426,12 @@ fn compact_signal(signal: ast_sgrep_core::search::HitSignal) -> &'static str {
         ast_sgrep_core::search::HitSignal::Structural => "t",
         ast_sgrep_core::search::HitSignal::Semantic => "m",
     }
+}
+
+/// Deterministic compact path id used on the MCP/plugin wire.
+/// Reverse lookup scans indexed paths; no session registry.
+pub fn compact_path_id(path: &str) -> String {
+    base36(fnv1a64(path.as_bytes()))
 }
 
 fn utf8_prefix(input: &str, max_bytes: usize) -> (&str, bool) {

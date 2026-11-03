@@ -31,14 +31,14 @@ mod handler;
 mod sandbox;
 
 use anyhow::Context;
-use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
 use ast_sgrep_plugins::{
-    format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json, CompactBudget,
-    DetailLevel, MissContext, OutputBudget, OutputFormat,
+    CompactBudget, DetailLevel, MissContext, OutputBudget, OutputFormat, compact_path_id,
+    format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json,
 };
 use sandbox::read_node;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,10 +56,6 @@ const MAX_CONTEXT_LINES: usize = 100;
 const DEFAULT_READ_CHARS: usize = 100_000;
 const MAX_READ_CHARS: usize = 1_000_000;
 const INDEX_REPO_DEADLINE: Duration = Duration::from_secs(600);
-/// Bound on remembered compact path-id mappings (kxmc). Compact search ids are
-/// `<path_id>:<start>-<end>`; `code_read` resolves `<path_id>` through this map,
-/// so an agent never has to reconstruct a path it was handed by id.
-const MAX_PATH_REGISTRY: usize = 4_096;
 /// Upper bound on a client-requested response token budget (m38g).
 const MAX_BUDGET_TOKENS: usize = 65_536;
 /// Bound on remembered emitted snippets (v972).
@@ -180,23 +176,10 @@ struct IndexRepoArgs {
     force: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct SearcherKey {
-    root: PathBuf,
-    index_path: Option<PathBuf>,
-    limit: usize,
-    use_embed: bool,
-    use_semantic_only: bool,
-    file_filter: Option<String>,
-    lang_filter: Option<String>,
-}
-
 #[derive(Default)]
-struct SearcherCache {
-    generation: u64,
-    /// Last observed on-disk writer stamp; mismatch forces reopen.
+struct WriterState {
+    /// Last observed on-disk writer stamp; mismatch clears the session maps.
     writer_generation: u64,
-    entry: Option<(SearcherKey, Searcher)>,
 }
 
 /// Relative compact IDs are meaningful only within their canonical call root.
@@ -209,13 +192,10 @@ pub struct McpServer {
     limit: usize,
     use_embed: bool,
     use_semantic_only: bool,
-    /// Reused across search-channel calls; cleared after index mutations.
-    searcher_cache: Mutex<SearcherCache>,
+    /// Writer stamp observed by this session; cleared after index mutations.
+    writer_state: Mutex<WriterState>,
     /// Single-flight lock for index_repo (es7u).
     index_lock: Mutex<()>,
-    /// Root-scoped compact path-id to project-relative path, learned from emitted
-    /// search envelopes (kxmc). Bounded; cleared when the index changes.
-    path_registry: Mutex<HashMap<RootScopedId, String>>,
     /// Root-scoped hit id to hash of the snippet already sent this session (v972).
     /// Bounded; cleared when the index changes, so an elision can never point
     /// at content from a previous index generation.
@@ -242,9 +222,8 @@ impl McpServer {
                 }),
             use_embed: !ast_sgrep_core::env_flag::env_flag("ASGREP_NO_EMBED"),
             use_semantic_only: ast_sgrep_core::env_flag::env_flag("ASGREP_SEMANTIC_ONLY"),
-            searcher_cache: Mutex::new(SearcherCache::default()),
+            writer_state: Mutex::new(WriterState::default()),
             index_lock: Mutex::new(()),
-            path_registry: Mutex::new(HashMap::new()),
             emitted_snippets: Mutex::new(HashMap::new()),
         })
     }
@@ -561,24 +540,6 @@ impl McpServer {
         Ok(canonical)
     }
 
-    fn searcher_key(
-        &self,
-        root: PathBuf,
-        limit: usize,
-        file_filter: Option<String>,
-        lang_filter: Option<String>,
-    ) -> SearcherKey {
-        SearcherKey {
-            root,
-            index_path: self.index_path.clone(),
-            limit,
-            use_embed: self.use_embed,
-            use_semantic_only: self.use_semantic_only,
-            file_filter,
-            lang_filter,
-        }
-    }
-
     fn search_options(
         &self,
         root: PathBuf,
@@ -621,34 +582,20 @@ impl McpServer {
         }
     }
 
-    fn invalidate_searcher_cache(&self) {
-        // Advance the generation even when a search temporarily owns the cached
-        // Searcher. That prevents the stale Searcher from returning after reindex.
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
-            cache.entry = None;
-        });
-        guard.generation = guard.generation.wrapping_add(1);
-        guard.entry = None;
-        // Entry is gone; next searcher_for polls the stamp for that call's root.
-        guard.writer_generation = 0;
-    }
-
-    /// Drop warm Searcher (+ session maps) when an external writer bumped the stamp
-    /// for the **cached** index root (not the session workspace).
+    /// Clear the session maps when an external writer bumped the stamp.
     fn sync_writer_generation(&self) {
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
-            cache.entry = None;
-        });
-        let Some((key, _)) = guard.entry.as_ref() else {
-            return;
+        let current =
+            ast_sgrep_core::read_writer_generation(&self.root, self.index_path.as_deref());
+        let stale = {
+            let mut guard = Self::lock_or_recover(&self.writer_state, |_| {});
+            if guard.writer_generation == current {
+                false
+            } else {
+                guard.writer_generation = current;
+                true
+            }
         };
-        let current = ast_sgrep_core::read_writer_generation(&key.root, key.index_path.as_deref());
-        if guard.writer_generation != current {
-            guard.generation = guard.generation.wrapping_add(1);
-            guard.entry = None;
-            guard.writer_generation = current;
-            drop(guard);
-            Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        if stale {
             Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
         }
     }
@@ -659,56 +606,14 @@ impl McpServer {
         limit: usize,
         file_filter: Option<String>,
         lang_filter: Option<String>,
-    ) -> anyhow::Result<(Searcher, u64)> {
+    ) -> anyhow::Result<Searcher> {
         self.sync_writer_generation();
-        let key = self.searcher_key(
-            root.clone(),
+        Ok(Searcher::new(self.search_options(
+            root,
             limit,
-            file_filter.clone(),
-            lang_filter.clone(),
-        );
-        // Poison fails closed: invalidate and rebuild rather than reuse tainted state.
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
-            cache.generation = cache.generation.wrapping_add(1);
-            cache.entry = None;
-        });
-        let need_new = match guard.entry.as_ref() {
-            None => true,
-            Some((cached_key, _)) => cached_key != &key,
-        };
-        if need_new {
-            let searcher =
-                Searcher::new(self.search_options(root.clone(), limit, file_filter, lang_filter))?;
-            guard.writer_generation =
-                ast_sgrep_core::read_writer_generation(&root, self.index_path.as_deref());
-            guard.entry = Some((key, searcher));
-        }
-        let generation = guard.generation;
-        let (_, searcher) = guard
-            .entry
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("searcher cache missing after populate"))?;
-        drop(guard);
-        Ok((searcher, generation))
-    }
-
-    fn restore_searcher(
-        &self,
-        root: PathBuf,
-        limit: usize,
-        file_filter: Option<String>,
-        lang_filter: Option<String>,
-        generation: u64,
-        searcher: Searcher,
-    ) {
-        let key = self.searcher_key(root, limit, file_filter, lang_filter);
-        let mut guard = Self::lock_or_recover(&self.searcher_cache, |cache| {
-            cache.generation = cache.generation.wrapping_add(1);
-            cache.entry = None;
-        });
-        if guard.generation == generation && guard.entry.is_none() {
-            guard.entry = Some((key, searcher));
-        }
+            file_filter,
+            lang_filter,
+        ))?)
     }
 
     fn tool_agent_search(
@@ -726,11 +631,12 @@ impl McpServer {
             lang,
             preview,
         } = args;
-        let (searcher, generation) =
+        let searcher =
             match self.searcher_for(root.clone(), limit, file_filter.clone(), lang.clone()) {
-                Ok(pair) => pair,
+                Ok(searcher) => searcher,
                 Err(error) if error.to_string().contains("index is empty") => {
-                    let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
+                    let miss =
+                        to_compact_miss_json(&query, &self.diagnose_miss(&root, &query, mode));
                     return Ok(serde_json::to_string(&miss)?);
                 }
                 Err(error) => return Err(error),
@@ -741,17 +647,16 @@ impl McpServer {
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}")),
             AgentSearchMode::Semantic => searcher.search_semantic(&query),
         };
-        self.restore_searcher(root.clone(), limit, file_filter, lang, generation, searcher);
+        drop(searcher);
         let response = response?;
         // 6a3i: a miss is the cheapest response we can send, and the one where
         // a vague answer costs the most in speculative agent retries.
         if response.hits.is_empty() {
-            let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, mode));
+            let miss = to_compact_miss_json(&query, &self.diagnose_miss(&root, &query, mode));
             return Ok(serde_json::to_string(&miss)?);
         }
         // kxmc: compact key-free envelope, minified.
         let mut envelope = render_compact_envelope(&response, preview, budget_tokens);
-        self.remember_compact_paths(&root, &envelope);
         if !resend_seen && preview != PreviewMode::None {
             self.elide_seen_snippets(&root, &mut envelope);
         }
@@ -806,7 +711,7 @@ impl McpServer {
     ///
     /// The index count is only consulted here, on the miss path, so a normal
     /// search never pays for it.
-    fn diagnose_miss(&self, root: &Path, mode: AgentSearchMode) -> MissContext {
+    fn diagnose_miss(&self, root: &Path, query: &str, mode: AgentSearchMode) -> MissContext {
         let indexed_files = Indexer::new(self.base_index_options(root.to_path_buf()))
             .ok()
             .and_then(|indexer| indexer.store().status().ok())
@@ -837,24 +742,7 @@ impl McpServer {
             unavailable,
             scope,
             indexed_files,
-        }
-    }
-
-    /// Record `p` table entries so `code_read` can resolve compact ids later.
-    ///
-    /// Uses the shared resolver so root-folded tables (am4a) are understood
-    /// exactly the way an agent would read them.
-    fn remember_compact_paths(&self, root: &Path, envelope: &Value) {
-        let mut registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
-        for (id, path) in ast_sgrep_plugins::resolve_compact_paths(envelope) {
-            let key = (root.to_path_buf(), id);
-            if registry.len() >= MAX_PATH_REGISTRY && !registry.contains_key(&key) {
-                // Bounded: a hostile or very long session cannot grow this map
-                // without limit. Unknown ids simply fail to resolve and the
-                // agent falls back to the `path#Lstart-Lend` form.
-                break;
-            }
-            registry.insert(key, path);
+            pattern_miss: ast_sgrep_plugins::is_bodyless_fn_args_pattern(query),
         }
     }
 
@@ -876,11 +764,19 @@ impl McpServer {
         if end.is_empty() || !end.bytes().all(|b| b.is_ascii_digit()) {
             return id.to_owned();
         }
-        let registry = Self::lock_or_recover(&self.path_registry, |registry| registry.clear());
-        match registry.get(&(root.to_path_buf(), path_id.to_owned())) {
-            Some(path) => format!("{path}#L{start}-L{end}"),
-            None => id.to_owned(),
+        let needle = path_id.split('~').next().unwrap_or(path_id);
+        let Ok(store) = IndexStore::open_readonly(root, self.index_path.as_deref()) else {
+            return id.to_owned();
+        };
+        let Ok(paths) = store.all_file_paths() else {
+            return id.to_owned();
+        };
+        for path in paths {
+            if compact_path_id(&path) == needle {
+                return format!("{path}#L{start}-L{end}");
+            }
         }
+        id.to_owned()
     }
 
     fn tool_code_read(&self, args: CodeReadArgs) -> anyhow::Result<String> {
@@ -948,13 +844,14 @@ impl McpServer {
         Ok(serde_json::to_string(&stats)?)
     }
 
-    /// Invalidate Searcher + session path/snippet maps after any index attempt.
+    /// Invalidate session path/snippet maps after any index attempt.
     ///
     /// Call on both Ok and Err once `Indexer::new` succeeded and `index_all` /
     /// `reindex_all` returned: bulk commit can land before sidecar rebuild fails.
     fn invalidate_after_index_attempt(&self) {
-        self.invalidate_searcher_cache();
-        Self::lock_or_recover(&self.path_registry, |registry| registry.clear()).clear();
+        drop(Self::lock_or_recover(&self.writer_state, |state| {
+            state.writer_generation = 0;
+        }));
         Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
     }
 }

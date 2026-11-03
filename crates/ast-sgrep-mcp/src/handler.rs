@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use asupersync::runtime::{reactor::create_reactor, RuntimeBuilder};
 use asupersync::Cx;
+use asupersync::runtime::{RuntimeBuilder, reactor::create_reactor};
 use fastmcp_rust::prelude::*;
 use fastmcp_rust::{McpRequestCancellation, ResultMeta, ToolErrorKind, ToolHandler};
 
@@ -35,15 +35,17 @@ fn spawn_cancel_watcher(
     cancellation: McpRequestCancellation,
     cancel: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || loop {
-        if cancel.load(Ordering::Acquire) {
-            return;
+    std::thread::spawn(move || {
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return;
+            }
+            if cancellation.is_cancel_requested() {
+                cancel.store(true, Ordering::Release);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        if cancellation.is_cancel_requested() {
-            cancel.store(true, Ordering::Release);
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
     })
 }
 

@@ -1,9 +1,9 @@
 //! Sandboxed project-root file reads for MCP `code_read`.
 //! Extracted from `lib.rs`. Leaf path/IO helpers only; JSON-RPC dispatch,
-//! `McpServer`, and `SearcherCache` stay in `lib`.
+//! `McpServer`, and session writer state stay in `lib`.
 
 use anyhow::Context;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::File;
 use std::io::{BufRead, Read};
 use std::path::{Component, Path};
