@@ -1455,14 +1455,12 @@ fn bfs_corpus_paths(root: &Path) -> Result<(Vec<PathBuf>, u128)> {
         .map_err(|error| crate::StoreError::Other(format!("failed to build walk pool: {error}")))?;
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut frontier: Vec<std::sync::Arc<Path>> = vec![std::sync::Arc::from(root.to_path_buf())];
+    let ignore = crate::gitignore::IgnoreMatcher::new(root);
     while !frontier.is_empty() {
         let collected: Vec<(Vec<PathBuf>, Vec<std::sync::Arc<Path>>)> = walk_pool.install(|| {
             frontier
                 .par_iter()
-                .map(|dir| {
-                    let thread_ignore = crate::gitignore::IgnoreMatcher::new(root);
-                    expand_dir(&thread_ignore, root, dir)
-                })
+                .map(|dir| expand_dir(&ignore, root, dir))
                 .collect::<Vec<_>>()
         });
         let mut next: Vec<std::sync::Arc<Path>> = Vec::new();

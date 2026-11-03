@@ -1,9 +1,7 @@
 use ast_sgrep_lang::Language;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 pub const DEFAULT_SKIP_DIR_NAMES: &[&str] = &[".git", ".asgrep"];
 
 /// Document/data rows indexed alongside source: they carry no tree-sitter
@@ -43,35 +41,39 @@ pub fn is_ignored(root: &Path, rel: &Path) -> bool {
 
 #[derive(Debug, Clone)]
 struct Rule {
-    base: std::rc::Rc<str>,
-    pattern: std::rc::Rc<str>,
+    base: String,
+    pattern: String,
     negate: bool,
     dir_only: bool,
 }
+
+/// One matcher holds every ignore rule as a flat prefixed vector, parsed once
+/// at construction. Query-time matching has no per-prefix chain map.
+#[derive(Debug, Clone)]
 pub struct IgnoreMatcher {
     root: PathBuf,
-    chains: RefCell<HashMap<String, Rc<Vec<Rule>>>>,
+    rules: Vec<Rule>,
 }
 impl IgnoreMatcher {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
-            chains: RefCell::new(HashMap::new()),
+            rules: load_all_rules(root),
         }
     }
-    pub fn clear(&self) {
-        self.chains.borrow_mut().clear();
+    pub fn clear(&mut self) {
+        let root = self.root.clone();
+        *self = Self::new(&root);
     }
     pub fn is_ignored(&self, rel: &Path) -> bool {
         let rel_str = rel
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/");
-        let rules = self.chain_for(&parent_prefix(rel));
-        if parent_dir_excluded(&rel_str, &rules) {
+        if parent_dir_excluded(&rel_str, &self.rules) {
             return true;
         }
         let mut ignored = false;
-        for rule in rules.iter() {
+        for rule in &self.rules {
             if matches_file(rule, &rel_str) {
                 ignored = !rule.negate;
             }
@@ -83,50 +85,41 @@ impl IgnoreMatcher {
             &rel_dir
                 .to_string_lossy()
                 .replace(std::path::MAIN_SEPARATOR, "/"),
-            &self.chain_for(&parent_prefix(rel_dir)),
+            &self.rules,
         )
     }
-    fn chain_for(&self, prefix: &str) -> Rc<Vec<Rule>> {
-        if let Some(hit) = self.chains.borrow().get(prefix) {
-            return Rc::clone(hit);
-        }
-        // Share the parent's rule vector and append only this directory's
-        // own rules. The previous deep clone of the parent chain
-        // made total rule-loading cost O(dirs² × rules) — measured 1.8s of a
-        // 1.9s pattern query on this repo (545 entries). Rc-sharing keeps the
-        // cached-per-prefix semantics; later directories never mutate an
-        // ancestor's vector, they build their own.
-        let rules = if prefix.is_empty() {
-            let mut rules = default_rules();
-            load_dir_rules(&self.root, "", &mut rules);
-            rules
-        } else {
-            let parent = prefix.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-            let mut rules = (*self.chain_for(parent)).clone();
-            load_dir_rules(&self.root.join(prefix), &format!("{prefix}/"), &mut rules);
-            rules
-        };
-        let rc = Rc::new(rules);
-        self.chains
-            .borrow_mut()
-            .insert(prefix.to_string(), Rc::clone(&rc));
-        rc
-    }
 }
-fn parent_prefix(rel: &Path) -> String {
-    let mut prefix = String::new();
-    if let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) {
-        for comp in parent.components() {
-            let Component::Normal(part) = comp else {
-                continue;
-            };
-            if !prefix.is_empty() {
-                prefix.push('/');
+
+fn load_all_rules(root: &Path) -> Vec<Rule> {
+    let rules = std::cell::RefCell::new(default_rules());
+    load_dir_rules(root, "", &mut rules.borrow_mut());
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if !entry.file_type().is_dir() || should_skip_dir(entry.path()) {
+                return false;
             }
-            prefix.push_str(&part.to_string_lossy());
-        }
+            let Ok(rel) = entry.path().strip_prefix(root) else {
+                return false;
+            };
+            if rel.as_os_str().is_empty() {
+                return true;
+            }
+            let rel_str = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            let mut rules = rules.borrow_mut();
+            if dir_ignored(&rel_str, &rules) {
+                return false;
+            }
+            load_dir_rules(entry.path(), &format!("{rel_str}/"), &mut rules);
+            true
+        })
+    {
+        let _ = entry;
     }
-    prefix
+    rules.into_inner()
 }
 fn default_rules() -> Vec<Rule> {
     DEFAULT_SKIP_DIR_NAMES
@@ -161,8 +154,8 @@ fn parse_rule(base: &str, line: &str) -> Rule {
         line.trim()
     };
     Rule {
-        base: std::rc::Rc::from(base),
-        pattern: std::rc::Rc::from(pat),
+        base: base.to_string(),
+        pattern: pat.to_string(),
         negate,
         dir_only: pat.ends_with('/'),
     }
@@ -172,7 +165,7 @@ fn rel_under_base<'a>(rule: &Rule, rel_str: &'a str) -> Option<&'a str> {
         return Some(rel_str);
     }
     rel_str
-        .strip_prefix(rule.base.as_ref())
+        .strip_prefix(rule.base.as_str())
         .map(|rest| rest.strip_prefix('/').unwrap_or(rest))
 }
 fn matches_file(rule: &Rule, rel_str: &str) -> bool {

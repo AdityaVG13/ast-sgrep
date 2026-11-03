@@ -846,7 +846,7 @@ fn planner_resolution_and_file_filters() {
     assert!(matcher.is_ignored(Path::new(".asgrep/x")));
     assert!(!matcher.is_ignored(Path::new(".git")));
     assert!(!matcher.is_ignored(Path::new("src/main.rs")));
-    // Determinism under repetition (rule chains are cached per prefix).
+    // Default rules ignore VCS/tool directory CONTENTS; a same-named FILE is kept.
     assert_eq!(
         matcher.is_ignored(Path::new(".git/config")),
         matcher.is_ignored(Path::new(".git/config"))
