@@ -716,14 +716,15 @@ impl CodeModeSession {
     }
 
     pub(crate) fn index_status(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let root = self.root_arg(args)?;
-        let mut guard = self.searcher_for(root, 1, None, None)?;
-        let searcher = guard
-            .as_mut()
-            .expect("searcher_for populates cache")
-            .for_read();
-        let mut value = serde_json::to_value(searcher.store().status()?)?;
-        drop(guard);
+        // Writable open on purpose: an empty workspace has no db yet, and
+        // hosts (FFI `materialize`, Pi probe) use status to create the schema
+        // so later readonly searches return zero hits instead of "index is empty".
+        let indexer = Indexer::new(IndexOptions {
+            root: self.root_arg(args)?,
+            index_path: self.config.index_path.clone(),
+            ..IndexOptions::default()
+        })?;
+        let mut value = serde_json::to_value(indexer.store().status()?)?;
         value["ambient_refreshes"] = serde_json::json!(self.ambient_refreshes);
         Ok(value)
     }

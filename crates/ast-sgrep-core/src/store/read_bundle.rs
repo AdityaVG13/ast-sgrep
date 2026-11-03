@@ -524,6 +524,71 @@ impl ReadBundle {
         }
         &[]
     }
+
+    pub fn file_by_path(&self, path: &str) -> Option<usize> {
+        (0..self.file_count()).find(|&i| self.path(i) == path)
+    }
+
+    fn file_line_span(&self, file: usize) -> (usize, usize) {
+        let start = self.file_first_line(file) as usize;
+        let end = if file + 1 < self.file_count() {
+            self.file_first_line(file + 1) as usize
+        } else {
+            self.line_count()
+        };
+        (start, end)
+    }
+
+    fn line_text(&self, index: usize) -> &str {
+        let start = self.line_start(index) as usize;
+        let end = self.line_start(index + 1) as usize;
+        let bytes = &self.source()[start..end];
+        let bytes = bytes.strip_suffix(&[b'\n']).unwrap_or(bytes);
+        std::str::from_utf8(bytes).unwrap_or("")
+    }
+
+    /// Last real line number, matching SQL `source_end` (trailing empty
+    /// cursor dropped, floored at 1). `None` if the path is not in the bundle.
+    pub fn source_line_total(&self, path: &str) -> Option<u32> {
+        let file = self.file_by_path(path)?;
+        let (lo, hi) = self.file_line_span(file);
+        if lo >= hi {
+            return Some(1);
+        }
+        let last = hi - 1;
+        let last_no = self.line_no(last);
+        Some(if self.line_text(last).is_empty() {
+            last_no.saturating_sub(1).max(1)
+        } else {
+            last_no.max(1)
+        })
+    }
+
+    /// Indexed source rows in `[start, end]`, same empty/EOF contract as SQL:
+    /// `None` = path not present; `Some([])` = present but the window is empty.
+    pub fn source_lines_in_range(
+        &self,
+        path: &str,
+        start: u32,
+        end: u32,
+    ) -> Option<Vec<(u32, String)>> {
+        let file = self.file_by_path(path)?;
+        let source_end = self.source_line_total(path)?;
+        let (lo, hi) = self.file_line_span(file);
+        let cap = end.min(source_end);
+        let mut out = Vec::new();
+        for index in lo..hi {
+            let no = self.line_no(index);
+            if no < start {
+                continue;
+            }
+            if no > cap {
+                break;
+            }
+            out.push((no, self.line_text(index).to_owned()));
+        }
+        Some(out)
+    }
 }
 
 struct BuildFile {
