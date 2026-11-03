@@ -3,25 +3,12 @@
 use super::*;
 use crate::extract::{is_inside_comment_or_string, is_member_expr_kind, node_text};
 use crate::Language;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{OnceLock, RwLock};
+use std::collections::BTreeMap;
 use tree_sitter::Node;
 
-/// Process-wide support cache for `needs_ast_grep_fallback` (language-free
-/// question: does ANY grammar build a template?).
+/// Language-free: does ANY grammar build a general-lane template?
 pub(crate) fn general_lane_supported(pattern: &str) -> bool {
-    static SUPPORTED: OnceLock<RwLock<HashMap<String, bool>>> = OnceLock::new();
-    let cache = SUPPORTED.get_or_init(|| RwLock::new(HashMap::new()));
-    let cached = cache.read().ok().and_then(|map| map.get(pattern).copied());
-    if let Some(supported) = cached {
-        return supported;
-    }
-    let supported = general_lane_supported_uncached(pattern);
-    if let Ok(mut writer) = cache.write() {
-        writer.insert(pattern.to_string(), supported);
-    }
-    supported
+    general_lane_supported_uncached(pattern)
 }
 
 pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
@@ -170,32 +157,13 @@ pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
     })
 }
 
-thread_local! {
-    /// Per-thread general-lane template cache (template construction parses the
-    /// pattern up to twice; the search walk pays it once per thread/pattern).
-    static GENERAL_TEMPLATES: RefCell<HashMap<(Language, String), Option<GeneralTemplate>>> =
-        RefCell::new(HashMap::new());
-}
-
 pub(crate) fn cached_general_template(lang: Language, pattern: &str) -> Option<GeneralTemplate> {
-    let key = (lang, pattern.trim().to_string());
-    GENERAL_TEMPLATES.with(|cell| {
-        let mut map = cell.borrow_mut();
-        if let Some(template) = map.get(&key) {
-            return template.clone();
-        }
-        let built = if general_lane_text_eligible_for(lang, pattern)
-            && !lane_comment_refused(lang, pattern)
-        {
-            let (substituted, placeholders, multi_names) =
-                substitute_general_metavariables(pattern)?;
-            build_general_template(lang, pattern, &substituted, &placeholders, &multi_names)
-        } else {
-            None
-        };
-        map.insert(key.clone(), built.clone());
-        built
-    })
+    if general_lane_text_eligible_for(lang, pattern) && !lane_comment_refused(lang, pattern) {
+        let (substituted, placeholders, multi_names) = substitute_general_metavariables(pattern)?;
+        build_general_template(lang, pattern, &substituted, &placeholders, &multi_names)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn match_structural_general(

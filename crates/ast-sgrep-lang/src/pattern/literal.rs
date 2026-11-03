@@ -3,8 +3,6 @@
 use super::*;
 use crate::extract::{is_ident_kind, is_inside_comment_or_string, node_text};
 use crate::Language;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use tree_sitter::Node;
 
 pub(crate) fn walk_literal(
@@ -127,35 +125,15 @@ pub(crate) struct LiteralTemplate {
     pub(crate) span: Option<(usize, usize)>,
 }
 
-/// Per-thread (language, pattern) → parsed `$`-less template cache.
-type LiteralTemplateCache = HashMap<(Language, String), Option<std::sync::Arc<LiteralTemplate>>>;
-
-thread_local! {
-    /// Per-thread literal-pattern template cache (one pattern parse per
-    /// (language, pattern); `Tree` clone is reference-counted).
-    static LITERAL_TEMPLATES: RefCell<LiteralTemplateCache> =
-        RefCell::new(HashMap::new());
-}
-
 /// Parse a `$`-less pattern into a template tree for R3 structural matching.
-/// Wraps the shared thread-local parsers with a per-thread (language,
-/// pattern) cache. `None` — the pattern is not valid code for this language —
-/// disables the structural arm so reference-rejected pattern text
-/// (`text# note` py) keeps today's exact-text behavior with no regression.
+/// `None` — the pattern is not valid code for this language — disables the
+/// structural arm so reference-rejected pattern text (`text# note` py) keeps
+/// today's exact-text behavior with no regression.
 pub(crate) fn parse_pattern_tree(
     lang: Language,
     pattern: &str,
 ) -> Option<std::sync::Arc<LiteralTemplate>> {
-    let key = (lang, pattern.to_string());
-    LITERAL_TEMPLATES.with(|cell| {
-        let mut map = cell.borrow_mut();
-        if let Some(template) = map.get(&key) {
-            return template.clone();
-        }
-        let built = build_literal_template(lang, pattern).map(std::sync::Arc::new);
-        map.insert(key, built.clone());
-        built
-    })
+    build_literal_template(lang, pattern).map(std::sync::Arc::new)
 }
 
 pub(crate) fn build_literal_template(lang: Language, pattern: &str) -> Option<LiteralTemplate> {

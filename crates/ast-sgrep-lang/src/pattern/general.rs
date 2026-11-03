@@ -3,8 +3,7 @@
 use super::*;
 use crate::extract::node_text;
 use crate::Language;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 // ---------------------------------------------------------------------------
@@ -1236,22 +1235,8 @@ pub(crate) fn build_if_cond_template(lang: Language, cond: &str) -> Option<Gener
     )
 }
 
-thread_local! {
-    static IF_COND_TEMPLATES: RefCell<HashMap<(Language, String), Option<GeneralTemplate>>> =
-        RefCell::new(HashMap::new());
-}
-
 pub(crate) fn cached_if_cond_template(lang: Language, cond: &str) -> Option<GeneralTemplate> {
-    let key = (lang, cond.trim().to_string());
-    IF_COND_TEMPLATES.with(|cell| {
-        let mut map = cell.borrow_mut();
-        if let Some(template) = map.get(&key) {
-            return template.clone();
-        }
-        let built = build_if_cond_template(lang, &key.1);
-        map.insert(key.clone(), built.clone());
-        built
-    })
+    build_if_cond_template(lang, cond.trim())
 }
 
 /// The two php families whose general-lane template only parses behind the

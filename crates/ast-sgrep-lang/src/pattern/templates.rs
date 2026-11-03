@@ -3,9 +3,8 @@
 use super::*;
 use crate::extract::node_text;
 use crate::Language;
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tree_sitter::{Node, Parser, Query};
 
 /// `HEAD?.$TAIL` ends: (head_capture, head_literal, tail_capture, tail_literal).
@@ -1262,50 +1261,20 @@ pub(crate) fn call_path_segment(part: &str) -> Option<Option<String>> {
     None
 }
 
-thread_local! {
-    /// Per-thread reusable parsers (Amdahl: `Parser::new` + `set_language` were
-    /// paid once per file in the rayon span; now once per thread per language).
-    static PARSERS: RefCell<HashMap<Language, Parser>> = RefCell::new(HashMap::new());
-}
-
 pub(crate) fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_sitter::Tree> {
-    PARSERS.with(|cell| {
-        let mut parsers = cell.borrow_mut();
-        let parser = match parsers.entry(lang) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let mut parser = Parser::new();
-                parser
-                    .set_language(&tree_sitter_language(lang))
-                    .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
-                entry.insert(parser)
-            }
-        };
-        parser
-            .parse(source, None)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
-    })
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_language(lang))
+        .map_err(|e| anyhow::anyhow!("failed to set language: {e}"))?;
+    parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
 }
-
-/// Process-wide compiled query cache (Amdahl: `Query::new` compiled every table
-/// query per file in the rayon span; queries are `'static` table entries, so
-/// key by pointer and compile once per process).
-pub(crate) type QueryCache = RwLock<HashMap<(Language, usize), Option<Arc<Query>>>>;
 
 pub(crate) fn compiled_query(
     language: &tree_sitter::Language,
-    lang: Language,
+    _lang: Language,
     source: &'static str,
 ) -> Option<Arc<Query>> {
-    static CACHE: OnceLock<QueryCache> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    let key = (lang, source.as_ptr() as usize);
-    if let Some(cached) = cache.read().ok()?.get(&key) {
-        return cached.clone();
-    }
-    let compiled = Query::new(language, source).ok().map(Arc::new);
-    if let Ok(mut writer) = cache.write() {
-        writer.insert(key, compiled.clone());
-    }
-    compiled
+    Query::new(language, source).ok().map(Arc::new)
 }
