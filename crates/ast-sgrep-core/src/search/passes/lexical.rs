@@ -1,3 +1,4 @@
+use super::super::fusion::NameIntern;
 use crate::query::ParsedQuery;
 use crate::rank::score_lexical_rrf;
 use crate::search::passes::bmh::asgrep_line_hit;
@@ -6,8 +7,59 @@ use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::Result;
 use rusqlite::params;
-use std::collections::HashMap;
-pub type LineMatches = HashMap<(String, u32), (Vec<usize>, Option<String>, String)>;
+
+/// Lexical scratch rows keyed by interned path index + line, not `(String, line)`.
+pub struct LineMatches {
+    intern: NameIntern,
+    rows: Vec<LineRow>,
+}
+
+struct LineRow {
+    file: u32,
+    line: u32,
+    ranks: Vec<usize>,
+    language: Option<String>,
+    content: String,
+}
+
+impl LineMatches {
+    pub fn new() -> Self {
+        Self {
+            intern: NameIntern::new(0),
+            rows: Vec::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn insert(
+        &mut self,
+        path: String,
+        line_no: u32,
+        ranks: Vec<usize>,
+        language: Option<String>,
+        content: String,
+    ) {
+        let file = self.intern.intern(&path);
+        if let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.file == file && row.line == line_no)
+        {
+            row.ranks.extend(ranks);
+            return;
+        }
+        self.rows.push(LineRow {
+            file,
+            line: line_no,
+            ranks,
+            language,
+            content,
+        });
+    }
+}
 
 /// Floor for lexical candidates; the retained rerank pool raises it when larger.
 pub const LEXICAL_POOL_FLOOR: usize = 100;
@@ -161,19 +213,18 @@ fn lexical_from_field(
     let mut ident_stmt = store.connection().prepare_cached(&id_sql)?;
     let bind: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
     let mut id_rows = ident_stmt.query(bind.as_slice())?;
-    let mut idents: std::collections::HashMap<i64, (String, Option<String>)> =
-        std::collections::HashMap::with_capacity(ids.len());
+    let mut idents: Vec<(i64, String, Option<String>)> = Vec::with_capacity(ids.len());
     while let Some(row) = id_rows.next()? {
         let id: i64 = row.get(0)?;
         let path: String = row.get(1)?;
         let language: Option<String> = row.get(2)?;
-        idents.insert(id, (path, language));
+        idents.push((id, path, language));
     }
     drop(id_rows);
     drop(ident_stmt);
     for (rank, (file_id, line_no, content)) in rows.into_iter().enumerate() {
         // A file deleted between the two statements yields no identity; skip it.
-        let Some((path, language)) = idents.get(&file_id) else {
+        let Some((_, path, language)) = idents.iter().find(|(id, _, _)| *id == file_id) else {
             continue;
         };
         accumulate(
@@ -194,24 +245,28 @@ fn accumulate(
     if !matches_lang(language.as_deref(), options.lang_filter.as_deref()) {
         return;
     }
-    matches
-        .entry((path, line_no))
-        .or_insert_with(|| (Vec::new(), language, content))
-        .0
-        .push(rank);
+    matches.insert(path, line_no, vec![rank], language, content);
 }
-/// Sortable lexical row: ((path, line_no), (ranks, language, content)).
-type LexicalHitRow = ((String, u32), (Vec<usize>, Option<String>, String));
 
 pub fn hits_from_matches(matches: LineMatches) -> Vec<SearchHit> {
-    // Emit in (path, line_no) order. LineMatches is a randomly seeded
-    // HashMap, so `into_iter` made the lexical channel's hit order a
-    // per-process random value (the unstable-sort hazard at its source).
-    let mut rows: Vec<LexicalHitRow> = matches.into_iter().collect();
-    rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    // Emit in (path, line_no) order. Row order is first-seen; sort by interned
+    // path then line so emission does not depend on insertion.
+    let LineMatches { intern, mut rows } = matches;
+    rows.sort_unstable_by(|left, right| {
+        intern
+            .get(left.file)
+            .cmp(intern.get(right.file))
+            .then(left.line.cmp(&right.line))
+    });
     rows.into_iter()
-        .map(|((path, line_no), (ranks, language, content))| {
-            asgrep_line_hit(path, language, line_no, content, score_lexical_rrf(&ranks))
+        .map(|row| {
+            asgrep_line_hit(
+                intern.get(row.file).to_owned(),
+                row.language,
+                row.line,
+                row.content,
+                score_lexical_rrf(&row.ranks),
+            )
         })
         .collect()
 }

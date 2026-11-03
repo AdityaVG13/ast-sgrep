@@ -40,10 +40,11 @@
 //! assigns margins and confidence, so downstream honesty fields reflect the
 //! critiqued ordering.
 
+use super::fusion::FileCsr;
 use crate::intent::QueryIntent;
 use crate::query::ParsedQuery;
 use crate::search::types::{HitKind, SearchHit};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Score multiplier when semantic evidence agrees with any structural channel.
 pub const AGREEMENT_BOOST: f64 = 1.15;
@@ -178,17 +179,19 @@ fn corroborates(witness: &Corroborator, hit: &SearchHit) -> bool {
 }
 
 /// Compound query identifiers and their fragments (`auth_refresh` -> {auth, refresh}).
-fn identifier_fragments(parsed: &ParsedQuery) -> HashMap<String, String> {
-    let mut fragment_to_ident = HashMap::new();
+fn identifier_fragments(parsed: &ParsedQuery) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
     for term in &parsed.terms {
         if !term.contains('_') {
             continue;
         }
         for fragment in term.split('_').filter(|f| f.len() > 1) {
-            fragment_to_ident.insert(fragment.to_string(), term.clone());
+            pairs.push((fragment.to_string(), term.clone()));
         }
     }
-    fragment_to_ident
+    pairs.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    pairs.dedup_by(|left, right| left.0 == right.0);
+    pairs
 }
 
 fn push_note(hit: &mut SearchHit, note: CriticNote) {
@@ -513,7 +516,7 @@ pub fn apply_critic(
             "[critic-trace] query_ident={:?} conceptual={} fragments={:?} expanded_len={}",
             ctx.query_ident,
             conceptual,
-            ctx.fragments.keys().collect::<Vec<_>>(),
+            ctx.fragments.iter().map(|(k, _)| k).collect::<Vec<_>>(),
             ctx.expanded.as_ref().map_or(0, |e| e.len())
         );
     }
@@ -566,7 +569,7 @@ pub fn apply_critic(
 /// Shared per-shortlist critic context, computed once and read by every
 /// per-hit stage.
 struct CriticCtx {
-    fragments: HashMap<String, String>,
+    fragments: Vec<(String, String)>,
     query_ident: Option<String>,
     has_code_evidence: bool,
     conceptual: bool,
@@ -578,21 +581,21 @@ struct CriticCtx {
 /// Non-embed witnesses per file: spans and symbols that can corroborate an
 /// embed-only parent (child chunks map to parent symbols).
 fn uncorroborated_embeds(hits: &[SearchHit]) -> HashSet<usize> {
-    let mut witnesses: HashMap<&str, Vec<Corroborator>> = HashMap::new();
+    let mut corroborators: Vec<Corroborator> = Vec::new();
+    let mut pairs: Vec<(&str, u32)> = Vec::new();
     for hit in hits.iter() {
         if embed_only(hit) {
             continue;
         }
-        witnesses
-            .entry(hit.file.as_str())
-            .or_default()
-            .push(Corroborator {
-                line_start: hit.line_start,
-                line_end: hit.line_end,
-                symbol: hit.symbol.clone(),
-                callee: hit.callee.clone(),
-            });
+        pairs.push((hit.file.as_str(), corroborators.len() as u32));
+        corroborators.push(Corroborator {
+            line_start: hit.line_start,
+            line_end: hit.line_end,
+            symbol: hit.symbol.clone(),
+            callee: hit.callee.clone(),
+        });
     }
+    let witnesses = FileCsr::build(pairs);
     let mut uncorroborated: HashSet<usize> = HashSet::new();
     for (index, hit) in hits.iter().enumerate() {
         if !embed_only(hit) {
@@ -600,11 +603,8 @@ fn uncorroborated_embeds(hits: &[SearchHit]) -> HashSet<usize> {
         }
         let corroborated = witnesses
             .get(hit.file.as_str())
-            .is_some_and(|file_witnesses| {
-                file_witnesses
-                    .iter()
-                    .any(|witness| corroborates(witness, hit))
-            });
+            .iter()
+            .any(|&i| corroborates(&corroborators[i as usize], hit));
         if corroborated {
             continue;
         }
@@ -640,7 +640,12 @@ fn stage_identifier_adjudication(hit: &mut SearchHit, ctx: &CriticCtx) {
         return;
     };
     let folded = symbol.to_lowercase();
-    if let Some(full_ident) = ctx.fragments.get(&folded) {
+    if let Some((_, full_ident)) = ctx
+        .fragments
+        .binary_search_by(|(key, _)| key.as_str().cmp(&folded))
+        .ok()
+        .map(|i| &ctx.fragments[i])
+    {
         let evidences_full = hit.excerpt.to_lowercase().contains(full_ident.as_str());
         if !evidences_full {
             hit.score *= COLLISION_PENALTY;

@@ -1,5 +1,5 @@
 use super::critic::identifier_tokens;
-use super::fusion::dedup_hits;
+use super::fusion::{dedup_hits, NameIntern};
 use super::types::{
     assign_hit_confidence, assign_signal_margins, HitKind, SearchHit, SearchOptions,
     SearchResponse, SnapshotStamp,
@@ -173,12 +173,19 @@ pub(crate) fn finish_response_checked_lazy(
     // `dedup=false` (`search_semantic`) where `dedup_hits` never runs (pass5).
     assign_hit_confidence(&mut hits);
     if options.count_only {
-        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-        for hit in &hits {
-            *counts.entry(hit.file.clone()).or_default() += 1;
+        let mut files: Vec<&str> = hits.iter().map(|hit| hit.file.as_str()).collect();
+        files.sort_unstable();
+        let mut counts: Vec<(String, u32)> = Vec::new();
+        let mut i = 0;
+        while i < files.len() {
+            let name = files[i];
+            let start = i;
+            i += 1;
+            while i < files.len() && files[i] == name {
+                i += 1;
+            }
+            counts.push((name.to_string(), (i - start) as u32));
         }
-        let mut counts: Vec<_> = counts.into_iter().collect();
-        counts.sort_by(|a, b| a.0.cmp(&b.0));
         let response = SearchResponse {
             query: parsed.raw.clone(),
             limit: options.limit,
@@ -323,13 +330,17 @@ pub(super) fn enforce_result_gates(
     hits
 }
 fn cap_per_file(hits: Vec<SearchHit>) -> Vec<SearchHit> {
-    let mut counts = std::collections::HashMap::new();
+    let mut intern = NameIntern::new(hits.len());
+    let mut counts: Vec<usize> = Vec::new();
     let mut kept = Vec::with_capacity(hits.len());
     let mut overflow = Vec::new();
     for hit in hits {
-        let c = counts.entry(hit.file.clone()).or_insert(0);
-        if *c < MAX_HITS_PER_FILE {
-            *c += 1;
+        let id = intern.intern(&hit.file) as usize;
+        if counts.len() <= id {
+            counts.resize(id + 1, 0);
+        }
+        if counts[id] < MAX_HITS_PER_FILE {
+            counts[id] += 1;
             kept.push(hit);
         } else {
             overflow.push(hit);

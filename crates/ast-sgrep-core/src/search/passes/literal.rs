@@ -88,16 +88,15 @@ fn literal_trigram(
     // trigrams derived from the needle are candidates, so any candidate's
     // posting list is a superset of true matches, and content_matches_literal
     // reverify restores exactness — poisoned dfs can change speed, not output.
-    if let TrigramShortcut::Match(terms) = store.trigram_df().scan_shortcut(store, needle) {
+    if let TrigramShortcut::Match(terms) = crate::store::trigram_df::scan_shortcut(store, needle) {
         let query = terms
             .iter()
             .map(|tri| crate::fts::escape_fts_term(tri))
             .collect::<Vec<_>>()
             .join(" AND ");
-        // Static (unarmed) picks are blind to this corpus: budget the probe
-        // scan and fall back to the phrase MATCH on exhaustion. Armed picks
-        // carry exact dfs, so they keep today's unbounded shape.
-        let budget = if store.trigram_df().is_armed() {
+        // Bundle-baked dfs are exact for this corpus. SQL control-arm
+        // shortcuts are not armed, so budget the probe scan.
+        let budget = if crate::store::trigram_df::df_ready(store) {
             None
         } else {
             Some(STATIC_SCAN_BUDGET)
@@ -236,7 +235,7 @@ fn literal_sql(
     // Keep the full scan for short, non-ASCII, punctuation-only and NUL needles.
     // ASCII trigrams query every non-ASCII ASCII-lowercase preimage as well.
     let anchor = if options.case_insensitive {
-        ascii_trigrams(needle)
+        ascii_trigrams(store, needle)
     } else {
         None
     };
@@ -330,7 +329,7 @@ fn literal_sql(
     Ok(hits)
 }
 
-fn ascii_trigrams(needle: &str) -> Option<Vec<String>> {
+fn ascii_trigrams(store: &IndexStore, needle: &str) -> Option<Vec<String>> {
     if !needle.is_ascii() || needle.contains('\0') {
         return None;
     }
@@ -341,7 +340,12 @@ fn ascii_trigrams(needle: &str) -> Option<Vec<String>> {
         .filter(|tri| tri.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_'))
         .map(|tri| std::str::from_utf8(tri).expect("ASCII anchor"))
         .collect();
-    trigrams.sort_unstable_by_key(|tri| (crate::store::trigram_df::bake_count(tri), *tri));
+    trigrams.sort_unstable_by_key(|tri| {
+        (
+            crate::store::trigram_df::min_df(store, tri).unwrap_or(i64::MAX),
+            *tri,
+        )
+    });
     trigrams.dedup();
     (!trigrams.is_empty()).then(|| trigrams.into_iter().take(2).map(str::to_owned).collect())
 }

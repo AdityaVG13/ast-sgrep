@@ -1245,3 +1245,142 @@ under both protocols; two earlier defects found on the way (zsh does not
 word-split unquoted loop variables — silent single-arm A/B; /usr/bin/time
 user+sys on a rayon workload varies with pool sizing under load, so CPU
 totals are comparable only within a pair).
+
+## Open: read-path cutover P0/P1 (read-path caches measured; frozen suite restored)
+
+P0 PASS on the owner-amended self-corpus surface (2026-11-02, HEAD `957c6b50`, binary
+`604cc8c9…`, M5 Max 18c; 732 files / 421,822 lines). Baseline warm p50 geomean 1.19 ms.
+Disable deltas (geomean): `response_on` -99.9% (KEEP), `warm` +66.6, `stamp` +50.4,
+`semantic` +45.2, `corpus` +14.8, `lexicon` +11.0, `symbols` +9.7, `df` +3.6, `count` +1.7,
+`gen` -0.2, `ivf` +1.2, `embed` +0.9, `compile` +21.6, all off +383.6. Noise band ~±10%.
+
+P1 PASS for the measured read path; two plan assumptions were refuted by measurement and the
+caches were kept:
+- Deleted `semantic_ann` `SESSION_CACHE` / `cache_session` / `cached_semantic_ivf` and
+  `semantic_ivf` `LazyIvfMemo` / `LAZY_IVF_CACHE`. Control `604cc8c9…` vs post `2ddbd053…`
+  (9 rounds x 24 iterations): geomean -0.16%, identity identical, 18/18 `suite_ok`; 27 targeted
+  tests pass; warm RSS 396.1 -> 374.3 MiB.
+- Code Mode render cache KEEP: identical repeats 0.059 ms with it vs 0.092 ms without (+55%).
+- Code Mode session Searcher KEEP: unique queries 2.33 ms with it vs 638.3 ms reopening every
+  call (+27,260%). The P1 premise that Searcher internals duplicate this cache is REFUTED.
+  Retry predicate: revisit only when per-call Searcher open+search is <=10% of the warm session
+  call (<=0.23 ms) or the P2 bundle supplies an equivalent warm handle.
+- MCP `SearcherCache` DELETED: pre-deletion A/B -0.2% (no-embed) / -1.56% (embed), within noise;
+  replaced by `WriterState` writer-stamp tracking. `path_registry` / `emitted_snippets`
+  invalidation kept. MCP invalidation tests 18/18 pass; `protocol` 22/23 with the pre-existing
+  `tools_list.json` golden stale at HEAD (copy changed in 36202228, golden last written in
+  82baf511) — not caused by this row. Also fixed the pre-existing `MissContext.pattern_miss`
+  missing-field compile error in the MCP crate.
+
+Frozen suite restored at `/Users/aditya/AI/ast-sgrep-bench/repoqa-cosqa-20261102` (RepoQA 600,
+CoSQA 500/6267) and rerun end to end (backend `static`, index 69.2 s): RepoQA mrr10 .7319,
+hit1 .6367, hit5 .8600, hit10 .9350, hit100 .9833, p50 17.96 / p95 29.07 / p99 39.78 ms;
+CoSQA mrr10 .4230, hit1 .3160, hit5 .5620, hit10 .6620, hit100 .9380, p50 12.61 / p95 16.01 /
+p99 17.76 ms; 0 errors, 0 timeouts. Matches `benchmarks/results/baselines.md` exactly and is no
+slower on latency.
+
+Still deferred: `embed_cache` table (index-side; needs a cold-index A/B), gitignore chain cache,
+LSP `Machine` memos, and the `ast-sgrep-lang` extract parser pool. Retry predicate: reopen each
+only when its own surface produces a <=10% warm regression and identity parity. CASS 60-day
+history remains code 5 (`maintenance-required`, rebuild pid 72957), recorded as a blocker.
+
+## Open: read-path cutover P2 (`read.v1` line/token bundle; unique-query warm gate failed)
+
+Measured 2026-11-02 on the self-corpus (733 files / 422,664 lines, HEAD `957c6b50`, dirty
+additive tree, binary `249044a3…`). Remaining P2 migrations (flat gitignore vector, stat-only
+ambient probe, MCP path-id scan, bundle empty/truncation/fingerprint/path-sort guards) landed
+before this measurement. `trigram_df` stays until P3; SQL control arm stays until P6.
+
+The owner-approved Code Mode/serve gate was run with **unique** `literal:` needles so
+ResponseCache repeats are not counted:
+
+- Serve cold first call median n=5: 419.9 ms bundle vs 625.7 ms SQL (0.671x) — PASS ≤0.75x.
+- Unique-query warm p50 n=80: 0.259 ms bundle vs 0.277 ms SQL (0.937x) — **FAIL** ≤0.85x.
+- Unique-query warm p90: 0.518 vs 0.391 ms (bundle worse in the tail).
+- Serve RSS after unique warm: 131.7 vs 212.7 MiB — PASS ≤150 MiB.
+- File/line identity: 80/80.
+- The earlier 0.835x "warm" p50 (0.0929 vs 0.1113 ms) was ResponseCache hits of repeated
+  needles and is not a warm number.
+- G6 index wall was not measured; stop is at the first failed gate.
+
+Evidence: `benchmarks/results/internal/readpath-p2-20261102/REPORT.md`. Campaign stopped. No
+production default change.
+
+Retry predicate (directly testable): reopen P2 only when Code Mode/serve unique-query warm p50
+is ≤0.85× SQL on this protocol — `asgrep serve --root . --no-embed`, `ASGREP_NO_AMBIENT_FRESHNESS=1`,
+n≥80 distinct `literal:` needles, first hit of each needle only, same self-corpus — **and**
+cold first-call median remains ≤0.75× SQL, file/line identity is n/n, and serve RSS ≤150 MiB.
+Do not treat ResponseCache-repeat latency as warm. G6 index-wall ≤+5% is then required before
+any default-path change.
+
+## Closed: read-path cutover P3 (graph/pattern/df bundle)
+
+Measured 2026-11-02 on the self-corpus (734 files / 423,364 lines, generation 48691, HEAD
+`957c6b50`, dirty additive tree). Query-time `TrigramDfCache` / static prior / `lexicon_cache`
+are gone. SQL control arm stays until P6.
+
+Unique-query serve retry (binary `3e22af40…`): combined warm p50 0.087 vs 0.177 ms (**0.489×**);
+callers 0.582×; pattern 0.438×; imports 0.687×; identity 45/45; RSS 13.8 vs 126.8 MiB.
+
+Close evidence (same session, later): structural-intent 596-query ALL MRR@10 **.9847**
+(callers .9846, defs 1.0000, imports .9617, 0 errors, 11.7 s). Frozen retrieve on
+`/Users/aditya/AI/ast-sgrep-bench/repoqa-cosqa-20261102`: RepoQA mrr10 **.7319**, CoSQA mrr10
+**.4230**, matching `frozen-20261102`. P3 close predicates held. P4 started.
+
+Evidence: `benchmarks/results/internal/readpath-p3-20261102/REPORT.md`.
+
+## Closed: read-path cutover P4 (semantic f16 bundle; frozen lockstep)
+
+Measured 2026-11-02 on the self-corpus (HEAD `957c6b50`, dirty additive tree). `SemanticCache` /
+`QUERY_EMBED_CACHE` / `CHUNK_ID_CACHE` deleted. SQL control arm stays until P6.
+
+Close binary `target/release/asgrep` sha256 `f6d2f49b4a3df6a84448534905fdccb6fac1500c544d3ecf7b177422558ee272`.
+
+The first frozen bundle retrieve (CoSQA mrr10 0.425220 / hit5 0.570 / hit100 0.936 vs SQL
+0.4230055555555553 / 0.562 / 0.938) was **not f16 cosine**. One-shot `line_corpus_if_cached`
+materialized `read.v1` (SQL returns None unless warmed) and hybrid cascade skipped leftover
+terms with baked `min_df>128` (SQL `min_df` is None). Fusion occupancy moved gold ranks.
+Fix: cached-only corpus; no baked-df skip on hybrid discovery.
+
+Protocol: `asgrep serve --root .`, tool=`search`, `ASGREP_NO_AMBIENT_FRESHNESS=1`, n=25 distinct
+conceptual NL needles, first hit of each only (no ResponseCache repeats).
+
+- Unique warm p50: 10.206 ms bundle vs 25.651 ms SQL (**0.398×**) — PASS ≤0.85× SQL.
+- File/line identity: **25/25** — PASS.
+- Serve RSS: **93.8 vs 298.0 MiB** — PASS ≤100 MiB.
+- Frozen retrieve-only on `/Users/aditya/AI/ast-sgrep-bench/repoqa-cosqa-20261102`:
+  RepoQA-600 mrr10 **0.7318935185185182**, CoSQA-500 mrr10 **0.4230055555555553**,
+  CoSQA hit5 **0.562**, hit100 **0.938** — bit-match `frozen-20261102`. 0 errors.
+
+Evidence: `benchmarks/results/internal/readpath-p4-20261102/` (`REPORT.md`,
+`unique-query.json`, `frozen-retry/summary.json`).
+
+Retry predicate (directly testable): reopen P4 only when the same serve protocol drops
+identity below 25/25, unique warm p50 exceeds 0.85× SQL, RSS exceeds 100 MiB, or
+`ASGREP_READPATH=bundle` frozen retrieve on those indexes prints CoSQA mrr10 other than
+**0.4230055555555553** (or hit5 other than **0.562**, hit100 other than **0.938**).
+Packing f32 or restoring sqlite mmap 256 MiB on the bundle arm does not count as a keep.
+
+## Open: read-path cutover P5 (compile caches gone; general TS lane remains)
+
+Measured 2026-11-02 (HEAD `957c6b50`, dirty additive). Deleted pattern compile memos:
+`QueryCache`, `PARSERS`, `SUPPORTED`, `GENERAL_TEMPLATES`, `IF_COND_TEMPLATES`,
+`LITERAL_TEMPLATES`. `extract.rs` `TS_PARSERS` kept (index extract). SQL control until P6.
+
+Binary sha256 `50dec77909d631ca976cb0de412965f83c8cce6617f1dd72abbffb9568023a6a`.
+
+- Structural-intent 596, gold sha256 `231aec65…05bc`: ALL MRR@10 **.9847** (callers .9846,
+  defs 1.0000, imports .9617) — PASS.
+- Pattern unique-query p50 **0.080 ms** bundle vs P3 **0.090 ms** — PASS no worse.
+  Protocol: `asgrep serve --root . --no-embed`, tool=`find`, n=45 prefixed, first hit.
+  Identity 45/45.
+- Remaining: `general_lane_supported` still admits TS-template `$` shapes. Native walkers
+  are not the only path. P6 not started.
+
+Evidence: `benchmarks/results/internal/readpath-p5-20261102/`.
+
+Retry predicate (directly testable): close P5 only when `general_lane_supported` is gone
+(no TS-template fallback for unclassified `$` patterns), unsupported shapes return the
+teaching error, structural-intent on gold sha256 `231aec65efc1876cd8a3499997fa2365d0330356157176db22d6350ae64605bc`
+still prints ALL MRR@10 **0.9847**, and the P3 mill protocol still has pattern p50 **≤0.090 ms**
+bundle and identity 45/45. Restoring any of the deleted compile caches does not count as a keep.

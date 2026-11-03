@@ -160,7 +160,7 @@ impl LexiconBuilder {
             return Vec::new();
         }
         let total = self.observations as f64;
-        let mut by_term: HashMap<&str, Vec<Association>> = HashMap::new();
+        let mut by_term: Vec<(&str, Vec<Association>)> = Vec::new();
         for ((left, right), count) in &self.pair_counts {
             if *count < MIN_SUPPORT {
                 continue;
@@ -181,12 +181,16 @@ impl LexiconBuilder {
                 // is evidence against an association, not for one.
                 continue;
             }
-            by_term.entry(left.as_str()).or_default().push(Association {
+            let association = Association {
                 term: left.clone(),
                 related: right.clone(),
                 ppmi: pmi,
                 support: *count,
-            });
+            };
+            match by_term.binary_search_by(|(term, _)| (*term).cmp(left.as_str())) {
+                Ok(i) => by_term[i].1.push(association),
+                Err(i) => by_term.insert(i, (left.as_str(), vec![association])),
+            }
         }
         let mut out = Vec::new();
         for (_, mut associations) in by_term {
@@ -209,12 +213,12 @@ impl LexiconBuilder {
 /// Persisted lexicon, loaded for query expansion.
 #[derive(Debug, Default, Clone)]
 pub struct Lexicon {
-    by_term: HashMap<String, Vec<Association>>,
+    by_term: Vec<(String, Vec<Association>)>,
 }
 
 impl Lexicon {
     pub fn from_associations(associations: Vec<Association>) -> Self {
-        let mut by_term: HashMap<String, Vec<Association>> = HashMap::new();
+        let mut by_term: Vec<(String, Vec<Association>)> = Vec::new();
         for association in associations {
             let reverse = Association {
                 term: association.related.clone(),
@@ -233,12 +237,16 @@ impl Lexicon {
     }
 
     pub fn len(&self) -> usize {
-        self.by_term.values().map(Vec::len).sum()
+        self.by_term.iter().map(|(_, rows)| rows.len()).sum()
     }
 
     /// Terms this repository associates with `term`, strongest first.
     pub fn related(&self, term: &str) -> &[Association] {
-        self.by_term.get(term).map(Vec::as_slice).unwrap_or(&[])
+        self.by_term
+            .binary_search_by(|(name, _)| name.as_str().cmp(term))
+            .ok()
+            .map(|i| self.by_term[i].1.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Expand a query with repository-learned terms, returning the added terms
@@ -268,23 +276,28 @@ impl Lexicon {
     }
 }
 
-fn insert_bounded(by_term: &mut HashMap<String, Vec<Association>>, association: Association) {
-    let entries = by_term.entry(association.term.clone()).or_default();
-    if entries
-        .iter()
-        .any(|existing| existing.related == association.related)
-    {
-        return;
+fn insert_bounded(by_term: &mut Vec<(String, Vec<Association>)>, association: Association) {
+    match by_term.binary_search_by(|(name, _)| name.as_str().cmp(&association.term)) {
+        Ok(i) => {
+            let entries = &mut by_term[i].1;
+            if entries
+                .iter()
+                .any(|existing| existing.related == association.related)
+            {
+                return;
+            }
+            entries.push(association);
+            entries.sort_by(|a, b| {
+                b.ppmi
+                    .partial_cmp(&a.ppmi)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.support.cmp(&a.support))
+                    .then_with(|| a.related.cmp(&b.related))
+            });
+            entries.truncate(MAX_PER_TERM);
+        }
+        Err(i) => by_term.insert(i, (association.term.clone(), vec![association])),
     }
-    entries.push(association);
-    entries.sort_by(|a, b| {
-        b.ppmi
-            .partial_cmp(&a.ppmi)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.support.cmp(&a.support))
-            .then_with(|| a.related.cmp(&b.related))
-    });
-    entries.truncate(MAX_PER_TERM);
 }
 
 /// Human-readable justification for one learned association (ufk7).

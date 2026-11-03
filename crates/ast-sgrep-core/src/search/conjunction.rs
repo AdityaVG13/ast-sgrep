@@ -22,6 +22,7 @@
 //! - Empty channels stay honest: an empty left result is empty; an empty
 //!   right result makes `AND` empty and `AND NOT` a no-op.
 
+use super::fusion::FileCsr;
 use crate::query::{strip_wrapping_quotes, ParsedQuery, QueryMode};
 use crate::search::types::{merge_channel_evidence, SearchHit};
 use crate::Result;
@@ -207,21 +208,24 @@ pub(crate) fn combine(
     negated: bool,
     span_join: bool,
 ) -> Vec<SearchHit> {
-    use std::collections::HashMap;
-    let mut right_by_file: HashMap<&str, Vec<&SearchHit>> = HashMap::new();
-    for hit in &right_hits {
-        right_by_file
-            .entry(hit.file.as_str())
-            .or_default()
-            .push(hit);
-    }
+    let right_by_file = FileCsr::build(
+        right_hits
+            .iter()
+            .enumerate()
+            .map(|(i, hit)| (hit.file.as_str(), i as u32))
+            .collect(),
+    );
     let joined = |left: &SearchHit| {
-        right_by_file.get(left.file.as_str()).is_some_and(|right| {
-            !span_join
-                || right
-                    .iter()
-                    .any(|right| pattern_caller_spans_overlap(left, right))
-        })
+        let right = right_by_file.get(left.file.as_str());
+        if right.is_empty() {
+            false
+        } else if !span_join {
+            true
+        } else {
+            right
+                .iter()
+                .any(|&i| pattern_caller_spans_overlap(left, &right_hits[i as usize]))
+        }
     };
     let mut kept: Vec<SearchHit> = if negated {
         left_hits.into_iter().filter(|hit| !joined(hit)).collect()

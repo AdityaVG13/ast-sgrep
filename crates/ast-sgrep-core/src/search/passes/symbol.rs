@@ -1,3 +1,4 @@
+use super::super::fusion::{FileCsr, NameIntern};
 use crate::query::ParsedQuery;
 use crate::rank::{
     best_symbol_score_normalized, max_normalize_idf, normalize_query_terms, score_caller_weighted,
@@ -5,12 +6,13 @@ use crate::rank::{
 };
 use crate::search::types::matches_lang;
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
+use crate::store::bundle_graph::file_tally;
 use crate::store::sql::{
     caller_terms_filter, escape_like_term, like_terms_filter, query_limit_map,
 };
 use crate::store::IndexStore;
 use crate::Result;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
@@ -86,22 +88,25 @@ pub type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
 
 /// Snapshot-held unique hybrid: one SQL load of defs, then RAM substring match.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct WarmedSymbolTable {
     rows: Arc<Vec<SymbolSpanRow>>,
     names_lower: Arc<Vec<String>>,
-    by_file: Arc<HashMap<String, Vec<usize>>>,
+    by_file: Arc<FileCsr>,
 }
 
+#[allow(dead_code)]
 impl WarmedSymbolTable {
     pub(crate) fn load(store: &IndexStore) -> Result<Self> {
         const WARMED_SYMBOL_CAP: usize = 262_144;
         let rows = query_symbol_spans(store, "", Vec::new(), SYMBOL_KIND_ORDER, WARMED_SYMBOL_CAP)?;
-        let mut names_lower = Vec::with_capacity(rows.len());
-        let mut by_file: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, row) in rows.iter().enumerate() {
-            names_lower.push(row.2.to_lowercase());
-            by_file.entry(row.0.clone()).or_default().push(i);
-        }
+        let names_lower: Vec<String> = rows.iter().map(|row| row.2.to_lowercase()).collect();
+        let by_file = FileCsr::build(
+            rows.iter()
+                .enumerate()
+                .map(|(i, row)| (row.0.as_str(), i as u32))
+                .collect(),
+        );
         Ok(Self {
             rows: Arc::new(rows),
             names_lower: Arc::new(names_lower),
@@ -123,10 +128,8 @@ impl WarmedSymbolTable {
         // rows that survive the budget are cloned.
         let mut matched: Vec<usize> = Vec::new();
         for path in allowed_files {
-            let Some(idxs) = self.by_file.get(path) else {
-                continue;
-            };
-            for &i in idxs {
+            for &i in self.by_file.get(path) {
+                let i = i as usize;
                 if !matches_lang(self.rows[i].1.as_deref(), options.lang_filter.as_deref()) {
                     continue;
                 }
@@ -196,6 +199,65 @@ pub fn kind_rank(kind: &str) -> u8 {
         "type" | "enum" | "class" | "interface" | "struct" => 1,
         _ => 2,
     }
+}
+
+fn first_containing_term(terms: &[String], name: &str) -> usize {
+    let lower = name.to_ascii_lowercase();
+    terms
+        .iter()
+        .position(|term| lower.contains(term.to_ascii_lowercase().as_str()))
+        .unwrap_or(terms.len())
+}
+
+fn packed_hybrid_def_rows(
+    bundle: &crate::store::read_bundle::ReadBundle,
+    terms: &[String],
+    allowed_files: &HashSet<String>,
+    lang: Option<&str>,
+    limit: usize,
+    affine: &HashSet<String>,
+) -> Vec<SymbolSpanRow> {
+    let mut all = crate::store::bundle_graph::symbol_matches_for_files(
+        bundle,
+        terms,
+        allowed_files,
+        lang,
+        usize::MAX,
+    );
+    all.sort_by(cmp_symbol_rows);
+    let affine_src = if affine.is_empty() {
+        None
+    } else {
+        Some(all.clone())
+    };
+    let mut rows = quota_term_fair_partition(
+        all,
+        |row| kind_rank(row.3.as_str()),
+        |row| first_containing_term(terms, &row.2),
+        limit,
+    );
+    rows.sort_by(cmp_symbol_rows);
+    rows = quota_partition(rows, |row| kind_rank(row.3.as_str()), limit);
+    if let Some(src) = affine_src {
+        let mut seen: HashSet<(String, u32, String)> = rows
+            .iter()
+            .map(|row| (row.0.clone(), row.4, row.2.clone()))
+            .collect();
+        let before = rows.len();
+        for row in src
+            .into_iter()
+            .filter(|row| affine.contains(&row.0))
+            .take(32)
+        {
+            if seen.insert((row.0.clone(), row.4, row.2.clone())) {
+                rows.push(row);
+            }
+        }
+        if rows.len() != before {
+            rows.sort_by(cmp_symbol_rows);
+        }
+    }
+    rows
 }
 
 /// Canonical symbol-row order shared by the warmed table and the cold SQL
@@ -483,6 +545,8 @@ fn caller_rows_to_hits(
     // when there is nothing to score.
     let idf_weights = if rows.is_empty() {
         Vec::new()
+    } else if let Ok(Some(bundle)) = excerpt_store.read_bundle(None) {
+        crate::store::bundle_graph::callee_idf_weights(&bundle, &norm_terms)
     } else {
         name_table_idf_weights(
             excerpt_store,
@@ -542,10 +606,11 @@ fn caller_rows_to_hits(
         attach_indexed_excerpts(excerpt_store, &mut caller_hits)?;
     }
     if let Some(store) = store {
-        let mut candidate_counts = HashMap::new();
+        let mut intern = NameIntern::new(caller_hits.len() + graph_hits.len());
+        let mut slots: Vec<Option<(Vec<(String, usize)>, usize)>> = Vec::new();
         let scip_refs = store.scip_fact_set(false)?;
-        attach_caller_resolutions(store, &mut candidate_counts, &scip_refs, &mut caller_hits)?;
-        attach_caller_resolutions(store, &mut candidate_counts, &scip_refs, &mut graph_hits)?;
+        attach_caller_resolutions(store, &mut intern, &mut slots, &scip_refs, &mut caller_hits)?;
+        attach_caller_resolutions(store, &mut intern, &mut slots, &scip_refs, &mut graph_hits)?;
     }
     caller_hits.extend(graph_hits);
     Ok(caller_hits)
@@ -587,31 +652,31 @@ pub(crate) fn attach_indexed_excerpts(store: &IndexStore, hits: &mut [SearchHit]
 
 fn attach_caller_resolutions(
     store: &IndexStore,
-    candidate_counts: &mut HashMap<String, (HashMap<String, usize>, usize)>,
-    scip_refs: &HashSet<(String, u32, String)>,
+    intern: &mut NameIntern,
+    slots: &mut Vec<Option<(Vec<(String, usize)>, usize)>>,
+    scip_refs: &[(String, u32, String)],
     hits: &mut [SearchHit],
 ) -> Result<()> {
     for hit in hits {
         let Some(callee) = hit.callee.as_deref() else {
             continue;
         };
-        if !candidate_counts.contains_key(callee) {
-            candidate_counts.insert(
-                callee.to_owned(),
-                store.symbol_name_candidate_counts(callee)?,
-            );
+        let id = intern.intern(callee) as usize;
+        while slots.len() <= id {
+            slots.push(None);
         }
-        let (by_file, repo) = &candidate_counts[callee];
-        let same_file = by_file.get(&hit.file).copied().unwrap_or(0);
+        if slots[id].is_none() {
+            slots[id] = Some(store.symbol_name_candidate_counts(callee)?);
+        }
+        let (by_file, repo) = slots[id].as_ref().expect("slot filled above");
+        let same_file = file_tally(by_file, &hit.file);
         let counted =
             crate::resolution::Resolution::from_candidates(same_file, *repo, std::iter::empty());
-        hit.resolution = Some(
-            if scip_refs.contains(&(hit.file.clone(), hit.line_start, callee.to_string())) {
-                counted.upgrade(crate::resolution::Resolution::ScipOccurrence)
-            } else {
-                counted
-            },
-        );
+        hit.resolution = Some(if scip_has(scip_refs, &hit.file, hit.line_start, callee) {
+            counted.upgrade(crate::resolution::Resolution::ScipOccurrence)
+        } else {
+            counted
+        });
     }
     Ok(())
 }
@@ -816,7 +881,7 @@ fn attach_scip_def_resolutions(store: &IndexStore, hits: &mut [SearchHit]) -> Re
         let Some(name) = hit.symbol.as_deref() else {
             continue;
         };
-        if scip_defs.contains(&(hit.file.clone(), hit.line_start, name.to_string())) {
+        if scip_has(&scip_defs, &hit.file, hit.line_start, name) {
             let current = hit
                 .resolution
                 .clone()
@@ -825,6 +890,17 @@ fn attach_scip_def_resolutions(store: &IndexStore, hits: &mut [SearchHit]) -> Re
         }
     }
     Ok(())
+}
+
+fn scip_has(facts: &[(String, u32, String)], file: &str, line: u32, name: &str) -> bool {
+    facts
+        .binary_search_by(|(path, line_no, ident)| {
+            path.as_str()
+                .cmp(file)
+                .then(line_no.cmp(&line))
+                .then(ident.as_str().cmp(name))
+        })
+        .is_ok()
 }
 pub fn symbol_pass(
     store: &IndexStore,
@@ -847,17 +923,6 @@ pub fn symbol_pass_for_files(
     allowed_files: &HashSet<String>,
     include_callers: bool,
 ) -> Result<Vec<SearchHit>> {
-    symbol_pass_for_files_warmed(store, options, parsed, allowed_files, include_callers, None)
-}
-
-pub(crate) fn symbol_pass_for_files_warmed(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    allowed_files: &HashSet<String>,
-    include_callers: bool,
-    warmed: Option<&WarmedSymbolTable>,
-) -> Result<Vec<SearchHit>> {
     if parsed.terms.is_empty() || allowed_files.is_empty() {
         return Ok(Vec::new());
     }
@@ -872,33 +937,27 @@ pub(crate) fn symbol_pass_for_files_warmed(
     // fusion decides, not the path alphabet.
     let sql_limit = options.retained_limit().clamp(32, SYMBOL_SQL_LIMIT);
     let norm_terms = normalize_query_terms(&parsed.terms);
+    let bundle = store.read_bundle(None).ok().flatten();
     let idf_weights = {
         let _span = crate::perf_profile::Span::start(
             "symbol_idf_weights",
             "search",
             "name_table_idf_weights",
         );
-        match warmed {
-            Some(table) => table.idf_weights(&norm_terms),
-            None => name_table_idf_weights(
-                store,
-                crate::names_sidecar::NamePopulation::Symbols,
-                &norm_terms,
-            )?,
-        }
+        name_table_idf_weights(
+            store,
+            crate::names_sidecar::NamePopulation::Symbols,
+            &norm_terms,
+        )?
     };
     let aliases = if has_aliasable_verb(&norm_terms) {
-        let cooccurrences = match warmed {
-            Some(table) => table.term_cooccurrences(&norm_terms),
-            None => name_table_term_cooccurrences(store, &norm_terms)?,
-        };
-        kept_verb_aliases(&norm_terms, &cooccurrences, |candidates| match warmed {
-            Some(table) => Ok(table.idf_weights_with_dfs(candidates)),
-            None => name_table_idf_weights_with_dfs(
+        let cooccurrences = name_table_term_cooccurrences(store, &norm_terms)?;
+        kept_verb_aliases(&norm_terms, &cooccurrences, |candidates| {
+            name_table_idf_weights_with_dfs(
                 store,
                 crate::names_sidecar::NamePopulation::Symbols,
                 candidates,
-            ),
+            )
         })?
     } else {
         AliasExpansion::default()
@@ -910,72 +969,70 @@ pub(crate) fn symbol_pass_for_files_warmed(
     };
     let mut def_discovery_terms = parsed.terms.clone();
     def_discovery_terms.extend(aliases.discovery.iter().cloned());
-    let rows = if let Some(table) = warmed {
-        let _span =
-            crate::perf_profile::Span::start("symbol_warm_matches", "search", "matches_for_files");
-        table.matches_for_files(options, &def_discovery_terms, allowed_files, sql_limit)
-    } else {
+    let affine = stem_affine_files(parsed, allowed_files);
+    let rows = {
         let _span = crate::perf_profile::Span::start(
             "symbol_quota_rows",
             "search",
             "query_quota_symbol_spans",
         );
-        let (mut where_clause, mut bind) = like_terms_filter(
-            "s.name",
-            &def_discovery_terms,
-            options.lang_filter.as_deref(),
-        );
-        restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
-        // Quotas must precede admission: even a 500-row function-first
-        // window can hide every minority kind. Fetch a bounded quota page in
-        // one statement, then preserve the shared canonical selection policy.
-        let mut rows =
-            query_quota_symbol_spans(store, &def_discovery_terms, &where_clause, bind, sql_limit)?;
-        rows.sort_by(cmp_symbol_rows);
-        quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit)
+        if let Some(bundle) = bundle
+            .as_ref()
+            .filter(|b| crate::store::bundle_graph::symbols_section_present(b))
+        {
+            packed_hybrid_def_rows(
+                bundle,
+                &def_discovery_terms,
+                allowed_files,
+                options.lang_filter.as_deref(),
+                sql_limit,
+                &affine,
+            )
+        } else {
+            let (mut where_clause, mut bind) = like_terms_filter(
+                "s.name",
+                &def_discovery_terms,
+                options.lang_filter.as_deref(),
+            );
+            restrict_to_files(&mut where_clause, &mut bind, Some(allowed_files));
+            let mut rows =
+                query_quota_symbol_spans(store, &def_discovery_terms, &where_clause, bind, sql_limit)?;
+            rows.sort_by(cmp_symbol_rows);
+            let mut rows = quota_partition(rows, |row| kind_rank(row.3.as_str()), sql_limit);
+            if !affine.is_empty() {
+                let (mut sup_where, mut sup_bind) = like_terms_filter(
+                    "s.name",
+                    &def_discovery_terms,
+                    options.lang_filter.as_deref(),
+                );
+                restrict_to_files(&mut sup_where, &mut sup_bind, Some(&affine));
+                if let Ok(supplement) =
+                    query_symbol_spans(store, &sup_where, sup_bind, SYMBOL_KIND_ORDER, 32)
+                {
+                    if !supplement.is_empty() {
+                        let mut seen: HashSet<(String, u32, String)> = rows
+                            .iter()
+                            .map(|row| (row.0.clone(), row.4, row.2.clone()))
+                            .collect();
+                        let before = rows.len();
+                        for row in supplement {
+                            if seen.insert((row.0.clone(), row.4, row.2.clone())) {
+                                rows.push(row);
+                            }
+                        }
+                        if rows.len() != before {
+                            rows.sort_by(cmp_symbol_rows);
+                        }
+                    }
+                }
+            }
+            rows
+        }
     };
     let mut score_terms = norm_terms;
     let mut score_weights = idf_weights;
     score_terms.extend(aliases.score);
     score_weights.extend(aliases.weights);
-    // Stem-affine admission (conformance ledger: file-affinity for def
-    // rows must break path-order quota windows). The quota windows above
-    // admit minorities in PATH order, so a stem-matching static
-    // (`DEFAULT_TYPES` in `default_types.rs`) is cut from the window
-    // before scoring ever runs — the score boost in
-    // `symbol_span_rows_to_hits_opts` cannot resurrect a row that was
-    // never selected. Re-query the (few) stem-affine files directly with
-    // the same discovery terms and merge what the quota missed; the
-    // boost then carries those rows through the score-ordered retain.
-    let affine = stem_affine_files(parsed, allowed_files);
-    let mut rows = rows;
-    if !affine.is_empty() {
-        let (mut sup_where, mut sup_bind) = like_terms_filter(
-            "s.name",
-            &def_discovery_terms,
-            options.lang_filter.as_deref(),
-        );
-        restrict_to_files(&mut sup_where, &mut sup_bind, Some(&affine));
-        if let Ok(supplement) =
-            query_symbol_spans(store, &sup_where, sup_bind, SYMBOL_KIND_ORDER, 32)
-        {
-            if !supplement.is_empty() {
-                let mut seen: HashSet<(String, u32, String)> = rows
-                    .iter()
-                    .map(|row| (row.0.clone(), row.4, row.2.clone()))
-                    .collect();
-                let before = rows.len();
-                for row in supplement {
-                    if seen.insert((row.0.clone(), row.4, row.2.clone())) {
-                        rows.push(row);
-                    }
-                }
-                if rows.len() != before {
-                    rows.sort_by(cmp_symbol_rows);
-                }
-            }
-        }
-    }
     let mut hits = {
         let _span = crate::perf_profile::Span::start(
             "symbol_rows_to_hits",
@@ -995,8 +1052,18 @@ pub(crate) fn symbol_pass_for_files_warmed(
     if include_callers {
         let _span =
             crate::perf_profile::Span::start("symbol_caller_pass", "search", "query_caller_rows");
-        hits.extend(caller_rows_to_hits(
-            store,
+        let caller_rows = if let Some(bundle) = bundle
+            .as_ref()
+            .filter(|b| crate::store::bundle_graph::callers_section_present(b))
+        {
+            crate::store::bundle_graph::callers_matches_for_files(
+                bundle,
+                &parsed.terms,
+                allowed_files,
+                options.lang_filter.as_deref(),
+                sql_limit,
+            )
+        } else {
             query_caller_rows(
                 store,
                 caller_terms_filter,
@@ -1004,7 +1071,11 @@ pub(crate) fn symbol_pass_for_files_warmed(
                 options.lang_filter.as_deref(),
                 Some(allowed_files),
                 sql_limit,
-            )?,
+            )?
+        };
+        hits.extend(caller_rows_to_hits(
+            store,
+            caller_rows,
             options,
             parsed,
             CallerMatchMode::Hybrid,
@@ -1396,10 +1467,26 @@ pub fn search_callers(
     let Some(q) = prefixed_mode_query(parsed) else {
         return Ok(vec![]);
     };
-    // callers:Name uses equality on indexed callee column.
     let name = q.terms.first().map(String::as_str).unwrap_or("");
     if name.is_empty() {
         return Ok(vec![]);
+    }
+    if let Ok(Some(bundle)) = store.read_bundle(None) {
+        let rows = crate::store::bundle_graph::callers_exact(
+            &bundle,
+            name,
+            options.lang_filter.as_deref(),
+            mode_sql_limit(options),
+        );
+        return caller_rows_to_hits(
+            store,
+            rows,
+            options,
+            &q,
+            CallerMatchMode::CalleeOnly,
+            Some(store),
+            true,
+        );
     }
     let (where_clause, bind) = exact_eq_filter("c.callee", name, options.lang_filter.as_deref());
     let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
@@ -1428,10 +1515,21 @@ pub fn search_defs(
     let Some(q) = prefixed_mode_query(parsed) else {
         return Ok(vec![]);
     };
-    // defs:Name is an exact symbol lookup — equality uses the name index.
     let name = q.terms.first().map(String::as_str).unwrap_or("");
     if name.is_empty() {
         return Ok(vec![]);
+    }
+    if let Ok(Some(bundle)) = store.read_bundle(None) {
+        let mut rows = crate::store::bundle_graph::defs_exact(
+            &bundle,
+            name,
+            options.lang_filter.as_deref(),
+            mode_sql_limit(options),
+        );
+        rows.sort_by(cmp_symbol_rows);
+        return symbol_span_rows_to_hits(store, rows, options, &q, HitKind::Def, |n| {
+            score_def(&q.terms, n)
+        });
     }
     let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
     let rows = query_symbol_spans(

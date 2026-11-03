@@ -4,10 +4,11 @@
 //! through indexed caller/callee relations and reports how each hop resolved.
 
 use crate::resolution::{Resolution, SymbolId};
+use crate::search::NameIntern;
 use crate::store::{CallEvidenceRow, IndexStore};
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct CallPathConfig {
@@ -57,7 +58,7 @@ pub struct CallPathResponse {
 
 #[derive(Debug, Clone)]
 struct Predecessor {
-    parent: String,
+    parent: u32,
     call: CallEvidenceRow,
 }
 
@@ -91,7 +92,7 @@ fn hop_resolution(store: &IndexStore, call: &CallEvidenceRow) -> Result<Resoluti
         return Ok(Resolution::ScipOccurrence);
     }
     let (by_file, repository_candidates) = store.symbol_name_candidate_counts(&call.callee)?;
-    let same_file_candidates = by_file.get(&call.file).copied().unwrap_or(0);
+    let same_file_candidates = crate::store::bundle_graph::file_tally(&by_file, &call.file);
     let candidates = store
         .symbols_named(&call.callee, 4)?
         .into_iter()
@@ -105,18 +106,18 @@ fn hop_resolution(store: &IndexStore, call: &CallEvidenceRow) -> Result<Resoluti
 
 fn reconstruct_path(
     store: &IndexStore,
-    source: &str,
-    sink: &str,
-    predecessors: &HashMap<String, Predecessor>,
+    source: u32,
+    sink: u32,
+    predecessors: &[Option<Predecessor>],
 ) -> Result<Vec<CallPathHop>> {
-    let mut current = sink.to_owned();
+    let mut current = sink;
     let mut calls = Vec::new();
     while current != source {
-        let predecessor = predecessors
-            .get(&current)
+        let predecessor = predecessors[current as usize]
+            .as_ref()
             .expect("visited call-path node has a predecessor");
         calls.push(predecessor.call.clone());
-        current.clone_from(&predecessor.parent);
+        current = predecessor.parent;
     }
     calls.reverse();
     calls
@@ -163,8 +164,13 @@ pub fn find_call_path(
         return Ok(response);
     }
 
-    let mut seen = HashSet::from([source_key.clone()]);
-    let mut predecessors = HashMap::new();
+    let mut intern = NameIntern::new(config.max_nodes.min(256));
+    let source_id = intern.intern(&source_key);
+    let sink_id = intern.intern(&sink_key);
+    let mut seen = vec![false; intern.len()];
+    seen[source_id as usize] = true;
+    let mut visited = 1usize;
+    let mut predecessors: Vec<Option<Predecessor>> = vec![None; intern.len()];
     let mut frontier = VecDeque::from([(
         source.to_owned(),
         0u32,
@@ -184,26 +190,31 @@ pub fn find_call_path(
         if calls.len() > remaining_edges {
             response.truncated = true;
         }
+        let parent_id = intern.intern(&normalized(&caller));
         for call in calls.into_iter().take(remaining_edges) {
             response.explored_edges += 1;
             let callee_key = normalized(&call.callee);
-            if seen.contains(&callee_key) {
+            let callee_id = intern.intern(&callee_key);
+            let idx = callee_id as usize;
+            if seen.len() <= idx {
+                seen.resize(idx + 1, false);
+                predecessors.resize(idx + 1, None);
+            }
+            if seen[idx] {
                 continue;
             }
-            if seen.len() >= config.max_nodes {
+            if visited >= config.max_nodes {
                 response.truncated = true;
                 continue;
             }
-            seen.insert(callee_key.clone());
-            predecessors.insert(
-                callee_key.clone(),
-                Predecessor {
-                    parent: normalized(&call.caller),
-                    call: call.clone(),
-                },
-            );
-            if callee_key == sink_key {
-                response.path = reconstruct_path(store, &source_key, &sink_key, &predecessors)?;
+            seen[idx] = true;
+            visited += 1;
+            predecessors[idx] = Some(Predecessor {
+                parent: parent_id,
+                call: call.clone(),
+            });
+            if callee_id == sink_id {
+                response.path = reconstruct_path(store, source_id, sink_id, &predecessors)?;
                 response.found = true;
                 response.depth = Some(response.path.len() as u32);
                 break 'search;
@@ -216,6 +227,6 @@ pub fn find_call_path(
             }
         }
     }
-    response.visited_nodes = seen.len();
+    response.visited_nodes = visited;
     Ok(response)
 }

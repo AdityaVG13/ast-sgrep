@@ -1,12 +1,11 @@
 //! File-granular graph evidence with deterministic, attempt-based work admission.
 //! Output trimming is independent of traversal. Work caps bound decoded/admitted
 //! evidence and store calls, not SQLite scans/sorts, elapsed time or byte sizes.
-use crate::search::{SearchHit, SearchOptions, Searcher};
+use crate::search::{NameIntern, SearchHit, SearchOptions, Searcher};
 use crate::store::{IndexStore, SymbolLocationRow};
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeLabel {
     Calls,
@@ -217,22 +216,30 @@ fn seed_location(store: &IndexStore, hit: &SearchHit) -> Result<Option<SymbolLoc
         .flatten())
 }
 fn build_seeds(store: &IndexStore, hits: &[SearchHit], top_n: usize) -> Result<Vec<ChainEntry>> {
-    let mut best_per_file: HashMap<&str, (&SearchHit, usize)> = HashMap::new();
+    let mut intern = NameIntern::new(top_n.min(hits.len()));
+    let mut best_idx: Vec<Option<usize>> = Vec::new();
+    let mut filled = 0usize;
     for (idx, hit) in hits.iter().enumerate() {
-        let key = hit.file.as_str();
-        match best_per_file.get(key) {
-            Some(&(_, existing_idx)) if hits[existing_idx].score >= hit.score => {}
-            _ => {
-                best_per_file.insert(key, (hit, idx));
-            }
+        let id = intern.intern(&hit.file) as usize;
+        if best_idx.len() <= id {
+            best_idx.resize(id + 1, None);
         }
-        if best_per_file.len() >= top_n {
+        match best_idx[id] {
+            Some(existing) if hits[existing].score >= hit.score => {}
+            None => {
+                best_idx[id] = Some(idx);
+                filled += 1;
+            }
+            Some(_) => best_idx[id] = Some(idx),
+        }
+        if filled >= top_n {
             break;
         }
     }
-    let mut sorted: Vec<_> = best_per_file
-        .values()
-        .map(|(hit, _)| (hit.file.as_str(), *hit))
+    let mut sorted: Vec<_> = best_idx
+        .into_iter()
+        .flatten()
+        .map(|idx| (hits[idx].file.as_str(), &hits[idx]))
         .collect();
     sorted.sort_by(|a, b| {
         b.1.score
@@ -368,18 +375,21 @@ fn expand_one(
     Ok((entries, edges))
 }
 fn dedup_by_file(entries: &[ChainEntry]) -> Vec<ChainEntry> {
-    let mut best: HashMap<&str, &ChainEntry> = HashMap::new();
+    let mut intern = NameIntern::new(entries.len());
+    let mut best: Vec<Option<&ChainEntry>> = Vec::new();
     for e in entries {
-        match best.get(e.file.as_str()) {
-            Some(&existing)
+        let id = intern.intern(&e.file) as usize;
+        if best.len() <= id {
+            best.resize(id + 1, None);
+        }
+        match best[id] {
+            Some(existing)
                 if existing.score > e.score
                     || (existing.score == e.score && existing.depth <= e.depth) => {}
-            _ => {
-                best.insert(e.file.as_str(), e);
-            }
+            _ => best[id] = Some(e),
         }
     }
-    let mut result: Vec<ChainEntry> = best.values().cloned().cloned().collect();
+    let mut result: Vec<ChainEntry> = best.into_iter().flatten().cloned().collect();
     result.sort_by(entry_cmp);
     result
 }
@@ -428,7 +438,9 @@ pub fn expand_chain(
     let mut all_edges = Vec::new();
     let mut frontier = seeds;
     let mut work = WorkBudget::new(config.max_work);
-    let mut seen_files: HashSet<String> = all_entries.iter().map(|e| e.file.clone()).collect();
+    let mut seen_files: Vec<String> = all_entries.iter().map(|e| e.file.clone()).collect();
+    seen_files.sort();
+    seen_files.dedup();
     for d in 1..=config.max_depth {
         if frontier.is_empty() {
             break;
@@ -447,7 +459,13 @@ pub fn expand_chain(
         }
         let novel: Vec<_> = dedup_by_file(&next)
             .into_iter()
-            .filter(|e| seen_files.insert(e.file.clone()))
+            .filter(|e| match seen_files.binary_search(&e.file) {
+                Ok(_) => false,
+                Err(i) => {
+                    seen_files.insert(i, e.file.clone());
+                    true
+                }
+            })
             .collect();
         all_entries.extend(novel.clone());
         frontier = novel;
@@ -455,23 +473,31 @@ pub fn expand_chain(
             break;
         }
     }
-    let mut edge_set = HashSet::new();
-    all_edges.retain(|e| {
-        edge_set.insert((
-            e.from_file.clone(),
-            e.from_symbol.clone(),
-            e.to_file.clone(),
-            e.to_symbol.clone(),
-            e.label,
-        ))
+    all_edges.sort_by(|a, b| {
+        a.from_file
+            .cmp(&b.from_file)
+            .then_with(|| a.from_symbol.cmp(&b.from_symbol))
+            .then_with(|| a.to_file.cmp(&b.to_file))
+            .then_with(|| a.to_symbol.cmp(&b.to_symbol))
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    all_edges.dedup_by(|a, b| {
+        a.from_file == b.from_file
+            && a.from_symbol == b.from_symbol
+            && a.to_file == b.to_file
+            && a.to_symbol == b.to_symbol
+            && a.label == b.label
     });
     all_entries.sort_by(entry_cmp);
     let total_nodes = all_entries.len();
     all_entries.truncate(config.limit);
     // After node truncate, edges must be a subset of remaining nodes.
-    let node_files: HashSet<&str> = all_entries.iter().map(|e| e.file.as_str()).collect();
+    let mut node_files: Vec<&str> = all_entries.iter().map(|e| e.file.as_str()).collect();
+    node_files.sort_unstable();
+    node_files.dedup();
     all_edges.retain(|e| {
-        node_files.contains(e.from_file.as_str()) && node_files.contains(e.to_file.as_str())
+        node_files.binary_search(&e.from_file.as_str()).is_ok()
+            && node_files.binary_search(&e.to_file.as_str()).is_ok()
     });
     let reasons = work.reasons();
     let truncated = !reasons.is_empty();

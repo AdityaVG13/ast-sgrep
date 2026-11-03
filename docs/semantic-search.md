@@ -100,8 +100,8 @@ up to 10,000 vectors. The bound is deliberate: the 2048-vector quality fixture
 misses the 0.99 recall target at 75%, while 90% restores exact top-10 recall and
 remains below the 95% candidate ceiling. Above 10,000 vectors, nprobe is capped
 at 8 so unique-query scoring stays under 1 ms (16 probes was p90 1.2 ms on the
-54k-chunk corpus). The IVF payload is prefaulted on first load so unique-query
-p90 is not a cold page-fault walk. Hybrid search scores only mmap rows whose
+54k-chunk corpus). IVF pages fault on first search; later unique queries do not
+walk the payload again. Hybrid search scores only mmap rows whose
 files survived the lexical/structural cascade, then SQLite-fetches those top-N
 survivors, not every concatenated vector in the candidate files. Hybrid cascade
 prefilter skips 1-2 character tokens (they cannot use trigrams and would

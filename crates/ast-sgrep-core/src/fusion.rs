@@ -1,8 +1,7 @@
 use crate::intent::ChannelWeights;
 use crate::rank::{rrf_score, RRF_K};
-use crate::search::{HitKind, SearchHit};
+use crate::search::{HitKind, NameIntern, SearchHit};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -448,61 +447,63 @@ pub fn apply_weighted_rrf(
         return Vec::new();
     }
     let mut channels: [Vec<usize>; 8] = std::array::from_fn(|_| Vec::new());
-    let mut members_by_result = HashMap::<(&str, u32), Vec<usize>>::new();
-    // Best semantic magnitude per result key, for the magnitude vote below.
-    // Embed scores reach fusion as cosine-scaled values (route_hits
-    // normalizes by the channel ceiling); only their ratio to the query's
-    // best is used, so the vote is invariant to that scaling.
-    let mut semantic_score_by_result = HashMap::<(&str, u32), f64>::new();
+    struct Acc {
+        file: u32,
+        line: u32,
+        members: Vec<usize>,
+        semantic: f64,
+        ranks: ChannelRanks,
+    }
+    let mut intern = NameIntern::new(hits.len());
+    let mut accs: Vec<Acc> = Vec::new();
+    let mut hit_slot = vec![usize::MAX; hits.len()];
     for (index, hit) in hits.iter().enumerate() {
         if hit.score.is_finite() && hit.score > 0.0 {
             channels[channel_for_kind(hit.kind).index()].push(index);
-            members_by_result
-                .entry((hit.file.as_str(), hit.line_start))
-                .or_default()
-                .push(index);
-            if hit.kind == HitKind::Embed {
-                let slot = semantic_score_by_result
-                    .entry((hit.file.as_str(), hit.line_start))
-                    .or_insert(0.0);
-                if hit.score > *slot {
-                    *slot = hit.score;
-                }
+            let file = intern.intern(&hit.file);
+            let slot = accs
+                .iter()
+                .position(|acc| acc.file == file && acc.line == hit.line_start)
+                .unwrap_or_else(|| {
+                    let slot = accs.len();
+                    accs.push(Acc {
+                        file,
+                        line: hit.line_start,
+                        members: Vec::new(),
+                        semantic: 0.0,
+                        ranks: ChannelRanks::default(),
+                    });
+                    slot
+                });
+            accs[slot].members.push(index);
+            if hit.kind == HitKind::Embed && hit.score > accs[slot].semantic {
+                accs[slot].semantic = hit.score;
             }
+            hit_slot[index] = slot;
         }
     }
-    let semantic_top = semantic_score_by_result
-        .values()
-        .copied()
-        .fold(0.0f64, f64::max);
-    // A lexical declaration record and its multi-line definition describe
-    // one observation, not independent corroboration. Keep the lexical member
-    // for provenance, but do not let it vote or spend a lexical rank slot.
-    // Indexed AST span/name suffice when definition excerpts are lazy. Unknown
-    // lexical text, inline bodies and nonidentical loaded records stay independent.
-    let declaration_lexical: HashSet<usize> = channels[FusionChannel::Lexical.index()]
-        .iter()
-        .copied()
-        .filter(|&index| {
-            let lexical = &hits[index];
-            let line = lexical.excerpt.trim();
-            (line.ends_with('{') || line.ends_with(':'))
-                && members_by_result[&(lexical.file.as_str(), lexical.line_start)]
-                    .iter()
-                    .any(|&member| {
-                        let definition = &hits[member];
-                        definition.kind == HitKind::Def
-                            && definition.line_end > definition.line_start
-                            && definition
-                                .symbol
-                                .as_deref()
-                                .is_some_and(|name| !name.is_empty() && line.contains(name))
-                            && (definition.excerpt.is_empty()
-                                || definition.excerpt.lines().next().map(str::trim) == Some(line))
-                    })
-        })
-        .collect();
-    let mut ranks_by_result = HashMap::<(&str, u32), ChannelRanks>::new();
+    let semantic_top = accs.iter().map(|acc| acc.semantic).fold(0.0f64, f64::max);
+    let mut declaration_lexical = vec![false; hits.len()];
+    for &index in &channels[FusionChannel::Lexical.index()] {
+        let lexical = &hits[index];
+        let line = lexical.excerpt.trim();
+        let slot = hit_slot[index];
+        if (line.ends_with('{') || line.ends_with(':'))
+            && accs[slot].members.iter().any(|&member| {
+                let definition = &hits[member];
+                definition.kind == HitKind::Def
+                    && definition.line_end > definition.line_start
+                    && definition
+                        .symbol
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty() && line.contains(name))
+                    && (definition.excerpt.is_empty()
+                        || definition.excerpt.lines().next().map(str::trim) == Some(line))
+            })
+        {
+            declaration_lexical[index] = true;
+        }
+    }
     for channel in FusionChannel::ALL {
         let members = &mut channels[channel.index()];
         members.sort_by(|left, right| {
@@ -513,38 +514,33 @@ pub fn apply_weighted_rrf(
                 .then_with(|| hits[*left].line_start.cmp(&hits[*right].line_start))
                 .then_with(|| hits[*left].line_end.cmp(&hits[*right].line_end))
         });
-        let mut seen_results = HashSet::<(&str, u32)>::new();
+        let mut seen = vec![false; accs.len()];
         let mut rank = 0usize;
         for index in members.iter().copied() {
-            if declaration_lexical.contains(&index) {
+            if declaration_lexical[index] {
                 continue;
             }
-            let hit = &hits[index];
-            let key = (hit.file.as_str(), hit.line_start);
-            if seen_results.insert(key) {
-                ranks_by_result
-                    .entry(key)
-                    .or_default()
-                    .set_best(channel, rank);
+            let slot = hit_slot[index];
+            if !seen[slot] {
+                seen[slot] = true;
+                accs[slot].ranks.set_best(channel, rank);
                 rank += 1;
             }
         }
     }
 
-    // Emit fused rows in sorted key order. members_by_result is a randomly
-    // seeded HashMap; iterating it directly made the fused hit
-    // ORDER a per-process random value feeding every downstream consumer
-    // (route_hits, critic, finish). The byte-stability contract is
-    // "identical inputs + identical index → identical results", so the
-    // emission itself must be deterministic, not just order-normalized
-    // downstream (the finish comparator hardens the tail, not this source).
-    let mut fused_keys: Vec<(&str, u32)> = members_by_result.keys().copied().collect();
-    fused_keys.sort_unstable();
-    let mut fused = Vec::with_capacity(fused_keys.len());
-    let mut magnitudes = Vec::with_capacity(fused_keys.len());
+    let mut order: Vec<usize> = (0..accs.len()).collect();
+    order.sort_by(|&left, &right| {
+        intern
+            .get(accs[left].file)
+            .cmp(intern.get(accs[right].file))
+            .then(accs[left].line.cmp(&accs[right].line))
+    });
+    let mut fused = Vec::with_capacity(order.len());
+    let mut magnitudes = Vec::with_capacity(order.len());
     let mut dump_rows = Vec::new();
-    for key in fused_keys {
-        let mut members = members_by_result.remove(&key).expect("key from same map");
+    for slot in order {
+        let mut members = std::mem::take(&mut accs[slot].members);
         members.sort_by(|left, right| {
             canonical_priority(hits[*left].kind)
                 .cmp(&canonical_priority(hits[*right].kind))
@@ -598,8 +594,8 @@ pub fn apply_weighted_rrf(
         // relative to the query's best. Monotonic in cosine, so
         // within-channel order is unchanged; non-semantic results are
         // bit-identical to pure weighted RRF.
-        let ranks = &ranks_by_result[&key];
-        let magnitude = semantic_score_by_result.get(&key).copied();
+        let ranks = &accs[slot].ranks;
+        let magnitude = (accs[slot].semantic > 0.0).then_some(accs[slot].semantic);
         let mut score = weighted_rrf_score(ranks, weights);
         if ranks.semantic.is_some() && semantic_top > 0.0 {
             if let Some(magnitude) = magnitude {

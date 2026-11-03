@@ -1,18 +1,19 @@
-use ast_sgrep_core::search::passes::lexical::hits_from_matches;
-use std::collections::HashMap;
+use ast_sgrep_core::search::passes::lexical::{hits_from_matches, LineMatches};
 
 /// The lexical channel must emit hits in (path, line_no) order.
-/// LineMatches is a randomly seeded HashMap, so an unsorted
-/// `into_iter` re-rolls the emission order every call and every process.
+/// Rows are first-seen in the intern table; emission sorts by interned path
+/// then line so insertion order cannot leak into the channel.
 #[test]
 fn lexical_emission_is_key_sorted_every_call() {
-    type SeedRow = (Vec<usize>, Option<String>, String);
     let build = || {
-        let mut matches: HashMap<(String, u32), SeedRow> = HashMap::new();
+        let mut matches = LineMatches::new();
         for i in 0..6 {
             matches.insert(
-                (format!("src/mod{i}.rs"), 7),
-                (vec![i as usize], Some("rust".into()), "row".into()),
+                format!("src/mod{i}.rs"),
+                7,
+                vec![i as usize],
+                Some("rust".into()),
+                "row".into(),
             );
         }
         matches

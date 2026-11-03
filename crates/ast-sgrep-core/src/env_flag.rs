@@ -39,3 +39,26 @@ pub fn retired_embed_request() -> Option<String> {
     }
     None
 }
+
+/// Measurement kill-switch for process memos (`ASGREP_NOCACHE`).
+///
+/// `all` or a comma-separated group list (`response,warm,corpus,codemode,render`).
+/// Not a product flag: unique-query mill does not count cache hits. Parsed once
+/// because each measured arm is its own process.
+pub fn memo_off(group: &str) -> bool {
+    use std::sync::OnceLock;
+    static GROUPS: OnceLock<Vec<String>> = OnceLock::new();
+    let groups = GROUPS.get_or_init(|| {
+        std::env::var("ASGREP_NOCACHE")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|part| part.trim().to_ascii_lowercase())
+                    .filter(|part| !part.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    groups.iter().any(|value| value == "all" || value == group)
+}

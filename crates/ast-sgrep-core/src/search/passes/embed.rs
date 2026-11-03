@@ -1,3 +1,4 @@
+use super::super::fusion::{FileCsr, NameIntern};
 use crate::intent::{classify, QueryIntent};
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
@@ -13,196 +14,249 @@ use crate::Result;
 use ast_sgrep_embed::{
     cosine_similarity, normalize_vec, top_k_similarity, SemanticChunkRow, MIN_SIMILARITY,
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::collections::HashSet;
+use std::sync::Arc;
 const EMBED_HIT_LIMIT: usize = 50;
-/// Warmed Pi snapshots score this many concat vectors in RAM instead of IVF.
-/// 54k-chunk IVF+SQL was ~29 ms unique; exhaustive dim-256 dots stay in the
-/// unique-hybrid budget and cannot lose recall to an approximate probe.
+/// Exhaustive concat rank is the IVF-miss fallback, not the serve default.
+/// Cap keeps a held snapshot from scoring an unbounded mmap.
 const SNAPSHOT_EXHAUSTIVE_CHUNK_CAP: usize = 65_536;
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
+    pub packed_f16: Arc<Vec<u16>>,
     pub flat_vectors: Arc<Vec<f32>>,
     pub ids: Arc<Vec<i64>>,
     pub embed_backend: String,
     pub embed_model: Option<String>,
-    chunk_ids_by_file: Arc<HashMap<String, Vec<usize>>>,
+    pub dim: usize,
+    chunks_by_file: Arc<FileCsr>,
+    bundle: Option<Arc<crate::store::read_bundle::ReadBundle>>,
+    view: Option<Arc<crate::store::bundle_semantic::SemanticView>>,
+    rank_idx: Option<Arc<Vec<usize>>>,
 }
 
-pub(crate) struct SemanticCache {
-    lang_filter: Option<String>,
-    max_id: i64,
-    index_data_version: i64,
-    semantic_data_version: i64,
-    embed_backend: String,
-    embed_model: Option<String>,
-    /// SQLite `PRAGMA data_version` at load time. Bumps on EVERY
-    /// committed database write — including foreign raw-SQL mutations through
-    /// a separate connection that move none of the local counters above — so
-    /// a cached chunk set can never outlive an external writer's commit.
-    /// `None` means the pragma was unreadable and the context was NOT cached.
-    data_version: Option<i64>,
+fn embed_ctx_len(ctx: &EmbedContext) -> usize {
+    if let Some(idx) = ctx.rank_idx.as_ref() {
+        idx.len()
+    } else if let Some(view) = ctx.view.as_ref() {
+        view.count
+    } else {
+        ctx.chunks.len()
+    }
+}
+
+fn empty_chunk_row() -> SemanticChunkRow {
+    (
+        String::new(),
+        0,
+        0,
+        String::new(),
+        String::new(),
+        Vec::new(),
+    )
+}
+
+fn chunk_at(ctx: &EmbedContext, i: usize) -> SemanticChunkRow {
+    if let (Some(bundle), Some(view)) = (&ctx.bundle, &ctx.view) {
+        view.row(bundle, i).unwrap_or_else(empty_chunk_row)
+    } else {
+        ctx.chunks.get(i).cloned().unwrap_or_else(empty_chunk_row)
+    }
+}
+
+fn chunks_by_file(chunks: &[SemanticChunkRow]) -> Arc<FileCsr> {
+    Arc::new(FileCsr::build(
+        chunks
+            .iter()
+            .enumerate()
+            .map(|(i, chunk)| (chunk.0.as_str(), i as u32))
+            .collect(),
+    ))
+}
+
+fn embed_context_from_parts(
     chunks: Arc<Vec<SemanticChunkRow>>,
+    packed_f16: Arc<Vec<u16>>,
     flat_vectors: Arc<Vec<f32>>,
     ids: Arc<Vec<i64>>,
-    chunk_ids_by_file: Arc<HashMap<String, Vec<usize>>>,
-}
-
-fn chunk_ids_by_file(chunks: &[SemanticChunkRow]) -> Arc<HashMap<String, Vec<usize>>> {
-    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        map.entry(chunk.0.clone()).or_default().push(i);
-    }
-    Arc::new(map)
-}
-
-fn embed_context_from_cache(entry: &SemanticCache) -> EmbedContext {
+    embed_backend: String,
+    embed_model: Option<String>,
+    dim: usize,
+) -> EmbedContext {
+    let chunks_by_file = chunks_by_file(&chunks);
     EmbedContext {
-        chunks: Arc::clone(&entry.chunks),
-        flat_vectors: Arc::clone(&entry.flat_vectors),
-        ids: Arc::clone(&entry.ids),
-        embed_backend: entry.embed_backend.clone(),
-        embed_model: entry.embed_model.clone(),
-        chunk_ids_by_file: Arc::clone(&entry.chunk_ids_by_file),
+        chunks,
+        packed_f16,
+        flat_vectors,
+        ids,
+        embed_backend,
+        embed_model,
+        dim,
+        chunks_by_file,
+        bundle: None,
+        view: None,
+        rank_idx: None,
     }
 }
 
-fn lock_clear_on_poison<T>(mutex: &Mutex<T>, clear: impl FnOnce(&mut T)) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            mutex.clear_poison();
-            let mut guard = PoisonError::into_inner(poisoned);
-            clear(&mut guard);
-            guard
+fn lang_ok(chunk_path_lang: Option<&str>, want: Option<&str>) -> bool {
+    want.is_none_or(|want| {
+        chunk_path_lang.is_some_and(|have| {
+            ast_sgrep_lang::Language::normalize_id(have)
+                == ast_sgrep_lang::Language::normalize_id(want)
+        })
+    })
+}
+
+fn packed_row_cosine_bytes(query_unit: &[f32], bytes: &[u8], dim: usize, i: usize) -> f32 {
+    let base = i * dim * 2;
+    let need = base + dim * 2;
+    if bytes.len() < need {
+        return 0.0;
+    }
+    if dim <= 256 {
+        let mut row = [0f32; 256];
+        for j in 0..dim {
+            let at = base + j * 2;
+            let bits = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+            row[j] = crate::store::bundle_semantic::f16_to_f32(bits);
+        }
+        cosine_similarity(query_unit, &row[..dim])
+    } else {
+        let mut row = vec![0f32; dim];
+        for j in 0..dim {
+            let at = base + j * 2;
+            let bits = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+            row[j] = crate::store::bundle_semantic::f16_to_f32(bits);
+        }
+        cosine_similarity(query_unit, &row)
+    }
+}
+
+fn embed_context_from_bundle(
+    bundle: Arc<crate::store::read_bundle::ReadBundle>,
+    view: Arc<crate::store::bundle_semantic::SemanticView>,
+    embed_backend: String,
+    embed_model: Option<String>,
+    lang_filter: Option<&str>,
+) -> Option<EmbedContext> {
+    if view.count == 0 || view.dim == 0 {
+        return None;
+    }
+    let mut pairs = Vec::with_capacity(view.count);
+    let mut rank_idx = Vec::new();
+    for i in 0..view.count {
+        let file = view.file_idx[i] as usize;
+        if !lang_ok(bundle.language(file), lang_filter) {
+            continue;
+        }
+        pairs.push((bundle.path(file), i as u32));
+        if lang_filter.is_some() {
+            rank_idx.push(i);
         }
     }
+    if pairs.is_empty() {
+        return None;
+    }
+    Some(EmbedContext {
+        chunks: Arc::new(Vec::new()),
+        packed_f16: Arc::new(Vec::new()),
+        flat_vectors: Arc::new(Vec::new()),
+        ids: Arc::clone(&view.ids),
+        embed_backend,
+        embed_model,
+        dim: view.dim,
+        chunks_by_file: Arc::new(FileCsr::build(pairs)),
+        bundle: Some(bundle),
+        view: Some(view),
+        rank_idx: lang_filter.and(Some(Arc::new(rank_idx))),
+    })
 }
 
-fn peek_semantic_cache(cache: &Mutex<Option<SemanticCache>>) -> Option<EmbedContext> {
-    let guard = lock_clear_on_poison(cache, |slot| {
-        *slot = None;
-    });
-    guard.as_ref().map(embed_context_from_cache)
+fn packed_row_cosine(query_unit: &[f32], packed: &[u16], dim: usize, i: usize) -> f32 {
+    let base = i * dim;
+    if dim <= 256 {
+        let mut row = [0f32; 256];
+        for j in 0..dim {
+            row[j] = crate::store::bundle_semantic::f16_to_f32(packed[base + j]);
+        }
+        cosine_similarity(query_unit, &row[..dim])
+    } else {
+        let mut row = vec![0f32; dim];
+        for j in 0..dim {
+            row[j] = crate::store::bundle_semantic::f16_to_f32(packed[base + j]);
+        }
+        cosine_similarity(query_unit, &row)
+    }
 }
 
 pub(crate) fn load_semantic_context(
     store: &IndexStore,
     options: &SearchOptions,
-    cache: &Mutex<Option<SemanticCache>>,
 ) -> Result<Option<EmbedContext>> {
     if !options.use_embed {
         return Ok(None);
     }
-    let lang_filter = options.lang_filter.clone();
-    let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
-    let index_data_version = store.index_data_version()?;
-    let semantic_data_version = store.semantic_data_version()?;
-    // The local counters above miss foreign raw-SQL mutations. SQLite's
-    // PRAGMA data_version bumps on every committed write by ANY connection; an
-    // unreadable pragma fails closed (no caching) rather than pinning a value.
-    let data_version = store
-        .connection()
-        .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
-        .ok();
     let embed_backend = store
         .get_meta("embed_backend")?
         .unwrap_or_else(|| "semantic".into());
-    {
-        let guard = lock_clear_on_poison(cache, |slot| {
-            *slot = None;
-        });
-        if let Some(c) = guard.as_ref() {
-            if c.lang_filter == lang_filter
-                && c.max_id == max_id
-                && c.index_data_version == index_data_version
-                && c.semantic_data_version == semantic_data_version
-                && c.embed_backend == embed_backend
-                && c.data_version.is_some()
-                && c.data_version == data_version
-            {
-                return Ok(Some(embed_context_from_cache(c)));
-            }
+    let embed_model = store.get_meta("embed_model")?;
+    let lang_filter = options.lang_filter.as_deref();
+    if let Some(bundle) = store.read_bundle(None)? {
+        if let Some(view) = bundle.semantic_view() {
+            return Ok(embed_context_from_bundle(
+                bundle,
+                view,
+                embed_backend,
+                embed_model,
+                lang_filter,
+            ));
         }
     }
-    let chunks = store.all_semantic_chunks(lang_filter.as_deref())?;
+    let chunks = store.all_semantic_chunks(lang_filter)?;
     if chunks.is_empty() {
         return Ok(None);
     }
-    let ids = store.semantic_chunk_ids(lang_filter.as_deref())?;
+    let ids = store.semantic_chunk_ids(lang_filter)?;
     let ids = if ids.len() == chunks.len() {
         ids
     } else {
         Vec::new()
     };
-    let embed_model = store.get_meta("embed_model")?;
-    let flat_vectors = flatten_vectors_for_search(&chunks, chunks[0].5.len())?;
-    let chunk_ids_by_file = chunk_ids_by_file(&chunks);
-    let entry = SemanticCache {
-        lang_filter,
-        max_id,
-        index_data_version,
-        semantic_data_version,
+    let dim = chunks[0].5.len();
+    let flat_vectors = flatten_vectors_for_search(&chunks, dim)?;
+    Ok(Some(embed_context_from_parts(
+        Arc::new(chunks),
+        Arc::new(Vec::new()),
+        Arc::new(flat_vectors),
+        Arc::new(ids),
         embed_backend,
         embed_model,
-        data_version,
-        chunks: Arc::new(chunks),
-        flat_vectors: Arc::new(flat_vectors),
-        ids: Arc::new(ids),
-        chunk_ids_by_file,
-    };
-    let ctx = embed_context_from_cache(&entry);
-    *lock_clear_on_poison(cache, |slot| {
-        *slot = None;
-    }) = Some(entry);
-    Ok(Some(ctx))
+        dim,
+    )))
 }
 
-/// Unconstrained embed. `trust_snapshot` is the Pi sticky unique path:
-/// warmed vectors stay in RAM. Exact RAM
-/// rank is used up to [`SNAPSHOT_EXHAUSTIVE_CHUNK_CAP`] even above the ANN
-/// threshold (IVF cannot beat exhaustive on a held snapshot). Bigger
-/// corpora still use IVF. Field rescoring honors the caller's request on
-/// this path too (field blobs for the rescore pool only), so held-snapshot
-/// ranking matches cold ranking; callers that need zero SQL opt out via
-/// `SearchOptions` field-rescoring controls.
+/// Unconstrained embed. Cold CLI already uses IVF above the ANN threshold.
+/// Serve holds a read snapshot; exhaustive mmap rank up to
+/// [`SNAPSHOT_EXHAUSTIVE_CHUNK_CAP`] used to run first (self-corpus 19_985
+/// chunks). IVF first matches the CLI/CoSQA path. Snapshot exhaustive stays
+/// the fallback when IVF does not admit (below threshold, missing sidecar,
+/// lang filter). Field rescoring still fetches the rescore-pool blobs.
 pub(crate) fn run_embed_pass_cached(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
-    cache: &Mutex<Option<SemanticCache>>,
     trust_snapshot: bool,
     use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
-    // Field rescoring follows the caller's request on every path —
-    // CLI gold ranking depends on the name-field lift (cli_smoke
-    // repository_vocabulary), and held-snapshot ranking must not diverge
-    // from cold ranking for the same query.
     let field = use_field_rescoring;
+    if let Some(hits) = embed_pass_lazy_ivf_with_rescoring(store, options, parsed, field)? {
+        return Ok(hits);
+    }
     if trust_snapshot {
-        if let Some(ctx) = peek_semantic_cache(cache) {
-            if ctx.ids.len() == ctx.chunks.len()
-                && !ctx.chunks.is_empty()
-                && ctx.chunks.len() <= SNAPSHOT_EXHAUSTIVE_CHUNK_CAP
-            {
-                return embed_pass_with_context_and_rescoring(
-                    store,
-                    options,
-                    parsed,
-                    Some(ctx),
-                    field,
-                );
-            }
-        }
-        // IVF-before-load used to skip filling SemanticCache whenever ANN
-        // applied (n>2000). Unique hybrid then missed the warmed flat rank
-        // and paid IVF+SQL per query. Load RAM first while under the
-        // snapshot exhaustive cap; IVF remains the path above that cap.
-        match load_semantic_context(store, options, cache)? {
+        match load_semantic_context(store, options)? {
             Some(ctx)
-                if ctx.ids.len() == ctx.chunks.len()
-                    && !ctx.chunks.is_empty()
-                    && ctx.chunks.len() <= SNAPSHOT_EXHAUSTIVE_CHUNK_CAP =>
+                if embed_ctx_len(&ctx) > 0
+                    && embed_ctx_len(&ctx) <= SNAPSHOT_EXHAUSTIVE_CHUNK_CAP =>
             {
                 return embed_pass_with_context_and_rescoring(
                     store,
@@ -215,10 +269,7 @@ pub(crate) fn run_embed_pass_cached(
             _ => {}
         }
     }
-    if let Some(hits) = embed_pass_lazy_ivf_with_rescoring(store, options, parsed, field)? {
-        return Ok(hits);
-    }
-    match load_semantic_context(store, options, cache)? {
+    match load_semantic_context(store, options)? {
         Some(ctx) => {
             embed_pass_with_context_and_rescoring(store, options, parsed, Some(ctx), field)
         }
@@ -460,21 +511,17 @@ pub(crate) fn embed_pass_for_files_with_rescoring(
         options,
         parsed,
         allowed_files,
-        None,
         false,
         use_field_rescoring,
     )
 }
 
-/// Hybrid cascade embed: if Code Mode already warmed `SemanticCache`, score
-/// those vectors filtered to cascade files in RAM. Does not populate the
-/// cache on miss -- that would load every chunk and regress CLI unique search.
+/// Hybrid cascade embed: score mmap/SQL vectors filtered to cascade files.
 pub(crate) fn embed_pass_for_files_cached(
     store: &IndexStore,
     options: &SearchOptions,
     parsed: &ParsedQuery,
     allowed_files: &HashSet<String>,
-    cache: Option<&Mutex<Option<SemanticCache>>>,
     trust_snapshot: bool,
     use_field_rescoring: bool,
 ) -> Result<Vec<SearchHit>> {
@@ -486,7 +533,6 @@ pub(crate) fn embed_pass_for_files_cached(
         options,
         parsed,
         allowed_files,
-        cache,
         trust_snapshot,
         use_field_rescoring,
     )? {
@@ -548,41 +594,41 @@ fn try_warmed_file_embed(
     options: &SearchOptions,
     parsed: &ParsedQuery,
     allowed_files: &HashSet<String>,
-    cache: Option<&Mutex<Option<SemanticCache>>>,
     trust_snapshot: bool,
     use_field_rescoring: bool,
 ) -> Result<Option<Vec<SearchHit>>> {
-    let Some(cache) = cache else {
+    let Some(ctx) = load_semantic_context(store, options)? else {
         return Ok(None);
     };
-    let peeked = peek_semantic_cache(cache);
-    if peeked.is_none() {
+    if embed_ctx_len(&ctx) == 0 {
         return Ok(None);
     }
-    let ctx = if trust_snapshot {
-        peeked
-    } else {
-        load_semantic_context(store, options, cache)?
-    };
-    let Some(ctx) = ctx else {
+    if ctx.view.is_none() && (ctx.ids.len() != ctx.chunks.len() || ctx.chunks.is_empty()) {
         return Ok(None);
-    };
-    if ctx.ids.len() != ctx.chunks.len() || ctx.chunks.is_empty() {
-        return Ok(None);
+    }
+    if let Some(view) = ctx.view.as_ref() {
+        if ctx.ids.len() != view.count {
+            return Ok(None);
+        }
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
     let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
-    // Pi unique: rank the warmed, already-normalized concat matrix in place.
-    // Cloning every cascade SemanticChunkRow (path + excerpt + Vec<f32>) and
-    // then L2-normalizing each copy was the 52-file unique-hybrid embed span.
-    let dim = ctx.chunks[0].5.len();
-    if trust_snapshot && dim > 0 && ctx.flat_vectors.len() == ctx.chunks.len() * dim {
+    let dim = ctx.dim;
+    let n = embed_ctx_len(&ctx);
+    let mmap_bytes = ctx
+        .view
+        .as_ref()
+        .zip(ctx.bundle.as_ref())
+        .and_then(|(view, bundle)| view.f16_bytes(bundle));
+    let use_mmap = dim > 0 && mmap_bytes.is_some();
+    let use_packed = dim > 0 && ctx.packed_f16.len() == n * dim;
+    let use_flat = dim > 0 && ctx.flat_vectors.len() == n * dim;
+    if use_mmap || use_packed || use_flat {
         let allowed_idx: Vec<usize> = allowed_files
             .iter()
-            .filter_map(|path| ctx.chunk_ids_by_file.get(path))
-            .flatten()
-            .copied()
+            .flat_map(|path| ctx.chunks_by_file.get(path).iter().copied())
+            .map(|i| i as usize)
             .collect();
         if allowed_idx.is_empty() {
             return Ok(Some(Vec::new()));
@@ -594,9 +640,6 @@ fn try_warmed_file_embed(
             ctx.embed_model.as_deref(),
         )?;
         let query_unit = normalize_vec(&query_vec);
-        // Rank the rescore pool (not just hit_limit) when field rescoring
-        // is on, mirroring the cold path: rescoring reorders the pool and
-        // embed_hits_from_pre_rank truncates to hit_limit afterwards.
         let pool = if use_field_rescoring {
             field_rescore_pool(hit_limit)
         } else {
@@ -604,18 +647,22 @@ fn try_warmed_file_embed(
         };
         let ranked = top_k_similarity(
             allowed_idx.into_iter().map(|i| {
-                let start = i * dim;
-                (
-                    i,
-                    cosine_similarity(&query_unit, &ctx.flat_vectors[start..start + dim]),
-                )
+                let sim = if let Some(bytes) = mmap_bytes {
+                    packed_row_cosine_bytes(&query_unit, bytes, dim, i)
+                } else if use_packed {
+                    packed_row_cosine(&query_unit, &ctx.packed_f16, dim, i)
+                } else {
+                    let start = i * dim;
+                    cosine_similarity(&query_unit, &ctx.flat_vectors[start..start + dim])
+                };
+                (i, sim)
             }),
             pool.max(1),
             Some(MIN_SIMILARITY),
         );
         return Ok(Some(embed_hits_from_pre_rank(
             store,
-            &ctx.chunks,
+            |i| chunk_at(&ctx, i),
             &ctx.ids,
             ranked,
             &query_vec,
@@ -687,6 +734,40 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
         return Ok(Vec::new());
     }
     let query = parsed.terms.join(" ");
+    if let Some(ctx) = ctx.as_ref() {
+        if let (Some(bundle), Some(view)) = (&ctx.bundle, &ctx.view) {
+            if view.count > 0 && ctx.ids.len() == view.count {
+                if let Some(bytes) = view.f16_bytes(bundle) {
+                    let query_vec = embed_query_vector_from_meta(
+                        &query,
+                        Some(ctx.dim),
+                        Some(ctx.embed_backend.as_str()),
+                        ctx.embed_model.as_deref(),
+                    )?;
+                    let ranked = crate::semantic_ann::brute_force_flat_f16_bytes(
+                        bytes,
+                        view.dim,
+                        view.count,
+                        &query_vec,
+                        view.count,
+                        ctx.rank_idx.as_ref().map(|idx| idx.as_slice()),
+                    );
+                    let intent = classify(parsed);
+                    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+                    return embed_hits_from_pre_rank(
+                        store,
+                        |i| chunk_at(ctx, i),
+                        &ctx.ids,
+                        ranked,
+                        &query_vec,
+                        intent,
+                        hit_limit,
+                        use_field_rescoring,
+                    );
+                }
+            }
+        }
+    }
     let owned;
     let chunks: &[SemanticChunkRow] = match &ctx {
         Some(ctx) => &ctx.chunks,
@@ -698,11 +779,18 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
     if chunks.is_empty() {
         return embed_legacy_hits(store, options, &query);
     }
-    let flat = ctx.as_ref().map(|c| c.flat_vectors.as_slice());
+    let flat = ctx
+        .as_ref()
+        .map(|c| c.flat_vectors.as_slice())
+        .filter(|f| !f.is_empty());
+    let packed = ctx
+        .as_ref()
+        .map(|c| c.packed_f16.as_slice())
+        .filter(|p| !p.is_empty());
     let query_vec = match ctx.as_ref() {
         Some(ctx) => embed_query_vector_from_meta(
             &query,
-            chunks.first().map(|c| c.5.len()),
+            Some(ctx.dim),
             Some(ctx.embed_backend.as_str()),
             ctx.embed_model.as_deref(),
         )?,
@@ -717,8 +805,15 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
     } else {
         options.ann_threshold
     };
-    let indices =
-        rank_chunk_indices_flat(store, &query_vec, chunks, flat, chunks.len(), ann_threshold)?;
+    let indices = rank_chunk_indices_flat(
+        store,
+        &query_vec,
+        chunks,
+        flat,
+        packed,
+        chunks.len(),
+        ann_threshold,
+    )?;
     let intent = classify(parsed);
     let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
     let fetched_ids;
@@ -743,7 +838,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
     };
     embed_hits_from_pre_rank(
         store,
-        chunks,
+        |i| chunks[i].clone(),
         ids,
         indices,
         &query_vec,
@@ -752,33 +847,8 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
         use_field_rescoring,
     )
 }
-/// Process-wide query embedding cache (query|backend|model|dim|pref → vector).
-/// Poison fails closed: clear the map before reuse (sxjc / pass11).
-static QUERY_EMBED_CACHE: OnceLock<Mutex<HashMap<String, Vec<f32>>>> = OnceLock::new();
-const QUERY_EMBED_CACHE_CAP: usize = 64;
-
-struct ChunkIdMemo {
-    db: String,
-    index_data_version: i64,
-    semantic_data_version: i64,
-    ids: Arc<Vec<i64>>,
-    paths: Arc<Vec<String>>,
-    /// `paths` indices sorted by path so hybrid can map ~100 allowed files
-    /// without scanning all 54k chunk rows.
-    path_order: Arc<Vec<u32>>,
-    dim: usize,
-    fingerprint: [u8; 32],
-    embed_backend: Option<String>,
-    embed_model: Option<String>,
-}
-
-/// `SELECT id FROM semantic_chunks ORDER BY id` is ~12 ms at 54k rows. The IVF
-/// payload order is that same id list, so cache it per store generation.
-static CHUNK_ID_CACHE: OnceLock<Mutex<Option<ChunkIdMemo>>> = OnceLock::new();
-
-fn chunk_id_cache() -> &'static Mutex<Option<ChunkIdMemo>> {
-    CHUNK_ID_CACHE.get_or_init(|| Mutex::new(None))
-}
+/// IVF payload order is `semantic_chunks.id` order. Bundle view is the
+/// snapshot; SQL is the identity control arm. No process-wide memo.
 
 pub fn member_indices_for_files(
     paths: &[String],
@@ -815,25 +885,32 @@ type CachedChunkIndex = (
 );
 
 fn cached_semantic_chunk_index(store: &IndexStore) -> Result<CachedChunkIndex> {
-    let index_data_version = store.index_data_version()?;
-    let semantic_data_version = store.semantic_data_version()?;
-    let db = store.db_path().to_string_lossy().into_owned();
-    {
-        let guard = lock_clear_on_poison(chunk_id_cache(), |slot| {
-            *slot = None;
-        });
-        if let Some(memo) = guard.as_ref() {
-            if memo.db == db
-                && memo.index_data_version == index_data_version
-                && memo.semantic_data_version == semantic_data_version
-            {
-                return Ok((
-                    Arc::clone(&memo.ids),
-                    Arc::clone(&memo.paths),
-                    Arc::clone(&memo.path_order),
-                    memo.dim,
-                    memo.fingerprint,
-                ));
+    if crate::store::read_bundle::bundle_enabled() {
+        if let Some(bundle) = store.read_bundle(None)? {
+            if let Some(view) = bundle.semantic_view() {
+            let index_data_version = store.index_data_version().unwrap_or(0);
+            let backend = store
+                .get_meta("embed_backend")?
+                .unwrap_or_else(|| "semantic".into());
+            let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
+                view.ids.len(),
+                view.ids.last().copied().unwrap_or(0),
+                view.dim,
+                Some(&backend),
+                index_data_version,
+            );
+            let paths = Arc::new(
+                (0..view.count)
+                    .map(|i| bundle.path(view.file_idx[i] as usize).to_owned())
+                    .collect::<Vec<_>>(),
+            );
+            return Ok((
+                Arc::clone(&view.ids),
+                paths,
+                Arc::clone(&view.path_order),
+                view.dim,
+                fingerprint,
+            ));
             }
         }
     }
@@ -850,57 +927,20 @@ fn cached_semantic_chunk_index(store: &IndexStore) -> Result<CachedChunkIndex> {
     path_order.sort_by(|&a, &b| paths[a as usize].cmp(&paths[b as usize]));
     let path_order = Arc::new(path_order);
     let dim = store.semantic_primary_dim()?;
-    let embed_backend = store.get_meta("embed_backend")?;
-    let embed_model = store.get_meta("embed_model")?;
-    let backend = embed_backend.clone().unwrap_or_else(|| "semantic".into());
+    let backend = store
+        .get_meta("embed_backend")?
+        .unwrap_or_else(|| "semantic".into());
     let fingerprint = crate::semantic_ivf::compute_ann_fingerprint(
         ids.len(),
         ids.last().copied().unwrap_or(0),
         dim,
         Some(&backend),
-        index_data_version,
+        store.index_data_version().unwrap_or(0),
     );
-    *lock_clear_on_poison(chunk_id_cache(), |slot| {
-        *slot = None;
-    }) = Some(ChunkIdMemo {
-        db,
-        index_data_version,
-        semantic_data_version,
-        ids: Arc::clone(&ids),
-        paths: Arc::clone(&paths),
-        path_order: Arc::clone(&path_order),
-        dim,
-        fingerprint,
-        embed_backend,
-        embed_model,
-    });
     Ok((ids, paths, path_order, dim, fingerprint))
 }
 
-fn query_embed_cache() -> &'static Mutex<HashMap<String, Vec<f32>>> {
-    QUERY_EMBED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String>)> {
-    {
-        let db = store.db_path().to_string_lossy().into_owned();
-        let index_data_version = store.index_data_version()?;
-        let semantic_data_version = store.semantic_data_version()?;
-        let guard = lock_clear_on_poison(chunk_id_cache(), |slot| {
-            *slot = None;
-        });
-        if let Some(memo) = guard.as_ref() {
-            // Path-only hits are stale after reindex: lang-filtered IVF returns
-            // None before refreshing this memo, then brute-force embed would
-            // reuse the previous generation's backend/model.
-            if memo.db == db
-                && memo.index_data_version == index_data_version
-                && memo.semantic_data_version == semantic_data_version
-            {
-                return Ok((memo.embed_backend.clone(), memo.embed_model.clone()));
-            }
-        }
-    }
     Ok((
         store.get_meta("embed_backend")?,
         store.get_meta("embed_model")?,
@@ -950,26 +990,13 @@ fn embed_query_vector_from_meta(
             ast_sgrep_embed::STATIC_DIM
         )));
     }
-    let cache_key = query.to_string();
-    {
-        let guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
-        if let Some(v) = guard.get(&cache_key) {
-            return Ok(v.clone());
-        }
-    }
     let _span = crate::perf_profile::Span::start(
         "embed_query",
         "semantic",
-        "static query embed (cache miss)",
+        "static query embed",
     );
     let vector = ast_sgrep_embed::embed_text(query);
     qvec_dump_if_set(query, &vector);
-    {
-        let mut guard = lock_clear_on_poison(query_embed_cache(), |map| map.clear());
-        if guard.len() < QUERY_EMBED_CACHE_CAP {
-            guard.insert(cache_key, vector.clone());
-        }
-    }
     Ok(vector)
 }
 
@@ -1019,19 +1046,23 @@ fn rows_in_id_order(store: &IndexStore, ids: &[i64]) -> Result<Option<Vec<Semant
     assemble_rows_in_id_order(store.semantic_chunk_hits_by_ids(ids)?, ids)
 }
 
+fn take_by_ids<T>(rows: Vec<(i64, T)>, ids: &[i64]) -> Option<Vec<T>> {
+    let mut owned: Vec<(i64, Option<T>)> =
+        rows.into_iter().map(|(id, row)| (id, Some(row))).collect();
+    owned.sort_unstable_by_key(|(id, _)| *id);
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let slot = owned.binary_search_by_key(id, |(row_id, _)| *row_id).ok()?;
+        out.push(owned[slot].1.take()?);
+    }
+    Some(out)
+}
+
 fn assemble_rows_in_id_order(
     fetched: Vec<(i64, SemanticChunkRow)>,
     ids: &[i64],
 ) -> Result<Option<Vec<SemanticChunkRow>>> {
-    let mut rows: HashMap<i64, SemanticChunkRow> = fetched.into_iter().collect();
-    let mut chunks = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(row) = rows.remove(id) else {
-            return Ok(None);
-        };
-        chunks.push(row);
-    }
-    Ok(Some(chunks))
+    Ok(take_by_ids(fetched, ids))
 }
 
 fn rows_and_fields_in_id_order(
@@ -1056,20 +1087,22 @@ fn rows_and_fields_in_id_order(
         "sqlite metadata+fields for IVF survivors",
     );
     let fetched = store.semantic_hits_and_fields_by_ids(ids, mask)?;
-    let mut row_map = HashMap::with_capacity(fetched.len());
-    let mut field_map = HashMap::with_capacity(fetched.len());
-    for (id, row, fields) in fetched {
-        row_map.insert(id, row);
-        field_map.insert(id, fields);
-    }
+    let mut owned: Vec<(i64, Option<(SemanticChunkRow, SemanticFieldVectors)>)> = fetched
+        .into_iter()
+        .map(|(id, row, fields)| (id, Some((row, fields))))
+        .collect();
+    owned.sort_unstable_by_key(|(id, _)| *id);
     let mut chunks = Vec::with_capacity(ids.len());
     let mut fields = Vec::with_capacity(ids.len());
     for id in ids {
-        let Some(row) = row_map.remove(id) else {
+        let Ok(slot) = owned.binary_search_by_key(id, |(row_id, _)| *row_id) else {
+            return Ok(None);
+        };
+        let Some((row, field)) = owned[slot].1.take() else {
             return Ok(None);
         };
         chunks.push(row);
-        fields.push(field_map.remove(id).unwrap_or_default());
+        fields.push(field);
     }
     Ok(Some((chunks, fields)))
 }
@@ -1089,11 +1122,22 @@ fn fields_for_ids(
         "semantic",
         "sqlite field vectors for IVF survivors",
     );
-    let mut field_map = store.semantic_field_vectors_by_ids(ids, mask)?;
-    Ok(ids
-        .iter()
-        .map(|id| field_map.remove(id).unwrap_or_default())
-        .collect())
+    let fetched = store.semantic_field_vectors_by_ids(ids, mask)?;
+    Ok(take_by_ids_or_default(fetched, ids))
+}
+
+fn take_by_ids_or_default<T: Default>(rows: Vec<(i64, T)>, ids: &[i64]) -> Vec<T> {
+    let mut owned: Vec<(i64, Option<T>)> =
+        rows.into_iter().map(|(id, row)| (id, Some(row))).collect();
+    owned.sort_unstable_by_key(|(id, _)| *id);
+    ids.iter()
+        .map(
+            |id| match owned.binary_search_by_key(id, |(row_id, _)| *row_id) {
+                Ok(slot) => owned[slot].1.take().unwrap_or_default(),
+                Err(_) => T::default(),
+            },
+        )
+        .collect()
 }
 
 // Stable rank-fanout shape: rank context is threaded, not bundled; bundling
@@ -1101,7 +1145,7 @@ fn fields_for_ids(
 #[allow(clippy::too_many_arguments)]
 fn embed_hits_from_pre_rank(
     store: &IndexStore,
-    chunks: &[SemanticChunkRow],
+    chunk_at: impl Fn(usize) -> SemanticChunkRow,
     ids: &[i64],
     ranked: Vec<(usize, f32)>,
     query_vec: &[f32],
@@ -1116,7 +1160,7 @@ fn embed_hits_from_pre_rank(
     };
     let taken: Vec<(usize, f32)> = ranked.into_iter().take(pool.max(1)).collect();
     let pool_chunks: Vec<SemanticChunkRow> =
-        taken.iter().map(|(idx, _)| chunks[*idx].clone()).collect();
+        taken.iter().map(|(idx, _)| chunk_at(*idx)).collect();
     let pool_ids: Vec<i64> = taken.iter().map(|(idx, _)| ids[*idx]).collect();
     let remapped: Vec<(usize, f32)> = taken
         .into_iter()
@@ -1218,7 +1262,17 @@ fn embed_similarity_hits(
         field_rank_union_keys(&ranked, &files, field_notes, union_mode)
     };
 
-    let mut parents = HashMap::<(&str, u32, u32, &str), ParentMatch>::new();
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct ParentKey {
+        file: u32,
+        line_start: u32,
+        line_end: u32,
+        symbol: u32,
+    }
+
+    let mut intern = NameIntern::new(ranked.len());
+    let mut parent_keys: Vec<ParentKey> = Vec::new();
+    let mut parents: Vec<ParentMatch> = Vec::new();
     for (pos, (index, similarity)) in ranked.into_iter().enumerate() {
         let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
             continue;
@@ -1227,14 +1281,25 @@ fn embed_similarity_hits(
             .get(pos)
             .copied()
             .unwrap_or((pos as u32, similarity));
-        let parent = parents
-            .entry((file.as_str(), *line_start, *line_end, symbol.as_str()))
-            .or_insert_with(|| ParentMatch {
+        let parent_key = ParentKey {
+            file: intern.intern(file),
+            line_start: *line_start,
+            line_end: *line_end,
+            symbol: intern.intern(symbol),
+        };
+        let parent = if let Some(slot) = parent_keys.iter().position(|seen| *seen == parent_key) {
+            &mut parents[slot]
+        } else {
+            parent_keys.push(parent_key);
+            parents.push(ParentMatch {
                 best_index: index,
                 best_similarity: similarity,
                 best_rank: key,
                 children: Vec::new(),
             });
+            let slot = parents.len() - 1;
+            &mut parents[slot]
+        };
         if similarity > parent.best_similarity {
             parent.best_index = index;
             parent.best_similarity = similarity;
@@ -1250,7 +1315,6 @@ fn embed_similarity_hits(
             parent.children.push((similarity, index));
         }
     }
-    let mut parents = parents.into_values().collect::<Vec<_>>();
     // Channel order = (best list rank, winning-list cosine, rescored
     // similarity), then the deterministic span tie-breaks. The carried
     // score stays the rescored similarity; only order changes.

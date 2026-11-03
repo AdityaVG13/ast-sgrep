@@ -7,7 +7,7 @@ use std::io::{Cursor, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::Arc;
 
 const MAGIC: &[u8; 6] = b"ASIVF\0";
 /// v3 stays the file version for reader-range reasons, but production saves
@@ -197,20 +197,6 @@ impl MappedVectors {
     fn as_slice(&self) -> &[f32] {
         bytemuck::try_cast_slice(&self.mmap[self.bytes.clone()])
             .expect("validated semantic IVF vector alignment")
-    }
-
-    /// Touch every page once so unique-query p90 is not a first-fault walk.
-    fn prefault(&self) {
-        let bytes = &self.mmap[self.bytes.clone()];
-        const PAGE: usize = 4096;
-        let mut offset = 0;
-        while offset < bytes.len() {
-            std::hint::black_box(bytes[offset]);
-            offset += PAGE;
-        }
-        if let Some(last) = bytes.last() {
-            std::hint::black_box(*last);
-        }
     }
 }
 
@@ -518,30 +504,6 @@ impl LazySemanticIvf {
     }
 }
 
-struct LazyIvfMemo {
-    path: PathBuf,
-    fingerprint: [u8; 32],
-    ivf: Arc<LazySemanticIvf>,
-}
-
-static LAZY_IVF_CACHE: OnceLock<Mutex<Option<LazyIvfMemo>>> = OnceLock::new();
-
-fn lock_clear_on_poison<T>(mutex: &Mutex<T>, clear: impl FnOnce(&mut T)) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            mutex.clear_poison();
-            let mut guard = PoisonError::into_inner(poisoned);
-            clear(&mut guard);
-            guard
-        }
-    }
-}
-
-fn lazy_ivf_cache() -> &'static Mutex<Option<LazyIvfMemo>> {
-    LAZY_IVF_CACHE.get_or_init(|| Mutex::new(None))
-}
-
 pub fn load_semantic_ivf_index(
     path: &Path,
     expected_fingerprint: [u8; 32],
@@ -549,16 +511,8 @@ pub fn load_semantic_ivf_index(
     let _span = crate::perf_profile::Span::start(
         "semantic_ivf_load",
         "semantic",
-        "load_semantic_ivf_index (cached mmap)",
+        "load_semantic_ivf_index (mmap parse)",
     );
-    {
-        let guard = lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None);
-        if let Some(memo) = guard.as_ref() {
-            if memo.path == path && memo.fingerprint == expected_fingerprint {
-                return Ok(Some(Arc::clone(&memo.ivf)));
-            }
-        }
-    }
     let Some(mapped) = map_and_parse(path, Some(expected_fingerprint))? else {
         return Ok(None);
     };
@@ -570,7 +524,6 @@ pub fn load_semantic_ivf_index(
         mmap: mapped.mmap,
         bytes: mapped.vector_bytes,
     };
-    mapped_vectors.prefault();
     let ivf = Arc::new(LazySemanticIvf {
         fingerprint: mapped.header.fingerprint,
         dim: mapped.header.dim,
@@ -578,11 +531,6 @@ pub fn load_semantic_ivf_index(
         index: mapped.index,
         mapped_vectors: Some(mapped_vectors),
         mapped_ids,
-    });
-    *lock_clear_on_poison(lazy_ivf_cache(), |slot| *slot = None) = Some(LazyIvfMemo {
-        path: path.to_path_buf(),
-        fingerprint: expected_fingerprint,
-        ivf: Arc::clone(&ivf),
     });
     Ok(Some(ivf))
 }

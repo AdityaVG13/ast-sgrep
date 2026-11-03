@@ -1,3 +1,4 @@
+use super::super::fusion::NameIntern;
 use crate::query::ParsedQuery;
 use crate::search::passes::bmh::{asgrep_line_hit, attach_regex_context, check_regex_deadline};
 use crate::search::types::matches_lang;
@@ -5,7 +6,6 @@ use crate::search::types::{SearchHit, SearchOptions};
 use crate::store::IndexStore;
 use crate::{Result, StoreError};
 use regex::Regex;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 /// Default wall-clock budget for `regex:` scans (ReDoS / large-corpus hang guard).
@@ -152,7 +152,8 @@ fn scan_regex_rows(
     let candidate_limit = options.retained_limit().max(100);
     let mut preferred = Vec::new();
     let mut overflow = Vec::new();
-    let mut per_file = HashMap::<Arc<str>, usize>::new();
+    let mut intern = NameIntern::new(candidate_limit);
+    let mut per_file: Vec<usize> = Vec::new();
     for (rank, row) in rows.enumerate() {
         // Between-line deadline check (56w1.3): a zero budget must fail
         // immediately instead of scanning everything.
@@ -171,9 +172,12 @@ fn scan_regex_rows(
             content,
             1.0 / (1.0 + rank as f64 * 0.01),
         );
-        let count = per_file.entry(path).or_default();
-        if *count < PREFERRED_PER_FILE {
-            *count += 1;
+        let id = intern.intern(path.as_ref()) as usize;
+        if per_file.len() <= id {
+            per_file.resize(id + 1, 0);
+        }
+        if per_file[id] < PREFERRED_PER_FILE {
+            per_file[id] += 1;
             preferred.push(hit);
         } else if overflow.len() < candidate_limit {
             overflow.push(hit);

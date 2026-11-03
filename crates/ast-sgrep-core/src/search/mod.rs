@@ -14,21 +14,22 @@ pub use field_weight::EmbedFieldScores;
 pub use finish::finish_response;
 pub(crate) use finish::finish_response_checked;
 pub use fusion::dedup_hits;
+pub(crate) use fusion::NameIntern;
 use passes::bmh::asgrep_line_hit;
-use passes::embed::{run_embed_pass_cached, SemanticCache};
+use passes::embed::run_embed_pass_cached;
 use passes::lexical::lexical_pass;
 use passes::literal::{literal_file_pass, literal_pass};
 use passes::regex::regex_pass;
 use passes::symbol::{
     anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
-    symbol_pass_for_files_warmed, WarmedSymbolTable,
+    symbol_pass_for_files,
 };
 pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub use types::{
     format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion, SearchHit,
@@ -62,7 +63,7 @@ fn lock_clear_on_poison<T>(mutex: &Mutex<T>, clear: impl FnOnce(&mut T)) -> Mute
     }
 }
 fn invalidate_response_cache(cache: &mut ResponseCache) {
-    cache.map.clear();
+    cache.entries.clear();
     cache.order.clear();
     cache.enabled = false;
     cache.gen = IndexGeneration {
@@ -85,7 +86,7 @@ struct IndexGeneration {
 struct ResponseCache {
     gen: IndexGeneration,
     /// Insertion-order LRU: front = oldest. Cap RESPONSE_CACHE_CAP (fj96).
-    map: std::collections::HashMap<String, SearchResponse>,
+    entries: Vec<(String, SearchResponse)>,
     order: std::collections::VecDeque<String>,
     /// When false, PRAGMA/gen probe failed — never cache (hdwh).
     enabled: bool,
@@ -109,27 +110,11 @@ pub struct Searcher {
     /// [`Self::stamp_response`]: Pi Code Mode repeats needles on a sticky
     /// Searcher, so cache hits must stay available when stamps are off.
     cache_responses: bool,
-    semantic_cache: Arc<Mutex<Option<SemanticCache>>>,
-    lexicon_cache: Mutex<Option<(i64, Vec<String>, crate::lexicon::Lexicon)>>,
     response_cache: Mutex<ResponseCache>,
-    /// S1: generation-keyed memo for snapshot-stamp parts that are pure
-    /// functions of index contents (worktree revision + sidecar fingerprint).
-    stamp_cache: Mutex<Option<(IndexGeneration, i64, Option<String>)>>,
-    /// S1: drained degraded notes from the latest memoized manifest probe.
-    stamp_degraded: Mutex<Vec<DegradedChannel>>,
     /// When true, this Searcher owns a long-lived `BEGIN DEFERRED` so sticky
     /// unique searches skip per-query BEGIN/COMMIT. Writers bump
     /// `writer_generation` and Code Mode drops the Searcher.
     read_snapshot_held: Mutex<bool>,
-    /// Snapshot-held `index_gen` is immutable for the Searcher lifetime:
-    /// Code Mode does not write on this connection, and other writers are
-    /// invisible until the snapshot is released. Unique hybrid was paying
-    /// PRAGMA + `search_data_versions` twice per query for a value warmup
-    /// already observed.
-    index_gen_memo: Mutex<Option<IndexGeneration>>,
-    /// Warmed def rows for snapshot unique hybrid. Filled by
-    /// [`Self::warm_search_path`]; CLI unique keeps the SQL LIKE fallback.
-    symbol_table: Mutex<Option<WarmedSymbolTable>>,
     /// `SearchOptions::cache_identity()` is identical for the Searcher
     /// lifetime (options are frozen in `with_store`).
     options_identity: String,
@@ -262,23 +247,17 @@ impl Searcher {
             use_field_rescoring: true,
             stamp_response: true,
             cache_responses: true,
-            semantic_cache: Arc::new(Mutex::new(None)),
-            lexicon_cache: Mutex::new(None),
             response_cache: Mutex::new(ResponseCache {
                 gen: IndexGeneration {
                     external: 0,
                     local: 0,
                     lexicon: 0,
                 },
-                map: std::collections::HashMap::new(),
+                entries: Vec::new(),
                 order: std::collections::VecDeque::new(),
                 enabled: true,
             }),
-            stamp_cache: Mutex::new(None),
-            stamp_degraded: Mutex::new(Vec::new()),
             read_snapshot_held: Mutex::new(false),
-            index_gen_memo: Mutex::new(None),
-            symbol_table: Mutex::new(None),
             options_identity,
         }
     }
@@ -312,18 +291,16 @@ impl Searcher {
     /// Pin RAM line corpus, trigram df vocab, and semantic vectors so the
     /// first unique sticky search is not the session-open tax.
     pub fn warm_search_path(&self) -> Result<()> {
-        let _ = self.store.line_corpus()?;
-        self.store.trigram_df().arm(&self.store);
-        if let Ok(table) = WarmedSymbolTable::load(&self.store) {
-            *lock_clear_on_poison(&self.symbol_table, |slot| *slot = None) = Some(table);
+        if crate::env_flag::memo_off("warm") {
+            return Ok(());
         }
+        let _ = self.store.line_corpus()?;
         if self.options.use_embed {
             let parsed = ParsedQuery::parse("warm");
             let _ = run_embed_pass_cached(
                 &self.store,
                 &self.options,
                 &parsed,
-                &self.semantic_cache,
                 self.snapshot_is_held(),
                 self.use_field_rescoring,
             )?;
@@ -344,7 +321,6 @@ impl Searcher {
         conn.execute_batch("BEGIN DEFERRED")
             .map_err(|e| crate::StoreError::Other(format!("failed to pin read snapshot: {e}")))?;
         *held = true;
-        *lock_clear_on_poison(&self.index_gen_memo, |memo| *memo = None) = None;
         Ok(())
     }
     /// Release a snapshot taken by [`Self::hold_read_snapshot`].
@@ -354,7 +330,6 @@ impl Searcher {
             return;
         }
         *held = false;
-        *lock_clear_on_poison(&self.index_gen_memo, |memo| *memo = None) = None;
         let conn = self.store.connection();
         if conn.is_autocommit() {
             return;
@@ -365,76 +340,41 @@ impl Searcher {
     }
     /// Occupancy of the generation-keyed response LRU (Pi/session diagnostics).
     pub fn cached_response_count(&self) -> usize {
-        lock_response_cache(&self.response_cache).map.len()
+        lock_response_cache(&self.response_cache).entries.len()
     }
     fn snapshot_is_held(&self) -> bool {
         *lock_clear_on_poison(&self.read_snapshot_held, |_| {})
     }
 
     fn index_gen(&self) -> Option<IndexGeneration> {
+        // A held read snapshot is immutable for the Searcher lifetime. The
+        // bundle header is the generation for that snapshot; no per-query
+        // PRAGMA/meta probes are needed. The SQL control arm has no header and
+        // pays the probes (it is the migration arm, not the product path).
         if self.snapshot_is_held() {
-            let memo = lock_clear_on_poison(&self.index_gen_memo, |slot| *slot = None);
-            if let Some(gen) = *memo {
-                return Some(gen);
+            if let Ok(Some(bundle)) = self.store.read_bundle(None) {
+                let generation = bundle.generation();
+                return Some(IndexGeneration {
+                    external: 0,
+                    local: generation,
+                    lexicon: generation,
+                });
             }
         }
         // PRAGMA failure disables caching rather than pinning gen=0 (hdwh).
         // `data_version` only moves for *other* connections; same-connection
         // writes are visible via `search_data_versions` (index/lexicon meta).
-        // A held read snapshot freezes both, so later unique searches reuse
-        // the first probe (Pi sticky path).
         let external = self
             .store
             .connection()
             .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
             .ok()?;
         let (local, lexicon) = self.store.search_data_versions().ok()?;
-        let gen = IndexGeneration {
+        Some(IndexGeneration {
             external,
             local,
             lexicon,
-        };
-        if self.snapshot_is_held() {
-            *lock_clear_on_poison(&self.index_gen_memo, |slot| *slot = None) = Some(gen);
-        }
-        Some(gen)
-    }
-    /// gauntlet-r5 (S1): generation-keyed memo for the expensive, purely
-    /// generation-derived parts of `snapshot_stamp`. The chunk-stats scan
-    /// (COUNT + MAX(length(vector)) over every semantic row), the worktree
-    /// revision (MAX(mtime_secs) over files), and the sidecar fingerprint are
-    /// functions of the index contents alone: any change to them is gated by
-    /// a generation counter bump (external data_version or the local
-    /// counters). `git_head` deliberately stays uncached:
-    /// it reads the worktree's HEAD file and can move without any index
-    /// write. Memo validity therefore keys on IndexGeneration; on any pragma
-    /// failure we skip the memo entirely (fail-open to recompute, hdwh).
-    fn cached_stamp_parts(&self, gen: IndexGeneration) -> Option<(i64, Option<String>)> {
-        {
-            let guard = lock_clear_on_poison(&self.stamp_cache, |_| {});
-            if let Some((_, rev, manifest)) = guard.as_ref().filter(|(g, _, _)| *g == gen) {
-                return Some((*rev, manifest.clone()));
-            }
-        }
-        let worktree_revision = self.store.worktree_revision().ok()?;
-        let mut degraded = Vec::new();
-        let semantic_manifest = self.semantic_manifest_impl(&mut degraded);
-        // A mismatched-sidecar verdict depends on the stored sidecar vs the
-        // live stats comparison and must stay loud per query; only the
-        // memo-safe parts are cached here. Unreadable-sidecar notes are
-        // drained by the caller so each response reports its own probe.
-        {
-            let mut guard =
-                lock_clear_on_poison(&self.stamp_degraded, |v: &mut Vec<DegradedChannel>| {
-                    *v = Vec::new()
-                });
-            *guard = degraded;
-        }
-        {
-            let mut guard = lock_clear_on_poison(&self.stamp_cache, |_| {});
-            *guard = Some((gen, worktree_revision, semantic_manifest.clone()));
-        }
-        Some((worktree_revision, semantic_manifest))
+        })
     }
     fn cache_key(&self, kind: &str, query: &str) -> String {
         // Full SearchOptions identity (nyui).
@@ -543,19 +483,39 @@ impl Searcher {
         }
         Some(hex32(&stored))
     }
-    /// S1 helper: manifest probe without the generation parameter. The
-    /// generation enters only through `expected_semantic_fingerprint`, which
-    /// reads generation-gated stats; callers that already hold a fresh
-    /// `IndexGeneration` use this variant together with `cached_stamp_parts`.
-    fn semantic_manifest_impl(&self, degraded: &mut Vec<DegradedChannel>) -> Option<String> {
-        let generation = self
-            .store
-            .search_data_versions()
-            .map(|(local, _)| local)
-            .unwrap_or_default();
-        self.semantic_manifest(generation, degraded)
+    /// Bundle-header variant of [`Self::semantic_manifest`]. The expected
+    /// fingerprint is baked at bundle build time, so the per-query path reads
+    /// only the sidecar header instead of scanning `semantic_chunks`.
+    fn semantic_manifest_for_stamp(
+        &self,
+        generation: i64,
+        degraded: &mut Vec<DegradedChannel>,
+    ) -> Result<Option<String>> {
+        let Some(bundle) = self.store.read_bundle(Some(generation))? else {
+            return Ok(self.semantic_manifest(generation, degraded));
+        };
+        let path = crate::semantic_ivf::semantic_ivf_path(self.store.db_path());
+        if !path.exists() {
+            return Ok(None);
+        }
+        let Some(stored) = crate::semantic_ivf::peek_semantic_ivf_fingerprint(&path) else {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_unreadable".to_owned(),
+            });
+            return Ok(None);
+        };
+        if bundle
+            .semantic_expected()
+            .is_some_and(|expected| expected != stored)
+        {
+            degraded.push(DegradedChannel {
+                channel: "semantic".to_owned(),
+                reason: "sidecar_generation_mismatch".to_owned(),
+            });
+        }
+        Ok(Some(hex32(&stored)))
     }
-
     /// Fingerprint the sidecar should carry for the current snapshot (d3l5).
     fn expected_semantic_fingerprint(&self, generation: i64) -> Option<[u8; 32]> {
         // The sidecar is built over the whole corpus, so compare against
@@ -582,24 +542,9 @@ impl Searcher {
         if terms.is_empty() {
             return Vec::new();
         }
-        let mut cache = lock_clear_on_poison(&self.lexicon_cache, |cached| *cached = None);
-        // The targeted load is a function of (generation, terms): a cached
-        // lexicon serves only the exact term set it was loaded for.
-        let hit = cache
-            .as_ref()
-            .is_some_and(|(cached_generation, cached_terms, _)| {
-                *cached_generation == lexicon_generation && *cached_terms == *terms
-            });
-        if !hit {
-            // A corrupt externally modified lexicon fails closed once per data
-            // generation rather than decoding the bounded maximum on every query.
-            let lexicon =
-                crate::lexicon::load_lexicon_for_terms(&self.store, terms).unwrap_or_default();
-            *cache = Some((lexicon_generation, terms.to_vec(), lexicon));
-        }
-        let Some((_, _, lexicon)) = cache.as_ref() else {
-            return Vec::new();
-        };
+        let _ = lexicon_generation;
+        let lexicon =
+            crate::lexicon::load_lexicon_for_terms(&self.store, terms).unwrap_or_default();
         if lexicon.is_empty() {
             return Vec::new();
         }
@@ -683,28 +628,15 @@ impl Searcher {
     /// Describe the snapshot a response was read from (d3l5).
     fn snapshot_stamp(&self, generation: i64) -> Result<SnapshotStamp> {
         let mut degraded_channels = Vec::new();
-        // S1: the generation-derived parts (worktree revision, sidecar
-        // fingerprint via the stats scan) are memoized per IndexGeneration.
-        // Fall back to the direct computation whenever the memo cannot be
-        // consulted (pragma failure) so behavior only ever gets slower, never
-        // different.
-        let (worktree_revision, semantic_manifest) = match self.index_gen() {
-            Some(gen) => self.cached_stamp_parts(gen).unwrap_or_else(|| {
-                let mut degraded = Vec::new();
-                (
-                    self.store.worktree_revision().unwrap_or_default(),
-                    self.semantic_manifest(generation, &mut degraded),
-                )
-            }),
-            None => {
-                let mut degraded = Vec::new();
-                (
-                    self.store.worktree_revision()?,
-                    self.semantic_manifest(generation, &mut degraded),
-                )
-            }
+        // The bundle header carries the generation-derived worktree revision
+        // and the expected ANN fingerprint. The SQL control arm falls back to
+        // direct probes; neither path memoizes a stamp.
+        let worktree_revision = match self.store.read_bundle(Some(generation))? {
+            Some(bundle) => bundle.worktree_revision(),
+            None => self.store.worktree_revision()?,
         };
-        degraded_channels.extend(self.take_stamp_degraded());
+        let semantic_manifest =
+            self.semantic_manifest_for_stamp(generation, &mut degraded_channels)?;
         Ok(SnapshotStamp {
             generation,
             schema_version: self.store.schema_version(),
@@ -719,18 +651,6 @@ impl Searcher {
             degraded_channels,
         })
     }
-    /// S1: degraded-channel notes produced by the most recent memoized
-    /// manifest probe (`sidecar_unreadable` only — a mismatch verdict is never
-    /// memoized, see `cached_stamp_parts`). Empty when the stamp was built
-    /// without the memo. The notes are drained once so each response reports
-    /// exactly what its own probe observed.
-    fn take_stamp_degraded(&self) -> Vec<DegradedChannel> {
-        let mut guard =
-            lock_clear_on_poison(&self.stamp_degraded, |v: &mut Vec<DegradedChannel>| {
-                *v = Vec::new()
-            });
-        std::mem::take(&mut *guard)
-    }
 
     fn cached(
         &self,
@@ -738,7 +658,7 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        if !self.cache_responses {
+        if !self.cache_responses || crate::env_flag::memo_off("response") {
             return self.fenced(compute);
         }
         let Some(gen) = self.index_gen() else {
@@ -748,7 +668,7 @@ impl Searcher {
         {
             let guard = lock_response_cache(&self.response_cache);
             if guard.enabled && guard.gen == gen {
-                if let Some(hit) = guard.map.get(&key) {
+                if let Some((_, hit)) = guard.entries.iter().find(|(k, _)| k == &key) {
                     return Ok(hit.clone());
                 }
             }
@@ -766,22 +686,24 @@ impl Searcher {
             return Ok(response);
         }
         if guard.gen != gen {
-            guard.map.clear();
+            guard.entries.clear();
             guard.order.clear();
             guard.gen = gen;
         }
-        if guard.map.contains_key(&key) {
-            guard.map.insert(key, response.clone());
+        if let Some((_, cached)) = guard.entries.iter_mut().find(|(k, _)| k == &key) {
+            *cached = response.clone();
         } else {
-            while guard.map.len() >= RESPONSE_CACHE_CAP {
+            while guard.entries.len() >= RESPONSE_CACHE_CAP {
                 if let Some(old) = guard.order.pop_front() {
-                    guard.map.remove(&old);
+                    if let Some(i) = guard.entries.iter().position(|(k, _)| k == &old) {
+                        guard.entries.swap_remove(i);
+                    }
                 } else {
                     break;
                 }
             }
             guard.order.push_back(key.clone());
-            guard.map.insert(key, response.clone());
+            guard.entries.push((key, response.clone()));
         }
         Ok(response)
     }
@@ -1050,7 +972,6 @@ impl Searcher {
                     &self.store,
                     &options,
                     expanded.as_ref().unwrap_or(&parsed),
-                    &self.semantic_cache,
                     self.snapshot_is_held(),
                     self.use_field_rescoring,
                 )
@@ -1078,7 +999,6 @@ impl Searcher {
                     &self.store,
                     &self.options,
                     expanded.as_ref().unwrap_or(&parsed),
-                    &self.semantic_cache,
                     self.snapshot_is_held(),
                     self.use_field_rescoring,
                 )?,
@@ -1273,7 +1193,6 @@ impl Searcher {
             let opts = self.options.clone();
             let sem_q = semantic_query.clone();
             let raw = parsed.raw.clone();
-            let cache = Arc::clone(&self.semantic_cache);
             let field = self.use_field_rescoring;
             let run_id = crate::perf_profile::current_run_id();
             Some(std::thread::spawn(move || {
@@ -1286,7 +1205,7 @@ impl Searcher {
                 let sibling = IndexStore::open_readonly(&root, Some(&db))?;
                 let version = sibling.index_data_version()?;
                 let semantic = passes::embed::run_embed_pass_cached(
-                    &sibling, &opts, &sem_q, &cache, false, field,
+                    &sibling, &opts, &sem_q, false, field,
                 )?;
                 let fanout = conceptual_fanout_pass(&sibling, &opts, &raw, &semantic)?;
                 Ok::<_, crate::StoreError>((version, semantic, fanout))
@@ -1362,7 +1281,6 @@ impl Searcher {
                         &self.store,
                         &self.options,
                         semantic_query,
-                        &self.semantic_cache,
                         self.snapshot_is_held(),
                         self.use_field_rescoring,
                     )?
@@ -1432,17 +1350,15 @@ impl Searcher {
                 "search",
                 "symbol_pass_for_files",
             );
-            let warmed = lock_clear_on_poison(&self.symbol_table, |slot| *slot = None).clone();
             // Callers stay in the conceptual pool: rule 5 (critic) penalizes
             // `<module>`/`main` caller hits there, which requires them to
             // reach fusion at all.
-            symbol_pass_for_files_warmed(
+            symbol_pass_for_files(
                 &self.store,
                 &self.options,
                 &stage_query,
                 &cascade_files,
                 true,
-                warmed.as_ref(),
             )?
         });
         // Identifier queries must retrieve the exact definition even when the
@@ -1545,7 +1461,6 @@ impl Searcher {
                             &self.store,
                             &self.options,
                             semantic_query,
-                            &self.semantic_cache,
                             trust_snapshot,
                             self.use_field_rescoring,
                         )?
@@ -1555,7 +1470,6 @@ impl Searcher {
                             &self.options,
                             semantic_query,
                             &working_files,
-                            Some(&self.semantic_cache),
                             trust_snapshot,
                             self.use_field_rescoring,
                         )?
@@ -1811,27 +1725,11 @@ fn literal_prefilter_pass(
         .collect::<Vec<_>>();
     let _df_span =
         crate::perf_profile::Span::start("lexical_df_gate_sort", "search", "trigram_df.min_df");
-    if drop_common {
-        // High-df English (encode/payload/search) owned unique-hybrid p90:
-        // each term still ran a full literal_pass. Rare siblings keep the
-        // cascade; all-common conceptual queries go empty so semantic escape
-        // can run (sub-1ms IVF) instead of a 100-file junk shortlist.
-        const CASCADE_COMMON_DF: i64 = 2048;
-        let rare: Vec<_> = terms
-            .iter()
-            .copied()
-            .filter(|term| {
-                !matches!(
-                    store.trigram_df().min_df(store, term),
-                    Some(df) if df > CASCADE_COMMON_DF
-                )
-            })
-            .collect();
-        if rare.is_empty() {
-            return Ok((Vec::new(), HashSet::new()));
-        }
-        terms = rare;
-    }
+    // Bundle `min_df` is a no-op on `ASGREP_READPATH=sql` (no mmap). Applying
+    // the baked-df common-term drop / rare-first sort only on the bundle arm
+    // would fill the 100-file cascade with a different set. Dedicated
+    // `literal:` still uses `scan_shortcut`. Hybrid discovery locksteps the
+    // SQL control arm.
     if terms.is_empty() {
         return Ok((Vec::new(), HashSet::new()));
     }
@@ -1882,26 +1780,6 @@ fn literal_prefilter_pass(
         let budget = if extra { file_cap } else { user_budget };
         let remaining = budget.saturating_sub(files.len());
         if remaining == 0 {
-            continue;
-        }
-        // Known common leftovers can be skipped after a foothold. Cold df
-        // remains unknown rather than paying an implicit vocabulary preload.
-        // The skip guards the SQL literal_pass cost only: with the line
-        // corpus resident, discovery is the cheap in-RAM scan the warm path
-        // exists for, and skipping a user term there starves the cascade —
-        // the term can be redundant for hit generation while being the only
-        // bridge to files the structural passes need (warm self-gold lost
-        // `search/types.rs` because "snapshot" was skipped after a
-        // "consistent" foothold; one-shot runs never skip, df unarmed).
-        const CASCADE_FOOTHOLD_DF: i64 = 128;
-        if corpus.is_none()
-            && !files.is_empty()
-            && !extra
-            && store
-                .trigram_df()
-                .min_df(store, term)
-                .is_some_and(|df| df > CASCADE_FOOTHOLD_DF)
-        {
             continue;
         }
         let term_cap = remaining.min(CASCADE_PER_TERM_FILE_LIMIT);
@@ -1960,10 +1838,10 @@ fn literal_prefilter_pass(
     Ok((out, user_files))
 }
 
-fn discovery_df(store: &IndexStore, term: &str) -> i64 {
-    // Missing df must sort LAST (common), never first. unwrap_or(0) made
-    // unknown terms look rarest and fill the 100-file cap before "durability".
-    store.trigram_df().min_df(store, term).unwrap_or(i64::MAX)
+fn discovery_df(_store: &IndexStore, _term: &str) -> i64 {
+    // SQL has no bundle df (`min_df` = None → MAX). Using baked df here
+    // reorders cascade terms on the bundle arm only.
+    i64::MAX
 }
 
 /// Boost hybrid recall with pre-indexed pattern_nodes (decls/calls extracted at index time).
@@ -1976,19 +1854,22 @@ fn structural_index_pass(
     use crate::rank::SCORE_PATTERN;
     use crate::search::types::{HitKind, SpanHitInput};
     let lang = options.lang_filter.as_deref();
-    let mut sig_to_term = HashMap::<String, String>::new();
+    let mut sig_to_term: Vec<(String, String)> = Vec::new();
     for term in &parsed.terms {
         if term.len() < 3 || !term.chars().all(|c| c == '_' || c.is_alphanumeric()) {
             continue;
         }
         for sig in ast_sgrep_lang::structural_term_signatures(term) {
-            sig_to_term.entry(sig).or_insert_with(|| term.clone());
+            match sig_to_term.binary_search_by(|(key, _)| key.as_str().cmp(&sig)) {
+                Ok(_) => {}
+                Err(i) => sig_to_term.insert(i, (sig, term.clone())),
+            }
         }
     }
     if sig_to_term.is_empty() {
         return Ok(Vec::new());
     }
-    let signatures: Vec<String> = sig_to_term.keys().cloned().collect();
+    let signatures: Vec<String> = sig_to_term.iter().map(|(sig, _)| sig.clone()).collect();
     let mut hits = Vec::new();
     let mut seen = HashSet::new();
     let rows = {
@@ -2011,7 +1892,11 @@ fn structural_index_pass(
         if !seen.insert((row.path.clone(), row.line_start, row.line_end)) {
             continue;
         }
-        let term = sig_to_term.get(&signature).cloned().unwrap_or(signature);
+        let term = sig_to_term
+            .binary_search_by(|(key, _)| key.as_str().cmp(&signature))
+            .ok()
+            .map(|i| sig_to_term[i].1.clone())
+            .unwrap_or(signature);
         // Excerpts attach lazily in finish (attach_indexed_excerpts_if_empty) for
         // the survivors only. Fetching one indexed excerpt per pattern node here
         // ran a SQL query for rows fusion then discarded — measured p50 244us /
@@ -2036,12 +1921,15 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
     use std::path::Component;
     use std::sync::OnceLock;
     const META_CACHE_CAP: usize = 4_096;
-    static META_CACHE: OnceLock<Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
-    let cache = META_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    struct MetaCache {
+        entries: Vec<(String, u64)>,
+    }
+    static META_CACHE: OnceLock<Mutex<MetaCache>> = OnceLock::new();
+    let cache = META_CACHE.get_or_init(|| Mutex::new(MetaCache { entries: Vec::new() }));
     let mut files = HashSet::new();
     let mut read_bytes_estimate = 0u64;
     {
-        let mut guard = lock_clear_on_poison(cache, |map| map.clear());
+        let mut guard = lock_clear_on_poison(cache, |cache| cache.entries.clear());
         for h in hits {
             if !files.insert(h.file.as_str()) {
                 continue;
@@ -2059,18 +1947,25 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
                 continue;
             }
             let key = root.join(hit_path).to_string_lossy().into_owned();
-            let len = if let Some(&n) = guard.get(&key) {
-                n
-            } else {
-                let n = std::fs::metadata(&key).ok().map(|m| m.len()).unwrap_or(0);
-                if guard.len() >= META_CACHE_CAP {
-                    // Bound growth: drop arbitrary entry when full.
-                    if let Some(evict) = guard.keys().next().cloned() {
-                        guard.remove(&evict);
+            let len = match guard
+                .entries
+                .binary_search_by(|(name, _)| name.as_str().cmp(&key))
+            {
+                Ok(i) => guard.entries[i].1,
+                Err(_) => {
+                    let n = std::fs::metadata(&key).ok().map(|m| m.len()).unwrap_or(0);
+                    if guard.entries.len() >= META_CACHE_CAP {
+                        guard.entries.remove(0);
                     }
+                    match guard
+                        .entries
+                        .binary_search_by(|(name, _)| name.as_str().cmp(&key))
+                    {
+                        Ok(_) => {}
+                        Err(i) => guard.entries.insert(i, (key, n)),
+                    }
+                    n
                 }
-                guard.insert(key, n);
-                n
             };
             read_bytes_estimate += len;
         }
