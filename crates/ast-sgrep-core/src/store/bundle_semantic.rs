@@ -109,12 +109,13 @@ impl SemanticView {
         self.fields_at(bundle, self.index_of_id(id)?, mask)
     }
 
-    pub fn fields_at(
+    /// Borrow packed f16 field rows. Missing mask bits are `None`.
+    pub fn field_f16_at<'a>(
         &self,
-        bundle: &ReadBundle,
+        bundle: &'a ReadBundle,
         i: usize,
         mask: FieldVectorMask,
-    ) -> Option<SemanticFieldVectors> {
+    ) -> Option<[Option<&'a [u8]>; 5]> {
         if i >= self.count {
             return None;
         }
@@ -129,18 +130,30 @@ impl SemanticView {
             let start = plane.saturating_mul(plane_bytes).saturating_add(row_off);
             let end = start.saturating_add(self.dim.saturating_mul(2));
             let row = planes.get(start..end)?;
-            if !row.len().is_multiple_of(2) {
-                return None;
-            }
-            // Packed f16 stays packed. score_fields expands once into f32.
-            Some(row.to_vec())
+            row.len().is_multiple_of(2).then_some(row)
         };
+        Some([
+            take(1, 0, mask.name),
+            take(2, 1, mask.docs),
+            take(4, 2, mask.body),
+            take(8, 3, mask.graph),
+            take(16, 4, mask.tests_examples),
+        ])
+    }
+
+    pub fn fields_at(
+        &self,
+        bundle: &ReadBundle,
+        i: usize,
+        mask: FieldVectorMask,
+    ) -> Option<SemanticFieldVectors> {
+        let [name, docs, body, graph, tests_examples] = self.field_f16_at(bundle, i, mask)?;
         Some(SemanticFieldVectors {
-            name: take(1, 0, mask.name),
-            docs: take(2, 1, mask.docs),
-            body: take(4, 2, mask.body),
-            graph: take(8, 3, mask.graph),
-            tests_examples: take(16, 4, mask.tests_examples),
+            name: name.and_then(f16_row_to_f32_bytes),
+            docs: docs.and_then(f16_row_to_f32_bytes),
+            body: body.and_then(f16_row_to_f32_bytes),
+            graph: graph.and_then(f16_row_to_f32_bytes),
+            tests_examples: tests_examples.and_then(f16_row_to_f32_bytes),
         })
     }
 }
@@ -293,6 +306,18 @@ fn field_trailer<'a>(bundle: &'a ReadBundle, view: &SemanticView) -> Option<(&'a
         &vecs[concat..concat + view.count],
         &vecs[concat + view.count..concat + need],
     ))
+}
+
+fn f16_row_to_f32_bytes(row: &[u8]) -> Option<Vec<u8>> {
+    if !row.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(row.len().saturating_mul(2));
+    for chunk in row.chunks_exact(2) {
+        let bits = u16::from_le_bytes(chunk.try_into().ok()?);
+        out.extend_from_slice(&f16_to_f32(bits).to_le_bytes());
+    }
+    Some(out)
 }
 
 pub fn decode_view(bundle: &ReadBundle) -> Option<SemanticView> {
