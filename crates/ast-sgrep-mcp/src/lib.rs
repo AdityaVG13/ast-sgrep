@@ -929,9 +929,17 @@ impl McpServer {
     }
 
     fn indexed_paths_for(&self, root: &Path) -> Option<Vec<String>> {
+        // A cached Searcher pins a DEFERRED snapshot: it is only authoritative
+        // when its recorded writer generation is still the stamp on disk. An
+        // external `asgrep index` bumps the stamp; trusting the stale snapshot
+        // would launder old paths under the new generation (see
+        // lookup_compact_path). The miss falls through to a fresh readonly
+        // open; the cache itself is rebuilt on the next search.
+        let generation = ast_sgrep_core::read_writer_generation(root, self.index_path.as_deref());
         if let Ok(guard) = self.searcher_cache.lock() {
             if let Some(cached) = guard.as_ref() {
-                if cached.root == root {
+                let fresh = cached.root == root && cached.writer_generation == generation;
+                if fresh {
                     return cached.searcher.store().all_file_paths().ok();
                 }
             }

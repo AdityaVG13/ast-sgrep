@@ -6,14 +6,19 @@ import { defined } from "./types.js";
 const DEFAULT_LIMIT = 8;
 /** Native tools the extension serves itself when the launcher predates them. */
 const NATIVE_FALLBACK_TOOLS = new Set(["read", "edit", "find"]);
-/** Fallback authority is either native unknown-tool or a pre-transport refusal. */
+/** Fallback authority is either native unknown-tool, a pre-transport refusal,
+ * or — for reads only — a warm session running over a checkout with no index
+ * yet (`index is empty`, `missing_index_error` in core). Indexed-but-dirty
+ * files never hit that error, so they still serve from the index. */
 function isFallbackEligible(tool, cause) {
     if (!NATIVE_FALLBACK_TOOLS.has(tool))
         return false;
     if (cause instanceof NoCliFallbackError)
         return cause.tool === tool;
     const message = cause instanceof Error ? cause.message : String(cause);
-    return message.includes("unknown tool:");
+    if (message.includes("unknown tool:"))
+        return true;
+    return tool === "read" && message.includes("index is empty");
 }
 function clampLimit(limit) {
     if (limit === undefined)

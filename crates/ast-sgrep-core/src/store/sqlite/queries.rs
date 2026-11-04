@@ -822,7 +822,7 @@ impl IndexStore {
     /// check for single-term hybrid queries that `classify` reads as
     /// Conceptual but that name a real identifier in this repository.
     pub fn has_symbol_named(&self, name: &str) -> Result<bool> {
-        if let Ok(Some(bundle)) = self.read_bundle(None) {
+        if let Some(bundle) = self.read_bundle(None)? {
             if crate::store::bundle_graph::symbols_section_present(&bundle) {
                 return Ok(!crate::store::bundle_graph::defs_exact(&bundle, name, None, 1)
                     .is_empty());
@@ -1055,7 +1055,7 @@ impl IndexStore {
         start: u32,
         end: u32,
     ) -> Result<Option<Vec<(u32, String)>>> {
-        if let Ok(Some(bundle)) = self.read_bundle(None) {
+        if let Some(bundle) = self.read_bundle(None)? {
             return Ok(bundle.source_lines_in_range(path, start, end));
         }
         let mut stmt = self.conn.prepare_cached(
@@ -1086,7 +1086,7 @@ impl IndexStore {
     /// indexed (caller falls back to a disk count). Backs the shared
     /// reader's past-EOF rejection (MCP `read_node` parity).
     pub fn source_line_total(&self, path: &str) -> Result<Option<u32>> {
-        if let Ok(Some(bundle)) = self.read_bundle(None) {
+        if let Some(bundle) = self.read_bundle(None)? {
             return Ok(bundle.source_line_total(path));
         }
         let mut stmt = self.conn.prepare_cached(

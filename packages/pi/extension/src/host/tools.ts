@@ -267,6 +267,20 @@ export function registerAstSgrepTools(
     runtime.resolveRoot ? await runtime.resolveRoot(context) : context.cwd;
 
   /**
+   * Whether the index db at `root` is on disk, or unknown when the runtime
+   * cannot resolve index paths. Same probe as anchorRoot's `indexAt`.
+   */
+  const indexDbExists = (root: string): boolean | undefined => {
+    const resolve = runtime.resolveIndexPath;
+    if (typeof resolve !== "function") return undefined;
+    try {
+      return existsSync(resolve.call(runtime, root));
+    } catch {
+      return undefined;
+    }
+  };
+
+  /**
    * One index per checkout. Pi hands us the session cwd; when that cwd sits
    * inside a checkout that already owns an index, that index serves it —
    * scoped to the cwd — instead of a second multi-hundred-MB `.asgrep` growing
@@ -834,16 +848,23 @@ export function registerAstSgrepTools(
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       report(onUpdate, "read", "started");
       try {
-        // Prefer the warm session (index-backed windows). Disk fallback stays
-        // for hosts with no backend, matching "works without a binary".
+        // Prefer the warm session (index-backed windows) when an index exists.
+        // Disk fallback stays for hosts with no backend and for checkouts that
+        // are not indexed yet, matching "works without a binary".
         const options = signal ? { signal } : {};
         const { root, scope } = await anchorRoot(ctx.cwd);
         ensurePool();
-        const sticky = await pool.acquire(root).catch(() => null);
+        // A warm worker over a root whose index db does not exist can only
+        // fail this read ("index is empty"), so skip the session entirely and
+        // serve from disk. The connector also falls back on that error, but
+        // only after paying the round-trip. Unknown (no resolver) keeps the
+        // session in charge, and the connector fallback covers it.
+        const indexExists = indexDbExists(root);
+        const sticky = indexExists === false ? null : await pool.acquire(root).catch(() => null);
         const bundle = createAsgrepConnector(
           { run: (a, c, o) => runtime.run(a, c, o), ...(sticky ? { sticky } : {}) },
           rootedAt(root),
-          { ...options, ...(sticky ? {} : { localReads: true }), ...(scope ? { scope } : {}) },
+          { ...options, ...(indexExists === false || !sticky ? { localReads: true } : {}), ...(scope ? { scope } : {}) },
         );
         const response = await bundle.asgrep.read(params);
         report(onUpdate, "read", "completed");

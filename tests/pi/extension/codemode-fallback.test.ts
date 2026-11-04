@@ -73,6 +73,27 @@ test("read falls back to a native-shaped window when the launcher lacks the tool
   assert.deepEqual(old.calls, ["read"]);
 });
 
+test("read falls back to disk when the warm session has no index yet", async () => {
+  const root = await project();
+  await write(root, "a.ts", "one\ntwo\nthree\nfour\n");
+  // A warm worker over an unindexed checkout answers with the core
+  // missing-index message instead of a window. Reads must still work from
+  // disk — before the fix this error propagated and the read failed.
+  const missing = new Error(`index is empty for ${root}: no index file at ${join(root, ".asgrep", "index.db")}; run: asgrep index ${root} --json, or rerun with --auto-index to index this checkout in place`);
+  const old = oldLauncher((tool) => tool === "read" ? missing : undefined);
+  const bundle = createAsgrepConnector(old.host, { cwd: root });
+  const response = await bundle.asgrep.read({ path: "a.ts", start: 2, end: 3 });
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.windows, [{ path: "a.ts", ref: "a.ts#L2-L3", start: 2, end: 3, truncated: false, text: "two\nthree" }]);
+  assert.deepEqual(old.calls, ["read"]);
+  // The fallback is memoized per tool: a second read goes straight to disk
+  // without paying the doomed native call again.
+  const again = await bundle.asgrep.read({ path: "a.ts", start: 4, end: 4 });
+  assert.equal(again.ok, true);
+  assert.deepEqual(again.windows, [{ path: "a.ts", ref: "a.ts#L4-L4", start: 4, end: 4, truncated: false, text: "four" }]);
+  assert.deepEqual(old.calls, ["read"]);
+});
+
 test("CLI-only read and edit use the confined fallback without replaying host failures", async () => {
   const root = await project();
   await write(root, "a.ts", "one\ntwo\nthree\nfour\n");

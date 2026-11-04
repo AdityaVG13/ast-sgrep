@@ -200,6 +200,21 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
     };
     const resolveRoot = async (context) => runtime.resolveRoot ? await runtime.resolveRoot(context) : context.cwd;
     /**
+     * Whether the index db at `root` is on disk, or unknown when the runtime
+     * cannot resolve index paths. Same probe as anchorRoot's `indexAt`.
+     */
+    const indexDbExists = (root) => {
+        const resolve = runtime.resolveIndexPath;
+        if (typeof resolve !== "function")
+            return undefined;
+        try {
+            return existsSync(resolve.call(runtime, root));
+        }
+        catch {
+            return undefined;
+        }
+    };
+    /**
      * One index per checkout. Pi hands us the session cwd; when that cwd sits
      * inside a checkout that already owns an index, that index serves it —
      * scoped to the cwd — instead of a second multi-hundred-MB `.asgrep` growing
@@ -640,7 +655,7 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 const fresh = await freshRoot(ctx.cwd, signal);
                 // The checkout owns the index; the caller's scope rides under it.
                 const anchored = withAnchorScope(params, fresh.scope);
-                const [tool, args] = searchToolCall(anchored);
+                let [tool, args] = searchToolCall(anchored);
                 const response = await machineCall(fresh.root, tool, args, searchArgs(anchored), rootedAt(fresh.root), options);
                 const notes = [];
                 if (fresh.freshness === "stale") {
@@ -648,16 +663,22 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
                 }
                 let indexState;
                 if (zeroHitResponse(response)) {
-                    const probe = await probeIndexState(fresh.root, rootedAt(fresh.root), options);
-                    if (probe) {
-                        indexState = probe.files === 0 ? "empty" : "ready";
-                        if (indexState === "empty") {
-                            notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
-                        }
-                        else if ((params.mode ?? "natural") === "semantic" && probe.semanticChunks === 0) {
-                            // Freshness refreshes index lexical/AST only, so a semantic query
-                            // on a cold repo has nothing to rank yet.
-                            notes.push("no embeddings yet: this index was built lexical-only -- run /asgrep-index (or asgrep.indexRepo()) to build vectors");
+                    if (response.why === "empty_index") {
+                        indexState = "empty";
+                        notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
+                    }
+                    else {
+                        const probe = await probeIndexState(fresh.root, rootedAt(fresh.root), options);
+                        if (probe) {
+                            indexState = probe.files === 0 ? "empty" : "ready";
+                            if (indexState === "empty") {
+                                notes.push("index has 0 files: this repository is not indexed -- run /asgrep-index (or asgrep.indexRepo()) and retry");
+                            }
+                            else if ((params.mode ?? "natural") === "semantic" && probe.semanticChunks === 0) {
+                                // Freshness refreshes index lexical/AST only, so a semantic query
+                                // on a cold repo has nothing to rank yet.
+                                notes.push("no embeddings yet: this index was built lexical-only -- run /asgrep-index (or asgrep.indexRepo()) to build vectors");
+                            }
                         }
                     }
                 }
@@ -728,13 +749,23 @@ export function registerAstSgrepTools(pi, runtime = new AstSgrepRuntime(pi), fre
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             report(onUpdate, "read", "started");
             try {
-                // Reading source must remain available when the binary or index is broken.
+                // Prefer the warm session (index-backed windows) when an index exists.
+                // Disk fallback stays for hosts with no backend and for checkouts that
+                // are not indexed yet, matching "works without a binary".
                 const options = signal ? { signal } : {};
                 const { root, scope } = await anchorRoot(ctx.cwd);
-                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o) }, rootedAt(root), { ...options, localReads: true, ...(scope ? { scope } : {}) });
+                ensurePool();
+                // A warm worker over a root whose index db does not exist can only
+                // fail this read ("index is empty"), so skip the session entirely and
+                // serve from disk. The connector also falls back on that error, but
+                // only after paying the round-trip. Unknown (no resolver) keeps the
+                // session in charge, and the connector fallback covers it.
+                const indexExists = indexDbExists(root);
+                const sticky = indexExists === false ? null : await pool.acquire(root).catch(() => null);
+                const bundle = createAsgrepConnector({ run: (a, c, o) => runtime.run(a, c, o), ...(sticky ? { sticky } : {}) }, rootedAt(root), { ...options, ...(indexExists === false || !sticky ? { localReads: true } : {}), ...(scope ? { scope } : {}) });
                 const response = await bundle.asgrep.read(params);
                 report(onUpdate, "read", "completed");
-                return success("read", response, { backend: "filesystem" });
+                return success("read", response, { backend: sticky ? pool.backend() : "filesystem" });
             }
             catch (cause) {
                 return failure("read", cause, signal);
