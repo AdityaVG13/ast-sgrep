@@ -1089,6 +1089,160 @@ pub fn flush_pending_alerts() { let _ = 1; }
     warm.hold_read_snapshot().expect("hold snapshot");
     warm.warm_search_path().expect("warm");
     assert_promoted(&warm, "warm");
+    // MCP and codemode reuse a Searcher opened at open_limit (>= request)
+    // and then truncate. Tail-slot rescue dies on that cut.
+    let wide = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 16,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("wide searcher");
+    let wide_hits = wide
+        .search("merge pending filesystem notifications => one callback")
+        .expect("wide search");
+    let clamped = &wide_hits.hits[..wide_hits.hits.len().min(4)];
+    assert!(
+        clamped
+            .iter()
+            .any(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts")),
+        "rescued semantic match must survive a 16→4 page clamp (MCP warm cache); hits:\n{}",
+        autopsy(&wide_hits.hits)
+    );
+}
+
+#[test]
+fn full_structural_arrow_page_still_considers_semantic_evidence() {
+    // INTENT: `->` is the sibling marker of `=>` in looks_structural.
+    // Coverage-sort + token-parrots must not drop the synonym embed on
+    // this arm either. Same corpus; only the marker changes.
+    let temp = TempDir::new().unwrap();
+    for i in 0..16 {
+        write_src(
+            temp.path(),
+            &format!("src/decoy_{i}.rs"),
+            &format!(
+                "/// merge pending filesystem notifications callback merge pending\npub fn merge_pending_notifications_{i}() {{ let _ = 1; }}\n"
+            ),
+        );
+    }
+    write_src(
+        temp.path(),
+        "src/z_notify.rs",
+        r#"
+/// Coalesce a burst of queued file-change alerts and deliver a single
+/// notification to subscribers so watchers are not flooded by duplicates.
+pub fn flush_pending_alerts() { let _ = 1; }
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let assert_promoted = |searcher: &Searcher, lane: &str| {
+        let response = searcher
+            .search("merge pending filesystem notifications -> one callback")
+            .expect("search");
+        let target = response
+            .hits
+            .iter()
+            .find(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts"));
+        let Some(target) = target else {
+            panic!(
+                "{lane} lane dropped the semantic match off a full structural page (`->`); hits:\n{}",
+                autopsy(&response.hits)
+            );
+        };
+        assert!(
+            target
+                .contributors
+                .contains(&ast_sgrep_core::HitKind::Embed),
+            "{lane} lane never considered semantic evidence for the target on a \
+             full structural `->` page (contributors: {:?}); hits:\n{}",
+            target.contributors,
+            autopsy(&response.hits)
+        );
+    };
+    let options = SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 4,
+        use_embed: true,
+        ..SearchOptions::default()
+    };
+    let cold = Searcher::new(options.clone()).expect("cold searcher");
+    assert_promoted(&cold, "cold");
+    let warm = Searcher::new(options).expect("warm searcher");
+    warm.hold_read_snapshot().expect("hold snapshot");
+    warm.warm_search_path().expect("warm");
+    assert_promoted(&warm, "warm");
+}
+
+#[test]
+fn structural_embed_rescue_promotes_on_page_hit_before_clamp() {
+    // INTENT: fewer decoys so the synonym already occupies a tail row of a
+    // wide (limit 16) page. Merge-onto-existing without promoting leaves it
+    // at rank ~8; MCP/codemode truncate(4) then drops it. Same gold as the
+    // 16-decoy steal pin — distinct hole is "already on the page".
+    let temp = TempDir::new().unwrap();
+    for i in 0..6 {
+        write_src(
+            temp.path(),
+            &format!("src/decoy_{i}.rs"),
+            &format!(
+                "/// merge pending filesystem notifications callback merge pending\npub fn merge_pending_notifications_{i}() {{ let _ = 1; }}\n"
+            ),
+        );
+    }
+    write_src(
+        temp.path(),
+        "src/z_notify.rs",
+        r#"
+/// Coalesce a burst of queued file-change alerts and deliver a single
+/// notification to subscribers so watchers are not flooded by duplicates.
+pub fn flush_pending_alerts() { let _ = 1; }
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let wide = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 16,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("wide searcher");
+    let wide_hits = wide
+        .search("merge pending filesystem notifications => one callback")
+        .expect("wide search");
+    let on_wide = wide_hits
+        .hits
+        .iter()
+        .any(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts"));
+    assert!(
+        on_wide,
+        "precondition: synonym must already be on the wide page; hits:\n{}",
+        autopsy(&wide_hits.hits)
+    );
+    let clamped = &wide_hits.hits[..wide_hits.hits.len().min(4)];
+    assert!(
+        clamped
+            .iter()
+            .any(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts")),
+        "on-page synonym must be promoted into the clamp window; hits:\n{}",
+        autopsy(&wide_hits.hits)
+    );
 }
 
 // ---------------------------------------------------------------------------

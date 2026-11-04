@@ -499,7 +499,8 @@ fn excerpt_wire_and_finish_gates() {
         vec!["src/a.rs", "src/b.rs"]
     );
 
-    // Hybrid def promotion: the definition is moved into the head at head-1.
+    // Hybrid def promotion: the definition sits at rank 2 so it stays on
+    // the page after a later tighter clamp.
     let hybrid = ParsedQuery::parse("needle");
     let hybrid_hits = || {
         let mut def = scored("d.rs", 1.0, "e");
@@ -531,7 +532,7 @@ fn excerpt_wire_and_finish_gates() {
             .iter()
             .map(|hit| hit.file.as_str())
             .collect::<Vec<_>>(),
-        vec!["t1.rs", "t2.rs", "d.rs"]
+        vec!["t1.rs", "d.rs", "t2.rs"]
     );
 }
 

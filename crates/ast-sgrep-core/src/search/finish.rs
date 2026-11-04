@@ -6,6 +6,7 @@ use super::types::{
 };
 use crate::query::{ParsedQuery, QueryMode};
 use crate::Result;
+use std::collections::HashMap;
 
 /// Hybrid/Regex pages emit each file's BEST hit before any file's second
 /// hit (first-occurrence order, overflow backfilled). One hit per file:
@@ -258,6 +259,51 @@ pub(crate) fn finish_response_checked_lazy(
         .into_iter()
         .map(|h| (excerpt_term_coverage(&parsed.terms, &h), h))
         .collect();
+    // Structural hybrid still coverage-sorts, so token-parrot decoys fill a
+    // short page and drop the synonym embed. Rescue the min-coverage embed
+    // file (the one that did not parrot query tokens). A "below max" pick
+    // still prefers a slightly-less-parrot decoy by cosine.
+    let structural_embed_rescue = if matches!(intent, crate::intent::QueryIntent::Structural)
+        && options.use_embed
+    {
+        // Token-parrot files have high coverage on *some* row (usually the
+        // Asgrep comment). The synonym file's rows stay near zero coverage;
+        // that is the 2D pin. Per-row coverage on the Def/Embed excerpt is
+        // often zero for both, so the file max is the discriminator.
+        let mut file_cov: HashMap<&str, u32> = HashMap::with_capacity(keyed.len());
+        for (cov, hit) in &keyed {
+            file_cov
+                .entry(hit.file.as_str())
+                .and_modify(|seen| *seen = (*seen).max(*cov))
+                .or_insert(*cov);
+        }
+        let max_file_cov = file_cov.values().copied().max().unwrap_or(0);
+        let min_file_cov = file_cov.values().copied().min().unwrap_or(0);
+        if min_file_cov >= max_file_cov {
+            None
+        } else {
+            keyed
+                .iter()
+                .filter(|(_, hit)| {
+                    (hit.kind == HitKind::Embed
+                        || hit.contributors.iter().any(|k| *k == HitKind::Embed))
+                        && file_cov
+                            .get(hit.file.as_str())
+                            .is_some_and(|c| *c == min_file_cov)
+                })
+                .max_by(|left, right| {
+                    left.1
+                        .score
+                        .partial_cmp(&right.1.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| left.1.file.cmp(&right.1.file))
+                        .then_with(|| left.1.line_start.cmp(&right.1.line_start))
+                })
+                .map(|(_, hit)| hit.clone())
+        }
+    } else {
+        None
+    };
     let mut compare = |(ca, a): &(u32, SearchHit), (cb, b): &(u32, SearchHit)| {
         cmp_ranked_hits(a, *ca, b, *cb, multi_term)
     };
@@ -280,6 +326,35 @@ pub(crate) fn finish_response_checked_lazy(
         }
     }
     hits = enforce_result_gates(hits, parsed.mode, gate_limit);
+    if let Some(embed) = structural_embed_rescue {
+        // Cap is one row per file. Same-file, different line must not
+        // re-enter as a second slot; attach embed provenance instead.
+        // If that row sits past rank 2, swap it into the head so a later
+        // tighter clamp (MCP/codemode open_limit → request) still sees it.
+        let steal_head = |hits: &[SearchHit]| {
+            (0..hits.len().min(2))
+                .rev()
+                .find(|&i| hits[i].kind != HitKind::Def)
+                .or_else(|| hits.iter().position(|hit| hit.kind != HitKind::Def))
+        };
+        if let Some(pos) = hits.iter().position(|hit| hit.file == embed.file) {
+            if !hits[pos].contributors.iter().any(|k| *k == HitKind::Embed) {
+                hits[pos].contributors.push(HitKind::Embed);
+            }
+            if hits[pos].symbol.is_none() {
+                hits[pos].symbol = embed.symbol.clone();
+            }
+            if pos >= 2 {
+                if let Some(steal) = steal_head(&hits) {
+                    hits.swap(steal, pos);
+                }
+            }
+        } else if let Some(index) = steal_head(&hits).or_else(|| hits.len().checked_sub(1)) {
+            hits[index] = embed;
+        } else {
+            hits.push(embed);
+        }
+    }
     let (read_bytes_estimate, returned_excerpt_bytes, prevented_read_bytes) =
         if skip_fs_byte_estimates {
             let returned = hits.iter().map(|h| h.excerpt.len() as u64).sum();
@@ -322,7 +397,11 @@ pub(super) fn enforce_result_gates(
                 {
                     hits.remove(index);
                 }
-                hits.insert(head - 1, definition);
+                // Rank 2 (or the sole slot): on the page, and still there
+                // after a later tighter clamp (MCP open_limit → request).
+                // `head - 1` is the last row of a wide page, which that cut drops.
+                let insert_at = 1.min(head.saturating_sub(1));
+                hits.insert(insert_at, definition);
             }
         }
     }
