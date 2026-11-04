@@ -1151,11 +1151,11 @@ impl IndexStore {
         &self,
         terms: &[String],
     ) -> Result<Vec<crate::lexicon::Association>> {
-        // Packed lexicon is not lockstep with the SQL control: SUBSTR /
-        // MAX_PER_TERM / ORDER BY term,related vs a full mmap scan. Hybrid
-        // critic concept-affinity therefore loads SQL. Dedicated graph tools
-        // still use the mmap table; this query-term load is the critic/expansion
-        // path.
+        // Packed rows are `ORDER BY term, related` at pack time. Hybrid critic
+        // used to re-query SQL so SUBSTR/LENGTH fail-closed matched the control
+        // arm; on a healthy lexicon (builder already caps MAX_TERM_CHARS) the
+        // mmap filter is the same set in the same order. SQL remains the
+        // `ASGREP_READPATH=sql` / no-bundle path.
         let mut unique: Vec<&str> = terms.iter().map(String::as_str).collect();
         unique.sort();
         unique.dedup();
@@ -1168,6 +1168,37 @@ impl IndexStore {
         // back to the full load, which is always correct.
         if unique.len() > crate::lexicon::MAX_PROSE_TERMS {
             return self.all_lexicon_rows();
+        }
+        if !self.lexicon_is_dirty().unwrap_or(true) {
+            if let Ok(Some(bundle)) = self.read_bundle(None) {
+                if crate::store::bundle_graph::lexicon_row_count(&bundle) > 0 {
+                    let owned: Vec<String> = unique.iter().map(|s| (*s).to_owned()).collect();
+                    let packed = crate::store::bundle_graph::lexicon_for_terms(&bundle, &owned);
+                    let mut out = Vec::with_capacity(
+                        owned.len().saturating_mul(crate::lexicon::MAX_PER_TERM),
+                    );
+                    for association in packed {
+                        let term_chars = association.term.chars().count() as i64;
+                        let related_chars = association.related.chars().count() as i64;
+                        out.push(Self::decode_lexicon_row(
+                            association.term,
+                            association.related,
+                            association.ppmi,
+                            i64::from(association.support),
+                            term_chars,
+                            related_chars,
+                        )?);
+                    }
+                    if out.len() > crate::lexicon::MAX_PAIRS {
+                        return Err(crate::StoreError::Other(format!(
+                            "stored lexicon exceeds maximum of {} associations",
+                            crate::lexicon::MAX_PAIRS
+                        ))
+                        .into());
+                    }
+                    return Ok(out);
+                }
+            }
         }
         let placeholders = std::iter::repeat_n("?", unique.len())
             .collect::<Vec<_>>()
@@ -1200,8 +1231,13 @@ impl IndexStore {
 
     /// Read a bounded lexicon (ufk7). Ordered so loads are deterministic.
     pub fn all_lexicon_rows(&self) -> Result<Vec<crate::lexicon::Association>> {
-        if let Ok(Some(bundle)) = self.read_bundle(None) {
-            return Ok(crate::store::bundle_graph::lexicon_for_terms(&bundle, &[]));
+        if !self.lexicon_is_dirty().unwrap_or(true) {
+            if let Ok(Some(bundle)) = self.read_bundle(None) {
+                let packed = crate::store::bundle_graph::lexicon_for_terms(&bundle, &[]);
+                if !packed.is_empty() {
+                    return Ok(packed);
+                }
+            }
         }
         let mut stmt = self.conn.prepare_cached(
             "SELECT SUBSTR(term, 1, ?1), SUBSTR(related, 1, ?1), ppmi, support,

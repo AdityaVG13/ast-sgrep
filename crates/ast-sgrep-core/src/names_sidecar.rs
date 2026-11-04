@@ -153,17 +153,21 @@ impl Section {
     fn dfs(&self, map: &[u8], terms: &[String]) -> (Vec<u64>, u64) {
         let mut dfs = vec![0u64; terms.len()];
         let text = &map[self.text.0..self.text.1];
+        let finders: Vec<memchr::memmem::Finder<'_>> = terms
+            .iter()
+            .map(|term| memchr::memmem::Finder::new(term.as_bytes()))
+            .collect();
         for i in 0..self.count {
             let start = read_u32(map, self.offsets.0 + i * 4) as usize;
             let end = read_u32(map, self.offsets.0 + (i + 1) * 4) as usize;
             if end < start || self.text.0 + end > self.text.1 {
                 continue;
             }
-            let Ok(name) = std::str::from_utf8(&text[start..end]) else {
-                continue;
-            };
-            for (t, term) in terms.iter().enumerate() {
-                if name.contains(term.as_str()) {
+            let name = &text[start..end];
+            // Write path only stores UTF-8; skip the from_utf8 tax on the mill
+            // df sweep. Corrupt bytes still cannot match a UTF-8 query term.
+            for (t, finder) in finders.iter().enumerate() {
+                if finder.find(name).is_some() {
                     dfs[t] += 1;
                 }
             }

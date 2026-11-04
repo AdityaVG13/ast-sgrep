@@ -9,6 +9,7 @@ use super::IndexStore;
 use crate::lexicon::Association;
 use crate::rank::{max_normalize_idf, term_idf};
 use crate::Result;
+use std::collections::HashSet;
 
 pub(crate) const SEC_DF: usize = 16;
 pub(crate) const SEC_SYM: usize = 17;
@@ -852,17 +853,28 @@ pub fn patterns_exact(
     out
 }
 
+pub fn lexicon_row_count(bundle: &ReadBundle) -> usize {
+    let Some(table) = bundle_table(bundle, SEC_LEX) else {
+        return 0;
+    };
+    if table.stride == 0 {
+        return 0;
+    }
+    table.rows.len() / table.stride
+}
+
 pub fn lexicon_for_terms(bundle: &ReadBundle, terms: &[String]) -> Vec<Association> {
     let Some(table) = bundle_table(bundle, SEC_LEX) else {
         return Vec::new();
     };
+    let want: HashSet<&str> = terms.iter().map(String::as_str).collect();
     let n = table.rows.len() / table.stride;
     let mut out = Vec::new();
     for i in 0..n {
         let at = i * table.stride;
         let term = interned(&table, read_u32(table.rows, at));
         let related = interned(&table, read_u32(table.rows, at + 4));
-        if !terms.is_empty() && !terms.iter().any(|t| t == term || t == related) {
+        if !want.is_empty() && !want.contains(term) && !want.contains(related) {
             continue;
         }
         let support = read_u32(table.rows, at + 8);

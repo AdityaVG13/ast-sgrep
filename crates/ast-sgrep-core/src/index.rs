@@ -572,8 +572,10 @@ impl Indexer {
         // Durable rows may already be visible; advertise before sidecar work so
         // peer Searcher caches cannot keep a pre-mutation snapshot (Option C lite).
         self.advertise_writer_generation();
-        self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
+        // Lexicon SQL must land before `read.v1` is packed; otherwise the mmap
+        // table is an empty snapshot and hybrid critic expansion goes dark.
         self.rebuild_lexicon_if_dirty();
+        self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
         Ok(stats)
     }
 
@@ -823,6 +825,17 @@ impl Indexer {
         if crate::semantic_ivf::is_in_memory_db(self.store.db_path()) {
             return Ok(());
         }
+        let generation = self.store.index_data_version()?;
+        if crate::store::read_bundle::is_fresh(self.store.db_path(), generation) {
+            return Ok(());
+        }
+        self.rebuild_read_bundle()
+    }
+
+    fn rebuild_read_bundle(&self) -> Result<()> {
+        if crate::semantic_ivf::is_in_memory_db(self.store.db_path()) {
+            return Ok(());
+        }
         // `auto` writes the bundle; explicit `sql` is the no-bundle control arm.
         let armed = crate::store::read_bundle::readpath()
             != crate::store::read_bundle::ReadPath::Sql
@@ -831,9 +844,6 @@ impl Indexer {
             return Ok(());
         }
         let generation = self.store.index_data_version()?;
-        if crate::store::read_bundle::is_fresh(self.store.db_path(), generation) {
-            return Ok(());
-        }
         crate::store::read_bundle::write_for_store(self.store(), generation)
     }
     /// Rewrite the names sidecar (folded idf vocabularies) when it does not
@@ -1081,7 +1091,11 @@ impl Indexer {
             self.rebuild_semantic_ivf_sidecar()?;
             self.sidecars_dirty.semantic_ivf = false;
         }
+        let lexicon_dirty = self.store.lexicon_is_dirty().unwrap_or(true);
         self.rebuild_lexicon_if_dirty();
+        if lexicon_dirty {
+            self.rebuild_read_bundle()?;
+        }
         if pending {
             self.advertise_writer_generation();
         }

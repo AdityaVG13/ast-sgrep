@@ -409,6 +409,39 @@ fn targeted_lexicon_load_matches_full_load() {
             "expansion must match for {terms:?}"
         );
     }
+
+    // After pack, hybrid critic must keep the same per-term lists on the
+    // mmap filter that SQL served before write_for_store.
+    let generation = store.index_data_version().unwrap();
+    ast_sgrep_core::store::read_bundle::write_for_store(&store, generation).unwrap();
+    let packed_full = load_lexicon(&store).expect("packed full load");
+    for terms in [
+        vec!["hub".to_string()],
+        vec!["spoke".to_string()],
+        vec!["hub".to_string(), "spoke".to_string()],
+        vec!["hub".to_string(), "elsewhere".to_string()],
+        vec!["missing".to_string()],
+        vec![],
+    ] {
+        let targeted = load_lexicon_for_terms(&store, &terms).expect("packed targeted load");
+        for term in &terms {
+            assert_eq!(
+                targeted.related(term),
+                packed_full.related(term),
+                "packed per-term list must match for {terms:?}"
+            );
+            assert_eq!(
+                targeted.related(term),
+                full.related(term),
+                "packed targeted must match pre-pack SQL for {terms:?}"
+            );
+        }
+        assert_eq!(
+            targeted.expand(&terms, 64),
+            packed_full.expand(&terms, 64),
+            "packed expansion must match for {terms:?}"
+        );
+    }
 }
 
 #[test]
