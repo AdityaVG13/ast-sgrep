@@ -8,7 +8,7 @@ use crate::search::field_weight::{
 };
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
-use crate::semantic_chunk::SemanticFieldVectors;
+use crate::semantic_chunk::{FieldVectorMask, SemanticFieldVectors};
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{
@@ -1147,6 +1147,9 @@ fn fields_for_ids(
     if !use_field_rescoring || !mask.any() || ids.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(fields) = fields_from_bundle(store, ids, mask)? {
+        return Ok(fields);
+    }
     let _span = crate::perf_profile::Span::start(
         "semantic_field_fetch",
         "semantic",
@@ -1154,6 +1157,27 @@ fn fields_for_ids(
     );
     let fetched = store.semantic_field_vectors_by_ids(ids, mask)?;
     Ok(take_by_ids_or_default(fetched, ids))
+}
+
+fn fields_from_bundle(
+    store: &IndexStore,
+    ids: &[i64],
+    mask: FieldVectorMask,
+) -> Result<Option<Vec<SemanticFieldVectors>>> {
+    let Some(bundle) = store.read_bundle(None)? else {
+        return Ok(None);
+    };
+    let Some(view) = bundle.semantic_view() else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(fields) = view.fields_by_id(&bundle, *id, mask) else {
+            return Ok(None);
+        };
+        out.push(fields);
+    }
+    Ok(Some(out))
 }
 
 fn take_by_ids_or_default<T: Default>(rows: Vec<(i64, T)>, ids: &[i64]) -> Vec<T> {

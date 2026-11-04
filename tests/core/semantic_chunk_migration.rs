@@ -315,6 +315,60 @@ fn persist_per_field_vectors_on_index() {
             );
         }
     }
+    let generation = store.index_data_version().unwrap();
+    ast_sgrep_core::store::read_bundle::write_for_store(store, generation).unwrap();
+    let bundle = ast_sgrep_core::store::read_bundle::ReadBundle::open(store.db_path())
+        .unwrap()
+        .expect("write_for_store publishes read.v1");
+    let view = bundle
+        .semantic_view()
+        .expect("semantic view after embed index");
+    let mask = ast_sgrep_core::semantic_chunk::FieldVectorMask::ALL;
+    let mut packed_present = 0usize;
+    for (id, sql) in &fields {
+        let packed = view
+            .fields_by_id(&bundle, *id, mask)
+            .expect("field trailer must cover every SQL chunk id");
+        packed_present += usize::from(packed.name.is_some());
+        assert_field_roundtrip(sql.name.as_deref(), packed.name.as_deref(), "name");
+        assert_field_roundtrip(sql.docs.as_deref(), packed.docs.as_deref(), "docs");
+        assert_field_roundtrip(sql.body.as_deref(), packed.body.as_deref(), "body");
+        assert_field_roundtrip(sql.graph.as_deref(), packed.graph.as_deref(), "graph");
+        assert_field_roundtrip(
+            sql.tests_examples.as_deref(),
+            packed.tests_examples.as_deref(),
+            "tests_examples",
+        );
+    }
+    assert!(
+        packed_present > 0,
+        "packed trailer must retain at least one name field"
+    );
+}
+
+fn assert_field_roundtrip(sql: Option<&[u8]>, packed: Option<&[u8]>, field: &str) {
+    match (sql.filter(|b| !b.is_empty()), packed.filter(|b| !b.is_empty())) {
+        (None, None) => {}
+        (Some(sql), Some(packed)) => {
+            let sql = ast_sgrep_embed::embed_from_bytes(sql).expect("sql f32");
+            let packed = ast_sgrep_embed::embed_from_bytes(packed).expect("packed f32");
+            assert_eq!(sql.len(), packed.len(), "{field} dim");
+            let cosine = ast_sgrep_embed::cosine_similarity(&sql, &packed);
+            assert!(
+                cosine > 0.999,
+                "{field} f16 roundtrip cosine {cosine} (want > 0.999)"
+            );
+        }
+        (sql, packed) => {
+            assert_eq!(
+                sql.is_some(),
+                packed.is_some(),
+                "{field} presence sql={} packed={}",
+                sql.is_some(),
+                packed.is_some()
+            );
+        }
+    }
 }
 
 #[test]

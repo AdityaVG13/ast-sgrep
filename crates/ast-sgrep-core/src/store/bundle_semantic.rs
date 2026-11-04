@@ -3,13 +3,20 @@
 //! Chunk metadata, interned `sc.text`, and f16 primary vectors live in the
 //! mmap. Ranking converts f16 on the stack per row; decode never materializes
 //! a corpus-sized f32. SQL remains the `ASGREP_READPATH=sql` control arm.
+//!
+//! `SEC_SEM_VEC` may trail the concat payload with per-field f16 planes
+//! (`count` mask bytes, then 5 × `count*dim` f16). Older concat-only files
+//! keep the prefix; readers without a trailer fall back to SQL field blobs.
 
 use super::bundle_graph::{file_idx, file_index, Intern};
 use super::read_bundle::ReadBundle;
 use super::IndexStore;
+use crate::semantic_chunk::{FieldVectorMask, SemanticFieldVectors};
 use crate::Result;
 use ast_sgrep_embed::SemanticChunkRow;
 use std::sync::Arc;
+
+const FIELD_PLANES: usize = 5;
 
 pub(crate) const SEC_SEM_META: usize = 22;
 pub(crate) const SEC_SEM_VEC: usize = 23;
@@ -92,6 +99,45 @@ impl SemanticView {
     pub fn row_by_id(&self, bundle: &ReadBundle, id: i64) -> Option<SemanticChunkRow> {
         self.row(bundle, self.index_of_id(id)?)
     }
+
+    pub fn fields_by_id(
+        &self,
+        bundle: &ReadBundle,
+        id: i64,
+        mask: FieldVectorMask,
+    ) -> Option<SemanticFieldVectors> {
+        self.fields_at(bundle, self.index_of_id(id)?, mask)
+    }
+
+    pub fn fields_at(
+        &self,
+        bundle: &ReadBundle,
+        i: usize,
+        mask: FieldVectorMask,
+    ) -> Option<SemanticFieldVectors> {
+        if i >= self.count {
+            return None;
+        }
+        let (masks, planes) = field_trailer(bundle, self)?;
+        let bits = masks[i];
+        let plane_bytes = self.count.saturating_mul(self.dim).saturating_mul(2);
+        let row_off = i.saturating_mul(self.dim).saturating_mul(2);
+        let take = |bit: u8, plane: usize, want: bool| {
+            if !want || bits & bit == 0 {
+                return None;
+            }
+            let start = plane.saturating_mul(plane_bytes).saturating_add(row_off);
+            let end = start.saturating_add(self.dim.saturating_mul(2));
+            f16_row_to_f32_bytes(planes.get(start..end)?)
+        };
+        Some(SemanticFieldVectors {
+            name: take(1, 0, mask.name),
+            docs: take(2, 1, mask.docs),
+            body: take(4, 2, mask.body),
+            graph: take(8, 3, mask.graph),
+            tests_examples: take(16, 4, mask.tests_examples),
+        })
+    }
 }
 
 pub(crate) fn pack_from_store(
@@ -149,15 +195,111 @@ pub(crate) fn pack_from_store(
     meta.extend_from_slice(bytemuck::cast_slice(&name_offs));
     meta.extend_from_slice(&meta_rows);
 
-    let mut vecs = Vec::with_capacity(8 + ids.len() * dim * 2);
+    let n = ids.len();
+    let mut vecs = Vec::with_capacity(8 + n * dim * 2 + n + FIELD_PLANES * n * dim * 2);
     vecs.extend_from_slice(&(dim as u32).to_le_bytes());
-    vecs.extend_from_slice(&(ids.len() as u32).to_le_bytes());
+    vecs.extend_from_slice(&(n as u32).to_le_bytes());
     for chunk in &chunks {
         for lane in &chunk.5 {
             vecs.extend_from_slice(&f32_to_f16(*lane).to_le_bytes());
         }
     }
+    append_field_trailer(&mut vecs, store, &ids, dim)?;
     Ok(SemanticSections { meta, vecs })
+}
+
+fn append_field_trailer(
+    vecs: &mut Vec<u8>,
+    store: &IndexStore,
+    ids: &[i64],
+    dim: usize,
+) -> Result<()> {
+    let Ok(fields) = store.semantic_chunk_field_vectors() else {
+        return Ok(());
+    };
+    if fields.len() != ids.len()
+        || fields
+            .iter()
+            .zip(ids.iter())
+            .any(|((id, _), want)| id != want)
+    {
+        return Ok(());
+    }
+    let n = ids.len();
+    let mut masks = vec![0u8; n];
+    let mut planes = vec![Vec::with_capacity(n * dim * 2); FIELD_PLANES];
+    for (i, (_, fv)) in fields.iter().enumerate() {
+        let blobs = [
+            fv.name.as_deref(),
+            fv.docs.as_deref(),
+            fv.body.as_deref(),
+            fv.graph.as_deref(),
+            fv.tests_examples.as_deref(),
+        ];
+        for (plane, blob) in blobs.into_iter().enumerate() {
+            if push_f16_row(&mut planes[plane], blob, dim) {
+                masks[i] |= 1 << plane;
+            }
+        }
+    }
+    vecs.extend_from_slice(&masks);
+    for plane in &planes {
+        vecs.extend_from_slice(plane);
+    }
+    Ok(())
+}
+
+fn push_f16_row(out: &mut Vec<u8>, blob: Option<&[u8]>, dim: usize) -> bool {
+    let zeros = dim.saturating_mul(2);
+    let Some(bytes) = blob.filter(|b| !b.is_empty()) else {
+        out.extend(std::iter::repeat_n(0u8, zeros));
+        return false;
+    };
+    let Ok(vec) = ast_sgrep_embed::embed_from_bytes(bytes) else {
+        out.extend(std::iter::repeat_n(0u8, zeros));
+        return false;
+    };
+    if vec.len() != dim {
+        out.extend(std::iter::repeat_n(0u8, zeros));
+        return false;
+    }
+    for lane in vec {
+        out.extend_from_slice(&f32_to_f16(lane).to_le_bytes());
+    }
+    true
+}
+
+fn concat_bytes(count: usize, dim: usize) -> usize {
+    8 + count.saturating_mul(dim).saturating_mul(2)
+}
+
+fn field_trailer_bytes(count: usize, dim: usize) -> usize {
+    count.saturating_add(FIELD_PLANES.saturating_mul(count.saturating_mul(dim).saturating_mul(2)))
+}
+
+fn field_trailer<'a>(bundle: &'a ReadBundle, view: &SemanticView) -> Option<(&'a [u8], &'a [u8])> {
+    let vecs = bundle.section(SEC_SEM_VEC);
+    let concat = concat_bytes(view.count, view.dim);
+    let need = field_trailer_bytes(view.count, view.dim);
+    if vecs.len() < concat.saturating_add(need) {
+        return None;
+    }
+    Some((
+        &vecs[concat..concat + view.count],
+        &vecs[concat + view.count..concat + need],
+    ))
+}
+
+fn f16_row_to_f32_bytes(row: &[u8]) -> Option<Vec<u8>> {
+    if !row.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(row.len().saturating_mul(2));
+    for chunk in row.chunks_exact(2) {
+        let bits = u16::from_le_bytes(chunk.try_into().ok()?);
+        out.extend_from_slice(&f16_to_f32(bits).to_le_bytes());
+    }
+    Some(out)
 }
 
 pub fn decode_view(bundle: &ReadBundle) -> Option<SemanticView> {
