@@ -572,7 +572,7 @@ impl Indexer {
         // Durable rows may already be visible; advertise before sidecar work so
         // peer Searcher caches cannot keep a pre-mutation snapshot (Option C lite).
         self.advertise_writer_generation();
-        // Lexicon SQL must land before `read.v1` is packed; otherwise the mmap
+        // Lexicon SQL must land before the read bundle is packed; otherwise the mmap
         // table is an empty snapshot and hybrid critic expansion goes dark.
         self.rebuild_lexicon_if_dirty();
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
@@ -818,7 +818,7 @@ impl Indexer {
         self.rebuild_read_bundle_if_stale()?;
         Ok(())
     }
-    /// Rebuild the `read.v1` columnar bundle when it does not reflect the
+    /// Rebuild the columnar read bundle when it does not reflect the
     /// current index generation. Unchanged refresh walks skip it; any
     /// mutation bumps `index_data_version` and the next finalize rewrites.
     fn rebuild_read_bundle_if_stale(&self) -> Result<()> {

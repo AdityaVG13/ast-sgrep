@@ -319,7 +319,7 @@ fn persist_per_field_vectors_on_index() {
     ast_sgrep_core::store::read_bundle::write_for_store(store, generation).unwrap();
     let bundle = ast_sgrep_core::store::read_bundle::ReadBundle::open(store.db_path())
         .unwrap()
-        .expect("write_for_store publishes read.v1");
+        .expect("write_for_store publishes the read bundle");
     let view = bundle
         .semantic_view()
         .expect("semantic view after embed index");

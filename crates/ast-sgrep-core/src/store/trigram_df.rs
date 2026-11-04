@@ -1,6 +1,6 @@
 //! Rarest-trigram df picker for the literal trigram scan.
 //!
-//! Document frequencies are baked into `read.v1` at index commit. Query
+//! Document frequencies are baked into the read bundle at index commit. Query
 //! time binary-searches that array. No process memo, no static prior, no
 //! fts5vocab preload. The SQL control arm (`ASGREP_READPATH=sql`) has no
 //! bundle and degrades to the full-phrase MATCH.

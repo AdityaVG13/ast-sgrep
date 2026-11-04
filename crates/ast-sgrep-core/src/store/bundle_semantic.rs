@@ -1,4 +1,4 @@
-//! Semantic concat tables packed into `read.v1`.
+//! Semantic concat tables packed into the read bundle.
 //!
 //! Chunk metadata, interned `sc.text`, and f16 primary vectors live in the
 //! mmap. Ranking converts f16 on the stack per row; decode never materializes
@@ -151,14 +151,14 @@ pub(crate) fn pack_from_store(
     let ids = store.semantic_chunk_ids(None)?;
     if ids.len() != chunks.len() {
         return Err(crate::StoreError::Other(
-            "semantic chunk id/row length mismatch while packing read.v1".into(),
+            "semantic chunk id/row length mismatch while packing the read bundle".into(),
         )
         .into());
     }
     let dim = chunks[0].5.len();
     if dim == 0 || chunks.iter().any(|chunk| chunk.5.len() != dim) {
         return Err(crate::StoreError::Other(
-            "semantic concat dim missing or mixed while packing read.v1".into(),
+            "semantic concat dim missing or mixed while packing the read bundle".into(),
         )
         .into());
     }

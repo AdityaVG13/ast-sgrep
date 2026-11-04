@@ -416,7 +416,7 @@ fn semantic_bundle_ids_match_sql_order() {
     assert_eq!(sql_ids.len(), 2, "fixture: two semantic chunks");
     let bundle = ast_sgrep_core::store::read_bundle::ReadBundle::open(store.db_path())
         .unwrap()
-        .expect("read.v1 after write_for_store");
+        .expect("read bundle after write_for_store");
     let view = bundle
         .semantic_view()
         .expect("semantic view present after packing chunks");

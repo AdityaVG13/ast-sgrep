@@ -41,7 +41,7 @@ fn pick_shortcut_falls_back_when_all_trigrams_are_common() {
 
 #[test]
 fn sql_control_arm_without_bundle_is_full_phrase() {
-    // P3 deleted the static prior. In-memory stores never publish read.v1,
+    // P3 deleted the static prior. In-memory stores never publish a read bundle,
     // so the SQL control arm must not invent a shortcut.
     let store = IndexStore::open_in_memory(std::path::Path::new("mem")).expect("in-memory store");
     assert!(!df_ready(&store));

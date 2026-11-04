@@ -188,7 +188,7 @@ pub struct LineCorpus {
     bytes_owned: Vec<u8>,
     /// Owned backing for the SQL fallback; empty when `bundle` is present.
     folded_bytes_owned: Vec<u8>,
-    /// Published `read.v1` mapping (source/folded/offsets/postings).
+    /// Published read-bundle mapping (source/folded/offsets/postings).
     bundle: Option<std::sync::Arc<crate::store::read_bundle::ReadBundle>>,
     lines: usize,
     starts: Vec<u32>,
@@ -304,7 +304,7 @@ impl LineCorpus {
         })))
     }
 
-    /// Open the columnar `read.v1` materialization as a corpus view. Offsets
+    /// Open the columnar read-bundle materialization as a corpus view. Offsets
     /// and postings are read from the mapping; only the small per-line start
     /// tables and file metadata are decoded.
     pub fn from_bundle(
@@ -316,7 +316,7 @@ impl LineCorpus {
         let n_files = bundle.file_count();
         if lines > u32::MAX as usize || n_files > u32::MAX as usize {
             return Err(crate::StoreError::Other(
-                "read.v1 counts exceed u32 ranges".into(),
+                "read bundle counts exceed u32 ranges".into(),
             ));
         }
         let file_first_line = (0..n_files).map(|i| bundle.file_first_line(i)).collect();

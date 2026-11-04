@@ -270,7 +270,7 @@ pub struct IndexStore {
     durability: crate::store::Durability,
     /// Packed indexed lines for unique-query literal. Cleared on generation bump.
     line_corpus: std::cell::RefCell<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>>,
-    /// Opened `read.v1` mapping. This is index materialization, not a
+    /// Opened read-bundle mapping. This is index materialization, not a
     /// query-keyed memo: it is reopened whenever the store generation moves.
     bundle: std::cell::RefCell<Option<std::sync::Arc<crate::store::read_bundle::ReadBundle>>>,
     /// Identity of the file backing `bundle`; a publish replaces the inode, so
@@ -630,7 +630,7 @@ impl IndexStore {
         // the same db_path from agent surfaces.
         &self.conn
     }
-    /// Open (or reuse) the published `read.v1` mapping. The handle is an index
+    /// Open (or reuse) the published read-bundle mapping. The handle is an index
     /// materialization, not a query-keyed memo; a generation mismatch reopens
     /// it. Explicit `bundle` fails closed when absent/stale; `auto` falls back
     /// to SQL only when the file does not exist.
@@ -657,7 +657,7 @@ impl IndexStore {
         let Some(bundle) = crate::store::read_bundle::ReadBundle::open(&self.db_path)? else {
             if path == crate::store::read_bundle::ReadPath::Bundle {
                 return Err(crate::StoreError::Other(
-                    "ASGREP_READPATH=bundle but read.v1 is missing; run `asgrep index`".into(),
+                    "ASGREP_READPATH=bundle but the read bundle is missing; run `asgrep index`".into(),
                 )
                 .into());
             }
@@ -666,7 +666,7 @@ impl IndexStore {
         if let Some(generation) = generation {
             if bundle.generation() != generation {
                 return Err(crate::StoreError::Other(format!(
-                    "read.v1 generation {} != store {generation}; reindex required",
+                    "read bundle generation {} != store {generation}; reindex required",
                     bundle.generation()
                 ))
                 .into());

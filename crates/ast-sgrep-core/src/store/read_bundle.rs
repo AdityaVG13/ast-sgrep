@@ -1,4 +1,4 @@
-//! `read.v1` columnar read bundle.
+//! Columnar read bundle (filename `*.read` beside the index DB).
 //!
 //! One mmap'd file beside the index DB carries the path-sorted line arena,
 //! folded arena, line metadata, identifier postings and per-file trigram
@@ -72,7 +72,7 @@ pub fn bundle_enabled() -> bool {
 }
 
 pub fn path_for(db_path: &Path) -> PathBuf {
-    db_path.with_extension("read.v1")
+    db_path.with_extension("read")
 }
 
 /// Cheap file identity for a mapped bundle. Rename-publication changes the
@@ -225,21 +225,21 @@ fn encode_header(header: &BundleHeader) -> [u8; HEADER_LEN] {
 
 fn decode_header(bytes: &[u8]) -> Result<BundleHeader> {
     if bytes.len() < HEADER_LEN {
-        return Err(crate::StoreError::Other("read.v1 header truncated".into()));
+        return Err(crate::StoreError::Other("read bundle header truncated".into()));
     }
     if &bytes[..8] != MAGIC {
-        return Err(crate::StoreError::Other("read.v1 magic mismatch".into()));
+        return Err(crate::StoreError::Other("read bundle magic mismatch".into()));
     }
     let rev = read_u32(bytes, 8);
     if rev < BUNDLE_REV_MIN || rev > BUNDLE_REV {
         return Err(crate::StoreError::Other(format!(
-            "read.v1 bundle rev {rev} not in {BUNDLE_REV_MIN}..={BUNDLE_REV}; reindex required"
+            "read bundle rev {rev} not in {BUNDLE_REV_MIN}..={BUNDLE_REV}; reindex required"
         )));
     }
     let schema = read_u32(bytes, 12);
     if i64::from(schema) != INDEX_SCHEMA_VERSION {
         return Err(crate::StoreError::Other(format!(
-            "read.v1 schema {schema} != {INDEX_SCHEMA_VERSION}; reindex required"
+            "read bundle schema {schema} != {INDEX_SCHEMA_VERSION}; reindex required"
         )));
     }
     let generation = i64::from_le_bytes(bytes[16..24].try_into().expect("generation span"));
@@ -274,10 +274,10 @@ fn decode_header(bytes: &[u8]) -> Result<BundleHeader> {
         let end = section
             .off
             .checked_add(section.len)
-            .ok_or_else(|| crate::StoreError::Other("read.v1 section overflow".into()))?;
+            .ok_or_else(|| crate::StoreError::Other("read bundle section overflow".into()))?;
         if end > bytes.len() as u64 {
             return Err(crate::StoreError::Other(format!(
-                "read.v1 section {index} outside file"
+                "read bundle section {index} outside file"
             )));
         }
     }
@@ -307,7 +307,7 @@ fn decode_header(bytes: &[u8]) -> Result<BundleHeader> {
     );
     if expected != recorded_fingerprint {
         return Err(crate::StoreError::Other(
-            "read.v1 header fingerprint mismatch".into(),
+            "read bundle header fingerprint mismatch".into(),
         ));
     }
     Ok(header)
@@ -339,7 +339,7 @@ impl ReadBundle {
         match Self::open(db_path)? {
             Some(bundle) if bundle.header.generation == generation => Ok(Some(bundle)),
             Some(bundle) => Err(crate::StoreError::Other(format!(
-                "read.v1 generation {} != store {generation}; reindex required",
+                "read bundle generation {} != store {generation}; reindex required",
                 bundle.header.generation
             ))
             .into()),
@@ -366,7 +366,7 @@ impl ReadBundle {
             let section = self.header.section(index);
             if section.len as usize != count.saturating_mul(std::mem::size_of::<u32>()) {
                 return Err(crate::StoreError::Other(format!(
-                    "read.v1 section {index} length mismatch"
+                    "read bundle section {index} length mismatch"
                 )));
             }
         }
@@ -374,18 +374,18 @@ impl ReadBundle {
             || self.section(SEC_FOLDED).len() != self.header.folded_len as usize
         {
             return Err(crate::StoreError::Other(
-                "read.v1 arena length mismatch".into(),
+                "read bundle arena length mismatch".into(),
             ));
         }
         if self.section(SEC_POSTINGS).len() % 4 != 0 {
             return Err(crate::StoreError::Other(
-                "read.v1 postings length misaligned".into(),
+                "read bundle postings length misaligned".into(),
             ));
         }
         if self.section(SEC_TRIGRAMS).len() != files.saturating_mul(FILTER_WORDS).saturating_mul(8)
         {
             return Err(crate::StoreError::Other(
-                "read.v1 trigram section length mismatch".into(),
+                "read bundle trigram section length mismatch".into(),
             ));
         }
         Ok(())
@@ -652,12 +652,12 @@ pub(crate) fn write_from_rows_with_metadata(
             current_path = Some(path.as_ref());
             path_offsets.push(
                 u32::try_from(path_bytes.len()).map_err(|_| {
-                    crate::StoreError::Other("read.v1 path arena exceeds u32".into())
+                    crate::StoreError::Other("read bundle path arena exceeds u32".into())
                 })?,
             );
             path_bytes.extend_from_slice(path.as_bytes());
             lang_offsets.push(u32::try_from(lang_bytes.len()).map_err(|_| {
-                crate::StoreError::Other("read.v1 language arena exceeds u32".into())
+                crate::StoreError::Other("read bundle language arena exceeds u32".into())
             })?);
             if let Some(language) = language {
                 lang_bytes.extend_from_slice(language.as_bytes());
@@ -675,11 +675,11 @@ pub(crate) fn write_from_rows_with_metadata(
         push_ascii_tokens(&mut token_files, content, fi);
         line_starts
             .push(u32::try_from(source.len()).map_err(|_| {
-                crate::StoreError::Other("read.v1 source arena exceeds u32".into())
+                crate::StoreError::Other("read bundle source arena exceeds u32".into())
             })?);
         folded_starts
             .push(u32::try_from(folded.len()).map_err(|_| {
-                crate::StoreError::Other("read.v1 folded arena exceeds u32".into())
+                crate::StoreError::Other("read bundle folded arena exceeds u32".into())
             })?);
         source.extend_from_slice(content.as_bytes());
         source.push(b'\n');
@@ -690,19 +690,19 @@ pub(crate) fn write_from_rows_with_metadata(
     }
     path_offsets.push(
         u32::try_from(path_bytes.len())
-            .map_err(|_| crate::StoreError::Other("read.v1 path arena exceeds u32".into()))?,
+            .map_err(|_| crate::StoreError::Other("read bundle path arena exceeds u32".into()))?,
     );
     lang_offsets.push(
         u32::try_from(lang_bytes.len())
-            .map_err(|_| crate::StoreError::Other("read.v1 language arena exceeds u32".into()))?,
+            .map_err(|_| crate::StoreError::Other("read bundle language arena exceeds u32".into()))?,
     );
     line_starts.push(
         u32::try_from(source.len())
-            .map_err(|_| crate::StoreError::Other("read.v1 source arena exceeds u32".into()))?,
+            .map_err(|_| crate::StoreError::Other("read bundle source arena exceeds u32".into()))?,
     );
     folded_starts.push(
         u32::try_from(folded.len())
-            .map_err(|_| crate::StoreError::Other("read.v1 folded arena exceeds u32".into()))?,
+            .map_err(|_| crate::StoreError::Other("read bundle folded arena exceeds u32".into()))?,
     );
     let mut file_first = vec![0u32; files.len()];
     for (line, &fi) in file_idx.iter().enumerate() {
@@ -768,7 +768,11 @@ pub(crate) fn write_from_rows_with_metadata(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_file_name(format!("read.v1.tmp.{}", std::process::id()));
+    let tmp = path.with_file_name(format!(
+        "{}.tmp.{}",
+        path.file_name().and_then(|name| name.to_str()).unwrap_or("read"),
+        std::process::id()
+    ));
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)

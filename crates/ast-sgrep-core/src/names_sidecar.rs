@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-pub const NAMES_SIDECAR_FILE: &str = "names.v1";
+pub const NAMES_SIDECAR_FILE: &str = "names";
 const MAGIC: &[u8; 6] = b"ASNM\0\0";
 const VERSION: u32 = 1;
 /// magic 6 + version u32 4 + generation i64 8 + symbols u64 8 + callees u64 8.

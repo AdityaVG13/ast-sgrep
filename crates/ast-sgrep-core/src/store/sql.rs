@@ -484,7 +484,7 @@ fn configure_connection_inner(
     if std::env::var_os("ASGREP_SQLITE_DEFAULTS").is_none() {
         // SQL control arm: 70 MiB page cache + 256 MiB mmap so trigram
         // doclists stay resident across a serve session (self-corpus ~58MB).
-        // Bundle reads those lists from `read.v1`. Leaving the 256 MiB sqlite
+        // Bundle reads those lists from the read bundle. Leaving the 256 MiB sqlite
         // mmap on the bundle arm faults the whole DB into RSS (50→122 MiB
         // across 25 unique conceptual queries). Leftover SQL is
         // lexicon/defs/field blobs; 16 MiB matches `restore_synchronous`.

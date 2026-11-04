@@ -1,4 +1,4 @@
-//! Graph tables packed into `read.v1` extra sections.
+//! Graph tables packed into the read bundle extra sections.
 //!
 //! Symbols, callers, imports, patterns, lexicon, and trigram df. Each table
 //! is interned strings plus fixed-stride rows. Query time binary-searches
@@ -59,7 +59,7 @@ impl Intern {
                 let idx = (self.offs.len() - 1) as u32;
                 self.bytes.extend_from_slice(value.as_bytes());
                 let end = u32::try_from(self.bytes.len()).map_err(|_| {
-                    crate::StoreError::Other("read.v1 intern arena exceeds u32".into())
+                    crate::StoreError::Other("read bundle intern arena exceeds u32".into())
                 })?;
                 self.offs.push(end);
                 self.sorted.insert(slot, (value.to_owned(), idx));
