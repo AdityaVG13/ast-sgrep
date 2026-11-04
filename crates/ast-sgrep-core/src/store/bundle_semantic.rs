@@ -35,6 +35,7 @@ pub struct SemanticView {
     pub(crate) intern_names_at: usize,
     pub(crate) intern_names_len: usize,
     pub(crate) path_order: Arc<Vec<u32>>,
+    pub(crate) id_order: Arc<Vec<u32>>,
     pub count: usize,
     pub dim: usize,
 }
@@ -75,6 +76,21 @@ impl SemanticView {
             text,
             Vec::new(),
         ))
+    }
+
+    /// Packed row for a semantic chunk id. `id_order` is sorted by id, so this
+    /// is a binary search even when pack order is not id order.
+    pub fn index_of_id(&self, id: i64) -> Option<usize> {
+        let order = self.id_order.as_slice();
+        let ids = self.ids.as_slice();
+        let slot = order
+            .binary_search_by(|&i| ids[i as usize].cmp(&id))
+            .ok()?;
+        Some(order[slot] as usize)
+    }
+
+    pub fn row_by_id(&self, bundle: &ReadBundle, id: i64) -> Option<SemanticChunkRow> {
+        self.row(bundle, self.index_of_id(id)?)
     }
 }
 
@@ -216,6 +232,8 @@ pub fn decode_view(bundle: &ReadBundle) -> Option<SemanticView> {
             .cmp(bundle.path(right))
             .then(a.cmp(&b))
     });
+    let mut id_order: Vec<u32> = (0..count as u32).collect();
+    id_order.sort_by(|&a, &b| ids[a as usize].cmp(&ids[b as usize]).then(a.cmp(&b)));
     Some(SemanticView {
         ids: Arc::new(ids),
         file_idx: Arc::new(file_idx),
@@ -227,6 +245,7 @@ pub fn decode_view(bundle: &ReadBundle) -> Option<SemanticView> {
         intern_names_at: names_at,
         intern_names_len: name_bytes_len,
         path_order: Arc::new(path_order),
+        id_order: Arc::new(id_order),
         count,
         dim,
     })

@@ -1038,12 +1038,35 @@ fn rows_in_id_order_with_vectors(
 }
 
 fn rows_in_id_order(store: &IndexStore, ids: &[i64]) -> Result<Option<Vec<SemanticChunkRow>>> {
+    if let Some(chunks) = chunks_from_bundle(store, ids)? {
+        return Ok(Some(chunks));
+    }
     let _span = crate::perf_profile::Span::start(
         "semantic_hit_fetch",
         "semantic",
         "sqlite metadata for IVF survivors (no concat blob)",
     );
     assemble_rows_in_id_order(store.semantic_chunk_hits_by_ids(ids)?, ids)
+}
+
+fn chunks_from_bundle(
+    store: &IndexStore,
+    ids: &[i64],
+) -> Result<Option<Vec<SemanticChunkRow>>> {
+    let Some(bundle) = store.read_bundle(None)? else {
+        return Ok(None);
+    };
+    let Some(view) = bundle.semantic_view() else {
+        return Ok(None);
+    };
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(row) = view.row_by_id(&bundle, *id) else {
+            return Ok(None);
+        };
+        out.push(row);
+    }
+    Ok(Some(out))
 }
 
 fn take_by_ids<T>(rows: Vec<(i64, T)>, ids: &[i64]) -> Option<Vec<T>> {
@@ -1074,6 +1097,13 @@ fn rows_and_fields_in_id_order(
     let mask = field_weights(intent).mask();
     if ids.is_empty() {
         return Ok(Some((Vec::new(), Vec::new())));
+    }
+    if let Some(chunks) = chunks_from_bundle(store, ids)? {
+        if !use_field_rescoring || !mask.any() {
+            return Ok(Some((chunks, Vec::new())));
+        }
+        let fields = fields_for_ids(store, ids, true, intent)?;
+        return Ok(Some((chunks, fields)));
     }
     if !use_field_rescoring || !mask.any() {
         let Some(chunks) = rows_in_id_order(store, ids)? else {

@@ -444,6 +444,24 @@ fn semantic_bundle_ids_match_sql_order() {
             packed.5.is_empty(),
             "row vector stays in mmap f16, not chunk.5"
         );
+        let by_id = view
+            .row_by_id(&bundle, sql_ids[i])
+            .expect("id lookup must find the packed row");
+        assert_eq!(by_id.0, packed.0);
+        assert_eq!(by_id.3, packed.3);
+        assert_eq!(by_id.4, packed.4);
+    }
+    for &id in sql_ids.iter().rev() {
+        let packed = view
+            .row_by_id(&bundle, id)
+            .expect("reverse-order id lookup");
+        let sql = store
+            .semantic_chunk_hits_by_ids(&[id])
+            .expect("sql hit");
+        assert_eq!(sql.len(), 1, "one SQL row for id {id}");
+        assert_eq!(packed.0, sql[0].1.0, "path");
+        assert_eq!(packed.3, sql[0].1.3, "symbol");
+        assert_eq!(packed.4, sql[0].1.4, "excerpt");
     }
     let options = SearchOptions {
         root: temp.path().to_path_buf(),
