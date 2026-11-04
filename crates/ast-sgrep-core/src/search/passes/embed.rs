@@ -332,8 +332,7 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
         Some(&backend),
         store.index_data_version()?,
     );
-    let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
-    let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
+    let Some(ivf) = store.cached_lazy_ivf(fingerprint)? else {
         return Ok(None);
     };
     if ivf.chunk_count() != count || ivf.dim != dim {
@@ -451,8 +450,7 @@ fn embed_pass_lazy_ivf_for_files(
     if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) || dim == 0 {
         return Ok(None);
     }
-    let path = crate::semantic_ivf::semantic_ivf_path(store.db_path());
-    let Some(ivf) = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)? else {
+    let Some(ivf) = store.cached_lazy_ivf(fingerprint)? else {
         return Ok(None);
     };
     if ivf.chunk_count() != count || ivf.dim != dim {

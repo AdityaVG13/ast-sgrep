@@ -128,7 +128,12 @@ impl SemanticView {
             }
             let start = plane.saturating_mul(plane_bytes).saturating_add(row_off);
             let end = start.saturating_add(self.dim.saturating_mul(2));
-            f16_row_to_f32_bytes(planes.get(start..end)?)
+            let row = planes.get(start..end)?;
+            if !row.len().is_multiple_of(2) {
+                return None;
+            }
+            // Packed f16 stays packed. score_fields expands once into f32.
+            Some(row.to_vec())
         };
         Some(SemanticFieldVectors {
             name: take(1, 0, mask.name),
@@ -288,18 +293,6 @@ fn field_trailer<'a>(bundle: &'a ReadBundle, view: &SemanticView) -> Option<(&'a
         &vecs[concat..concat + view.count],
         &vecs[concat + view.count..concat + need],
     ))
-}
-
-fn f16_row_to_f32_bytes(row: &[u8]) -> Option<Vec<u8>> {
-    if !row.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(row.len().saturating_mul(2));
-    for chunk in row.chunks_exact(2) {
-        let bits = u16::from_le_bytes(chunk.try_into().ok()?);
-        out.extend_from_slice(&f16_to_f32(bits).to_le_bytes());
-    }
-    Some(out)
 }
 
 pub fn decode_view(bundle: &ReadBundle) -> Option<SemanticView> {

@@ -97,6 +97,20 @@ pub fn decode_field_vector(bytes: Option<&[u8]>) -> Option<Vec<f32>> {
     embed_from_bytes(bytes).ok()
 }
 
+/// Bundle field planes are f16 (`dim * 2` bytes). SQL blobs are f32 LE
+/// (`dim * 4`). Both expand to the same `f32` lane cosine uses.
+fn vector_for_query(query: &[f32], bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() == query.len().saturating_mul(2) {
+        let mut out = Vec::with_capacity(query.len());
+        for chunk in bytes.chunks_exact(2) {
+            let bits = u16::from_le_bytes(chunk.try_into().ok()?);
+            out.push(crate::store::bundle_semantic::f16_to_f32(bits));
+        }
+        return Some(out);
+    }
+    decode_field_vector(Some(bytes)).filter(|v| v.len() == query.len())
+}
+
 pub fn score_fields(
     query: &[f32],
     fields: &SemanticFieldVectors,
@@ -106,10 +120,7 @@ pub fn score_fields(
         if weight <= 0.0 {
             return None;
         }
-        let vector = decode_field_vector(blob.map(Vec::as_slice))?;
-        if vector.len() != query.len() {
-            return None;
-        }
+        let vector = vector_for_query(query, blob.map(Vec::as_slice)?)?;
         Some(cosine_similarity(query, &vector))
     };
     EmbedFieldScores {

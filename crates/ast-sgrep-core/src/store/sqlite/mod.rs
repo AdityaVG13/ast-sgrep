@@ -281,6 +281,14 @@ pub struct IndexStore {
     /// Opened names sidecar (folded idf vocabularies). Generation-gated by
     /// the reader; cleared implicitly by reopen on generation change.
     names_sidecar: std::cell::RefCell<Option<std::sync::Arc<crate::names_sidecar::NamesSidecar>>>,
+    /// Parsed `semantic.ivf` mmap, keyed by ANN fingerprint. Dropped when the
+    /// index generation moves so a rebuilt sidecar cannot ride the old mapping.
+    lazy_ivf: std::cell::RefCell<
+        Option<(
+            [u8; 32],
+            std::sync::Arc<crate::semantic_ivf::LazySemanticIvf>,
+        )>,
+    >,
     read_only: bool,
 }
 mod queries;
@@ -419,6 +427,7 @@ impl IndexStore {
             bundle_file_stamp: std::cell::Cell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
             names_sidecar: std::cell::RefCell::new(None),
+            lazy_ivf: std::cell::RefCell::new(None),
             read_only,
         };
         store.init_schema()?;
@@ -1302,6 +1311,27 @@ impl IndexStore {
         self.names_sidecar.borrow_mut()
     }
 
+    /// Sticky `semantic.ivf` mapping for a fingerprint. Mill serve reuses the
+    /// same generation, so the mmap parse must not run on every query.
+    pub(crate) fn cached_lazy_ivf(
+        &self,
+        fingerprint: [u8; 32],
+    ) -> Result<Option<std::sync::Arc<crate::semantic_ivf::LazySemanticIvf>>> {
+        {
+            let slot = self.lazy_ivf.borrow();
+            if let Some((fp, ivf)) = slot.as_ref() {
+                if *fp == fingerprint {
+                    return Ok(Some(std::sync::Arc::clone(ivf)));
+                }
+            }
+        }
+        let path = crate::semantic_ivf::semantic_ivf_path(&self.db_path);
+        let loaded = crate::semantic_ivf::load_semantic_ivf_index(&path, fingerprint)?;
+        *self.lazy_ivf.borrow_mut() =
+            loaded.as_ref().map(|ivf| (fingerprint, std::sync::Arc::clone(ivf)));
+        Ok(loaded)
+    }
+
     pub fn index_data_version(&self) -> Result<i64> {
         // The meta row is authoritative for both same-connection and foreign
         // commits. No memo: the bundle header or one meta read is enough.
@@ -1361,6 +1391,7 @@ impl IndexStore {
         self.line_corpus.borrow_mut().take();
         self.bundle.borrow_mut().take();
         self.bundle_file_stamp.set(None);
+        self.lazy_ivf.borrow_mut().take();
         self.line_corpus_disabled.set(false);
         Ok(())
     }
