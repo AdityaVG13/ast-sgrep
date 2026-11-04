@@ -1313,6 +1313,13 @@ fn name_table_term_cooccurrences(store: &IndexStore, norm_terms: &[String]) -> R
     if norm_terms.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(co) = crate::names_sidecar::sidecar_cooccurrences_for_store(
+        store,
+        crate::names_sidecar::NamePopulation::Symbols,
+        norm_terms,
+    ) {
+        return Ok(co);
+    }
     let (source, column) = crate::names_sidecar::NamePopulation::Symbols.sql_source_and_column();
     let sql = format!("SELECT {column} FROM {source}");
     let conn = store.connection();

@@ -148,6 +148,31 @@ fn eq_lower(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// ASCII-case-insensitive substring, no per-row lowercase allocation.
+fn contains_lower(hay: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    let hay = hay.as_bytes();
+    let needle = needle_lower.as_bytes();
+    if needle.len() > hay.len() {
+        return false;
+    }
+    hay.windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn allowed_file_idx(bundle: &ReadBundle, allowed: &HashSet<String>) -> HashSet<u32> {
+    let n = bundle.file_count();
+    let mut set = HashSet::with_capacity(allowed.len().min(n));
+    for i in 0..n {
+        if allowed.contains(bundle.path(i)) {
+            set.insert(i as u32);
+        }
+    }
+    set
+}
+
 fn read_u32(rows: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(rows[at..at + 4].try_into().expect("u32"))
 }
@@ -648,21 +673,23 @@ pub fn symbol_matches_for_files(
         return Vec::new();
     };
     let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+    let allowed_idx = allowed_file_idx(bundle, allowed_files);
+    if allowed_idx.is_empty() {
+        return Vec::new();
+    }
     let n = table.rows.len() / table.stride;
     let mut matched = Vec::new();
     for i in 0..n {
         let at = i * table.stride;
         let file_idx = read_u32(table.rows, at);
+        if !allowed_idx.contains(&file_idx) {
+            continue;
+        }
         if !lang_ok(bundle, file_idx, lang) {
             continue;
         }
-        let path = bundle.path(file_idx as usize);
-        if !allowed_files.contains(path) {
-            continue;
-        }
         let name = interned(&table, read_u32(table.rows, at + 12));
-        let lower = name.to_ascii_lowercase();
-        if terms_lower.iter().any(|term| lower.contains(term)) {
+        if terms_lower.iter().any(|term| contains_lower(name, term)) {
             if let Some(row) = symbol_row(bundle, &table, i) {
                 matched.push(row);
             }
@@ -728,6 +755,10 @@ pub fn callers_matches_for_files(
         return Vec::new();
     }
     let terms_lower: Vec<String> = terms.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let allowed_idx = allowed_file_idx(bundle, allowed_files);
+    if allowed_idx.is_empty() {
+        return Vec::new();
+    }
     let n = table.rows.len() / table.stride;
     let mut out = Vec::new();
     for i in 0..n {
@@ -736,25 +767,21 @@ pub fn callers_matches_for_files(
         }
         let at = i * table.stride;
         let file_idx = read_u32(table.rows, at);
-        if !lang_ok(bundle, file_idx, lang) {
+        if !allowed_idx.contains(&file_idx) {
             continue;
         }
-        let path = bundle.path(file_idx as usize);
-        if !allowed_files.contains(path) {
+        if !lang_ok(bundle, file_idx, lang) {
             continue;
         }
         let caller = interned(&table, read_u32(table.rows, at + 8));
         let callee = interned(&table, read_u32(table.rows, at + 12));
-        let caller_l = caller.to_ascii_lowercase();
-        let callee_l = callee.to_ascii_lowercase();
-        if !terms_lower
-            .iter()
-            .any(|term| caller_l.contains(term) || callee_l.contains(term))
-        {
+        if !terms_lower.iter().any(|term| {
+            contains_lower(caller, term) || contains_lower(callee, term)
+        }) {
             continue;
         }
         out.push((
-            path.to_owned(),
+            bundle.path(file_idx as usize).to_owned(),
             bundle.language(file_idx as usize).map(str::to_owned),
             caller.to_owned(),
             callee.to_owned(),
@@ -787,7 +814,7 @@ pub fn imports_like(
         }
         let line = read_u32(table.rows, at + 4);
         let path_mod = interned(&table, read_u32(table.rows, at + 8));
-        if !needle.is_empty() && !path_mod.to_ascii_lowercase().contains(&needle) {
+        if !needle.is_empty() && !contains_lower(path_mod, &needle) {
             continue;
         }
         out.push((

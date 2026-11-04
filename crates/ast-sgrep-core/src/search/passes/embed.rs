@@ -285,6 +285,22 @@ pub fn embed_pass_lazy_ivf(
     embed_pass_lazy_ivf_with_rescoring(store, options, parsed, true)
 }
 
+fn semantic_ann_shape(store: &IndexStore) -> Result<(usize, i64, usize)> {
+    if let Some(bundle) = store.read_bundle(None)? {
+        if let Some(view) = bundle.semantic_view() {
+            let max_id = view
+                .id_order
+                .last()
+                .copied()
+                .map(|i| view.ids[i as usize])
+                .unwrap_or(0);
+            return Ok((view.count, max_id, view.dim));
+        }
+    }
+    let (count, max_id) = store.semantic_chunk_count_and_max_id()?;
+    Ok((count, max_id, store.semantic_primary_dim()?))
+}
+
 pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     store: &IndexStore,
     options: &SearchOptions,
@@ -297,16 +313,12 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if options.lang_filter.is_some() {
         return Ok(None);
     }
-    // Fingerprint inputs at index-seek cost: COUNT(*)+MAX(id) instead of
-    // materializing the whole id array (19.8k rows at repo scale). The
-    // inputs are identical to the array-derived check (count, max id, dim,
-    // backend, data version), so the fingerprint is byte-identical and
-    // sidecar validation is unchanged.
-    let (count, max_id) = store.semantic_chunk_count_and_max_id()?;
+    // Fingerprint inputs from the packed semantic view when present (count,
+    // max id, dim). SQL COUNT(*)+MAX(id) remains the control arm.
+    let (count, max_id, dim) = semantic_ann_shape(store)?;
     if !crate::semantic_ann::should_use_ann(count, options.ann_threshold) {
         return Ok(None);
     }
-    let dim = store.semantic_primary_dim()?;
     if dim == 0 {
         return Ok(None);
     }

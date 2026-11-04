@@ -174,6 +174,43 @@ impl Section {
         }
         (dfs, self.count as u64)
     }
+
+    fn cooccurrences(&self, map: &[u8], terms: &[String]) -> Vec<u64> {
+        let mut co = vec![0u64; terms.len()];
+        if terms.len() < 2 {
+            return co;
+        }
+        let text = &map[self.text.0..self.text.1];
+        let finders: Vec<memchr::memmem::Finder<'_>> = terms
+            .iter()
+            .map(|term| memchr::memmem::Finder::new(term.as_bytes()))
+            .collect();
+        let mut hits = vec![false; terms.len()];
+        for i in 0..self.count {
+            let start = read_u32(map, self.offsets.0 + i * 4) as usize;
+            let end = read_u32(map, self.offsets.0 + (i + 1) * 4) as usize;
+            if end < start || self.text.0 + end > self.text.1 {
+                continue;
+            }
+            let name = &text[start..end];
+            hits.fill(false);
+            let mut count = 0usize;
+            for (t, finder) in finders.iter().enumerate() {
+                if finder.find(name).is_some() {
+                    hits[t] = true;
+                    count += 1;
+                }
+            }
+            if count >= 2 {
+                for (t, hit) in hits.iter().enumerate() {
+                    if *hit {
+                        co[t] += 1;
+                    }
+                }
+            }
+        }
+        co
+    }
 }
 
 fn read_u32(map: &[u8], at: usize) -> u32 {
@@ -276,6 +313,16 @@ impl NamesSidecar {
         };
         section.dfs(&self.map, terms)
     }
+
+    /// Per-term co-occurrence counts: names containing this term AND at least
+    /// one other query term. Same folded substring predicate as [`Self::dfs`].
+    pub fn cooccurrences(&self, population: NamePopulation, terms: &[String]) -> Vec<u64> {
+        let section = match population {
+            NamePopulation::Symbols => &self.symbols,
+            NamePopulation::DistinctCallees => &self.callees,
+        };
+        section.cooccurrences(&self.map, terms)
+    }
 }
 
 /// Store-facing entry: sidecar dfs when enabled, fresh, and openable;
@@ -285,6 +332,18 @@ pub(crate) fn sidecar_dfs_for_store(
     population: NamePopulation,
     terms: &[String],
 ) -> Option<(Vec<u64>, u64)> {
+    Some(open_sidecar_for_store(store)?.dfs(population, terms))
+}
+
+pub(crate) fn sidecar_cooccurrences_for_store(
+    store: &IndexStore,
+    population: NamePopulation,
+    terms: &[String],
+) -> Option<Vec<u64>> {
+    Some(open_sidecar_for_store(store)?.cooccurrences(population, terms))
+}
+
+fn open_sidecar_for_store(store: &IndexStore) -> Option<Arc<NamesSidecar>> {
     if disabled_by_env() {
         return None;
     }
@@ -292,7 +351,7 @@ pub(crate) fn sidecar_dfs_for_store(
     let mut slot = store.names_sidecar_slot();
     if let Some(open) = slot.as_ref() {
         if open.is_fresh(generation) {
-            return Some(open.dfs(population, terms));
+            return Some(Arc::clone(open));
         }
     }
     let opened = Arc::new(NamesSidecar::open(store.db_path())?);
@@ -300,7 +359,6 @@ pub(crate) fn sidecar_dfs_for_store(
         *slot = None;
         return None;
     }
-    let result = opened.dfs(population, terms);
-    *slot = Some(opened);
-    Some(result)
+    *slot = Some(Arc::clone(&opened));
+    Some(opened)
 }
