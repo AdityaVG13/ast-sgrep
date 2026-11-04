@@ -111,41 +111,6 @@ fn vector_for_query(query: &[f32], bytes: &[u8]) -> Option<Vec<f32>> {
     decode_field_vector(Some(bytes)).filter(|v| v.len() == query.len())
 }
 
-/// Expand one packed f16 row into `scratch` and cosine against `query`.
-pub fn cosine_f16(query: &[f32], f16_le: &[u8], scratch: &mut Vec<f32>) -> Option<f32> {
-    if f16_le.len() != query.len().saturating_mul(2) {
-        return None;
-    }
-    scratch.clear();
-    scratch.reserve(query.len());
-    for chunk in f16_le.chunks_exact(2) {
-        let bits = u16::from_le_bytes(chunk.try_into().ok()?);
-        scratch.push(crate::store::bundle_semantic::f16_to_f32(bits));
-    }
-    Some(cosine_similarity(query, scratch))
-}
-
-pub fn score_fields_f16(
-    query: &[f32],
-    planes: [Option<&[u8]>; 5],
-    weights: FieldWeights,
-    scratch: &mut Vec<f32>,
-) -> EmbedFieldScores {
-    let sim = |weight: f32, blob: Option<&[u8]>, scratch: &mut Vec<f32>| {
-        if weight <= 0.0 {
-            return None;
-        }
-        cosine_f16(query, blob?, scratch)
-    };
-    EmbedFieldScores {
-        name: sim(weights.name, planes[0], scratch),
-        docs: sim(weights.docs, planes[1], scratch),
-        body: sim(weights.body, planes[2], scratch),
-        graph: sim(weights.graph, planes[3], scratch),
-        tests_examples: sim(weights.tests_examples, planes[4], scratch),
-    }
-}
-
 pub fn score_fields(
     query: &[f32],
     fields: &SemanticFieldVectors,
@@ -198,12 +163,14 @@ pub fn combine_field_scores(weights: FieldWeights, scores: &EmbedFieldScores) ->
 /// backend, where the primary was a hash projection and the name-field
 /// lift had to rescue it. Fields now only lift: the score is the stronger
 /// of the two estimates.
-pub fn lift_primary(
+pub fn rescore_similarity(
     primary: f32,
-    scores: EmbedFieldScores,
+    query: &[f32],
+    fields: &SemanticFieldVectors,
     intent: QueryIntent,
 ) -> (f32, Option<EmbedFieldScores>) {
     let weights = field_weights(intent);
+    let scores = score_fields(query, fields, weights);
     match combine_field_scores(weights, &scores) {
         Some(mixed) => (primary.max(mixed), Some(scores)),
         None => (
@@ -217,19 +184,6 @@ pub fn lift_primary(
             }),
         ),
     }
-}
-
-pub fn rescore_similarity(
-    primary: f32,
-    query: &[f32],
-    fields: &SemanticFieldVectors,
-    intent: QueryIntent,
-) -> (f32, Option<EmbedFieldScores>) {
-    lift_primary(
-        primary,
-        score_fields(query, fields, field_weights(intent)),
-        intent,
-    )
 }
 
 /// Query-side field rank union (`ASGREP_FIELD_RANK_UNION=off|docs|docs-python|all`,

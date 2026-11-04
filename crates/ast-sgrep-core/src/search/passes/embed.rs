@@ -3,8 +3,8 @@ use crate::intent::{classify, QueryIntent};
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
 use crate::search::field_weight::{
-    field_rank_union_keys, field_rank_union_mode, field_weights, lift_primary, score_fields,
-    score_fields_f16, EmbedFieldScores, FieldRankUnionMode,
+    field_rank_union_keys, field_rank_union_mode, field_weights, rescore_similarity,
+    EmbedFieldScores, FieldRankUnionMode,
 };
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
@@ -412,23 +412,18 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     if candidate_ids.len() != ranked_payload.len() {
         return Ok(None);
     }
-    let Some(chunks) = rows_in_id_order(store, &candidate_ids)? else {
+    let Some((chunks, fields)) =
+        rows_and_fields_in_id_order(store, &candidate_ids, use_field_rescoring, intent)?
+    else {
         return Ok(None);
     };
-    let scores = field_scores_for_ids(
-        store,
-        &candidate_ids,
-        &query_vec,
-        use_field_rescoring,
-        intent,
-    )?;
     let ranked: Vec<(usize, f32)> = ranked_payload
         .iter()
         .enumerate()
         .map(|(i, (_, score))| (i, *score))
         .collect();
     Ok(Some(embed_hits_rescored(
-        &chunks, ranked, &scores, intent, hit_limit,
+        &chunks, ranked, &query_vec, &fields, intent, hit_limit,
     )))
 }
 
@@ -490,23 +485,18 @@ fn embed_pass_lazy_ivf_for_files(
     if candidate_ids.len() != ranked_payload.len() {
         return Ok(None);
     }
-    let Some(chunks) = rows_in_id_order(store, &candidate_ids)? else {
+    let Some((chunks, fields)) =
+        rows_and_fields_in_id_order(store, &candidate_ids, use_field_rescoring, intent)?
+    else {
         return Ok(None);
     };
-    let scores = field_scores_for_ids(
-        store,
-        &candidate_ids,
-        &query_vec,
-        use_field_rescoring,
-        intent,
-    )?;
     let ranked: Vec<(usize, f32)> = ranked_payload
         .iter()
         .enumerate()
         .map(|(i, (_, score))| (i, *score))
         .collect();
     Ok(Some(embed_hits_rescored(
-        &chunks, ranked, &scores, intent, hit_limit,
+        &chunks, ranked, &query_vec, &fields, intent, hit_limit,
     )))
 }
 
@@ -847,6 +837,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
                 return Ok(embed_hits_rescored(
                     chunks,
                     indices,
+                    &query_vec,
                     &[],
                     intent,
                     hit_limit,
@@ -1107,56 +1098,53 @@ fn assemble_rows_in_id_order(
     Ok(take_by_ids(fetched, ids))
 }
 
-fn field_scores_from_bundle(
+fn rows_and_fields_in_id_order(
     store: &IndexStore,
     ids: &[i64],
-    query: &[f32],
-    intent: QueryIntent,
-) -> Result<Option<Vec<EmbedFieldScores>>> {
-    let weights = field_weights(intent);
-    let mask = weights.mask();
-    if ids.is_empty() || !mask.any() {
-        return Ok(Some(Vec::new()));
-    }
-    let Some(bundle) = store.read_bundle(None)? else {
-        return Ok(None);
-    };
-    let Some(view) = bundle.semantic_view() else {
-        return Ok(None);
-    };
-    let mut scratch = Vec::with_capacity(query.len());
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(i) = view.index_of_id(*id) else {
-            return Ok(None);
-        };
-        let Some(planes) = view.field_f16_at(&bundle, i, mask) else {
-            return Ok(None);
-        };
-        out.push(score_fields_f16(query, planes, weights, &mut scratch));
-    }
-    Ok(Some(out))
-}
-
-fn field_scores_for_ids(
-    store: &IndexStore,
-    ids: &[i64],
-    query: &[f32],
     use_field_rescoring: bool,
     intent: QueryIntent,
-) -> Result<Vec<EmbedFieldScores>> {
-    if !use_field_rescoring {
-        return Ok(Vec::new());
+) -> Result<Option<(Vec<SemanticChunkRow>, Vec<SemanticFieldVectors>)>> {
+    let mask = field_weights(intent).mask();
+    if ids.is_empty() {
+        return Ok(Some((Vec::new(), Vec::new())));
     }
-    if let Some(scores) = field_scores_from_bundle(store, ids, query, intent)? {
-        return Ok(scores);
+    if let Some(chunks) = chunks_from_bundle(store, ids)? {
+        if !use_field_rescoring || !mask.any() {
+            return Ok(Some((chunks, Vec::new())));
+        }
+        let fields = fields_for_ids(store, ids, true, intent)?;
+        return Ok(Some((chunks, fields)));
     }
-    let fields = fields_for_ids(store, ids, true, intent)?;
-    let weights = field_weights(intent);
-    Ok(fields
-        .iter()
-        .map(|field| score_fields(query, field, weights))
-        .collect())
+    if !use_field_rescoring || !mask.any() {
+        let Some(chunks) = rows_in_id_order(store, ids)? else {
+            return Ok(None);
+        };
+        return Ok(Some((chunks, Vec::new())));
+    }
+    let _span = crate::perf_profile::Span::start(
+        "semantic_hit_fetch",
+        "semantic",
+        "sqlite metadata+fields for IVF survivors",
+    );
+    let fetched = store.semantic_hits_and_fields_by_ids(ids, mask)?;
+    let mut owned: Vec<(i64, Option<(SemanticChunkRow, SemanticFieldVectors)>)> = fetched
+        .into_iter()
+        .map(|(id, row, fields)| (id, Some((row, fields))))
+        .collect();
+    owned.sort_unstable_by_key(|(id, _)| *id);
+    let mut chunks = Vec::with_capacity(ids.len());
+    let mut fields = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Ok(slot) = owned.binary_search_by_key(id, |(row_id, _)| *row_id) else {
+            return Ok(None);
+        };
+        let Some((row, field)) = owned[slot].1.take() else {
+            return Ok(None);
+        };
+        chunks.push(row);
+        fields.push(field);
+    }
+    Ok(Some((chunks, fields)))
 }
 
 fn fields_for_ids(
@@ -1243,11 +1231,12 @@ fn embed_hits_from_pre_rank(
         .enumerate()
         .map(|(i, (_, score))| (i, score))
         .collect();
-    let scores = field_scores_for_ids(store, &pool_ids, query_vec, use_field_rescoring, intent)?;
+    let fields = fields_for_ids(store, &pool_ids, use_field_rescoring, intent)?;
     Ok(embed_hits_rescored(
         &pool_chunks,
         remapped,
-        &scores,
+        query_vec,
+        &fields,
         intent,
         hit_limit,
     ))
@@ -1276,11 +1265,12 @@ fn embed_hits_from_concat_rank(
         .enumerate()
         .map(|(i, (_, score))| (i, score))
         .collect();
-    let scores = field_scores_for_ids(store, &pool_ids, query_vec, use_field_rescoring, intent)?;
+    let fields = fields_for_ids(store, &pool_ids, use_field_rescoring, intent)?;
     Ok(embed_hits_rescored(
         &pool_chunks,
         remapped,
-        &scores,
+        query_vec,
+        &fields,
         intent,
         hit_limit,
     ))
@@ -1289,7 +1279,8 @@ fn embed_hits_from_concat_rank(
 fn embed_hits_rescored(
     chunks: &[SemanticChunkRow],
     ranked: Vec<(usize, f32)>,
-    field_scores: &[EmbedFieldScores],
+    query_vec: &[f32],
+    fields: &[SemanticFieldVectors],
     intent: QueryIntent,
     hit_limit: usize,
 ) -> Vec<SearchHit> {
@@ -1297,8 +1288,8 @@ fn embed_hits_rescored(
     let ranked = ranked
         .into_iter()
         .map(|(idx, primary)| {
-            if let Some(scores) = field_scores.get(idx) {
-                let (score, note) = lift_primary(primary, scores.clone(), intent);
+            if let Some(field) = fields.get(idx) {
+                let (score, note) = rescore_similarity(primary, query_vec, field, intent);
                 if idx < notes.len() {
                     notes[idx] = note;
                 }
