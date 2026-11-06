@@ -9,23 +9,31 @@ use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
 use ast_sgrep_lang::{
-    cached_pattern_signatures, detect_language, index_can_serve_pattern, match_pattern,
-    needs_ast_grep_fallback, required_pattern_literal,
+    detect_language, match_pattern, needs_ast_grep_fallback, required_pattern_literal,
 };
 use rayon::prelude::*;
 use serde::Serialize;
-use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub use crate::pattern_bench::bench_ast_grep;
-use crate::pattern_bench::find_ast_grep_binary;
 
 #[path = "native_walk.rs"]
 mod native_walk;
 use self::native_walk::search_pattern_native_profiled;
+
+#[path = "rename_scan.rs"]
+mod rename_scan;
+use self::rename_scan::rename_colliding_callee_rest;
+
+#[path = "lane_guards.rs"]
+mod lane_guards;
+use self::lane_guards::{
+    depth_truncation_disagreement_check, native_walk_candidate_narrowed, serve_cached_exact_lane,
+    structural_fallback_error,
+};
 
 /// Convert a simple query or `defs:` / `callers:` prefix into an ast-grep pattern.
 pub fn ast_grep_pattern_for_query(query: &str) -> Option<String> {
@@ -277,169 +285,6 @@ pub fn search_pattern_with_config(
     Ok(hits)
 }
 
-/// The structured fail-closed error for patterns the native classifier
-/// rejects. The message names the permanent non-delegation decision:
-/// external ast-grep is bench-only, so no gate state ever answers
-/// beyond-native patterns.
-fn structural_fallback_error(
-    pattern: &str,
-    config: &crate::config::CoreConfig,
-) -> crate::StoreError {
-    let state = if config.external_ast_grep_enabled && find_ast_grep_binary(config).is_some() {
-        "external ast-grep is configured but is bench-only; search never delegates"
-    } else {
-        "structural fallback is disabled or unavailable"
-    };
-    crate::StoreError::Other(format!(
-        "pattern requires structural fallback ({state}; fail-closed): {pattern} — working spellings: 'fn $NAME($$$)' (every fn-shaped item), a no-parens name ('fn plain_name' filters by name), or 'defs:NAME' for the definition site; rust bodyless concrete names answer trait signatures only"
-    ))
-}
-
-/// The exact-signature index-serve early returns of [`search_pattern`].
-/// Returns `Ok(Some(hits))` when a cached lane is authoritative for the
-/// pattern and the search is answered there; `Ok(None)` means the native
-/// walk (or a refusal) decides.
-///
-/// Decl signatures are budget-exempt at extraction (a beyond-budget node
-/// still records its own decl row; only recursion stops), so a pattern whose
-/// signatures are ALL decl: has COMPLETE rows even with depth-truncated
-/// files in scope — serve the cached lane instead of refusing. This branch
-/// is hoisted ABOVE the truncation skip: it exists precisely for the
-/// truncated scope. call:/kind:/ident rows stay incomplete past the budget
-/// and keep the walk/refusal paths below. Comment placement remains a
-/// matcher decision, so comment-carrying spellings stay excluded.
-// Stable lane shape: query context is threaded, not bundled; bundling would
-// churn every pattern lane for no behavior gain.
-#[allow(clippy::too_many_arguments)]
-fn serve_cached_exact_lane(
-    store: &crate::store::IndexStore,
-    match_spelling: &str,
-    pattern: &str,
-    lang_filter: Option<&str>,
-    limit: usize,
-    comment_free: bool,
-    has_pattern_rows: bool,
-    depth_truncated_in_scope: bool,
-) -> Result<Option<Vec<SearchHit>>> {
-    let Some(signatures) = cached_pattern_signatures(match_spelling) else {
-        return Ok(None);
-    };
-    let decl_exact = !signatures.is_empty() && signatures.iter().all(|s| s.starts_with("decl:"));
-    if depth_truncated_in_scope && comment_free && decl_exact {
-        let indexed =
-            search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
-        return Ok(Some(indexed));
-    }
-    if has_pattern_rows
-        && !depth_truncated_in_scope
-        && comment_free
-        && !match_spelling.contains("$$$")
-        && !pattern_may_carry_expando_meta(pattern)
-        // Keyword-literal roots (`null`/`true`/`false`, py
-        // `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
-        // identifier rows, so the "ident-exact" index serve below composed
-        // a silent empty where the reference answers the keyword leaf node.
-        // Route the class to the native walk, which answers exactly; every
-        // other ident signature keeps the index-served lane.
-        && !ast_sgrep_lang::pattern_is_keyword_literal_root(match_spelling)
-    {
-        let indexed =
-            search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
-        // Exact ident / decl / call signatures are complete in pattern_nodes.
-        // Re-walking the tree cannot add a hit the index missed.
-        if index_can_serve_pattern(match_spelling, &signatures) {
-            return Ok(Some(indexed));
-        }
-        // Kind-only signatures are inexact (every `function_definition`
-        // — any arity, any return type). Unioning those rows into the
-        // result set let a zero-param `def main():` match a one-param
-        // template. The native walk below decides every hit, and its
-        // candidate narrowing (`candidate_kind_signatures`) covers exactly
-        // the files that can hold a match, so inexact rows are dropped,
-        // never merged.
-    }
-    Ok(None)
-}
-
-/// The native-walk leg of [`search_pattern`]: kind-candidate narrowing
-/// (skipped while depth-truncated files are in scope) followed by the
-/// profiled walk. A walk ERROR is not propagated — it composes into
-/// `Ok(None)` so the caller's fail-closed backstop decides, exactly as the
-/// historical `Err(_) => false` arm; candidate SQL errors DO propagate.
-///
-/// Narrow the native walk to files holding a node of the pattern's kind
-/// when the exact shape is not indexable. Sound: files without such a node
-/// cannot contain a match; the native matcher still decides every hit on
-/// surviving files.
-fn native_walk_candidate_narrowed(
-    store: &crate::store::IndexStore,
-    match_spelling: &str,
-    root: &Path,
-    lang_filter: Option<&str>,
-    has_pattern_rows: bool,
-    depth_truncated_in_scope: bool,
-    config: &crate::config::CoreConfig,
-) -> Result<Option<(Vec<SearchHit>, usize)>> {
-    let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(match_spelling) {
-        Some(kinds) if has_pattern_rows && !depth_truncated_in_scope => {
-            Some(store.pattern_node_candidate_paths(&kinds, lang_filter)?)
-        }
-        _ => None,
-    };
-    Ok(
-        match search_pattern_native_profiled(
-            match_spelling,
-            root,
-            lang_filter,
-            true,
-            candidate_paths,
-            config,
-        ) {
-            Ok(native) => Some((native.hits, native.unanswerable_corpus_languages)),
-            Err(_) => None,
-        },
-    )
-}
-
-/// Post-walk honesty check: with a depth-truncated file in scope the
-/// cached lane must not serve, so the walk is the only answerer. When THAT
-/// answers empty for a shape whose signature rows demonstrably exist in
-/// untruncated files, the lanes disagree — the walk did not decide a shape
-/// the tree provably contains (partial templates parse but match nothing
-/// natively) — refuse loudly instead of composing ok:true-empty. Rows
-/// absent = possibly genuinely absent, so walk-empty stays an honest answer
-/// there (residual: occurrences entirely inside truncated files are
-/// unanswerable by any lane; registered in the conformance ledger).
-fn depth_truncation_disagreement_check(
-    store: &crate::store::IndexStore,
-    match_spelling: &str,
-    lang_filter: Option<&str>,
-    limit: usize,
-    depth_truncated_in_scope: bool,
-    walk_answered_empty: bool,
-) -> Result<()> {
-    if !(depth_truncated_in_scope && walk_answered_empty) {
-        return Ok(());
-    }
-    if let Some(signatures) = cached_pattern_signatures(match_spelling) {
-        if index_can_serve_pattern(match_spelling, &signatures) {
-            let indexed =
-                search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
-            if !indexed.is_empty() {
-                return Err(crate::StoreError::Other(format!(
-                    "pattern {match_spelling:?} cannot be answered completely: \
-                     depth-truncated file(s) in scope make the cached lane \
-                     non-authoritative, and the native walk returned no hits \
-                     for this cache-servable shape whose rows exist. Search \
-                     the identifier form (pattern:<name>) or raise the \
-                     extraction depth budget and re-index"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Whether the pattern carries comment syntax AND at least one language's
 /// placement/content gate accepts the face — the ingress-exemption class
 /// documented at the `needs_ast_grep_fallback` call in [`search_pattern`].
@@ -460,128 +305,6 @@ fn comment_carrying_face_gate_accepted(pattern: &str) -> bool {
     })
 }
 
-/// The reference keeps `$$$Rest` (multi-capture) and `$Rest` (single
-/// capture) in DISTINCT capture slots even when they share a base name; the
-/// native chain matcher binds both through one map key, so a
-/// classifier-accepted pattern like `$O.out.$$$A($A)` cannot bind the
-/// property-name rest — every file answers match-none and the walk composes
-/// into a silent `ok:true` empty where the reference answers hits
-/// (`System.out.println(total)`). The chain lane otherwise implements the
-/// reference's rest-binds-property semantics exactly, so the fix renames
-/// ONLY the colliding callee-path rest occurrences to a fresh deterministic
-/// name. This is a deliberate behavior change, not a hit-set-preserving
-/// no-op: pre-fix the colliding rest bound through the SAME map key as the
-/// single capture, so the property text had to unify with the pattern's `$A`
-/// argument and colliding patterns answered match-none; post-fix the fresh
-/// name binds the rest the reference's way and those faces answer hits. The
-/// preserved invariant is name-distinct ingress: non-colliding patterns are
-/// untouched, and every changed face moved from wrong-empty (or wrong
-/// unification) to the reference-agreed hit set. Scoped to whole dot-segment
-/// rests in the callee path (name/property slots); argument-slot rests keep
-/// their registered semantics, and `::`-path name slots are out of the
-/// probed scope and untouched.
-/// Determinism: the fresh-name loop is a pure function of the pattern string.
-fn rename_colliding_callee_rest(pattern: &str) -> Cow<'_, str> {
-    let Some(head_end) = pattern.find('(') else {
-        return Cow::Borrowed(pattern);
-    };
-    let (head, tail) = pattern.split_at(head_end);
-    let mut singles = std::collections::BTreeSet::new();
-    let mut rests = std::collections::BTreeSet::new();
-    scan_meta_names(pattern, &mut singles, &mut rests);
-    let mut renames: Vec<(&str, String)> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for segment in head.split('.') {
-        let Some(base) = segment.strip_prefix("$$$") else {
-            continue;
-        };
-        if base.is_empty() || !base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            continue;
-        }
-        if seen.contains(&base) {
-            continue;
-        }
-        seen.push(base);
-        if !singles.contains(base) {
-            continue;
-        }
-        let mut ordinal = 1usize;
-        // The fresh name MUST stay inside the canonical metavariable
-        // alphabet `[A-Z_][A-Z0-9_]*`. The original `_r` suffix carried a
-        // lowercase tail byte, so the de-collided spelling itself classified
-        // MixedCase and routed to NeverMatches — the collision faces went
-        // silent-empty again. Uppercase suffix + ordinal digits keep the
-        // rename canonical.
-        let mut fresh = format!("{base}_R");
-        while singles.contains(fresh.as_str()) || rests.contains(fresh.as_str()) {
-            ordinal += 1;
-            fresh = format!("{base}_R{ordinal}");
-        }
-        rests.insert(fresh.clone());
-        renames.push((base, fresh));
-    }
-    if renames.is_empty() {
-        return Cow::Borrowed(pattern);
-    }
-    let renamed_head = head
-        .split('.')
-        .map(|segment| match segment.strip_prefix("$$$") {
-            Some(base) => match renames.iter().find(|(name, _)| *name == base) {
-                Some((_, fresh)) => format!("$$${fresh}"),
-                None => segment.to_string(),
-            },
-            None => segment.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(".");
-    let mut renamed = String::with_capacity(pattern.len() + 8);
-    renamed.push_str(&renamed_head);
-    renamed.push_str(tail);
-    Cow::Owned(renamed)
-}
-
-/// Every metavariable NAME in `pattern`, split by capture class: `$Name`
-/// (single) vs `$$$Name`+ (rest). `$$A` universal tokens are neither.
-fn scan_meta_names(
-    pattern: &str,
-    singles: &mut std::collections::BTreeSet<String>,
-    rests: &mut std::collections::BTreeSet<String>,
-) {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] != '$' {
-            i += 1;
-            continue;
-        }
-        let mut run = 0usize;
-        while i + run < chars.len() && chars[i + run] == '$' {
-            run += 1;
-        }
-        let name_start = i + run;
-        let mut name_end = name_start;
-        while name_end < chars.len()
-            && (chars[name_end].is_ascii_alphanumeric() || chars[name_end] == '_')
-        {
-            name_end += 1;
-        }
-        if name_end > name_start {
-            let name: String = chars[name_start..name_end].iter().collect();
-            match run {
-                1 => {
-                    singles.insert(name);
-                }
-                2 => {}
-                _ => {
-                    rests.insert(name);
-                }
-            }
-            i = name_end;
-        } else {
-            i = name_start.max(i + 1);
-        }
-    }
-}
 fn search_pattern_cached(
     pattern: &str,
     signatures: &[String],
