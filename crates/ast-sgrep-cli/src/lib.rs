@@ -4,6 +4,7 @@ mod agent;
 pub mod bench;
 mod cli_args;
 mod codemod_cmd;
+mod doctor;
 mod eval;
 mod index_cmd;
 mod install;
