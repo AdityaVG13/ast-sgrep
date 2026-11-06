@@ -3,21 +3,30 @@
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::{
-    expand_incremental_path_list, IndexOptions, IndexStore, Indexer,
-    Language, SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
+    IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, MAX_EXCERPT_LINES,
 };
 use ast_sgrep_plugins::{
     format_response_with, is_bodyless_fn_args_pattern, MissContext, OutputFormat,
 };
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::jail::{JailKind, JailResolve, jail_join};
 use crate::tools::{call_tool, CallError};
+
+#[path = "session_args.rs"]
+mod session_args;
+
+#[path = "session_wire.rs"]
+mod session_wire;
+
+pub use self::session_wire::encoded_len;
+pub(crate) use self::session_wire::admit_response;
+use self::session_args::{incremental_paths, optional_lang, scoped_search_query};
+use self::session_wire::{ensure_render_input_bounded, search_render_key};
 
 /// Maximum encoded value returned by one Code Mode tool call.
 pub const MAX_CALL_RESPONSE_BYTES: usize = ast_sgrep_core::MAX_STDIN_LINE_BYTES;
@@ -841,245 +850,6 @@ impl CodeModeSession {
         self.invalidate_searcher_cache();
         result
     }
-}
-
-#[derive(Default)]
-struct CountingWriter(usize);
-
-impl Write for CountingWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0 = self.0.saturating_add(buf.len());
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Count JSON wire bytes without allocating a serialized buffer.
-/// Adapters keep their own envelope accounting and serialization-error policy.
-pub fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_json::Error> {
-    let mut writer = CountingWriter::default();
-    serde_json::to_writer(&mut writer, value)?;
-    Ok(writer.0)
-}
-
-/// Admit the final wire value before publishing it or committing an edit.
-/// Conservative `json_size_bound` runs first; exact `encoded_len` only when
-/// that bound exceeds the session cap.
-pub(crate) fn admit_response(value: &Value) -> Result<(), CallError> {
-    if json_size_bound(value) > MAX_CALL_RESPONSE_BYTES
-        && encoded_len(value)? > MAX_CALL_RESPONSE_BYTES
-    {
-        return Err(CallError::Other(anyhow!(
-            "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
-        )));
-    }
-    Ok(())
-}
-
-/// Conservative JSON wire-size upper bound (every string byte as `\u00XX`).
-/// Exact `encoded_len` runs only when this bound exceeds the session cap.
-fn json_size_bound(value: &Value) -> usize {
-    match value {
-        Value::Null => 4,
-        Value::Bool(true) => 4,
-        Value::Bool(false) => 5,
-        Value::Number(n) => n.to_string().len(),
-        Value::String(s) => 2usize.saturating_add(s.len().saturating_mul(6)),
-        Value::Array(items) => {
-            let inner: usize = items.iter().map(json_size_bound).sum();
-            2usize
-                .saturating_add(inner)
-                .saturating_add(items.len().saturating_sub(1))
-        }
-        Value::Object(map) => {
-            let inner: usize = map
-                .iter()
-                .map(|(k, v)| {
-                    2usize
-                        .saturating_add(k.len().saturating_mul(6))
-                        .saturating_add(1)
-                        .saturating_add(json_size_bound(v))
-                })
-                .sum();
-            2usize
-                .saturating_add(inner)
-                .saturating_add(map.len().saturating_sub(1))
-        }
-    }
-}
-
-fn search_render_key(
-    query: &str,
-    limit: usize,
-    format: OutputFormat,
-    excerpt_lines: usize,
-    semantic_only: bool,
-    lang: Option<&str>,
-) -> String {
-    let fmt = match format {
-        OutputFormat::Native => "n",
-        OutputFormat::GitHub => "gh",
-        OutputFormat::GitLab => "gl",
-        OutputFormat::Agent => "a",
-        OutputFormat::AgentCapsule => "c",
-        OutputFormat::Compact => "k",
-    };
-    format!(
-        "{query}\0{limit}\0{fmt}\0{excerpt_lines}\0{}\0{}",
-        u8::from(semantic_only),
-        lang.unwrap_or("")
-    )
-}
-
-fn ensure_render_input_bounded(
-    response: &ast_sgrep_core::SearchResponse,
-    format: OutputFormat,
-    excerpt_lines: usize,
-) -> anyhow::Result<()> {
-    let mut bytes = response.query.len().saturating_mul(4);
-    for hit in &response.hits {
-        // Metadata is repeated in refs, follow-up hints, and reason strings.
-        bytes = bytes.saturating_add(hit.file.len().saturating_mul(2));
-        for value in [
-            hit.symbol.as_deref(),
-            hit.caller.as_deref(),
-            hit.callee.as_deref(),
-            hit.language.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            bytes = bytes.saturating_add(value.len().saturating_mul(4));
-        }
-        bytes = bytes.saturating_add(match format {
-            OutputFormat::AgentCapsule if excerpt_lines == 0 => 4 * 121,
-            OutputFormat::AgentCapsule => excerpt_prefix_bytes(&hit.excerpt, excerpt_lines),
-            _ => hit.excerpt.len(),
-        });
-        if bytes > MAX_CALL_RESPONSE_BYTES {
-            return Err(anyhow!(
-                "codemode response source exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn excerpt_prefix_bytes(excerpt: &str, lines: usize) -> usize {
-    excerpt
-        .lines()
-        .take(lines)
-        .enumerate()
-        .fold(0usize, |total, (index, line)| {
-            total
-                .saturating_add(usize::from(index > 0))
-                .saturating_add(line.len())
-        })
-}
-
-fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<PathBuf>>> {
-    let Some(raw_paths) = args.get("paths") else {
-        return Ok(None);
-    };
-    let raw_paths = raw_paths
-        .as_array()
-        .context("index_repo paths must be an array")?;
-    if raw_paths.is_empty() {
-        return Err(anyhow!("index_repo paths must be non-empty"));
-    }
-    if raw_paths.len() > MAX_INCREMENTAL_PATHS {
-        return Err(anyhow!(
-            "index_repo paths exceeds max {MAX_INCREMENTAL_PATHS}"
-        ));
-    }
-
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("cannot resolve index root: {}", root.display()))?;
-    let mut seen = HashSet::with_capacity(raw_paths.len());
-    let mut paths = Vec::with_capacity(raw_paths.len());
-    for raw in raw_paths {
-        let raw = raw
-            .as_str()
-            .context("index_repo paths entries must be strings")?;
-        if raw.is_empty() {
-            return Err(anyhow!("index_repo paths entries must be non-empty"));
-        }
-        // Targeted reindex tolerates a missing leaf (new/deleted files keep
-        // working); `..` and containment still reject with this tool's
-        // legacy messages.
-        let canonical = match jail_join(&root, raw, JailResolve::LenientLeaf) {
-            Ok(path) => path,
-            Err(err) => {
-                return Err(match err.kind {
-                    JailKind::Traversal => {
-                        anyhow!("index_repo path traversal rejected: {raw}")
-                    }
-                    JailKind::UnresolvableRoot => {
-                        anyhow!("cannot resolve index root: {}", root.display())
-                    }
-                    JailKind::Unresolvable => {
-                        let candidate = err.candidate.display().to_string();
-                        err.into_anyhow(format!("cannot resolve index path: {candidate}"))
-                    }
-                    JailKind::Outside => anyhow!(
-                        "index_repo path is outside project root: {}",
-                        err.candidate.display()
-                    ),
-                    // No legacy arm: the old code never checked UTF-8 (fail closed).
-                    JailKind::NonUtf8 => {
-                        anyhow!("index_repo path is not valid UTF-8: {raw}")
-                    }
-                });
-            }
-        };
-        if seen.insert(canonical.clone()) {
-            paths.push(canonical);
-        }
-    }
-    Ok(Some(expand_incremental_path_list(
-        paths,
-        MAX_INCREMENTAL_PATHS,
-    )))
-}
-
-fn scoped_search_query(args: &Value, query: &str) -> String {
-    let scope = ["in", "file_filter", "fileFilter"]
-        .into_iter()
-        .find_map(|key| args.get(key).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|path| !path.is_empty() && !path.split(['/', '\\']).any(|segment| segment == ".."));
-    match scope {
-        Some(path)
-            if !query
-                .split_whitespace()
-                .any(|token| token.starts_with("in:")) =>
-        {
-            format!("in:{path} {query}")
-        }
-        _ => query.to_string(),
-    }
-}
-
-fn optional_lang(args: &Value) -> anyhow::Result<Option<String>> {
-    let Some(raw) = args
-        .get("lang")
-        .or_else(|| args.get("lang_filter"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(language) = Language::parse(raw) else {
-        return Err(anyhow!(
-            "unknown lang '{raw}' (expected a stored id or extension such as rs, ts, py)"
-        ));
-    };
-    Ok(Some(language.as_str().to_string()))
 }
 
 #[cfg(test)]
