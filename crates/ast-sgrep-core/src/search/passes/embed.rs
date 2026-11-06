@@ -1,14 +1,18 @@
+use super::embed_fetch::{
+    fields_for_ids, rows_and_fields_in_id_order, rows_in_id_order_with_vectors,
+};
+use super::embed_query::{embed_query_vector, embed_query_vector_from_meta};
 use super::super::fusion::{FileCsr, NameIntern};
 use crate::intent::{classify, QueryIntent};
 use crate::query::ParsedQuery;
 use crate::rank::SCORE_EMBED;
 use crate::search::field_weight::{
-    field_rank_union_keys, field_rank_union_mode, field_weights, rescore_similarity,
+    field_rank_union_keys, field_rank_union_mode, rescore_similarity,
     EmbedFieldScores, FieldRankUnionMode,
 };
 use crate::search::types::{HitKind, SearchHit, SearchOptions, SpanHitInput};
 use crate::semantic_ann::{flatten_vectors_for_search, rank_chunk_indices_flat};
-use crate::semantic_chunk::{FieldVectorMask, SemanticFieldVectors};
+use crate::semantic_chunk::SemanticFieldVectors;
 use crate::store::IndexStore;
 use crate::Result;
 use ast_sgrep_embed::{
@@ -924,97 +928,6 @@ fn cached_semantic_chunk_index(store: &IndexStore) -> Result<CachedChunkIndex> {
     Ok((ids, paths, path_order, dim, fingerprint))
 }
 
-fn embed_store_meta(store: &IndexStore) -> Result<(Option<String>, Option<String>)> {
-    Ok((
-        store.get_meta("embed_backend")?,
-        store.get_meta("embed_model")?,
-    ))
-}
-
-fn embed_query_vector(
-    store: &IndexStore,
-    query: &str,
-    stored_dim: Option<usize>,
-) -> Result<Vec<f32>> {
-    let (stored_backend, stored_model) = embed_store_meta(store)?;
-    embed_query_vector_from_meta(
-        query,
-        stored_dim,
-        stored_backend.as_deref(),
-        stored_model.as_deref(),
-    )
-}
-
-fn embed_query_vector_from_meta(
-    query: &str,
-    stored_dim: Option<usize>,
-    stored_backend: Option<&str>,
-    stored_model: Option<&str>,
-) -> Result<Vec<f32>> {
-    let t_encode = crate::env_flag::profile_clock();
-    let vector = embed_query_vector_from_meta_inner(query, stored_dim, stored_backend, stored_model)?;
-    crate::env_flag::emit_profile_stage_since("search_embed_encode", t_encode);
-    Ok(vector)
-}
-
-fn embed_query_vector_from_meta_inner(
-    query: &str,
-    stored_dim: Option<usize>,
-    stored_backend: Option<&str>,
-    stored_model: Option<&str>,
-) -> Result<Vec<f32>> {
-    if let Some(msg) = crate::env_flag::retired_embed_request() {
-        return Err(crate::StoreError::Other(msg));
-    }
-    let dim = stored_dim.unwrap_or(ast_sgrep_embed::STATIC_DIM);
-    // Never serve vectors embedded by a retired engine or an older model:
-    // `asgrep index` performs the migration rewrite. The unversioned
-    // "semantic" layout gets the same refusal (only a full rewrite may
-    // promote it).
-    if let Some(backend_name) = stored_backend {
-        let active = crate::store::active_model_id();
-        if backend_name != "static" || stored_model != Some(active) {
-            return Err(crate::StoreError::Other(format!(
-                "index was embedded with model {:?} (backend {backend_name:?}); active embedding model is {active:?} — run `asgrep index` to migrate (one-time full re-embed)",
-                stored_model.unwrap_or("unknown")
-            )));
-        }
-    }
-    if dim != ast_sgrep_embed::STATIC_DIM {
-        return Err(crate::StoreError::Other(format!(
-            "stored embedding dimension {dim} does not match active dimension {}; run `asgrep index` to migrate",
-            ast_sgrep_embed::STATIC_DIM
-        )));
-    }
-    let _span = crate::perf_profile::Span::start(
-        "embed_query",
-        "semantic",
-        "static query embed",
-    );
-    let vector = ast_sgrep_embed::embed_text(query);
-    qvec_dump_if_set(query, &vector);
-    Ok(vector)
-}
-
-/// Offline-analysis hook (default off): append the query embedding as one
-/// JSON line per process, mirroring the ASGREP_FUSION_DUMP contract
-/// (best-effort, errors swallowed). One CLI run = one query = one line, so
-/// line order joins to the driving harness's query order exactly.
-fn qvec_dump_if_set(query: &str, vector: &[f32]) {
-    use std::io::Write;
-    let Ok(path) = std::env::var("ASGREP_QVEC_DUMP") else {
-        return;
-    };
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
-        return;
-    };
-    let body = serde_json::json!({"q": query, "v": vector});
-    let _ = writeln!(f, "{body}");
-}
 fn field_rescore_pool(hit_limit: usize) -> usize {
     // IVF mmap already ranked candidates. Fetching 8× hit_limit (400 at the
     // default embed cap of 50) from SQLite was the unique-query floor.
@@ -1026,169 +939,6 @@ fn field_rescore_pool(hit_limit: usize) -> usize {
     (hit_limit * 3).max(192)
 }
 
-fn rows_in_id_order_with_vectors(
-    store: &IndexStore,
-    ids: &[i64],
-) -> Result<Option<Vec<SemanticChunkRow>>> {
-    assemble_rows_in_id_order(store.semantic_chunks_by_ids(ids)?, ids)
-}
-
-fn rows_in_id_order(store: &IndexStore, ids: &[i64]) -> Result<Option<Vec<SemanticChunkRow>>> {
-    if let Some(chunks) = chunks_from_bundle(store, ids)? {
-        return Ok(Some(chunks));
-    }
-    let _span = crate::perf_profile::Span::start(
-        "semantic_hit_fetch",
-        "semantic",
-        "sqlite metadata for IVF survivors (no concat blob)",
-    );
-    assemble_rows_in_id_order(store.semantic_chunk_hits_by_ids(ids)?, ids)
-}
-
-fn chunks_from_bundle(
-    store: &IndexStore,
-    ids: &[i64],
-) -> Result<Option<Vec<SemanticChunkRow>>> {
-    let Some(bundle) = store.read_bundle(None)? else {
-        return Ok(None);
-    };
-    let Some(view) = bundle.semantic_view() else {
-        return Ok(None);
-    };
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(row) = view.row_by_id(&bundle, *id) else {
-            return Ok(None);
-        };
-        out.push(row);
-    }
-    Ok(Some(out))
-}
-
-fn take_by_ids<T>(rows: Vec<(i64, T)>, ids: &[i64]) -> Option<Vec<T>> {
-    let mut owned: Vec<(i64, Option<T>)> =
-        rows.into_iter().map(|(id, row)| (id, Some(row))).collect();
-    owned.sort_unstable_by_key(|(id, _)| *id);
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        let slot = owned.binary_search_by_key(id, |(row_id, _)| *row_id).ok()?;
-        out.push(owned[slot].1.take()?);
-    }
-    Some(out)
-}
-
-fn assemble_rows_in_id_order(
-    fetched: Vec<(i64, SemanticChunkRow)>,
-    ids: &[i64],
-) -> Result<Option<Vec<SemanticChunkRow>>> {
-    Ok(take_by_ids(fetched, ids))
-}
-
-fn rows_and_fields_in_id_order(
-    store: &IndexStore,
-    ids: &[i64],
-    use_field_rescoring: bool,
-    intent: QueryIntent,
-) -> Result<Option<(Vec<SemanticChunkRow>, Vec<SemanticFieldVectors>)>> {
-    let mask = field_weights(intent).mask();
-    if ids.is_empty() {
-        return Ok(Some((Vec::new(), Vec::new())));
-    }
-    if let Some(chunks) = chunks_from_bundle(store, ids)? {
-        if !use_field_rescoring || !mask.any() {
-            return Ok(Some((chunks, Vec::new())));
-        }
-        let fields = fields_for_ids(store, ids, true, intent)?;
-        return Ok(Some((chunks, fields)));
-    }
-    if !use_field_rescoring || !mask.any() {
-        let Some(chunks) = rows_in_id_order(store, ids)? else {
-            return Ok(None);
-        };
-        return Ok(Some((chunks, Vec::new())));
-    }
-    let _span = crate::perf_profile::Span::start(
-        "semantic_hit_fetch",
-        "semantic",
-        "sqlite metadata+fields for IVF survivors",
-    );
-    let fetched = store.semantic_hits_and_fields_by_ids(ids, mask)?;
-    let mut owned: Vec<(i64, Option<(SemanticChunkRow, SemanticFieldVectors)>)> = fetched
-        .into_iter()
-        .map(|(id, row, fields)| (id, Some((row, fields))))
-        .collect();
-    owned.sort_unstable_by_key(|(id, _)| *id);
-    let mut chunks = Vec::with_capacity(ids.len());
-    let mut fields = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Ok(slot) = owned.binary_search_by_key(id, |(row_id, _)| *row_id) else {
-            return Ok(None);
-        };
-        let Some((row, field)) = owned[slot].1.take() else {
-            return Ok(None);
-        };
-        chunks.push(row);
-        fields.push(field);
-    }
-    Ok(Some((chunks, fields)))
-}
-
-fn fields_for_ids(
-    store: &IndexStore,
-    ids: &[i64],
-    use_field_rescoring: bool,
-    intent: QueryIntent,
-) -> Result<Vec<SemanticFieldVectors>> {
-    let mask = field_weights(intent).mask();
-    if !use_field_rescoring || !mask.any() || ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    if let Some(fields) = fields_from_bundle(store, ids, mask)? {
-        return Ok(fields);
-    }
-    let _span = crate::perf_profile::Span::start(
-        "semantic_field_fetch",
-        "semantic",
-        "sqlite field vectors for IVF survivors",
-    );
-    let fetched = store.semantic_field_vectors_by_ids(ids, mask)?;
-    Ok(take_by_ids_or_default(fetched, ids))
-}
-
-fn fields_from_bundle(
-    store: &IndexStore,
-    ids: &[i64],
-    mask: FieldVectorMask,
-) -> Result<Option<Vec<SemanticFieldVectors>>> {
-    let Some(bundle) = store.read_bundle(None)? else {
-        return Ok(None);
-    };
-    let Some(view) = bundle.semantic_view() else {
-        return Ok(None);
-    };
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(fields) = view.fields_by_id(&bundle, *id, mask) else {
-            return Ok(None);
-        };
-        out.push(fields);
-    }
-    Ok(Some(out))
-}
-
-fn take_by_ids_or_default<T: Default>(rows: Vec<(i64, T)>, ids: &[i64]) -> Vec<T> {
-    let mut owned: Vec<(i64, Option<T>)> =
-        rows.into_iter().map(|(id, row)| (id, Some(row))).collect();
-    owned.sort_unstable_by_key(|(id, _)| *id);
-    ids.iter()
-        .map(
-            |id| match owned.binary_search_by_key(id, |(row_id, _)| *row_id) {
-                Ok(slot) => owned[slot].1.take().unwrap_or_default(),
-                Err(_) => T::default(),
-            },
-        )
-        .collect()
-}
 
 // Stable rank-fanout shape: rank context is threaded, not bundled; bundling
 // would churn every rescoring call for no behavior gain.
