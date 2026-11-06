@@ -14,6 +14,7 @@ mod outline_cmd;
 mod read_cmd;
 mod search_cmd;
 pub mod supervisor;
+mod value_parsers;
 mod watch;
 
 use anyhow::Context;
