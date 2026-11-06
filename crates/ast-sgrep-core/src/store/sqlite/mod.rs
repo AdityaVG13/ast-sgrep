@@ -1,6 +1,5 @@
 use super::sql::{optional_row, CLEAR_ALL_SQL, SCHEMA_DDL};
 use crate::Result;
-use ast_sgrep_lang::PatternNode;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,110 +34,6 @@ pub type IndexedLineRow = (Arc<str>, u32, String, Option<Arc<str>>);
 pub type ImportQueryRow = (String, Option<String>, String, u32);
 pub type CallRow = (String, u32, String, String);
 
-#[derive(Debug, Clone)]
-pub(crate) struct CallEvidenceRow {
-    pub(crate) file: String,
-    pub(crate) line: u32,
-    pub(crate) caller: String,
-    pub(crate) callee: String,
-    pub(crate) scip_exact: bool,
-}
-
-/// INTEGER byte offsets must fit `i64` on write (pb2w). Wrapping `as i64`
-/// would store a negative and later wrap to `usize::MAX` on a 64-bit host.
-fn sql_i64_from_byte_offset(value: usize) -> rusqlite::Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("byte offset {value} exceeds SQLite INTEGER storage"),
-        )))
-    })
-}
-
-/// Reject negative / out-of-range INTEGER byte offsets on read (pb2w).
-fn sql_usize_from_byte_offset(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<usize> {
-    let raw: i64 = row.get(idx)?;
-    usize::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(idx, raw))
-}
-
-pub struct PatternNodeRow {
-    pub path: String,
-    pub language: Option<String>,
-    pub line_start: u32,
-    pub line_end: u32,
-    pub excerpt: String,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SemanticChunkStats {
-    pub count: usize,
-    pub max_id: i64,
-    pub dim: usize,
-}
-#[derive(Debug, Clone)]
-pub struct SymbolRow {
-    pub name: String,
-    pub kind: String,
-    pub line_start: u32,
-    pub line_end: u32,
-    pub byte_start: usize,
-    pub byte_end: usize,
-}
-#[derive(Debug, Clone)]
-pub struct CallerRow {
-    pub caller: String,
-    pub callee: String,
-    pub line_no: u32,
-    pub byte_start: usize,
-    pub byte_end: usize,
-}
-#[derive(Debug, Clone)]
-pub struct ImportRow {
-    pub module_path: String,
-    pub line_no: u32,
-}
-#[derive(Debug, Clone)]
-pub struct SymbolLocationRow {
-    pub path: String,
-    pub name: String,
-    pub language: Option<String>,
-    pub line_start: u32,
-    pub line_end: u32,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FileIdentity {
-    pub mtime_secs: i64,
-    pub mtime_nanos: u32,
-    pub content_hash: String,
-}
-pub struct UpsertFileInput<'a> {
-    pub rel_path: &'a str,
-    pub language: Option<&'a str>,
-    pub mtime_secs: i64,
-    pub mtime_nanos: u32,
-    pub content_hash: &'a str,
-    pub lines: &'a [(u32, String)],
-    pub eol: &'a str,
-    pub symbols: &'a [SymbolRow],
-    pub callers: &'a [CallerRow],
-    pub imports: &'a [ImportRow],
-    pub pattern_nodes: &'a [PatternNode],
-    /// Extraction hit the depth budget; rows for this file are incomplete
-    /// and the cached pattern lane must not serve them as authoritative.
-    pub depth_truncated: bool,
-    pub semantic_chunks: &'a [crate::semantic_chunk::SemanticChunkInput],
-    pub embed_semantic: bool,
-}
-pub struct RefreshLinesInput<'a> {
-    pub file_id: i64,
-    pub language: Option<&'a str>,
-    pub mtime_secs: i64,
-    pub mtime_nanos: u32,
-    pub content_hash: &'a str,
-    pub lines: &'a [(u32, String)],
-    pub eol: &'a str,
-    pub rel_path: &'a str,
-}
 pub struct IndexStore {
     conn: Connection,
     root: std::path::PathBuf,
@@ -175,9 +70,12 @@ pub struct IndexStore {
     read_only: bool,
 }
 mod graph_reads;
+mod generations;
 mod lexicon_store;
 mod open;
+mod pattern_reads;
 mod queries;
+mod rows;
 mod scip_overlay;
 mod schema;
 mod semantic_reads;
@@ -185,6 +83,13 @@ mod source_reads;
 mod transactions;
 mod writes;
 pub use queries::fold_file_stat_identity;
+pub use rows::{
+    CallerRow, ImportRow, PatternNodeRow, RefreshLinesInput, SemanticChunkStats, SymbolLocationRow,
+    SymbolRow, UpsertFileInput,
+};
+pub(crate) use rows::{
+    CallEvidenceRow, FileIdentity, sql_i64_from_byte_offset, sql_usize_from_byte_offset,
+};
 impl IndexStore {
     pub fn root(&self) -> &Path {
         &self.root
@@ -421,82 +326,6 @@ impl IndexStore {
         Ok(loaded)
     }
 
-    pub fn index_data_version(&self) -> Result<i64> {
-        // The meta row is authoritative for both same-connection and foreign
-        // commits. No memo: the bundle header or one meta read is enough.
-        Ok(self
-            .get_meta("index_data_version")?
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0))
-    }
-
-    /// Indexed-content and lexicon generations used by long-lived search caches.
-    pub(crate) fn search_data_versions(&self) -> Result<(i64, i64)> {
-        Ok(self.conn.query_row(
-            "SELECT
-               COALESCE(MAX(CASE WHEN key = 'index_data_version' THEN CAST(value AS INTEGER) END), 0),
-               COALESCE(MAX(CASE WHEN key = 'lexicon_data_version' THEN CAST(value AS INTEGER) END), 0)
-             FROM meta
-             WHERE key IN ('index_data_version', 'lexicon_data_version')",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?)
-    }
-    /// True when the index still stores the unversioned `"semantic"` backend.
-    /// Search refuses that meta; indexing must rewrite every chunk before
-    /// promoting to the current `"semantic-v2"` identity.
-    pub fn needs_legacy_semantic_rewrite(&self) -> Result<bool> {
-        Ok(self.get_meta("embed_backend")?.as_deref() == Some("semantic"))
-    }
-    /// Start a proven-complete semantic rewrite inside the caller's bulk
-    /// transaction. Old vectors are removed before the first upsert so that
-    /// its resolved provider/model can establish the store-wide identity;
-    /// every later upsert must match it or the bulk transaction rolls back.
-    /// Embed-cache rows for any other model are dead weight after the
-    /// rewrite (the cache is keyed by model id) and are purged here.
-    pub(crate) fn reset_semantic_index_for_rewrite(&self, keep_model_id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM semantic_chunks", [])?;
-        self.conn.execute("DELETE FROM embeddings", [])?;
-        self.conn.execute(
-            "DELETE FROM embed_cache WHERE model_id != ?1",
-            rusqlite::params![keep_model_id],
-        )?;
-        for key in [
-            "embed_backend",
-            "embed_backend_pref",
-            "embed_model",
-            "embed_dim",
-        ] {
-            self.delete_meta(key)?;
-        }
-        crate::semantic_ann::drop_semantic_ivf(self)?;
-        self.bump_semantic_data_version()
-    }
-    fn bump_index_data_version(&self) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO meta(key, value) VALUES('index_data_version', '1')              ON CONFLICT(key) DO UPDATE SET value =              CAST(COALESCE(meta.value, '0') AS INTEGER) + 1",
-            [],
-        )?;
-        self.line_corpus.borrow_mut().take();
-        self.bundle.borrow_mut().take();
-        self.bundle_file_stamp.set(None);
-        self.lazy_ivf.borrow_mut().take();
-        self.line_corpus_disabled.set(false);
-        Ok(())
-    }
-    /// Monotonic counter bumped on every semantic_chunks mutation (insert or delete).
-    /// Used by SemanticCache and the IVF fingerprint to detect delete+re-add
-    /// collisions where max_id is reused but chunk content/vectors differ.
-    pub fn semantic_data_version(&self) -> Result<i64> {
-        Ok(self
-            .get_meta("semantic_data_version")?
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0))
-    }
-    pub fn bump_semantic_data_version(&self) -> Result<()> {
-        let v = self.semantic_data_version()?.saturating_add(1);
-        self.set_meta("semantic_data_version", &v.to_string())
-    }
     pub fn file_id(&self, rel_path: &str) -> Result<Option<i64>> {
         optional_row(
             &self.conn,
