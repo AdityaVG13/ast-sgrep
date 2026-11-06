@@ -180,6 +180,8 @@ mod open;
 mod queries;
 mod scip_overlay;
 mod schema;
+mod semantic_reads;
+mod source_reads;
 mod transactions;
 mod writes;
 pub use queries::fold_file_stat_identity;
