@@ -27,6 +27,7 @@ pub mod io_bounds;
 pub mod limits;
 pub mod names_sidecar;
 pub mod pattern;
+mod pattern_comment_syntax;
 pub mod paths;
 pub mod perf_profile;
 pub mod pipeline_parts;
