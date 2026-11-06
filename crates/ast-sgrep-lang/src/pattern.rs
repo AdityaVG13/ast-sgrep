@@ -20,6 +20,7 @@
 
 pub(crate) mod answerable;
 pub(crate) mod bind;
+pub(crate) mod call_walks;
 pub(crate) mod calls;
 pub(crate) mod classify;
 pub(crate) mod collect;
@@ -39,12 +40,14 @@ pub(crate) mod php;
 pub(crate) mod preproc;
 pub(crate) mod preprocess;
 pub(crate) mod py_delete;
+pub(crate) mod return_lane;
 pub(crate) mod roots142;
 pub(crate) mod roots142_decl_match;
 pub(crate) mod roots142_statements;
 pub(crate) mod statements;
 pub(crate) mod structural;
 pub(crate) mod templates;
+pub(crate) mod universal;
 
 /// ONE trivia convention (H7): every pattern module sees the canonical
 /// predicates through this glob (`use super::*`), so no lane keeps a
@@ -53,6 +56,7 @@ pub(crate) use crate::trivia::*;
 
 pub use answerable::*;
 pub(crate) use bind::*;
+pub(crate) use call_walks::*;
 pub(crate) use calls::*;
 pub use classify::*;
 pub(crate) use collect::*;
@@ -72,9 +76,11 @@ pub use php::*;
 pub(crate) use preproc::*;
 pub(crate) use preprocess::*;
 pub(crate) use py_delete::*;
+pub(crate) use return_lane::*;
 pub(crate) use roots142::*;
 pub(crate) use roots142_decl_match::*;
 pub(crate) use roots142_statements::*;
 pub(crate) use statements::*;
 pub(crate) use structural::*;
 pub use templates::*;
+pub(crate) use universal::*;
