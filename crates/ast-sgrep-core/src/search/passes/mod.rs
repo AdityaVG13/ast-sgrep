@@ -1,6 +1,7 @@
 pub mod bmh;
 pub mod embed;
 pub mod embed_fetch;
+pub mod embed_hits;
 pub mod embed_query;
 pub mod lexical;
 pub mod literal;

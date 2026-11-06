@@ -1,7 +1,7 @@
 use super::super::embed_support::init_cache_seq;
 use super::super::sql::configure_connection_with;
 use super::super::try_index_db_path;
-use super::{enclosing_index_db, missing_index_error, second_index_error, IndexStore};
+use super::IndexStore;
 use crate::Result;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -155,4 +155,68 @@ impl IndexStore {
         crate::env_flag::emit_profile_stage_since("sqlite_cache_seq", t_seq);
         Ok(store)
     }
+}
+
+/// Nearest ancestor (never the root itself) holding the default-layout index,
+/// searched only up to and including the git work tree root: a parent that
+/// merely happens to hold an index (a home directory, a shared scratch tree) is
+/// not this project's checkout and must not capture a new project. The home
+/// directory and anything above it never capture, git or no git — a git-less
+/// tree (benchmark corpus, tarball extract) below an indexed home is still
+/// its own project.
+/// Silent when an env override moves indexes elsewhere.
+fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
+    if std::env::var_os("ASGREP_INDEX_PATH").is_some()
+        || std::env::var_os("ASGREP_USE_CACHE").is_some()
+    {
+        return None;
+    }
+    let start = if root.is_file() { root.parent()? } else { root };
+    let work_tree = start.ancestors().find(|dir| dir.join(".git").exists());
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    start
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| work_tree.is_none_or(|tree| dir.starts_with(tree)))
+        .take_while(|dir| home.as_deref().is_none_or(|h| !h.starts_with(dir)))
+        .map(|dir| dir.join(super::super::INDEX_DIR).join(super::super::INDEX_DB))
+        .find(|candidate| candidate.is_file())
+}
+
+/// No index file at this root. Say which file is missing and, when the root sits
+/// inside an indexed checkout, name that index: a nested directory answering
+/// "index is empty" reads as a broken index instead of a missing one. Keeps the
+/// documented `index is empty` fail-closed phrase (docs/validation/negative-ledgers.md).
+fn missing_index_error(root: &Path, db_path: &Path) -> crate::StoreError {
+    if let Some(enclosing) = enclosing_index_db(root) {
+        return crate::StoreError::EmptyIndex(format!(
+            "index is empty for {}: no index file at {}; this checkout is indexed at {} -- run the command at that root, pass --index-path for a separate index, or rerun with --auto-index to index this checkout in place",
+            root.display(),
+            db_path.display(),
+            enclosing.display()
+        ));
+    }
+    crate::StoreError::EmptyIndex(format!(
+        "index is empty for {}: no index file at {}; run: asgrep index {} --json, or rerun with --auto-index to index this checkout in place",
+        root.display(),
+        db_path.display(),
+        root.display()
+    ))
+}
+
+/// Writable open with the default layout inside an indexed checkout: refuse to
+/// create a second `.asgrep` under the tree. The caller either works at the
+/// checkout root or asks for a deliberate separate index path.
+fn second_index_error(root: &Path, db_path: &Path, enclosing: &Path) -> crate::StoreError {
+    let enclosing_root = enclosing
+        .parent()
+        .and_then(|dir| dir.parent())
+        .unwrap_or(enclosing);
+    crate::StoreError::Other(format!(
+        "refusing to create a second index at {} (root {}): the enclosing checkout is already indexed at {} -- run: asgrep index {} --json, or pass --index-path for a separate index",
+        db_path.display(),
+        root.display(),
+        enclosing.display(),
+        enclosing_root.display()
+    ))
 }
