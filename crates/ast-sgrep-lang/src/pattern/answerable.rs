@@ -127,7 +127,7 @@ pub(crate) fn native_kind_language_answerable(
             sg_pattern_parses(lang, pattern)
                 && if property_face {
                     matches!(lang, Language::TypeScript | Language::JavaScript)
-                        || (cached_general_template(lang, pattern).is_some()
+                        || (general_template_for(lang, pattern).is_some()
                             && sg_pattern_gate_accepts(lang, pattern))
                 } else {
                     matches!(lang, Language::TypeScript | Language::JavaScript)
@@ -191,7 +191,7 @@ pub(crate) fn sg_optional_connector_spelling(lang: Language, pattern: &str) -> b
     } else {
         (doc, false)
     };
-    let Ok(tree) = parse_source(lang, &doc) else {
+    let Some(tree) = parse_source_silent(lang, &doc) else {
         return false;
     };
     let mut node = tree.root_node();
@@ -345,7 +345,7 @@ pub(crate) fn sg_pattern_parses(lang: Language, pattern: &str) -> bool {
         .chars()
         .map(|c| if c == '$' { SG_EXPANDO_CHAR } else { c })
         .collect();
-    let Ok(tree) = parse_source(lang, &doc) else {
+    let Some(tree) = parse_source_silent(lang, &doc) else {
         return false;
     };
     let mut node = tree.root_node();

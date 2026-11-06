@@ -7,8 +7,8 @@
 //!   in-memory mock and not a shared process-wide path.
 //! - `index_path` is always set **explicitly**, so ambient `ASGREP_INDEX_PATH`
 //!   and `ASGREP_USE_CACHE` / XDG shared cache cannot leak across tests.
-//! - Dropping the session (end of test / end of `with_temp_index`) removes
-//!   corpus files and the DB (and SQLite sidecars under the temp root).
+//! - Dropping the session (end of test) removes corpus files and the DB
+//!   (and SQLite sidecars under the temp root).
 //!
 //! Prefer this over ad-hoc `TempDir` + `IndexStore::open(root, None)` when the
 //! test only needs a private store or a private corpus+index pair.
@@ -39,7 +39,6 @@ impl IsolatedIndexSession {
         let temp = TempDir::new().expect("isolated index tempdir");
         let corpus_root = temp.path().join("corpus");
         fs::create_dir_all(&corpus_root).expect("create isolated corpus dir");
-        // Explicit file path under temp -- never env/XDG resolved.
         let index_path = temp.path().join("index.db");
         Self {
             _temp: temp,
@@ -59,25 +58,23 @@ impl IsolatedIndexSession {
         });
     }
 
-    /// [`IndexOptions`] with isolation-safe `root` and `index_path` filled in.
-    ///
-    /// Callers may override other fields via struct update; `root` / `index_path`
-    /// should stay as set here (or re-applied via [`Self::index_all`]).
+    /// [`IndexOptions`] with isolation-safe `root` and `index_path` filled in:
+    /// the [`crate::hermetic_index_options`] triple. Callers may override
+    /// other fields via struct update; `root` / `index_path` should stay as
+    /// set here (or re-applied via [`Self::index_all`]).
     pub fn index_options(&self) -> IndexOptions {
-        IndexOptions {
-            root: self.corpus_root.clone(),
-            index_path: Some(self.index_path.clone()),
-            ..IndexOptions::default()
-        }
+        crate::hermetic_index_options(&self.corpus_root, &self.index_path)
     }
 
-    /// [`SearchOptions`] with isolation-safe `root` and `index_path` filled in.
+    /// [`SearchOptions`] with isolation-safe `root` and `index_path` filled in:
+    /// the [`crate::hermetic_search_options`] triple at the suite default
+    /// limit. Callers may override other fields via struct update.
     pub fn search_options(&self) -> SearchOptions {
-        SearchOptions {
-            root: self.corpus_root.clone(),
-            index_path: Some(self.index_path.clone()),
-            ..SearchOptions::default()
-        }
+        crate::hermetic_search_options(
+            &self.corpus_root,
+            &self.index_path,
+            SearchOptions::default_limit(),
+        )
     }
 
     /// Open a real on-disk [`IndexStore`] at this session's explicit `index_path`.
@@ -123,10 +120,4 @@ impl Default for IsolatedIndexSession {
 /// Create a private corpus + real on-disk SQLite session (cleaned on drop).
 pub fn isolated_index_session() -> IsolatedIndexSession {
     IsolatedIndexSession::new()
-}
-
-/// Run `f` with a private real-SQLite session; temp tree cleaned when `f` returns.
-pub fn with_temp_index<R>(f: impl FnOnce(&IsolatedIndexSession) -> R) -> R {
-    let session = IsolatedIndexSession::new();
-    f(&session)
 }

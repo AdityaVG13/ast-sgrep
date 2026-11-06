@@ -336,7 +336,14 @@ fn file_stem_eq(path: &str, ident: &str) -> bool {
     let normalized = path.replace("\\", "/");
     let file = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     let stem = file.rsplit_once('.').map(|(s, _)| s).unwrap_or(file);
-    stem.eq_ignore_ascii_case(ident)
+    if stem.eq_ignore_ascii_case(ident) {
+        return true;
+    }
+    // Token-equal spellings (authRefresh, auth-refresh) name the same
+    // identifier as the stem (auth_refresh): the owning-module boost and
+    // the compound/partial rescue must not depend on how it was typed.
+    let stem_tokens = identifier_tokens(stem);
+    !stem_tokens.is_empty() && stem_tokens == identifier_tokens(ident)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

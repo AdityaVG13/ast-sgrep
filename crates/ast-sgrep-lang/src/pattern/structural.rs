@@ -785,7 +785,7 @@ pub(crate) fn interface_candidate_refused(
                     candidate_modifiers.push(text.trim());
                 }
             }
-            kind if kind.contains("comment") => {
+            kind if is_trivia_kind(kind) => {
                 if let (Some(name), Some(body)) = (name, body) {
                     if child.start_byte() >= name.end_byte()
                         && child.end_byte() <= body.start_byte()
@@ -1086,7 +1086,7 @@ pub(crate) fn walk_calls(
                     if let Some(text) = node_text(&node, source) {
                         captures.insert("MATCH".to_string(), text.to_string());
                     }
-                    if call_arg_slots_match(slots, &nodes, source, &mut captures).is_some()
+                    if match_arg_slots(slots, &nodes, source, &mut captures, ArgSlotMode::Positional).is_some()
                         && seen.insert((node.start_byte(), node.end_byte()))
                     {
                         out.push(hit_for_node(&node, source, pattern, captures));
@@ -1213,7 +1213,7 @@ pub(crate) fn walk_member_calls(
                         // conflict is the unification veto.
                         if bind_slot_face_callee_metas(&node, source, pattern, &mut captures)
                             .is_some()
-                            && arg_slots_match(slots, &nodes, source, &mut captures).is_some()
+                            && match_arg_slots(slots, &nodes, source, &mut captures, ArgSlotMode::Backtracking).is_some()
                             && seen.insert((node.start_byte(), node.end_byte()))
                         {
                             out.push(hit_for_node(&node, source, pattern, captures));

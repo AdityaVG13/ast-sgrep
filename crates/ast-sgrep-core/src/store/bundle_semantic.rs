@@ -75,14 +75,14 @@ impl SemanticView {
             intern_get(names, offs, self.text_idx[i] as usize)?.to_owned()
         };
         let path = bundle.path(self.file_idx[i] as usize).to_owned();
-        Some((
+        Some(SemanticChunkRow {
             path,
-            self.start[i],
-            self.end[i],
-            name,
+            line_start: self.start[i],
+            line_end: self.end[i],
+            symbol: name,
             text,
-            Vec::new(),
-        ))
+            embedding: Vec::new(),
+        })
     }
 
     /// Packed row for a semantic chunk id. `id_order` is sorted by id, so this
@@ -160,8 +160,8 @@ pub(crate) fn pack_from_store(
         )
         .into());
     }
-    let dim = chunks[0].5.len();
-    if dim == 0 || chunks.iter().any(|chunk| chunk.5.len() != dim) {
+    let dim = chunks[0].embedding.len();
+    if dim == 0 || chunks.iter().any(|chunk| chunk.embedding.len() != dim) {
         return Err(crate::StoreError::Other(
             "semantic concat dim missing or mixed while packing the read bundle".into(),
         )
@@ -171,19 +171,19 @@ pub(crate) fn pack_from_store(
     let mut names = Intern::new();
     let mut meta_rows = Vec::with_capacity(chunks.len() * SEM_ROW);
     for (id, chunk) in ids.iter().zip(chunks.iter()) {
-        let path = chunk.0.as_str();
+        let path = chunk.path.as_str();
         let Some(file_idx) = file_idx(&files, path) else {
             return Err(crate::StoreError::Other(format!(
                 "semantic chunk path {path} missing from line bundle"
             ))
             .into());
         };
-        let name_idx = names.intern(&chunk.3)?;
-        let text_idx = names.intern(&chunk.4)?;
+        let name_idx = names.intern(&chunk.symbol)?;
+        let text_idx = names.intern(&chunk.text)?;
         meta_rows.extend_from_slice(&id.to_le_bytes());
         meta_rows.extend_from_slice(&file_idx.to_le_bytes());
-        meta_rows.extend_from_slice(&chunk.1.to_le_bytes());
-        meta_rows.extend_from_slice(&chunk.2.to_le_bytes());
+        meta_rows.extend_from_slice(&chunk.line_start.to_le_bytes());
+        meta_rows.extend_from_slice(&chunk.line_end.to_le_bytes());
         meta_rows.extend_from_slice(&name_idx.to_le_bytes());
         meta_rows.extend_from_slice(&text_idx.to_le_bytes());
     }
@@ -205,7 +205,7 @@ pub(crate) fn pack_from_store(
     vecs.extend_from_slice(&(dim as u32).to_le_bytes());
     vecs.extend_from_slice(&(n as u32).to_le_bytes());
     for chunk in &chunks {
-        for lane in &chunk.5 {
+        for lane in &chunk.embedding {
             vecs.extend_from_slice(&f32_to_f16(*lane).to_le_bytes());
         }
     }

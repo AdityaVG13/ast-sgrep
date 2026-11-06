@@ -59,6 +59,32 @@ pub fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Canonical search-family command names: the query+ROOT commands whose flags
+/// include the shared search tuning set (--format, --file-filter, ...).
+///
+/// Per-site extensions (documented at each use):
+/// - `rewrite_search_path_alias` uses exactly this set (`--path` exists only here).
+/// - Search-tuning validation additionally allows defs/callers/imports, the
+///   symbol+ROOT commands sharing the same tuning plumbing.
+pub(crate) const SEARCH_FAMILY: &[&str] = &["search", "keyword", "semantic"];
+
+/// Predicate over clap command names for [`SEARCH_FAMILY`].
+pub(crate) fn is_search_family(name: &str) -> bool {
+    SEARCH_FAMILY.contains(&name)
+}
+
+/// Commands sharing the search-tuning plumbing (`--format`, `--file-filter`,
+/// ...): [`SEARCH_FAMILY`] plus the symbol+ROOT commands defs/callers/imports.
+/// The display string is derived from
+/// [`Commands::search_tuning_commands_display`] so the flag-scope usage
+/// errors in [`validate_cli`] can never drift from the predicate.
+fn search_tuning_error(flag: &str) -> anyhow::Error {
+    usage_error(format!(
+        "{flag} applies only to {}",
+        Commands::search_tuning_commands_display()
+    ))
+}
+
 fn rewrite_search_path_alias(mut raw: Vec<OsString>) -> Vec<OsString> {
     if !raw
         .iter()
@@ -104,7 +130,8 @@ fn rewrite_search_path_alias(mut raw: Vec<OsString>) -> Vec<OsString> {
         } else if (!s.starts_with('-') || s == "-") && !command_seen {
             command_seen = true;
             if let Some(command) = parser.find_subcommand(arg) {
-                if !matches!(command.get_name(), "search" | "keyword" | "semantic") {
+                // Exactly SEARCH_FAMILY: --path exists only on query+ROOT commands.
+                if !is_search_family(command.get_name()) {
                     return raw;
                 }
                 active = command;
@@ -273,18 +300,14 @@ fn validate_cli(cli: &Cli) -> anyhow::Result<()> {
             );
         }
     }
-    // Search-only flags must fail on commands that cannot apply them.
-    let search_command = matches!(
-        cli.command.as_ref(),
-        None | Some(
-            Commands::Search(_)
-                | Commands::Keyword(_)
-                | Commands::Semantic(_)
-                | Commands::Defs(_)
-                | Commands::Callers(_)
-                | Commands::Imports(_)
-        )
-    );
+    // Search-only flags must fail on commands that cannot apply them: the
+    // tuning set (SEARCH_FAMILY plus defs/callers/imports), via the single
+    // predicate next to `Commands::name`.
+    let search_command = cli
+        .command
+        .as_ref()
+        .map(|command| command.is_search_tuning_command())
+        .unwrap_or(true);
     if tuning.semantic_only
         && matches!(cli.command.as_ref(), Some(Commands::Search(q)) if !q.pattern.is_empty())
     {
@@ -294,14 +317,10 @@ fn validate_cli(cli: &Cli) -> anyhow::Result<()> {
         ));
     }
     if tuning.format.is_some() && !search_command {
-        return Err(usage_error(
-            "--format applies only to search, keyword, or semantic commands",
-        ));
+        return Err(search_tuning_error("--format"));
     }
     if tuning.file_filter.is_some() && !search_command {
-        return Err(usage_error(
-            "--file-filter applies only to search, keyword, or semantic commands",
-        ));
+        return Err(search_tuning_error("--file-filter"));
     }
     // An unknown --lang label must fail closed as a usage error instead of
     // lowercasing into a silent filter-to-nothing (the reference exits 2 on

@@ -44,6 +44,7 @@ pub mod adapters;
 pub mod batch;
 pub mod catalog;
 pub mod io;
+pub mod jail;
 pub mod plan;
 pub mod session;
 pub mod tools;
@@ -54,8 +55,9 @@ pub use adapters::{
 };
 pub use batch::{
     run_batch, run_serve, BatchCall, BatchCallResult, BatchRequest, BatchResponse, ParallelMode,
-    ServeRequest, ServeResponse, MAX_BATCH_CALLS, MAX_BATCH_ERROR_BYTES, MAX_BATCH_ID_BYTES,
-    MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_TOOL_BYTES, MAX_BATCH_VALUE_BYTES,
+    ServeRequest, ServeResponse, BATCH_ENVELOPE_RESERVE_BYTES, MAX_BATCH_CALLS,
+    MAX_BATCH_ERROR_BYTES, MAX_BATCH_ID_BYTES, MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_TOOL_BYTES,
+    MAX_BATCH_VALUE_BYTES,
 };
 pub use catalog::{catalog_describe, catalog_search, tool_catalog, ToolDef, ToolKind};
 pub use plan::{example_plan, parse_plan, run_plan, Plan, PlanResult, PlanStep};

@@ -3,7 +3,6 @@
 //! Eligible tools set `allowed_callers` to the code-execution tool so Claude can
 //! invoke them from the sandbox instead of via model round-trips.
 
-use crate::adapters::schema_for;
 use crate::catalog::tool_catalog;
 use serde_json::{json, Value};
 
@@ -21,13 +20,13 @@ pub fn anthropic_tools() -> Value {
     for def in tool_catalog() {
         // Skip meta discovery tools from the always-on list; hosts can add them
         // when progressive discovery is desired.
-        if def.name.starts_with("catalog_") {
+        if def.is_discovery() {
             continue;
         }
         let mut tool = json!({
             "name": def.name,
             "description": def.description,
-            "input_schema": schema_for(&def),
+            "input_schema": def.input_schema.clone(),
         });
         if def.read_only {
             tool["allowed_callers"] = json!([CODE_EXECUTION_CALLER]);
@@ -42,12 +41,12 @@ pub fn anthropic_tools() -> Value {
 pub fn anthropic_discovery_tools() -> Value {
     let tools: Vec<Value> = tool_catalog()
         .into_iter()
-        .filter(|d| d.name.starts_with("catalog_"))
+        .filter(|d| d.is_discovery())
         .map(|def| {
             json!({
                 "name": def.name,
                 "description": def.description,
-                "input_schema": schema_for(&def),
+                "input_schema": def.input_schema.clone(),
                 "allowed_callers": [CODE_EXECUTION_CALLER],
             })
         })

@@ -8,7 +8,11 @@ use crate::types::{
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     DocumentSymbolParams, ExecuteCommandParams, InitializeParams, NotificationMessage,
     ReferenceParams, RequestMessage, SearchParams, TextDocumentPositionParams,
-    WorkspaceSymbolParams,
+    WorkspaceSymbolParams, METHOD_ASGREP_SEARCH, METHOD_DEFINITION, METHOD_DID_CHANGE,
+    METHOD_DID_CLOSE, METHOD_DID_OPEN, METHOD_DID_SAVE, METHOD_DOCUMENT_SYMBOL,
+    METHOD_EXECUTE_COMMAND, METHOD_EXIT, METHOD_INCOMING_CALLS, METHOD_INITIALIZE,
+    METHOD_INITIALIZED, METHOD_OUTGOING_CALLS, METHOD_PREPARE_CALL_HIERARCHY,
+    METHOD_REFERENCES, METHOD_SHUTDOWN, METHOD_WORKSPACE_SYMBOL, MAX_SEARCH_RESULTS,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -54,17 +58,17 @@ fn parse_params<P: DeserializeOwned>(params: &Value) -> anyhow::Result<P> {
 }
 
 const HANDLERS: &[(&str, ReqH)] = &[
-    ("initialize", LspServer::h_init),
-    ("shutdown", LspServer::h_shutdown),
-    ("workspace/symbol", LspServer::h_wsym),
-    ("asgrep/search", LspServer::h_search),
-    ("textDocument/documentSymbol", LspServer::h_dsym),
-    ("textDocument/definition", LspServer::h_def),
-    ("textDocument/references", LspServer::h_refs),
-    ("textDocument/prepareCallHierarchy", LspServer::h_prep_ch),
-    ("callHierarchy/incomingCalls", LspServer::h_in_calls),
-    ("callHierarchy/outgoingCalls", LspServer::h_out_calls),
-    ("workspace/executeCommand", LspServer::h_exec),
+    (METHOD_INITIALIZE, LspServer::h_init),
+    (METHOD_SHUTDOWN, LspServer::h_shutdown),
+    (METHOD_WORKSPACE_SYMBOL, LspServer::h_wsym),
+    (METHOD_ASGREP_SEARCH, LspServer::h_search),
+    (METHOD_DOCUMENT_SYMBOL, LspServer::h_dsym),
+    (METHOD_DEFINITION, LspServer::h_def),
+    (METHOD_REFERENCES, LspServer::h_refs),
+    (METHOD_PREPARE_CALL_HIERARCHY, LspServer::h_prep_ch),
+    (METHOD_INCOMING_CALLS, LspServer::h_in_calls),
+    (METHOD_OUTGOING_CALLS, LspServer::h_out_calls),
+    (METHOD_EXECUTE_COMMAND, LspServer::h_exec),
 ];
 
 impl Default for LspServer {
@@ -153,8 +157,8 @@ impl LspServer {
         notif: NotificationMessage,
     ) -> io::Result<()> {
         match notif.method.as_str() {
-            "initialized" => {}
-            "textDocument/didOpen" => {
+            m if m == METHOD_INITIALIZED => {}
+            m if m == METHOD_DID_OPEN => {
                 self.sync_rel_path(
                     stdout,
                     "didOpen",
@@ -165,7 +169,7 @@ impl LspServer {
                     },
                 )?;
             }
-            "textDocument/didSave" => {
+            m if m == METHOD_DID_SAVE => {
                 self.sync_rel_path(
                     stdout,
                     "didSave",
@@ -176,7 +180,7 @@ impl LspServer {
                     },
                 )?;
             }
-            "textDocument/didChange" => {
+            m if m == METHOD_DID_CHANGE => {
                 self.sync_rel_path(
                     stdout,
                     "didChange",
@@ -186,7 +190,7 @@ impl LspServer {
                     },
                 )?;
             }
-            "textDocument/didClose" => {
+            m if m == METHOD_DID_CLOSE => {
                 self.sync_rel_path(
                     stdout,
                     "didClose",
@@ -194,13 +198,18 @@ impl LspServer {
                     |b, p: DidCloseTextDocumentParams| b.close_document(&p.text_document.uri),
                 )?;
             }
-            "exit" => self.exit_requested = true,
+            m if m == METHOD_EXIT => self.exit_requested = true,
             _ => {}
         }
         Ok(())
     }
 
     /// Parse a sync notification and surface index errors via `window/showMessage`.
+    ///
+    /// Notifications carry no JSON-RPC id, so failures cannot be answered on
+    /// the wire. Every drop — missing backend, bad params, index error — is
+    /// surfaced via `window/showMessage` (plus stderr) instead of a silent
+    /// `Ok` that loses didOpen/didChange data.
     fn sync_rel_path<P, F>(
         &self,
         stdout: &mut impl Write,
@@ -213,10 +222,21 @@ impl LspServer {
         F: FnOnce(&LspBackend, P) -> anyhow::Result<()>,
     {
         let Some(backend) = self.backend.as_ref() else {
+            show_index_error(
+                stdout,
+                surface,
+                &anyhow::anyhow!(
+                    "{surface} received before initialize; document sync data not indexed"
+                ),
+            )?;
             return Ok(());
         };
-        let Ok(parsed) = serde_json::from_value::<P>(params) else {
-            return Ok(());
+        let parsed = match serde_json::from_value::<P>(params) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                show_index_error(stdout, surface, &anyhow::Error::new(error))?;
+                return Ok(());
+            }
         };
         if let Err(e) = f(backend, parsed) {
             show_index_error(stdout, surface, &e)?;
@@ -332,12 +352,11 @@ fn resolve_root(params: &InitializeParams) -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-/// ei0i-style clamp for LSP `asgrep/search`: remap 0→default, hard-cap at 1000.
+/// ei0i-style clamp for LSP `asgrep/search`: remap 0→default, hard-cap at MAX_SEARCH_RESULTS.
 fn clamp_lsp_search_limit(limit: usize) -> usize {
-    const MAX_OUTPUT_RESULTS: usize = 1000;
     let default = ast_sgrep_core::SearchOptions::default_limit();
-    let base = if limit == 0 { default.max(1) } else { limit };
-    base.clamp(1, MAX_OUTPUT_RESULTS)
+    let base = if limit == 0 { default } else { limit };
+    base.clamp(1, MAX_SEARCH_RESULTS)
 }
 
 /// Malformed JSON has no recoverable id, but still requires Parse Error.
@@ -372,4 +391,62 @@ fn show_index_error(stdout: &mut impl Write, surface: &str, err: &anyhow::Error)
 
 pub fn log(msg: &str) {
     let _ = writeln!(io::stderr(), "[asgrep-lsp] {msg}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn did_open_params(uri: &str) -> Value {
+        json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": "rust",
+                "version": 1,
+                "text": "fn main() {}\n"
+            }
+        })
+    }
+
+    /// F17: a didOpen arriving before `initialize` must not vanish silently.
+    #[test]
+    fn sync_before_initialize_surfaces_loss() {
+        let server = LspServer::new();
+        let mut out = Vec::new();
+        server
+            .sync_rel_path(
+                &mut out,
+                "didOpen",
+                did_open_params("file:///tmp/nowhere-pending.rs"),
+                |_: &LspBackend, _: DidOpenTextDocumentParams| Ok(()),
+            )
+            .unwrap();
+        let body = String::from_utf8(out).unwrap();
+        assert!(
+            body.contains("window/showMessage"),
+            "pre-initialize didOpen was dropped silently; frame={body:?}"
+        );
+    }
+
+    /// F17: unparsable didChange params must not vanish silently.
+    #[test]
+    fn sync_malformed_params_surface_error() {
+        let mut server = LspServer::new();
+        server.backend = Some(LspBackend::new(std::env::temp_dir()));
+        let mut out = Vec::new();
+        server
+            .sync_rel_path(
+                &mut out,
+                "didChange",
+                json!({ "bogus": true }),
+                |_: &LspBackend, _: DidChangeTextDocumentParams| Ok(()),
+            )
+            .unwrap();
+        let body = String::from_utf8(out).unwrap();
+        assert!(
+            body.contains("window/showMessage"),
+            "malformed didChange was dropped silently; frame={body:?}"
+        );
+    }
 }

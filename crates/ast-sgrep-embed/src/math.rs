@@ -22,14 +22,7 @@ fn exceeds_threshold(sim: f32, min: f32) -> bool {
     if !sim.is_finite() || !min.is_finite() {
         return false;
     }
-    let next = if min == 0.0 {
-        f32::from_bits(1)
-    } else if min > 0.0 {
-        f32::from_bits(min.to_bits() + 1)
-    } else {
-        f32::from_bits(min.to_bits() - 1)
-    };
-    sim > next
+    sim > min.next_up()
 }
 const SIMD_DOT_THRESHOLD: usize = 64;
 

@@ -1,4 +1,3 @@
-use crate::cli_oracle::write_root_bytes;
 use crate::fixture::sample_root;
 use serde_json::Value;
 use std::fs;
@@ -21,7 +20,7 @@ impl CliSession {
             bin,
             _temp: temp,
         };
-        session.index().expect("index sample fixture");
+        session.index();
         session
     }
     pub fn search_json(&self, query: &str, extra: &[&str]) -> Value {
@@ -34,7 +33,7 @@ impl CliSession {
         serde_json::from_slice(&self.run_success(&args).stdout).expect("search json")
     }
     pub fn run_success(&self, args: &[&str]) -> Output {
-        let out = self.run(args).expect("run command");
+        let out = self.run(args);
         assert!(
             out.status.success(),
             "expected success (args={args:?} cwd={:?}), stderr: {}, stdout: {}",
@@ -48,7 +47,7 @@ impl CliSession {
         out
     }
     pub fn run_failure(&self, args: &[&str]) -> Output {
-        let out = self.run(args).expect("run command");
+        let out = self.run(args);
         assert!(
             !out.status.success(),
             "expected failure, stdout: {}",
@@ -56,13 +55,17 @@ impl CliSession {
         );
         out
     }
-    pub fn run(&self, args: &[&str]) -> Result<Output, String> {
-        Command::new(&self.bin)
-            .args(args)
-            .output()
-            .map_err(|e| e.to_string())
+    pub fn run(&self, args: &[&str]) -> Output {
+        crate::spawn::spawn_hermetic(
+            &self.bin,
+            args,
+            &[],
+            None,
+            crate::spawn::SpawnMode::Collect,
+            None,
+        )
     }
-    fn index(&self) -> Result<Output, String> {
+    fn index(&self) -> Output {
         self.run(&[
             "--index-path",
             self.index_path.to_str().unwrap(),
@@ -76,25 +79,7 @@ impl CliSession {
 /// the test target, else `$CARGO_TARGET_DIR/<profile>/`, else the workspace
 /// `target/<profile>/` relative to this crate's manifest.
 pub fn asgrep_bin() -> PathBuf {
-    if let Some(p) = option_env!("CARGO_BIN_EXE_asgrep") {
-        return PathBuf::from(p);
-    }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let exe = format!("asgrep{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(dir).join(profile).join(&exe);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(profile)
-        .join(exe)
+    crate::locate_test_bin(option_env!("CARGO_BIN_EXE_asgrep"), "asgrep")
 }
 
 /// Path of the `asgrep-watch` helper the production shim resolves next to
@@ -232,21 +217,14 @@ pub fn run(bin: &Path, args: &[&str]) -> Output {
 /// [`run`] with extra child env applied after the scrub, so extras win on
 /// collision (e.g. a test deliberately planting `ASGREP_INDEX_PATH`).
 pub fn run_env(bin: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
-    let mut cmd = Command::new(bin);
-    cmd.args(args)
-        .env("NO_COLOR", "1")
-        .env("HF_HUB_OFFLINE", "1");
-    let scrub: Vec<String> = std::env::vars()
-        .map(|(key, _)| key)
-        .filter(|key| key.starts_with("ASGREP_"))
-        .collect();
-    for var in &scrub {
-        cmd.env_remove(var);
-    }
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    cmd.output().expect("run asgrep")
+    crate::spawn::spawn_hermetic(
+        bin,
+        args,
+        envs,
+        None,
+        crate::spawn::SpawnMode::Collect,
+        None,
+    )
 }
 
 /// Parse stdout as one standalone JSON value. Panics with a stdout+stderr dump
@@ -448,11 +426,11 @@ pub fn assert_failure_envelope(
     value
 }
 
-/// INTENT: str-body fixture writer over [`write_root_bytes`] (which takes
+/// INTENT: str-body fixture writer over [`crate::write_file`] (which takes
 /// bytes); the numerical suites write `fn <term>() {}` fixtures through
 /// this one-liner. Panics on IO failure.
 pub fn write_fixture(root: &Path, name: &str, body: &str) {
-    write_root_bytes(root, name, body.as_bytes());
+    crate::write_file(&root.join(name), body.as_bytes());
 }
 
 /// INTENT: eval-gold writer with caller-chosen filename. Panics on IO failure.

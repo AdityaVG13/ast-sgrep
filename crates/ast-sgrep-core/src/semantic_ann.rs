@@ -340,9 +340,9 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
         ))
     })?;
     for (i, chunk) in chunks.iter().enumerate() {
-        if chunk.5.len() != dim {
+        if chunk.embedding.len() != dim {
             return Err(crate::StoreError::Other(format!(
-                "semantic chunk {} has dimension {} but expected {} (mixed backends or corrupted store; reindex with --force-reindex)", i, chunk.5.len(), dim
+                "semantic chunk {} has dimension {} but expected {} (mixed backends or corrupted store; reindex with --force-reindex)", i, chunk.embedding.len(), dim
             )));
         }
     }
@@ -351,13 +351,13 @@ pub fn flatten_vectors_for_search(chunks: &[SemanticChunkRow], dim: usize) -> Re
         flat.par_chunks_mut(dim)
             .zip(chunks.par_iter())
             .for_each(|(row, chunk)| {
-                row.copy_from_slice(&chunk.5);
+                row.copy_from_slice(&chunk.embedding);
                 normalize_vec_in_place(row);
             });
     } else {
         for (i, chunk) in chunks.iter().enumerate() {
             let start = i * dim;
-            flat[start..start + dim].copy_from_slice(&chunk.5);
+            flat[start..start + dim].copy_from_slice(&chunk.embedding);
             normalize_vec_in_place(&mut flat[start..start + dim]);
         }
     }
@@ -667,7 +667,7 @@ pub fn drop_semantic_ivf(store: &IndexStore) -> Result<()> {
     Ok(())
 }
 fn ann_fingerprint(store: &IndexStore, chunks: &[SemanticChunkRow]) -> Result<[u8; 32]> {
-    let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
+    let dim = chunks.first().map(|c| c.embedding.len()).unwrap_or(0);
     let max_id = store.semantic_chunk_max_id()?.unwrap_or(0);
     let backend = store
         .get_meta("embed_backend")?
@@ -685,7 +685,7 @@ pub fn load_or_build_semantic_ivf(
     chunks: &[SemanticChunkRow],
     override_threshold: Option<usize>,
 ) -> Result<Option<Arc<PersistedSemanticIvf>>> {
-    let dim = chunks.first().map(|c| c.5.len()).unwrap_or(0);
+    let dim = chunks.first().map(|c| c.embedding.len()).unwrap_or(0);
     if chunks.is_empty() || dim == 0 || !should_use_ann(chunks.len(), override_threshold) {
         return Ok(None);
     }
@@ -747,8 +747,8 @@ pub fn rank_chunk_indices_flat(
     if chunks.is_empty() || limit == 0 {
         return Ok(vec![]);
     }
-    let dim = if !chunks[0].5.is_empty() {
-        chunks[0].5.len()
+    let dim = if !chunks[0].embedding.is_empty() {
+        chunks[0].embedding.len()
     } else if let Some(f) = flat.filter(|f| !f.is_empty() && f.len() % chunks.len() == 0) {
         f.len() / chunks.len()
     } else if let Some(p) = packed_f16.filter(|p| !p.is_empty() && p.len() % chunks.len() == 0) {
@@ -787,10 +787,10 @@ pub fn rebuild_semantic_ivf_sidecar(
         invalidate_semantic_ivf(store.db_path())?;
         return Ok(());
     }
-    let Some(first) = chunks.first().filter(|c| !c.5.is_empty()) else {
+    let Some(first) = chunks.first().filter(|c| !c.embedding.is_empty()) else {
         return Ok(());
     };
-    let dim = first.5.len();
+    let dim = first.embedding.len();
     if reassign_stale_ivf_partition(store, chunks, dim)? {
         return Ok(());
     }

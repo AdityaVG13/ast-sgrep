@@ -16,10 +16,9 @@
 //!   [`crate::assert_failure_envelope`]).
 
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::TempDir;
 
 /// INTENT: two-function seed source so both the search baseline
@@ -30,13 +29,17 @@ pub const QUERY: &str = "probe_target";
 /// INTENT: the seeded source path that outline snapshots are taken over.
 pub const OUTLINE_PATH: &str = "src/lib.rs";
 /// INTENT: hard per-invocation bound for [`run_in`]: a wedged binary panics
-/// the test instead of hanging the suite.
-pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
+/// the test instead of hanging the suite. Single-sourced from
+/// [`crate::spawn::SPAWN_RUN_TIMEOUT`] (see the bounds table there).
+pub use crate::spawn::SPAWN_RUN_TIMEOUT as RUN_TIMEOUT;
 
-/// INTENT: hermetic run with a hard timeout. Scrubs inherited `ASGREP_*` (the
+/// INTENT: hermetic run with a hard timeout via [`crate::spawn_hermetic`]
+/// (`Collect` + `cwd` + bound). Scrubs inherited `ASGREP_*` (the
 /// parent env must not shift flag defaults), pins `NO_COLOR=1` +
 /// `HF_HUB_OFFLINE=1` (an accidental model load fails fast instead of
 /// downloading), runs in `dir`. Panics past `timeout`, killing the child.
+/// For outputs past the 64KB pipe buffer see
+/// [`crate::run_drain_timeout`] (`Drain` shape).
 pub fn run_timeout(
     bin: &Path,
     dir: &Path,
@@ -44,41 +47,14 @@ pub fn run_timeout(
     envs: &[(&str, &str)],
     timeout: Duration,
 ) -> Output {
-    let mut cmd = Command::new(bin);
-    cmd.args(args)
-        .env("NO_COLOR", "1")
-        .env("HF_HUB_OFFLINE", "1")
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let scrub: Vec<String> = std::env::vars()
-        .map(|(key, _)| key)
-        .filter(|key| key.starts_with("ASGREP_"))
-        .collect();
-    for var in &scrub {
-        cmd.env_remove(var);
-    }
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    let mut child = cmd.spawn().expect("spawn asgrep");
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait().expect("try_wait") {
-            Some(_) => return child.wait_with_output().expect("collect output"),
-            None => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let output = child.wait_with_output().expect("collect output after kill");
-                    panic!(
-                        "asgrep {args:?} exceeded {timeout:?}; stderr: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-    }
+    crate::spawn::spawn_hermetic(
+        bin,
+        args,
+        envs,
+        Some(dir),
+        crate::spawn::SpawnMode::Collect,
+        Some(timeout),
+    )
 }
 
 /// INTENT: [`run_timeout`] with the suite-standard [`RUN_TIMEOUT`]: the only
@@ -98,19 +74,20 @@ pub fn seed_project() -> (TempDir, PathBuf, PathBuf) {
 }
 
 /// INTENT: seed `<temp>/proj/src/worker_<i>.rs` x `count`: the wide
-/// kill-window fixture for SIGKILL fault injection (generated names need
-/// owned strings, so this writes directly instead of via `file_tree`).
+/// kill-window fixture for SIGKILL fault injection. Generated names are owned
+/// `String`s, routed through [`crate::fixture::file_tree`] (generic over
+/// borrowed or owned pairs).
 pub fn seed_big_project(count: usize) -> (TempDir, PathBuf, PathBuf) {
-    let temp = TempDir::new().unwrap();
+    let files: Vec<(String, String)> = (0..count)
+        .map(|i| {
+            (
+                format!("proj/src/worker_{i:04}.rs"),
+                format!("fn worker_{i:04}() {{ run({i}); }}\n"),
+            )
+        })
+        .collect();
+    let temp = crate::fixture::file_tree(&files);
     let root = temp.path().join("proj");
-    fs::create_dir_all(root.join("src")).unwrap();
-    for i in 0..count {
-        fs::write(
-            root.join("src").join(format!("worker_{i:04}.rs")),
-            format!("fn worker_{i:04}() {{ run({i}); }}\n"),
-        )
-        .unwrap();
-    }
     let index = temp.path().join("idx.db");
     (temp, root, index)
 }
@@ -223,24 +200,17 @@ pub fn run_status(
     crate::assert_success(&output, "status")
 }
 
-/// INTENT: sorted (file, line_start, symbol) answer keys. Scores, excerpts,
-/// and ordering are excluded: only the served answer SET is compared across
-/// recovery.
+/// INTENT: sorted (file, line_start, symbol) answer keys via the canonical
+/// [`crate::hit::HitKey::answer_keys`] projection. Scores, excerpts, and
+/// ordering are excluded: only the served answer SET is compared across
+/// recovery. The missing-hits panic is kept here (not in the shared
+/// projection): a recovery envelope without a hits array is a broken
+/// fixture, not an empty answer set.
 pub fn search_answer_keys(search: &Value) -> Vec<(String, u64, String)> {
-    let mut keys: Vec<(String, u64, String)> = search["hits"]
+    search["hits"]
         .as_array()
-        .unwrap_or_else(|| panic!("search must carry a hits array: {search}"))
-        .iter()
-        .map(|hit| {
-            (
-                hit["file"].as_str().unwrap_or_default().to_owned(),
-                hit["line_start"].as_u64().unwrap_or(0),
-                hit["symbol"].as_str().unwrap_or_default().to_owned(),
-            )
-        })
-        .collect();
-    keys.sort();
-    keys
+        .unwrap_or_else(|| panic!("search must carry a hits array: {search}"));
+    crate::hit::HitKey::answer_keys(search)
 }
 
 /// INTENT: `search` with `--no-auto-index` (serve must not heal under the

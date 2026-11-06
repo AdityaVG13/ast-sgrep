@@ -2,19 +2,21 @@ use crate::support::path_to_file_uri;
 use crate::support::{
     call_hierarchy_endpoint, document_symbol_kind, extract_identifier_at, innermost_symbol,
     line_at_index, line_range, line_range_ext, location_value, try_apply_text_edit,
-    utf16_char_to_byte, workspace_symbol, AsgrepSettings,
+    uri_to_rel_path, utf16_char_to_byte, workspace_symbol, AsgrepSettings,
 };
-pub use crate::support::{path_to_file_uri as path_to_uri, uri_to_rel_path};
 use crate::types::{
     CallHierarchyItem, DocumentSymbolParams, ExecuteCommandParams, TextDocumentContentChangeEvent,
-    TextDocumentPositionParams, SYMBOL_KIND_FUNCTION,
+    TextDocumentPositionParams, COMMAND_CALLERS, COMMAND_DEFS, COMMAND_REINDEX,
+    COMMAND_SEARCH, COMMAND_SEARCH_SEMANTIC, EXECUTE_COMMAND_SEARCH_LIMIT,
+    FIND_REFERENCES_LIMIT, GOTO_DEFINITION_LIMIT, WORKSPACE_SYMBOL_LIMIT,
+    SYMBOL_KIND_FUNCTION,
 };
 use ast_sgrep_core::{IndexOptions, Indexer, SearchOptions, Searcher};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 pub struct LspBackend {
     root: PathBuf,
@@ -133,6 +135,24 @@ fn resolve_lsp_index_path_with_cache(
     Ok(resolved)
 }
 
+/// Single poison-recovery policy for the LSP mutexes.
+///
+/// A poisoned mutex means a prior holder panicked while indexing. Recovery
+/// clears the poison so the server keeps serving, then runs `on_poison` to
+/// repair caller state: index-lock holders mark the index not-ready, dirty
+/// holders drop the untrusted half-mutated map.
+fn lock_recovering<T>(mutex: &Mutex<T>, on_poison: impl FnOnce(&mut T)) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            mutex.clear_poison();
+            let mut guard = poisoned.into_inner();
+            on_poison(&mut guard);
+            guard
+        }
+    }
+}
+
 impl LspBackend {
     pub fn new(root: PathBuf) -> Self {
         Self::with_index_path(crate::support::canonicalize_workspace_root(root), None)
@@ -204,16 +224,11 @@ impl LspBackend {
     }
 
     fn with_index_lock<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
-        let guard = match self.index_lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                // Poison means a prior indexer panic; mark not-ready and clear poison
-                // so subsequent recoveries can rebuild (sxjc / LSP index_ready).
-                self.index_ready.store(false, Ordering::SeqCst);
-                self.index_lock.clear_poison();
-                poisoned.into_inner()
-            }
-        };
+        let guard = lock_recovering(&self.index_lock, |_| {
+            // Poison means a prior indexer panic; mark not-ready so
+            // subsequent recoveries can rebuild (sxjc / LSP index_ready).
+            self.index_ready.store(false, Ordering::SeqCst);
+        });
         let _g = guard;
         f()
     }
@@ -265,15 +280,7 @@ impl LspBackend {
     /// sync for the rest of the process. Fail closed by clearing the
     /// untrusted dirty set rather than reusing half-mutated entries.
     fn dirty_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
-        match self.dirty_buffers.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                self.dirty_buffers.clear_poison();
-                let mut guard = poisoned.into_inner();
-                guard.clear();
-                guard
-            }
-        }
+        Self::lock_dirty(&self.dirty_buffers)
     }
 
     fn remember_dirty(&self, rel: &str, content: &str) -> anyhow::Result<()> {
@@ -290,15 +297,7 @@ impl LspBackend {
     fn lock_dirty(
         dirty: &Mutex<HashMap<String, String>>,
     ) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
-        match dirty.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                dirty.clear_poison();
-                let mut guard = poisoned.into_inner();
-                guard.clear();
-                guard
-            }
-        }
+        lock_recovering(dirty, |map| map.clear())
     }
 
     fn run_full_index(
@@ -330,14 +329,9 @@ impl LspBackend {
         std::thread::spawn(move || {
             // Match `with_index_lock` poison recovery: a prior panic must not
             // permanently stall background reindex (ready stays false forever).
-            let _g = match lock.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    ready.store(false, Ordering::SeqCst);
-                    lock.clear_poison();
-                    poisoned.into_inner()
-                }
-            };
+            let _g = lock_recovering(lock.as_ref(), |_| {
+                ready.store(false, Ordering::SeqCst);
+            });
             let ok = Self::run_full_index(opts, dirty.as_ref()).is_ok();
             ready.store(ok, Ordering::SeqCst);
             if !ok {
@@ -428,11 +422,11 @@ impl LspBackend {
                 "callHierarchyProvider": true,
                 "executeCommandProvider": {
                     "commands": [
-                        "asgrep.search",
-                        "asgrep.search.semantic",
-                        "asgrep.reindex",
-                        "asgrep.callers",
-                        "asgrep.defs"
+                        COMMAND_SEARCH,
+                        COMMAND_SEARCH_SEMANTIC,
+                        COMMAND_REINDEX,
+                        COMMAND_CALLERS,
+                        COMMAND_DEFS
                     ]
                 }
             },
@@ -444,7 +438,7 @@ impl LspBackend {
         if query.is_empty() {
             return Ok(json!([]));
         }
-        self.with_locked_searcher(50, |s| {
+        self.with_locked_searcher(WORKSPACE_SYMBOL_LIMIT, |s| {
             Ok(Value::Array(
                 s.search(query)?
                     .hits
@@ -479,7 +473,7 @@ impl LspBackend {
 
     pub fn goto_definition(&self, params: &TextDocumentPositionParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(params)?;
-        self.with_locked_searcher(16, |s| {
+        self.with_locked_searcher(GOTO_DEFINITION_LIMIT, |s| {
             let locs = self.prefixed_hits(s, "defs:", &symbol)?;
             Ok(match locs.len() {
                 0 => Value::Null,
@@ -491,7 +485,7 @@ impl LspBackend {
 
     pub fn find_references(&self, params: &crate::types::ReferenceParams) -> anyhow::Result<Value> {
         let symbol = self.symbol_at_position(&params.at)?;
-        self.with_locked_searcher(128, |s| {
+        self.with_locked_searcher(FIND_REFERENCES_LIMIT, |s| {
             let mut locs = self.prefixed_hits(s, "callers:", &symbol)?;
             let include_decl = params
                 .context
@@ -571,14 +565,22 @@ impl LspBackend {
     pub fn execute_command(&self, params: &ExecuteCommandParams) -> anyhow::Result<Value> {
         let arg = first_cmd_arg(params);
         match params.command.as_str() {
-            "asgrep.reindex" => {
+            COMMAND_REINDEX => {
                 self.ensure_index()?;
                 Ok(json!({ "status": "reindexed" }))
             }
-            "asgrep.search" => self.search(arg, false, 32),
-            "asgrep.search.semantic" => self.search(arg, true, 32),
-            "asgrep.callers" => self.search(&format!("callers:{arg}"), false, 32),
-            "asgrep.defs" => self.search(&format!("defs:{arg}"), false, 32),
+            COMMAND_SEARCH => self.search(arg, false, EXECUTE_COMMAND_SEARCH_LIMIT),
+            COMMAND_SEARCH_SEMANTIC => self.search(arg, true, EXECUTE_COMMAND_SEARCH_LIMIT),
+            COMMAND_CALLERS => self.search(
+                &format!("callers:{arg}"),
+                false,
+                EXECUTE_COMMAND_SEARCH_LIMIT,
+            ),
+            COMMAND_DEFS => self.search(
+                &format!("defs:{arg}"),
+                false,
+                EXECUTE_COMMAND_SEARCH_LIMIT,
+            ),
             other => Err(anyhow::anyhow!("unknown command: {other}")),
         }
     }

@@ -31,13 +31,14 @@ mod handler;
 mod sandbox;
 
 use anyhow::Context;
-use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher};
+use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError};
 use ast_sgrep_plugins::{
     CompactBudget, DetailLevel, MissContext, OutputBudget, OutputFormat, compact_path_id,
     format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json,
 };
 use sandbox::read_node;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,7 +94,6 @@ impl PreviewMode {
     }
 }
 
-/// Wire JSON for search tools (`deny_unknown_fields`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentSearchWire {
@@ -115,6 +115,7 @@ struct AgentSearchWire {
 }
 
 /// Trusted agent-search args after MCP tools/call boundary parse.
+#[derive(Debug)]
 struct AgentSearchArgs {
     query: String,
     root: PathBuf,
@@ -126,7 +127,6 @@ struct AgentSearchArgs {
     preview: PreviewMode,
 }
 
-/// Wire JSON for `code_read`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CodeReadWire {
@@ -140,6 +140,7 @@ struct CodeReadWire {
 }
 
 /// Trusted `code_read` args after boundary parse.
+#[derive(Debug)]
 struct CodeReadArgs {
     ids: Vec<String>,
     root: PathBuf,
@@ -147,7 +148,6 @@ struct CodeReadArgs {
     max_chars: usize,
 }
 
-/// Wire JSON for `index_status`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IndexStatusWire {
@@ -160,7 +160,6 @@ struct IndexStatusArgs {
     root: PathBuf,
 }
 
-/// Wire JSON for `index_repo`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IndexRepoWire {
@@ -358,7 +357,6 @@ impl McpServer {
                 let parsed = self.parse_agent_search(args)?;
                 self.tool_agent_search(parsed, AgentSearchMode::Hybrid)
             }
-            // keyword_search and deprecated code_search share Keyword mode (compat alias).
             "keyword_search" | "code_search" => {
                 let parsed = self.parse_agent_search(args)?;
                 self.tool_agent_search(parsed, AgentSearchMode::Keyword)
@@ -420,10 +418,19 @@ impl McpServer {
         self.sandbox_root(candidate)
     }
 
-    fn parse_agent_search(&self, args: &Value) -> anyhow::Result<AgentSearchArgs> {
+    /// Single wire-args boundary parse (F19): every tool args object enters
+    /// here, so the `is_object` check, the `Value` clone for `from_value`,
+    /// and the unknown-field mapping live in exactly one place.
+    fn parse_wire<T>(&self, args: &Value) -> anyhow::Result<T>
+    where
+        T: DeserializeOwned,
+    {
         anyhow::ensure!(args.is_object(), "arguments must be an object");
-        let wire: AgentSearchWire =
-            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        serde_json::from_value(args.clone()).map_err(Self::map_wire_error)
+    }
+
+    fn parse_agent_search(&self, args: &Value) -> anyhow::Result<AgentSearchArgs> {
+        let wire: AgentSearchWire = self.parse_wire(args)?;
         let query = wire.query.trim();
         anyhow::ensure!(
             !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS,
@@ -481,9 +488,7 @@ impl McpServer {
     }
 
     fn parse_code_read(&self, args: &Value) -> anyhow::Result<CodeReadArgs> {
-        anyhow::ensure!(args.is_object(), "arguments must be an object");
-        let wire: CodeReadWire =
-            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        let wire: CodeReadWire = self.parse_wire(args)?;
         anyhow::ensure!(
             !wire.ids.is_empty() && wire.ids.len() <= MAX_READ_REFS,
             "ids must contain 1 to 20 node IDs"
@@ -494,16 +499,7 @@ impl McpServer {
         };
         let max_chars = match wire.max_chars {
             None => DEFAULT_READ_CHARS,
-            Some(value) => {
-                let value = usize::try_from(value)
-                    .ok()
-                    .context("max_chars must be a positive integer")?;
-                anyhow::ensure!(
-                    (1..=MAX_READ_CHARS).contains(&value),
-                    "max_chars must be between 1 and {MAX_READ_CHARS}"
-                );
-                value
-            }
+            Some(value) => Self::bounded_usize("max_chars", value, 1, MAX_READ_CHARS)?,
         };
         Ok(CodeReadArgs {
             ids: wire.ids,
@@ -514,18 +510,14 @@ impl McpServer {
     }
 
     fn parse_index_status(&self, args: &Value) -> anyhow::Result<IndexStatusArgs> {
-        anyhow::ensure!(args.is_object(), "arguments must be an object");
-        let wire: IndexStatusWire =
-            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        let wire: IndexStatusWire = self.parse_wire(args)?;
         Ok(IndexStatusArgs {
             root: self.resolve_root(wire.root)?,
         })
     }
 
     fn parse_index_repo(&self, args: &Value) -> anyhow::Result<IndexRepoArgs> {
-        anyhow::ensure!(args.is_object(), "arguments must be an object");
-        let wire: IndexRepoWire =
-            serde_json::from_value(args.clone()).map_err(Self::map_wire_error)?;
+        let wire: IndexRepoWire = self.parse_wire(args)?;
         Ok(IndexRepoArgs {
             root: self.resolve_root(wire.root)?,
             force: wire.force.unwrap_or(false),
@@ -605,18 +597,16 @@ impl McpServer {
         let current =
             ast_sgrep_core::read_writer_generation(&self.root, self.index_path.as_deref());
         let stale = {
-            let mut guard = Self::lock_or_recover(&self.writer_state, |_| {});
-            if guard.writer_generation == current {
-                false
-            } else {
-                guard.writer_generation = current;
-                true
-            }
+            let guard = Self::lock_or_recover(&self.writer_state, |_| {});
+            guard.writer_generation != current
         };
         if stale {
-            Self::lock_or_recover(&self.emitted_snippets, |seen| seen.clear()).clear();
-            self.drop_cached_searcher();
-            *Self::lock_or_recover(&self.compact_paths, |intern| *intern = None) = None;
+            // H1/F20: single invalidation path — reuse the post-index clear
+            // so a cached map added there cannot be missed here. It parks the
+            // stamp at 0, so record the stamp just observed afterwards.
+            self.invalidate_after_index_attempt();
+            *Self::lock_or_recover(&self.writer_state, |_| {}) =
+                WriterState { writer_generation: current };
         }
     }
 
@@ -636,6 +626,16 @@ impl McpServer {
             AgentSearchMode::Keyword => searcher.search_lexical(query)?,
             AgentSearchMode::Ast => searcher.search(&format!("pattern: {query}"))?,
             AgentSearchMode::Semantic => searcher.search_semantic(query)?,
+        })
+    }
+
+    /// Typed empty-index gate (P2): the search path fails closed with
+    /// [`StoreError::EmptyIndex`]; match the variant through the whole
+    /// anyhow chain so a future `.context()` cannot reintroduce string
+    /// matching. Message text is never read here.
+    fn is_empty_index_error(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            matches!(cause.downcast_ref::<StoreError>(), Some(store) if store.is_empty_index())
         })
     }
 
@@ -698,8 +698,12 @@ impl McpServer {
                 None,
                 lang_filter.map(str::to_owned),
             ))?;
-            let _ = searcher.hold_read_snapshot();
-            let _ = searcher.warm_search_path();
+            // P3: snapshot/warm failures propagate instead of being swallowed.
+            // A half-warmed Searcher never enters the cache; the caller maps
+            // an empty index to the miss envelope and surfaces the rest as a
+            // tool error, exactly as if the search itself had failed.
+            searcher.hold_read_snapshot()?;
+            searcher.warm_search_path()?;
             *guard = Some(CachedSearcher {
                 root,
                 lang_filter: lang_filter.map(str::to_owned),
@@ -709,6 +713,19 @@ impl McpServer {
             });
         }
         Ok(guard)
+    }
+
+    fn finish_search(
+        response: ast_sgrep_core::SearchResponse,
+        limit: usize,
+        store: &IndexStore,
+    ) -> (ast_sgrep_core::SearchResponse, Option<usize>) {
+        let indexed = if response.hits.is_empty() {
+            store.has_indexed_files().ok().map(usize::from)
+        } else {
+            None
+        };
+        (Self::clamp_search_response(response, limit), indexed)
     }
 
     fn run_search(
@@ -723,30 +740,12 @@ impl McpServer {
         if file_filter.is_some() || ast_sgrep_core::env_flag::memo_off("warm") {
             let searcher = self.searcher_for(root, limit, file_filter, lang)?;
             let response = Self::dispatch_search(&searcher, mode, query)?;
-            let indexed = if response.hits.is_empty() {
-                searcher
-                    .store()
-                    .has_indexed_files()
-                    .ok()
-                    .map(usize::from)
-            } else {
-                None
-            };
-            return Ok((Self::clamp_search_response(response, limit), indexed));
+            return Ok(Self::finish_search(response, limit, searcher.store()));
         }
         let guard = self.cached_searcher(root, limit, lang.as_deref())?;
         let searcher = &guard.as_ref().expect("cached_searcher populates").searcher;
         let response = Self::dispatch_search(searcher, mode, query)?;
-        let indexed = if response.hits.is_empty() {
-            searcher
-                .store()
-                .has_indexed_files()
-                .ok()
-                .map(usize::from)
-        } else {
-            None
-        };
-        Ok((Self::clamp_search_response(response, limit), indexed))
+        Ok(Self::finish_search(response, limit, searcher.store()))
     }
 
     fn tool_agent_search(
@@ -767,7 +766,7 @@ impl McpServer {
         let (response, indexed_files) =
             match self.run_search(root.clone(), limit, file_filter, lang, mode, &query) {
                 Ok(pair) => pair,
-                Err(error) if error.to_string().contains("index is empty") => {
+                Err(error) if Self::is_empty_index_error(&error) => {
                     let miss = to_compact_miss_json(
                         &query,
                         &self.diagnose_miss(&root, &query, mode, Some(0)),
@@ -983,7 +982,6 @@ impl McpServer {
         // Single-flight wait counts toward the soft deadline (es7u).
         let started = Instant::now();
         let _flight = Self::lock_or_recover(&self.index_lock, |_| {});
-        // Soft deadline: refuse to start when the prior wait already exhausted the budget.
         anyhow::ensure!(
             started.elapsed() < INDEX_REPO_DEADLINE,
             "index_repo exceeded {}s single-flight deadline before start",
@@ -1094,4 +1092,92 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod wire_invalidation_regression {
+    //! F19/F20 regression pins (census_mcp.md): one generic wire parse (S1)
+    //! and one session-invalidation path (H1).
+    use super::*;
+    use serde_json::json;
+
+    fn test_server() -> McpServer {
+        McpServer {
+            root: PathBuf::from("/tmp"),
+            index_path: None,
+            limit: 10,
+            use_embed: false,
+            use_semantic_only: false,
+            writer_state: Mutex::new(WriterState::default()),
+            index_lock: Mutex::new(()),
+            emitted_snippets: Mutex::new(HashMap::new()),
+            searcher_cache: Mutex::new(None),
+            compact_paths: Mutex::new(None),
+        }
+    }
+
+    /// F19: every tool-args shape parses through one generic boundary with
+    /// one object check and one unknown-field mapping.
+    #[test]
+    fn parse_wire_single_generic_boundary() {
+        let server = test_server();
+        for raw in [json!("nope"), json!(42), json!([{"root": "/tmp"}])] {
+            let err = server.parse_wire::<IndexStatusWire>(&raw).unwrap_err();
+            assert!(
+                err.to_string().contains("arguments must be an object"),
+                "non-object rejected: {raw}"
+            );
+        }
+        let err = server
+            .parse_wire::<IndexRepoWire>(&json!({"force": true, "bogus": 1}))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "unknown argument: bogus");
+        let status: IndexStatusWire = server.parse_wire(&json!({})).unwrap();
+        assert!(status.root.is_none());
+        let repo: IndexRepoWire = server.parse_wire(&json!({"force": true})).unwrap();
+        assert_eq!(repo.force, Some(true));
+        // Per-tool parsers share the same boundary messages.
+        let err = server.parse_agent_search(&json!([1])).unwrap_err();
+        assert!(err.to_string().contains("arguments must be an object"));
+        let err = server
+            .parse_code_read(&json!({"ids": ["x"], "bogus": 1}))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "unknown argument: bogus");
+    }
+
+    /// F20/H1: a stale writer stamp clears every session map through the
+    /// single post-index invalidation path and records the stamp observed.
+    #[test]
+    fn stale_writer_sync_uses_single_invalidation_path() {
+        let server = test_server();
+        let current =
+            ast_sgrep_core::read_writer_generation(&server.root, server.index_path.as_deref());
+        *server.writer_state.lock().unwrap() =
+            WriterState { writer_generation: current.wrapping_add(1) };
+        server.emitted_snippets.lock().unwrap().insert(
+            (PathBuf::from("/tmp"), String::from("stale-id")),
+            7,
+        );
+        *server.compact_paths.lock().unwrap() = Some((
+            0,
+            PathBuf::from("/tmp"),
+            HashMap::from([(String::from("a"), String::from("b"))]),
+        ));
+        server.sync_writer_generation();
+        assert!(
+            server.emitted_snippets.lock().unwrap().is_empty(),
+            "stale sync clears elisions"
+        );
+        assert!(
+            server.compact_paths.lock().unwrap().is_none(),
+            "stale sync clears compact intern"
+        );
+        assert_eq!(
+            server.writer_state.lock().unwrap().writer_generation,
+            current,
+            "stamp re-observed so the next sync is not spuriously stale"
+        );
+        // H1 structural pin: a stale sync clears every session map through the
+        // single post-index invalidation path; the stamp is re-observed above.
+    }
 }

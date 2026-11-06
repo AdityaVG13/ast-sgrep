@@ -19,7 +19,7 @@ pub(crate) fn retain_py_await_operand_free(source: &str, hits: &mut Vec<PatternM
     if hits.is_empty() {
         return;
     }
-    let Ok(tree) = parse_source(Language::Python, source) else {
+    let Some(tree) = parse_source_silent(Language::Python, source) else {
         return;
     };
     let mut operand_spans: Vec<(usize, usize)> = Vec::new();
@@ -71,7 +71,7 @@ pub(crate) fn collect_kind_matches_filtered(
     if !require_operand_less {
         return collect_kind_matches(lang, source, pattern, kinds);
     }
-    let Ok(tree) = parse_source(lang, source) else {
+    let Some(tree) = parse_source_silent(lang, source) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -99,7 +99,7 @@ pub(crate) fn walk_kind_list_operand_less(
         let mut cursor = node.walk();
         let operand_less = node
             .children(&mut cursor)
-            .all(|child| child.kind().contains("comment") || !child.is_named());
+            .all(|child| is_trivia_kind(child.kind()) || !child.is_named());
         if operand_less {
             walk_kind_list(node, source, pattern, kinds, seen, out);
             return;
@@ -120,7 +120,7 @@ pub(crate) fn collect_identifier_matches(
     source: &str,
     pattern: &str,
 ) -> Vec<PatternMatch> {
-    let Ok(tree) = parse_source(lang, source) else {
+    let Some(tree) = parse_source_silent(lang, source) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -164,7 +164,7 @@ pub(crate) fn collect_kind_matches(
     pattern: &str,
     kinds: &[&str],
 ) -> Vec<PatternMatch> {
-    let Ok(tree) = parse_source(lang, source) else {
+    let Some(tree) = parse_source_silent(lang, source) else {
         return Vec::new();
     };
     let mut out = Vec::new();

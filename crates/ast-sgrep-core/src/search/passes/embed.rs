@@ -20,6 +20,14 @@ const EMBED_HIT_LIMIT: usize = 50;
 /// Exhaustive concat rank is the IVF-miss fallback, not the serve default.
 /// Cap keeps a held snapshot from scoring an unbounded mmap.
 const SNAPSHOT_EXHAUSTIVE_CHUNK_CAP: usize = 65_536;
+
+/// Single home for the embed hit-limit stanza (F5): floor 50, honour larger
+/// retained limits. Every embed pass derives its cap here instead of
+/// repeating `EMBED_HIT_LIMIT.max(options.retained_limit())`.
+pub fn embed_hit_limit(options: &SearchOptions) -> usize {
+    EMBED_HIT_LIMIT.max(options.retained_limit())
+}
+
 pub struct EmbedContext {
     pub chunks: Arc<Vec<SemanticChunkRow>>,
     pub packed_f16: Arc<Vec<u16>>,
@@ -45,14 +53,14 @@ fn embed_ctx_len(ctx: &EmbedContext) -> usize {
 }
 
 fn empty_chunk_row() -> SemanticChunkRow {
-    (
-        String::new(),
-        0,
-        0,
-        String::new(),
-        String::new(),
-        Vec::new(),
-    )
+    SemanticChunkRow {
+        path: String::new(),
+        line_start: 0,
+        line_end: 0,
+        symbol: String::new(),
+        text: String::new(),
+        embedding: Vec::new(),
+    }
 }
 
 fn chunk_at(ctx: &EmbedContext, i: usize) -> SemanticChunkRow {
@@ -68,7 +76,7 @@ fn chunks_by_file(chunks: &[SemanticChunkRow]) -> Arc<FileCsr> {
         chunks
             .iter()
             .enumerate()
-            .map(|(i, chunk)| (chunk.0.as_str(), i as u32))
+            .map(|(i, chunk)| (chunk.path.as_str(), i as u32))
             .collect(),
     ))
 }
@@ -222,7 +230,7 @@ pub(crate) fn load_semantic_context(
     } else {
         Vec::new()
     };
-    let dim = chunks[0].5.len();
+    let dim = chunks[0].embedding.len();
     let flat_vectors = flatten_vectors_for_search(&chunks, dim)?;
     Ok(Some(embed_context_from_parts(
         Arc::new(chunks),
@@ -275,14 +283,6 @@ pub(crate) fn run_embed_pass_cached(
         }
         None => Ok(vec![]),
     }
-}
-
-pub fn embed_pass_lazy_ivf(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-) -> Result<Option<Vec<SearchHit>>> {
-    embed_pass_lazy_ivf_with_rescoring(store, options, parsed, true)
 }
 
 fn semantic_ann_shape(store: &IndexStore) -> Result<(usize, i64, usize)> {
@@ -361,7 +361,7 @@ pub(crate) fn embed_pass_lazy_ivf_with_rescoring(
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, &query, Some(dim))?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+    let hit_limit = embed_hit_limit(options);
     let pool = field_rescore_pool(hit_limit);
     // Door B: rank from the mmap'd concat payload, then SQLite-fetch only the
     // top-N survivors. Door C: field blobs are selected only for those ids
@@ -470,7 +470,7 @@ fn embed_pass_lazy_ivf_for_files(
     let query = parsed.terms.join(" ");
     let query_vec = embed_query_vector(store, &query, Some(dim))?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+    let hit_limit = embed_hit_limit(options);
     let pool = field_rescore_pool(hit_limit);
     let Some(ranked_payload) = ivf.search_members(&query_vec, &members, pool) else {
         return Ok(None);
@@ -498,32 +498,6 @@ fn embed_pass_lazy_ivf_for_files(
     Ok(Some(embed_hits_rescored(
         &chunks, ranked, &query_vec, &fields, intent, hit_limit,
     )))
-}
-
-pub fn embed_pass_for_files(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    allowed_files: &HashSet<String>,
-) -> Result<Vec<SearchHit>> {
-    embed_pass_for_files_with_rescoring(store, options, parsed, allowed_files, true)
-}
-
-pub(crate) fn embed_pass_for_files_with_rescoring(
-    store: &IndexStore,
-    options: &SearchOptions,
-    parsed: &ParsedQuery,
-    allowed_files: &HashSet<String>,
-    use_field_rescoring: bool,
-) -> Result<Vec<SearchHit>> {
-    embed_pass_for_files_cached(
-        store,
-        options,
-        parsed,
-        allowed_files,
-        false,
-        use_field_rescoring,
-    )
 }
 
 /// Hybrid cascade embed: score mmap/SQL vectors filtered to cascade files.
@@ -561,7 +535,7 @@ pub(crate) fn embed_pass_for_files_cached(
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+    let hit_limit = embed_hit_limit(options);
     let mut survivors = Vec::new();
     let mut survivor_ids = Vec::new();
     for (id, row) in
@@ -572,7 +546,7 @@ pub(crate) fn embed_pass_for_files_cached(
     }
     let modern_files = survivors
         .iter()
-        .map(|chunk| chunk.0.clone())
+        .map(|chunk| chunk.path.clone())
         .collect::<HashSet<_>>();
     let legacy_only_files = allowed_files
         .difference(&modern_files)
@@ -586,7 +560,7 @@ pub(crate) fn embed_pass_for_files_cached(
         return Ok(Vec::new());
     }
     let query_vec =
-        embed_query_vector(store, &query, survivors.first().map(|chunk| chunk.5.len()))?;
+        embed_query_vector(store, &query, survivors.first().map(|chunk| chunk.embedding.len()))?;
     embed_hits_from_concat_rank(
         store,
         &survivors,
@@ -623,7 +597,7 @@ fn try_warmed_file_embed(
     }
     let query = parsed.terms.join(" ");
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+    let hit_limit = embed_hit_limit(options);
     let dim = ctx.dim;
     let n = embed_ctx_len(&ctx);
     let mmap_bytes = ctx
@@ -685,8 +659,8 @@ fn try_warmed_file_embed(
     let mut survivor_ids = Vec::new();
     let mut present = HashSet::new();
     for (chunk, id) in ctx.chunks.iter().zip(ctx.ids.iter()) {
-        if allowed_files.contains(&chunk.0) {
-            present.insert(chunk.0.as_str());
+        if allowed_files.contains(&chunk.path) {
+            present.insert(chunk.path.as_str());
             survivors.push(chunk.clone());
             survivor_ids.push(*id);
         }
@@ -708,7 +682,7 @@ fn try_warmed_file_embed(
     }
     let query_vec = embed_query_vector_from_meta(
         &query,
-        survivors.first().map(|chunk| chunk.5.len()),
+        survivors.first().map(|chunk| chunk.embedding.len()),
         Some(ctx.embed_backend.as_str()),
         ctx.embed_model.as_deref(),
     )?;
@@ -763,7 +737,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
                         ctx.rank_idx.as_ref().map(|idx| idx.as_slice()),
                     );
                     let intent = classify(parsed);
-                    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+                    let hit_limit = embed_hit_limit(options);
                     return embed_hits_from_pre_rank(
                         store,
                         |i| chunk_at(ctx, i),
@@ -804,7 +778,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
             Some(ctx.embed_backend.as_str()),
             ctx.embed_model.as_deref(),
         )?,
-        None => embed_query_vector(store, &query, chunks.first().map(|c| c.5.len()))?,
+        None => embed_query_vector(store, &query, chunks.first().map(|c| c.embedding.len()))?,
     };
     let ann_threshold = if options.lang_filter.is_some()
         || (ctx.is_some() && chunks.len() <= SNAPSHOT_EXHAUSTIVE_CHUNK_CAP)
@@ -825,7 +799,7 @@ pub(crate) fn embed_pass_with_context_and_rescoring(
         ann_threshold,
     )?;
     let intent = classify(parsed);
-    let hit_limit = EMBED_HIT_LIMIT.max(options.retained_limit());
+    let hit_limit = embed_hit_limit(options);
     let fetched_ids;
     let ids: &[i64] = match ctx.as_ref() {
         Some(ctx) if ctx.ids.len() == chunks.len() => ctx.ids.as_slice(),
@@ -972,6 +946,18 @@ fn embed_query_vector(
 }
 
 fn embed_query_vector_from_meta(
+    query: &str,
+    stored_dim: Option<usize>,
+    stored_backend: Option<&str>,
+    stored_model: Option<&str>,
+) -> Result<Vec<f32>> {
+    let t_encode = crate::env_flag::profile_clock();
+    let vector = embed_query_vector_from_meta_inner(query, stored_dim, stored_backend, stored_model)?;
+    crate::env_flag::emit_profile_stage_since("search_embed_encode", t_encode);
+    Ok(vector)
+}
+
+fn embed_query_vector_from_meta_inner(
     query: &str,
     stored_dim: Option<usize>,
     stored_backend: Option<&str>,
@@ -1317,7 +1303,7 @@ fn embed_similarity_hits(
     }
 
     let union_mode = field_rank_union_mode();
-    let files: Vec<&str> = chunks.iter().map(|c| c.0.as_str()).collect();
+    let files: Vec<&str> = chunks.iter().map(|c| c.path.as_str()).collect();
     let union_keys = if union_mode == FieldRankUnionMode::Off {
         (0..ranked.len() as u32)
             .zip(ranked.iter().map(|(_, score)| *score))
@@ -1338,7 +1324,7 @@ fn embed_similarity_hits(
     let mut parent_keys: Vec<ParentKey> = Vec::new();
     let mut parents: Vec<ParentMatch> = Vec::new();
     for (pos, (index, similarity)) in ranked.into_iter().enumerate() {
-        let Some((file, line_start, line_end, symbol, excerpt, _)) = chunks.get(index) else {
+        let Some(chunk) = chunks.get(index) else {
             continue;
         };
         let key = union_keys
@@ -1346,10 +1332,10 @@ fn embed_similarity_hits(
             .copied()
             .unwrap_or((pos as u32, similarity));
         let parent_key = ParentKey {
-            file: intern.intern(file),
-            line_start: *line_start,
-            line_end: *line_end,
-            symbol: intern.intern(symbol),
+            file: intern.intern(&chunk.path),
+            line_start: chunk.line_start,
+            line_end: chunk.line_end,
+            symbol: intern.intern(&chunk.symbol),
         };
         let parent = if let Some(slot) = parent_keys.iter().position(|seen| *seen == parent_key) {
             &mut parents[slot]
@@ -1374,7 +1360,7 @@ fn embed_similarity_hits(
         if !parent
             .children
             .iter()
-            .any(|&(_, idx)| chunks.get(idx).is_some_and(|row| row.4 == *excerpt))
+            .any(|&(_, idx)| chunks.get(idx).is_some_and(|row| row.text == chunk.text))
         {
             parent.children.push((similarity, index));
         }
@@ -1388,10 +1374,10 @@ fn embed_similarity_hits(
             .cmp(&right.best_rank.0)
             .then_with(|| right.best_rank.1.total_cmp(&left.best_rank.1))
             .then_with(|| right.best_similarity.total_cmp(&left.best_similarity))
-            .then_with(|| chunks[left.best_index].0.cmp(&chunks[right.best_index].0))
-            .then_with(|| chunks[left.best_index].1.cmp(&chunks[right.best_index].1))
-            .then_with(|| chunks[left.best_index].2.cmp(&chunks[right.best_index].2))
-            .then_with(|| chunks[left.best_index].3.cmp(&chunks[right.best_index].3))
+            .then_with(|| chunks[left.best_index].path.cmp(&chunks[right.best_index].path))
+            .then_with(|| chunks[left.best_index].line_start.cmp(&chunks[right.best_index].line_start))
+            .then_with(|| chunks[left.best_index].line_end.cmp(&chunks[right.best_index].line_end))
+            .then_with(|| chunks[left.best_index].symbol.cmp(&chunks[right.best_index].symbol))
     });
     parents.truncate(hit_limit);
     parents
@@ -1401,23 +1387,23 @@ fn embed_similarity_hits(
                 right
                     .0
                     .total_cmp(&left.0)
-                    .then_with(|| chunks[left.1].4.cmp(&chunks[right.1].4))
+                    .then_with(|| chunks[left.1].text.cmp(&chunks[right.1].text))
             });
             parent.children.truncate(3);
-            let (file, line_start, line_end, symbol, _, _) = &chunks[parent.best_index];
+            let best = &chunks[parent.best_index];
             let mut hit = SearchHit::span(SpanHitInput {
                 kind: HitKind::Embed,
-                file: file.clone(),
-                line_start: *line_start,
-                line_end: *line_end,
+                file: best.path.clone(),
+                line_start: best.line_start,
+                line_end: best.line_end,
                 score: SCORE_EMBED * f64::from(parent.best_similarity),
                 excerpt: parent
                     .children
                     .into_iter()
-                    .map(|(_, idx)| chunks[idx].4.as_str())
+                    .map(|(_, idx)| chunks[idx].text.as_str())
                     .collect::<Vec<_>>()
                     .join("\n...\n"),
-                symbol: (!symbol.is_empty()).then_some(symbol.clone()),
+                symbol: (!best.symbol.is_empty()).then_some(best.symbol.clone()),
                 language: None,
                 byte_span: None,
             });
@@ -1435,11 +1421,11 @@ fn embed_legacy_hits(
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
-    let query_vec = embed_query_vector(store, query, chunks.first().map(|c| c.5.len()))?;
+    let query_vec = embed_query_vector(store, query, chunks.first().map(|c| c.embedding.len()))?;
     Ok(embed_similarity_hits(
         &chunks,
         ast_sgrep_embed::rank_chunk_indices_by_vector(&query_vec, &chunks, chunks.len()),
         &[],
-        EMBED_HIT_LIMIT.max(options.retained_limit()),
+        embed_hit_limit(options),
     ))
 }

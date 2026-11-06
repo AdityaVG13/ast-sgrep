@@ -4,17 +4,16 @@ pub struct ParsedQuery {
     pub mode: QueryMode,
     pub target: Option<String>,
     pub terms: Vec<String>,
-    /// Directory or glob from an `in:path` token. Applied as a file filter.
+    /// Resolved `in:path` file filter, computed ONCE at resolve time
+    /// (`resolve_path_scope`): an exact file rel-path when the scope names a
+    /// FILE under the index root, otherwise the `dir/**` (or as-authored
+    /// wildcard) glob. Finish compiles this directly and never re-derives it.
     pub path_scope: Option<String>,
     /// Set when an `in:` token was present but unresolvable at parse time
     /// — bare `in:`, a `..` segment,
     /// an absolute path, or a duplicate token. Search must refuse loudly;
     /// the historic silent drop silently ran the query UNSCOPED.
     pub path_scope_error: Option<String>,
-    /// Set by the Searcher when the scope resolves to a FILE under the
-    /// index root — finish filters by exact rel-path equality
-    /// instead of the impossible `file/**` glob.
-    pub path_scope_exact: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryMode {
@@ -71,58 +70,38 @@ impl ParsedQuery {
     }
 
     fn parse_mode(trimmed: &str) -> Self {
-        for (prefix, mode) in [
-            ("callers:", QueryMode::Callers),
-            ("defs:", QueryMode::Defs),
-            ("imports:", QueryMode::Imports),
-        ] {
+        fn scored(target: &str) -> Vec<String> {
+            tokenize_for_scoring(target)
+        }
+        fn verbatim(target: &str) -> Vec<String> {
+            vec![target.to_string()]
+        }
+        fn lowered(target: &str) -> Vec<String> {
+            vec![target.to_lowercase()]
+        }
+        // Single prefix→mode table: each entry carries its per-mode term
+        // closure (scored tokens for symbol lanes, byte-faithful verbatim
+        // for pattern/literal/regex, lowercased for word). `raw` always
+        // keeps the full user query including the mode prefix (54if).
+        let table: [(&str, QueryMode, fn(&str) -> Vec<String>); 7] = [
+            ("callers:", QueryMode::Callers, scored),
+            ("defs:", QueryMode::Defs, scored),
+            ("imports:", QueryMode::Imports, scored),
+            ("pattern:", QueryMode::Pattern, verbatim),
+            ("literal:", QueryMode::Literal, verbatim),
+            ("regex:", QueryMode::Regex, verbatim),
+            ("word:", QueryMode::Word, lowered),
+        ];
+        for (prefix, mode, terms_of) in table {
             if let Some(rest) = trimmed.strip_prefix(prefix) {
                 let target = strip_wrapping_quotes(rest.trim()).to_string();
                 return Self {
                     raw: trimmed.to_string(),
                     mode,
                     target: Some(target.clone()),
-                    terms: tokenize_for_scoring(&target),
+                    terms: terms_of(&target),
                     path_scope: None,
                     path_scope_error: None,
-                    path_scope_exact: false,
-                };
-            }
-        }
-        if let Some(rest) = trimmed.strip_prefix("pattern:") {
-            let t = strip_wrapping_quotes(rest.trim()).to_string();
-            return Self {
-                raw: trimmed.to_string(),
-                mode: QueryMode::Pattern,
-                target: Some(t.clone()),
-                terms: vec![t],
-                path_scope: None,
-                path_scope_error: None,
-                path_scope_exact: false,
-            };
-        }
-        for (prefix, mode) in [
-            ("literal:", QueryMode::Literal),
-            ("regex:", QueryMode::Regex),
-            ("word:", QueryMode::Word),
-        ] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let target = strip_wrapping_quotes(rest.trim()).to_string();
-                let terms = if mode == QueryMode::Word {
-                    vec![target.to_lowercase()]
-                } else {
-                    // eh5a: literal/regex terms keep case (case-sensitive match).
-                    vec![target.clone()]
-                };
-                // 54if: `raw` always keeps the full user query including mode prefix.
-                return Self {
-                    raw: trimmed.to_string(),
-                    mode,
-                    target: Some(target),
-                    terms,
-                    path_scope: None,
-                    path_scope_error: None,
-                    path_scope_exact: false,
                 };
             }
         }
@@ -133,7 +112,6 @@ impl ParsedQuery {
             terms: tokenize_for_scoring(trimmed),
             path_scope: None,
             path_scope_error: None,
-            path_scope_exact: false,
         }
     }
 
@@ -255,7 +233,6 @@ impl ParsedQuery {
             terms,
             path_scope: None,
             path_scope_error: None,
-            path_scope_exact: false,
         }
     }
     pub fn literal(query: &str) -> Self {
@@ -273,7 +250,11 @@ impl ParsedQuery {
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| self.primary_symbol().unwrap_or_default().to_string())
     }
-    /// Identifier as the user typed it (`Searcher`, `auth_refresh`), not folded.
+    /// Identifier as the user typed it (`Searcher`, `auth_refresh`,
+    /// `auth-refresh`), not folded. `-` stays inside the token so kebab-case
+    /// is the same identifier as snake_case for `identifier_match` / critic
+    /// query_ident; splitting it made `auth-refresh` look like query_ident
+    /// `auth` and FILE_STEM_BOOST every hit in `auth.rs` (including `main`).
     pub fn identifier_spelling(&self) -> Option<&str> {
         if let Some(target) = self.target.as_deref() {
             let trimmed = target.trim();
@@ -282,18 +263,19 @@ impl ParsedQuery {
             }
         }
         self.raw
-            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
             .find(|word| {
                 !word.is_empty()
                     && (word.chars().any(char::is_uppercase)
                         || word.contains('_')
+                        || word.contains('-')
                         || looks_like_symbol(word))
             })
     }
     pub fn primary_symbol(&self) -> Option<&str> {
         let cased = self
             .raw
-            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
             .find(|w| w.chars().any(char::is_uppercase))
             .map(str::to_lowercase);
         cased

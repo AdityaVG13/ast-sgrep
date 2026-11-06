@@ -32,6 +32,13 @@ pub struct ToolDef {
     pub read_only: bool,
 }
 
+impl ToolDef {
+    /// Progressive-discovery membership: the `catalog_*` meta tools.
+    pub fn is_discovery(&self) -> bool {
+        self.name.starts_with("catalog_")
+    }
+}
+
 /// Owned shadow of [`ToolDef`] for one-time JSON deserialization: `&'static str`
 /// fields cannot borrow from a parsed buffer, so the const below is parsed
 /// once, the two strings per tool are leaked once, and calls clone the static.

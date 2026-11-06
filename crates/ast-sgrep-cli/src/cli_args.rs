@@ -568,6 +568,131 @@ pub(crate) enum Commands {
     Install(crate::install::InstallArgs),
 }
 
+impl Commands {
+    /// Canonical clap command name (kebab-case; aliases excluded).
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Commands::Index(_) => "index",
+            Commands::Status(_) => "status",
+            Commands::Outline(_) => "outline",
+            Commands::Read(_) => "read",
+            Commands::Reindex(_) => "reindex",
+            Commands::Codemod(_) => "codemod",
+            Commands::Search(_) => "search",
+            Commands::Bench { .. } => "bench",
+            Commands::Watch { .. } => "watch",
+            Commands::Keyword(_) => "keyword",
+            Commands::Semantic(_) => "semantic",
+            Commands::Chain(_) => "chain",
+            Commands::CallPath(_) => "call-path",
+            Commands::Defs(_) => "defs",
+            Commands::Callers(_) => "callers",
+            Commands::Imports(_) => "imports",
+            Commands::Capabilities(_) => "capabilities",
+            Commands::Version(_) => "version",
+            Commands::RobotDocs(_) => "robot-docs",
+            Commands::Doctor { .. } => "doctor",
+            Commands::Eval(_) => "eval",
+            Commands::CodemodeBatch { .. } => "codemode-batch",
+            Commands::Serve { .. } => "serve",
+            Commands::Install(_) => "install",
+        }
+    }
+
+    /// Commands sharing the search-tuning plumbing (`--format`,
+    /// `--file-filter`, ...): [`SEARCH_FAMILY`](crate::SEARCH_FAMILY) plus the
+    /// symbol+ROOT commands defs/callers/imports. Single source for the
+    /// flag-scope usage errors in [`validate_cli`](crate::validate_cli) and the
+    /// argv-recovery search-channel gates.
+    pub(crate) fn is_search_tuning_command(&self) -> bool {
+        matches!(
+            self,
+            Commands::Search(_)
+                | Commands::Keyword(_)
+                | Commands::Semantic(_)
+                | Commands::Defs(_)
+                | Commands::Callers(_)
+                | Commands::Imports(_)
+        )
+    }
+
+    /// Canonical names sharing the tuning plumbing, in error-display order.
+    /// Keep in sync with [`Commands::is_search_tuning_command`].
+    pub(crate) fn search_tuning_command_names() -> &'static [&'static str] {
+        &[
+            "search",
+            "keyword",
+            "semantic",
+            "defs",
+            "callers",
+            "imports",
+        ]
+    }
+
+    /// `search, keyword, semantic, defs, callers, or imports` — derived from
+    /// [`Commands::search_tuning_command_names`] so the usage errors can never
+    /// drift from the predicate.
+    pub(crate) fn search_tuning_commands_display() -> String {
+        let names = Self::search_tuning_command_names();
+        let (last, rest) = names.split_last().expect("tuning set is non-empty");
+        if rest.is_empty() {
+            return (*last).to_owned();
+        }
+        format!("{}, or {last}", rest.join(", "))
+    }
+
+    /// Every canonical command name (every [`Commands::name`] arm, same
+    /// order). Recovery tables consult this instead of hand lists.
+    pub(crate) fn all_names() -> &'static [&'static str] {
+        &[
+            "index",
+            "status",
+            "outline",
+            "read",
+            "reindex",
+            "codemod",
+            "search",
+            "bench",
+            "watch",
+            "keyword",
+            "semantic",
+            "chain",
+            "call-path",
+            "defs",
+            "callers",
+            "imports",
+            "capabilities",
+            "version",
+            "robot-docs",
+            "doctor",
+            "eval",
+            "codemode-batch",
+            "serve",
+            "install",
+        ]
+    }
+
+    /// Search-channel aliases, in error-display order. Single source for
+    /// [`Commands::is_search_channel_name`] and the agent typo-recovery
+    /// tables so the pair cannot drift from either side.
+    pub(crate) fn search_aliases() -> &'static [&'static str] {
+        &["find", "query"]
+    }
+
+    /// Search-channel names for argv recovery: the tuning set plus the
+    /// `find`/`query` search aliases.
+    pub(crate) fn is_search_channel_name(name: &str) -> bool {
+        Self::search_tuning_command_names().contains(&name)
+            || Self::search_aliases().contains(&name)
+    }
+
+    /// Commands that always emit machine JSON (used by
+    /// [`raw_machine_output_requested`](crate::machine::raw_machine_output_requested)).
+    pub(crate) fn is_always_machine_command_name(name: &str) -> bool {
+        matches!(name, "capabilities" | "doctor" | "codemode-batch")
+    }
+}
+
 #[derive(Parser, Clone)]
 pub(crate) struct VersionArgs {
     #[arg(long)]
@@ -783,32 +908,92 @@ impl Cli {
     }
 
     pub(crate) fn command_name(&self) -> &'static str {
-        match self.command.as_ref() {
-            None => "search",
-            Some(Commands::Index(_)) => "index",
-            Some(Commands::Status(_)) => "status",
-            Some(Commands::Outline(_)) => "outline",
-            Some(Commands::Read(_)) => "read",
-            Some(Commands::Reindex(_)) => "reindex",
-            Some(Commands::Codemod(_)) => "codemod",
-            Some(Commands::Search(_)) => "search",
-            Some(Commands::Bench { .. }) => "bench",
-            Some(Commands::Watch { .. }) => "watch",
-            Some(Commands::Keyword(_)) => "keyword",
-            Some(Commands::Semantic(_)) => "semantic",
-            Some(Commands::Chain(_)) => "chain",
-            Some(Commands::CallPath(_)) => "call-path",
-            Some(Commands::Defs(_)) => "defs",
-            Some(Commands::Callers(_)) => "callers",
-            Some(Commands::Imports(_)) => "imports",
-            Some(Commands::Capabilities(_)) => "capabilities",
-            Some(Commands::Version(_)) => "version",
-            Some(Commands::RobotDocs(_)) => "robot-docs",
-            Some(Commands::Doctor { .. }) => "doctor",
-            Some(Commands::Eval(_)) => "eval",
-            Some(Commands::CodemodeBatch { .. }) => "codemode-batch",
-            Some(Commands::Install(_)) => "install",
-            Some(Commands::Serve { .. }) => "serve",
+        self.command
+            .as_ref()
+            .map_or("search", |command| command.name())
+    }
+}
+
+#[cfg(test)]
+mod command_name_sync_tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    /// Required-arg fixtures so `try_parse_from` succeeds per command.
+    fn extra_argv(name: &str) -> &'static [&'static str] {
+        match name {
+            "outline" => &["f.rs"],
+            "read" => &["f.rs#L1"],
+            "codemod" => &["--pattern", "p", "--rewrite", "r"],
+            "search" | "keyword" | "semantic" | "chain" => &["q"],
+            "call-path" => &["a", "b"],
+            "defs" | "callers" | "imports" => &["sym"],
+            "eval" => &["--gold", "g.json"],
+            "codemode-batch" => &["--requests", "-"],
+            "install" => &["--target", "cursor"],
+            _ => &[],
         }
+    }
+
+    #[test]
+    fn cli_name_tables_stay_in_sync() {
+        // (a) every `Commands::name` arm, in order, equals `all_names()` (24).
+        let mut parsed_names = Vec::with_capacity(Commands::all_names().len());
+        let mut tuning_names = Vec::new();
+        for name in Commands::all_names() {
+            let mut argv = vec!["asgrep", name];
+            argv.extend_from_slice(extra_argv(name));
+            let cli = Cli::try_parse_from(argv)
+                .unwrap_or_else(|e| panic!("parse fixture for '{name}' failed: {e}"));
+            let command = cli.command.as_ref().expect("subcommand must parse");
+            assert_eq!(
+                command.name(),
+                *name,
+                "Commands::name arm drift for '{name}'"
+            );
+            parsed_names.push(command.name());
+            if command.is_search_tuning_command() {
+                tuning_names.push(command.name());
+            }
+        }
+        assert_eq!(
+            parsed_names,
+            Commands::all_names(),
+            "Commands::name set/order drift vs all_names()"
+        );
+        assert_eq!(
+            Commands::all_names().len(),
+            24,
+            "all_names count drift (add the new command to the fixture + tables)"
+        );
+        let cmd = Cli::command();
+        let clap_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+        assert_eq!(
+            clap_names,
+            Commands::all_names(),
+            "clap registration order drift vs all_names()"
+        );
+
+        // (b) tuning predicate set == tuning name list.
+        assert_eq!(
+            tuning_names,
+            Commands::search_tuning_command_names(),
+            "is_search_tuning_command drift vs search_tuning_command_names()"
+        );
+
+        // (c) clap alias attrs == search_aliases().
+        let cmd = Cli::command();
+        let search = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == "search")
+            .expect("search subcommand registered");
+        let mut aliases: Vec<&str> = search.get_aliases().collect();
+        aliases.sort_unstable();
+        let mut expected: Vec<&str> = Commands::search_aliases().to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            aliases, expected,
+            "search clap aliases drift vs search_aliases()"
+        );
     }
 }

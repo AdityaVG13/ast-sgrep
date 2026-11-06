@@ -81,7 +81,6 @@ impl CatalogTool {
         let outcome = self
             .server
             .dispatch_tool(&self.tool.name, arguments, cancel.clone());
-        // Release the watcher either way: done-flag or observed cancellation.
         cancel.store(true, Ordering::Release);
         let _ = watcher.join();
         outcome.map_err(|error| format!("{error:#}"))

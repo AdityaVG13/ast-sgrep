@@ -40,9 +40,11 @@ tree-sitter-dart = "0.2.0"
 # re-verification (do NOT silently follow upstream: grammar drift breaks goldens).
 tree-sitter-moonbit = { version = "0.1.0", git = "https://github.com/moonbitlang/tree-sitter-moonbit", rev = "b63ce9169bcd831157f3b79ef8ff9219d305f9d0" }
 
+# INTENDED dev-only cycle (F38): lang tests use testkit fixtures while
+# testkit depends on lang. Do not "fix" by splitting crates.
 [dev-dependencies]
-ast-sgrep-embed = { path = "../ast-sgrep-embed" }
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+ast-sgrep-embed.workspace = true
+ast-sgrep-testkit.workspace = true
 serde_json.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
@@ -71,17 +73,8 @@ path = "../../tests/lang/oracle_pattern.rs"
 name = "oracle_pipeline"
 path = "../../tests/lang/oracle_pipeline.rs"
 [[test]]
-name = "error_api_pass1"
-path = "../../tests/lang/error_api_pass1.rs"
-[[test]]
-name = "error_api_pass2"
-path = "../../tests/lang/error_api_pass2.rs"
-[[test]]
-name = "error_api_pass3"
-path = "../../tests/lang/error_api_pass3.rs"
-[[test]]
-name = "error_api_pass4"
-path = "../../tests/lang/error_api_pass4.rs"
+name = "error_api_matrix"
+path = "../../tests/lang/error_api_matrix.rs"
 [[test]]
 name = "invalidation_parser"
 path = "../../tests/lang/invalidation_parser.rs"
@@ -127,3 +120,6 @@ path = "../../tests/lang/canonical_filter_unit.rs"
 [[test]]
 name = "signature_unit"
 path = "../../tests/lang/signature_unit.rs"
+[[test]]
+name = "callee_cluster"
+path = "../../tests/lang/callee_cluster.rs"

@@ -71,14 +71,14 @@ fn enclosing_index_db(root: &Path) -> Option<PathBuf> {
 /// documented `index is empty` fail-closed phrase (docs/validation/negative-ledgers.md).
 fn missing_index_error(root: &Path, db_path: &Path) -> crate::StoreError {
     if let Some(enclosing) = enclosing_index_db(root) {
-        return crate::StoreError::Other(format!(
+        return crate::StoreError::EmptyIndex(format!(
             "index is empty for {}: no index file at {}; this checkout is indexed at {} -- run the command at that root, pass --index-path for a separate index, or rerun with --auto-index to index this checkout in place",
             root.display(),
             db_path.display(),
             enclosing.display()
         ));
     }
-    crate::StoreError::Other(format!(
+    crate::StoreError::EmptyIndex(format!(
         "index is empty for {}: no index file at {}; run: asgrep index {} --json, or rerun with --auto-index to index this checkout in place",
         root.display(),
         db_path.display(),
@@ -293,6 +293,7 @@ pub struct IndexStore {
 }
 mod queries;
 mod writes;
+pub use queries::fold_file_stat_identity;
 impl IndexStore {
     pub fn open(root: &Path, index_path: Option<&Path>) -> Result<Self> {
         Self::open_with_durability(root, index_path, crate::store::Durability::from_env())
@@ -389,16 +390,20 @@ impl IndexStore {
         }
         // Preserve rusqlite's error code so explicit reindex can distinguish a
         // corrupt/non-database file from permission, locking, and IO failures.
+        let t_conn = crate::env_flag::profile_clock();
         let conn = if read_only {
             Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
         } else {
             Connection::open(&db_path)?
         };
+        crate::env_flag::emit_profile_stage_since("sqlite_conn_open", t_conn);
+        let t_config = crate::env_flag::profile_clock();
         if read_only {
             super::sql::configure_connection_readonly(&conn)?;
         } else {
             configure_connection_with(&conn, durability)?;
         }
+        crate::env_flag::emit_profile_stage_since("sqlite_configure", t_config);
         Self::from_configured_connection(conn, root, db_path, durability, read_only)
     }
 
@@ -430,8 +435,12 @@ impl IndexStore {
             lazy_ivf: std::cell::RefCell::new(None),
             read_only,
         };
+        let t_schema = crate::env_flag::profile_clock();
         store.init_schema()?;
+        crate::env_flag::emit_profile_stage_since("sqlite_schema_probes", t_schema);
+        let t_seq = crate::env_flag::profile_clock();
         init_cache_seq(&store.conn, &store.cache_seq)?;
+        crate::env_flag::emit_profile_stage_since("sqlite_cache_seq", t_seq);
         Ok(store)
     }
     fn init_schema(&self) -> Result<()> {
@@ -830,7 +839,7 @@ impl IndexStore {
             |r| r.get(0),
         )?;
         if core < 4 {
-            return Err(crate::StoreError::Other(format!(
+            return Err(crate::StoreError::EmptyIndex(format!(
                 "index is empty for {}; run: asgrep index {} --json",
                 self.root.display(),
                 self.root.display()

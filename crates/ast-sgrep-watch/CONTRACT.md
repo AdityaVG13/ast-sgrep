@@ -5,10 +5,12 @@ reason: `notify` links CoreFoundation/CoreServices on macOS (~1.5ms dyld per
 process), so the watcher lives here and the main binary never links it.
 
 - Purpose/layer: leaf binary crate. `asgrep watch` re-execs this binary with
-  verbatim argv; `main` re-parses via `ast_sgrep_cli::parse_watch_launch`
+  verbatim argv; `main` re-parses via `ast_sgrep_cli::run_watch_process`
   (same parser as the shim, so index options cannot drift) and runs the
   moved `watch` loop unchanged.
-- Public surface: none (bin-only, no lib). Deps: `ast-sgrep-cli` (arg parse),
+- Public surface: none (bin-only, no lib). Deps: `ast-sgrep-cli` (arg parse,
+  exact-pinned `=2.7.0` behind the versioned single-entry contract in
+  `src/cli_contract.rs`, v1: only `run_watch_process`),
   `ast-sgrep-core` (indexer), `notify` (file events, owned here).
 - Invariants: never linked into `asgrep` (verify: `otool -L asgrep` shows no
   CoreFoundation/CoreServices); argv handling identical to the shim's parse;

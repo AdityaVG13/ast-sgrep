@@ -13,7 +13,7 @@ use ast_sgrep_core::semantic_ivf::{compute_ann_fingerprint, load_semantic_ivf, s
 use ast_sgrep_core::store::UpsertFileInput;
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, StoreError};
 use ast_sgrep_testkit::{
-    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, home_names,
+    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, dir_listing,
     isolated_index_session, quarantine_path, quiesced_db_bytes, search_parity_key,
     search_parity_keys, store_snapshot, truncate_file, IsolatedIndexSession,
 };
@@ -87,7 +87,7 @@ fn rebuilds_are_idempotent() {
         assert_eq!(store_snapshot(&root, &db), snap_once);
         assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_once);
         assert_eq!(integrity(&root, &db), "ok");
-        assert!(home_names(db.parent().unwrap())
+        assert!(dir_listing(db.parent().unwrap())
             .iter()
             .all(|n| !n.contains(".corrupt")));
     }

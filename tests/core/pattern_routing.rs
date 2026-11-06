@@ -196,6 +196,38 @@ fn hybrid_quoted_literal_intent_hits_phrase_line() {
     );
 }
 
+/// Single-quoted hybrid phrase routes to the Literal intent through the
+/// unified `strip_wrapping_quotes` gate in `intent.rs` (`classify_hybrid`),
+/// the same rule the prefixed modes apply in `query.rs`: `'foo bar
+/// unique_phrase'` classifies Literal and search runs the phrase literal
+/// pass on the inner bytes (one balanced quote layer stripped). Before the
+/// gate fix this test passed incidentally — the query classified Conceptual
+/// and matched only because `tokenize_words` splits on apostrophes — not
+/// through the literal pass it now exercises.
+#[test]
+fn single_quoted_hybrid_phrase_strips_one_single_quote_layer_for_literal_pass() {
+    let session = indexed_rs("fn main() {\n    let msg = \"foo bar unique_phrase\";\n}\n");
+    let searcher = session.searcher(SearchOptions {
+        use_embed: false,
+        limit: 16,
+        ..session.search_options()
+    });
+    let hybrid = searcher.search("'foo bar unique_phrase'").unwrap();
+    let literal = searcher.search("literal:foo bar unique_phrase").unwrap();
+    assert!(
+        !literal.hits.is_empty(),
+        "literal phrase must hit: {:?}",
+        literal.hits
+    );
+    let lit_line = literal.hits[0].line_start;
+    assert!(
+        hybrid.hits.iter().any(|h| h.line_start == lit_line),
+        "single-quoted hybrid must strip one quote layer and hit same line as literal:; hybrid={:?} literal={:?}",
+        hybrid.hits,
+        literal.hits
+    );
+}
+
 #[test]
 fn ident_pattern_is_served_from_index() {
     let session = indexed_rs(

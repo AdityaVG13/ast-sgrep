@@ -275,6 +275,7 @@ mod langs;
 mod pattern;
 mod pattern_queries;
 pub mod signature;
+pub(crate) mod trivia;
 use langs::{
     CParser, CSharpParser, CppParser, DartParser, GoParser, JavaParser, JavaScriptParser,
     KotlinParser, MoonBitParser, PhpParser, PythonParser, RubyParser, RustParser, SwiftParser,
@@ -283,9 +284,9 @@ use langs::{
 pub use pattern::{
     classify_native, declaration_prefix, is_pattern_ident, is_universal_root_pattern,
     literal_trailing_comment_lane, match_literal_pattern, match_pattern, native_pattern_answerable,
-    needs_ast_grep_fallback, pattern_is_keyword_literal_root, php_comment_transparent_operand_lane,
-    tree_sitter_language, BodyTemplate, NativeKind, PatternMatch, DECL_KIND_PREFIXES,
-    DECL_PATTERN_PREFIXES,
+    needs_ast_grep_fallback, parse_arg_slots, pattern_is_keyword_literal_root,
+    php_comment_transparent_operand_lane, tree_sitter_language, ArgSlot, ArgSlotGrammar,
+    BodyTemplate, NativeKind, PatternMatch, DECL_KIND_PREFIXES, DECL_PATTERN_PREFIXES,
 };
 pub use signature::{
     cached_pattern_signatures, candidate_kind_signatures, index_can_serve_pattern,

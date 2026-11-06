@@ -304,6 +304,168 @@ fn auth_refresh_identifier_ranks_the_definition() {
 }
 
 #[test]
+fn camel_and_kebab_query_spellings_rank_snake_definition() {
+    // INTENT: the user-typed identifier is often camelCase or kebab-case
+    // (`authRefresh`, `auth-refresh`) while the indexed def is snake_case.
+    // identifier_match already treats token-equal spellings as Exact; if
+    // identifier_spelling drops kebab (`-` is a split) or fragments stay
+    // underscore-only, helpers/substrings can steal rank 1. Distinct from
+    // HIT-side camel parrots on a structural page.
+    let (_temp, searcher) = indexed_corpus();
+    for query in ["authRefresh", "auth-refresh"] {
+        let response = searcher.search(query).expect("search");
+        require_first(
+            query,
+            &response.hits,
+            "auth.rs",
+            "auth_refresh",
+            "camel/kebab query spelling must rank the snake_case definition first.",
+        );
+    }
+}
+
+#[test]
+fn defs_camel_and_kebab_find_snake_definition() {
+    // INTENT: `defs:` exact-name lookup uses lookup_symbol() (the raw
+    // target). Token-equal spellings (`defs:authRefresh`, `defs:auth-refresh`)
+    // must still admit `auth_refresh`. Distinct from hybrid ranking: this
+    // is the defs lane, which never reaches identifier_match if exact
+    // lookup returns nothing.
+    let (_temp, searcher) = indexed_corpus();
+    for query in ["defs:authRefresh", "defs:auth-refresh"] {
+        let response = searcher.search(query).expect("defs");
+        require_first(
+            query,
+            &response.hits,
+            "auth.rs",
+            "auth_refresh",
+            "defs: camel/kebab spelling must admit the snake_case definition first.",
+        );
+    }
+}
+
+#[test]
+fn callers_camel_and_kebab_find_snake_callee() {
+    // INTENT: `callers:` uses the same exact-name lookup as `defs:`.
+    // Token-equal spellings must admit call sites of `auth_refresh`.
+    let (_temp, searcher) = indexed_corpus();
+    for query in ["callers:authRefresh", "callers:auth-refresh"] {
+        let response = searcher.search(query).expect("callers");
+        let found = response.hits.iter().any(|hit| {
+            hit.kind == ast_sgrep_core::HitKind::Caller
+                && (hit.callee.as_deref() == Some("auth_refresh")
+                    || hit.symbol.as_deref() == Some("auth_refresh"))
+        });
+        assert!(
+            found,
+            "callers: camel/kebab spelling must admit auth_refresh call sites; hits:\\n{}",
+            autopsy(&response.hits)
+        );
+    }
+}
+
+#[test]
+fn word_camel_and_kebab_still_admit_snake_definition() {
+    // INTENT: the word/literal lane merges `defs:{identifier_spelling}` so an
+    // identifier needle still finds the declaration. Default search is
+    // case-sensitive, so a retain of `symbol == spelling` drops the snake
+    // def that alias lookup just admitted (`authRefresh` ≠ `auth_refresh`).
+    // Distinct from `defs:`: this is the post-lookup membership cut.
+    let (_temp, searcher) = indexed_corpus();
+    for query in ["word:authRefresh", "word:auth-refresh"] {
+        let response = searcher.search(query).expect("word");
+        require_first(
+            query,
+            &response.hits,
+            "auth.rs",
+            "auth_refresh",
+            "word: camel/kebab spelling must still admit the snake_case definition first.",
+        );
+    }
+    // Case-only fold must still be cut: `searcher` is not `Searcher`.
+    let typed = searcher.search("word:Searcher").expect("word Searcher");
+    require_first(
+        "word:Searcher",
+        &typed.hits,
+        "search.rs",
+        "Searcher",
+        "word:Searcher must keep the typed name; admitting `searcher` widens case-sensitive membership.",
+    );
+}
+
+#[test]
+fn conjunction_defs_and_callers_legs_admit_camel_alias() {
+    // INTENT: each conjunction leg dispatches through channel_hits into
+    // search_defs/search_callers. Alias expansion lives inside those fns; if
+    // a leg reintroduced exact-spelling lookup, its side would return empty
+    // and the file-scope intersection would vanish. Distinct from direct
+    // `defs:`/`callers:`: this is the conjunction dispatch path.
+    let (_temp, searcher) = indexed_corpus();
+    for query in [
+        "defs:authRefresh AND literal:fetch_token",
+        "callers:authRefresh AND literal:fetch_token",
+    ] {
+        let response = searcher.search(query).expect("conjunction");
+        let found = response.hits.iter().any(|hit| {
+            hit.file.replace('\\', "/").ends_with("auth.rs")
+                && (hit.symbol.as_deref() == Some("auth_refresh")
+                    || hit.callee.as_deref() == Some("auth_refresh"))
+        });
+        assert!(
+            found,
+            "conjunction leg must admit the snake_case alias; query={query:?} hits:\n{}",
+            autopsy(&response.hits)
+        );
+    }
+}
+
+#[test]
+fn file_stem_boost_treats_camel_and_kebab_like_snake() {
+    // INTENT: the owning-module boost keys on the file stem. Spelling-literal
+    // comparison boosts `auth_refresh` in `auth_refresh.rs` but not
+    // token-equal `authRefresh` / `auth-refresh`, so the same identifier
+    // ranks a different file first depending on how it was typed. The critic
+    // runs on the hybrid lane (direct `defs:` never reaches it: the def-row
+    // score affinity already matches fragment substrings there). Distinct
+    // from identifier_match (already token-equal): this is file_stem_eq.
+    let temp = TempDir::new().unwrap();
+    write_src(
+        temp.path(),
+        "src/a_impl.rs",
+        "pub fn auth_refresh() { let _ = 1; }\n",
+    );
+    write_src(
+        temp.path(),
+        "src/auth_refresh.rs",
+        "pub fn auth_refresh() { let _ = 2; }\n",
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let searcher = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 12,
+        ..SearchOptions::default()
+    })
+    .expect("searcher");
+    for query in ["auth_refresh", "authRefresh", "auth-refresh"] {
+        let response = searcher.search(query).expect("search");
+        require_first(
+            query,
+            &response.hits,
+            "auth_refresh.rs",
+            "auth_refresh",
+            "the owning module must win for every token-equal spelling of the identifier.",
+        );
+    }
+}
+
+#[test]
 fn hybrid_nl_ranks_implementation_above_tests() {
     let (_temp, searcher) = indexed_corpus();
     let query = "how does hybrid search work";
@@ -1245,6 +1407,152 @@ pub fn flush_pending_alerts() { let _ = 1; }
     );
 }
 
+#[test]
+fn structural_embed_rescue_promotes_when_page_is_all_defs() {
+    // INTENT: name-only Def decoys parrot via snake_case (`merge_pending_*`)
+    // with excerpt coverage 0, so rescue must count identifier tokens; the
+    // page is all Defs, so steal_head must still take a clamp slot. MCP
+    // truncate(4) otherwise drops the synonym. Distinct from the comment-decoy
+    // on-page pin.
+    let temp = TempDir::new().unwrap();
+    for i in 0..6 {
+        write_src(
+            temp.path(),
+            &format!("src/decoy_{i}.rs"),
+            &format!("pub fn merge_pending_notifications_{i}() {{ let _ = 1; }}\n"),
+        );
+    }
+    write_src(
+        temp.path(),
+        "src/z_notify.rs",
+        r#"
+/// Coalesce a burst of queued file-change alerts and deliver a single
+/// notification to subscribers so watchers are not flooded by duplicates.
+pub fn flush_pending_alerts() { let _ = 1; }
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let wide = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 16,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("wide searcher");
+    let wide_hits = wide
+        .search("merge pending filesystem notifications => one callback")
+        .expect("wide search");
+    let gold = wide_hits
+        .hits
+        .iter()
+        .find(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts"));
+    let Some(gold) = gold else {
+        panic!(
+            "precondition: synonym must already be on the wide page; hits:\n{}",
+            autopsy(&wide_hits.hits)
+        );
+    };
+    assert!(
+        wide_hits
+            .hits
+            .iter()
+            .all(|hit| hit.kind == ast_sgrep_core::HitKind::Def),
+        "precondition: page is all Defs (no Asgrep comment rows to steal); hits:\n{}",
+        autopsy(&wide_hits.hits)
+    );
+    let clamped = &wide_hits.hits[..wide_hits.hits.len().min(4)];
+    assert!(
+        clamped
+            .iter()
+            .any(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts")),
+        "all-Def page must still promote the synonym into the clamp window; gold kind={:?} contributors={:?}; hits:\n{}",
+        gold.kind,
+        gold.contributors,
+        autopsy(&wide_hits.hits)
+    );
+}
+
+#[test]
+fn structural_embed_rescue_promotes_when_decoys_are_camel_case() {
+    // INTENT: camelCase Def names (`mergePendingNotifications`) do not
+    // contain `_`, so replace('_',' ') leaves excerpt-style coverage 0.
+    // Rescue must use the same camel split as identifier_tokens or the
+    // synonym stays at the tail of an all-Def page and MCP truncate(4)
+    // drops it. Distinct from the snake_case all-Def pin.
+    let temp = TempDir::new().unwrap();
+    for i in 0..6 {
+        write_src(
+            temp.path(),
+            &format!("src/decoy_{i}.rs"),
+            "pub fn mergePendingNotifications() { let _ = 1; }\n",
+        );
+    }
+    write_src(
+        temp.path(),
+        "src/z_notify.rs",
+        r#"
+/// Coalesce a burst of queued file-change alerts and deliver a single
+/// notification to subscribers so watchers are not flooded by duplicates.
+pub fn flush_pending_alerts() { let _ = 1; }
+"#,
+    );
+    ast_sgrep_core::Indexer::new(IndexOptions {
+        root: temp.path().to_path_buf(),
+        force_reindex: true,
+        embed_semantic: true,
+        ..IndexOptions::default()
+    })
+    .expect("indexer")
+    .index_all()
+    .expect("index");
+    let wide = Searcher::new(SearchOptions {
+        root: temp.path().to_path_buf(),
+        limit: 16,
+        use_embed: true,
+        ..SearchOptions::default()
+    })
+    .expect("wide searcher");
+    let wide_hits = wide
+        .search("merge pending filesystem notifications => one callback")
+        .expect("wide search");
+    let gold = wide_hits
+        .hits
+        .iter()
+        .find(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts"));
+    let Some(gold) = gold else {
+        panic!(
+            "precondition: synonym must already be on the wide page; hits:\n{}",
+            autopsy(&wide_hits.hits)
+        );
+    };
+    assert!(
+        wide_hits
+            .hits
+            .iter()
+            .all(|hit| hit.kind == ast_sgrep_core::HitKind::Def),
+        "precondition: page is all Defs; hits:\n{}",
+        autopsy(&wide_hits.hits)
+    );
+    let clamped = &wide_hits.hits[..wide_hits.hits.len().min(4)];
+    assert!(
+        clamped
+            .iter()
+            .any(|hit| hit.symbol.as_deref() == Some("flush_pending_alerts")),
+        "camelCase name-parrots must still promote the synonym into the clamp window; gold kind={:?} contributors={:?}; hits:\n{}",
+        gold.kind,
+        gold.contributors,
+        autopsy(&wide_hits.hits)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Verb-alias discovery: NL verbs (check/parse/register) whose literal form
 // names no indexed symbol must still reach the code-verb surface
@@ -1363,19 +1671,16 @@ fn assert_top_def_symbol(searcher: &Searcher, query: &str, want: &str) {
 #[test]
 fn verb_alias_queries_reach_code_verb_symbols() {
     let (_keep, searcher) = verb_alias_corpus();
-    // check -> matched
     assert_top_def_symbol(
         &searcher,
         "where does the app check a file against the type filter",
         "matched",
     );
-    // parse -> loads
     assert_top_def_symbol(
         &searcher,
         "where does the app parse json request bodies",
         "loads",
     );
-    // register -> add_url_rule
     assert_top_def_symbol(
         &searcher,
         "where does the app register url routes",

@@ -197,6 +197,31 @@ fn plan_runner_resolves_step_refs() {
 }
 
 #[test]
+fn plan_runner_double_dollar_escapes_to_literal() {
+    let (_tmp, mut session) = indexed_session();
+    // `$$seed` must arrive at the tool as the literal string `$seed`, not
+    // resolve against the `seed` step output (previously: `unknown step ref`).
+    let plan = parse_plan(&json!({
+        "steps": [
+            {"id": "seed", "tool": "search", "args": {"query": "auth", "format": "capsule", "limit": 5}},
+            {"id": "lit", "tool": "search", "args": {"query": "$$seed", "format": "capsule", "limit": 5}},
+        ],
+        "return": "$lit"
+    }))
+    .expect("parse");
+    let result = run_plan(&mut session, &plan).expect("run");
+    assert!(result.ok);
+    assert_eq!(
+        result
+            .return_value
+            .get("query")
+            .and_then(|q| q.as_str()),
+        Some("$seed"),
+        "double-dollar must collapse to one literal `$` with no ref resolution"
+    );
+}
+
+#[test]
 fn example_plan_is_valid_json_shape() {
     let plan = parse_plan(&example_plan()).expect("example plan parses");
     assert_eq!(plan.steps.len(), 4);

@@ -3,8 +3,9 @@
 //! stays in `index`.
 
 use crate::gitignore::{should_skip_dir, should_skip_file};
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+pub use crate::paths::canonicalize_affected_path;
 
 /// Normalize a watcher path against a canonicalized index root.
 pub(crate) fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<PathBuf> {
@@ -16,42 +17,6 @@ pub(crate) fn normalize_watch_path(root: &Path, input_path: &Path) -> Option<Pat
     canonicalize_affected_path(&candidate)
         .ok()
         .filter(|canonical| canonical.starts_with(root))
-}
-
-/// Resolve the nearest existing ancestor without following the final path
-/// component. This confines intermediate symlinks while preserving the indexed
-/// key for a newly created or deleted file.
-pub fn canonicalize_affected_path(path: &Path) -> std::io::Result<PathBuf> {
-    let Some(name) = path.file_name() else {
-        return path.canonicalize();
-    };
-    let mut existing = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let mut suffix = vec![name.to_os_string()];
-    loop {
-        match existing.canonicalize() {
-            Ok(mut canonical) => {
-                for component in suffix.iter().rev() {
-                    canonical.push(component);
-                }
-                return Ok(canonical);
-            }
-            Err(error)
-                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) =>
-            {
-                let Some(name) = existing.file_name().map(ToOwned::to_owned) else {
-                    return Err(error);
-                };
-                suffix.push(name);
-                if !existing.pop() {
-                    return Err(error);
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
 }
 
 /// Guard predicate for watch updates: skip-dir components, skip-file policy, gitignore.

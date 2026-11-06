@@ -38,7 +38,6 @@ fn use_cache_without_home_fails_closed() {
         msg.contains("HOME") || msg.contains("XDG_CACHE_HOME") || msg.contains("/tmp"),
         "expected fail-closed message, got {msg}"
     );
-    // restore
     match old_home {
         Some(v) => std::env::set_var("HOME", v),
         None => std::env::remove_var("HOME"),

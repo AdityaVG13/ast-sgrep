@@ -14,8 +14,6 @@ use memmap2::MmapOptions;
 use std::fs::File;
 use std::io;
 
-/// Map an open file read-only.
-///
 /// # Safety boundary
 ///
 /// `memmap2` requires `unsafe` because the OS may change mapped bytes if

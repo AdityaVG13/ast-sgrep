@@ -23,7 +23,7 @@
 use ast_sgrep_codemode::{
     batch::{bound_error, validate_batch},
     session::encoded_len,
-    CodeModeSession, SessionConfig, MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_VALUE_BYTES,
+    CodeModeSession, SessionConfig, ToolName, MAX_BATCH_RESPONSE_BYTES, MAX_BATCH_VALUE_BYTES,
 };
 use napi::bindgen_prelude::*;
 use napi::{JsValue, ScopedTask, Task};
@@ -31,7 +31,7 @@ use napi_derive::napi;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -39,20 +39,33 @@ fn map_err(err: impl std::fmt::Display) -> Error {
     Error::from_reason(err.to_string())
 }
 
-/// Bounded metadata and symbol lookups that may run on the JS thread. Search
-/// and other potentially expensive tools stay on libuv's worker pool.
+/// Sync `call_now` admission: exactly the bounded metadata and symbol lookups.
+/// Membership keys on stable `ToolName` variants while every spelling comes
+/// from codemode's `TOOL_RECORDS` table (`parse`/`as_str`), so a catalog
+/// rename flows without a lockstep edit here; a newly added tool defaults to
+/// the worker pool (fail-closed for the JS thread) until deliberately listed.
+/// The gate stays literal-canonical on purpose — aliases of fast tools still
+/// route to `call()` (pinned by `ffi_call_now::fast_slow_partition_is_exact`).
+/// Search and other potentially expensive tools stay on libuv's worker pool.
 fn is_fast_lookup(tool: &str) -> bool {
-    matches!(
-        tool,
-        "defs"
-            | "callers"
-            | "imports"
-            | "index_status"
-            | "catalog_search"
-            | "catalog_describe"
-            | "find"
-            | "read"
-    )
+    ToolName::parse(tool).is_some_and(|name| {
+        matches!(
+            name,
+            ToolName::Find
+                | ToolName::Read
+                | ToolName::Defs
+                | ToolName::Callers
+                | ToolName::Imports
+                | ToolName::IndexStatus
+                | ToolName::CatalogSearch
+                | ToolName::CatalogDescribe
+        ) && name.as_str() == tool
+    })
+}
+
+/// Missing-args convention, single source (was one `unwrap_or` per call site).
+fn default_args() -> Value {
+    Value::Object(Default::default())
 }
 
 #[napi(object)]
@@ -108,10 +121,13 @@ pub struct JsBatchResponse {
 }
 
 /// Warm in-process Code Mode session (one Searcher, reused across calls).
+///
+/// The executed-call total is served from the session itself
+/// (`CodeModeSession::call_count`); no mirrored counter is kept here, so a
+/// future tool path cannot leave a copy stale.
 #[napi]
 pub struct Session {
     inner: Arc<Mutex<CodeModeSession>>,
-    call_count: Arc<AtomicU32>,
     root: String,
 }
 
@@ -121,42 +137,19 @@ fn cancelled_error() -> Error {
 
 struct SessionCancelGuard<'a> {
     session: &'a mut CodeModeSession,
-    call_count: &'a AtomicU32,
 }
 
 impl<'a> SessionCancelGuard<'a> {
-    fn arm(
-        session: &'a mut CodeModeSession,
-        cancel: &Arc<AtomicBool>,
-        call_count: &'a AtomicU32,
-    ) -> Self {
+    fn arm(session: &'a mut CodeModeSession, cancel: &Arc<AtomicBool>) -> Self {
         session.set_cancel(Some(Arc::clone(cancel)));
-        Self {
-            session,
-            call_count,
-        }
-    }
-
-    fn session(&mut self) -> &mut CodeModeSession {
-        self.session
+        Self { session }
     }
 }
 
 impl Drop for SessionCancelGuard<'_> {
     fn drop(&mut self) {
         self.session.set_cancel(None);
-        // Publish even when a cancelled batch or result-budget error returns
-        // early, while the session lock still protects the executed prefix.
-        publish_call_count(self.session, self.call_count);
     }
-}
-
-fn publish_call_count(session: &CodeModeSession, call_count: &AtomicU32) {
-    // Saturate at u32::MAX; the session cap makes wrap unreachable.
-    call_count.store(
-        session.call_count().min(u32::MAX as usize) as u32,
-        Ordering::Relaxed,
-    );
 }
 
 fn watch_cancel(
@@ -183,6 +176,10 @@ fn watch_cancel(
 
 /// Abortable mutex acquire. A blocking `lock()` would keep cancelled waiters
 /// parked on a pooled session after Code Mode's soft wall fires.
+/// Poison policy for the session mutex (applies to every lock site in this
+/// module): a poisoned lock is recovered via `into_inner()`, never wedged. A
+/// task that panics while holding the session must not permanently brick the
+/// JS host, so lock sites read through the poison and keep serving.
 fn lock_session<'a>(
     inner: &'a Mutex<CodeModeSession>,
     cancelled: &AtomicBool,
@@ -201,16 +198,33 @@ fn lock_session<'a>(
             Err(TryLockError::WouldBlock) => {
                 std::thread::sleep(Duration::from_millis(2));
             }
-            Err(TryLockError::Poisoned(_)) => {
-                return Err(Error::from_reason("session lock poisoned"));
+            // Poison policy above: recover the session instead of wedging.
+            Err(TryLockError::Poisoned(err)) => {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(cancelled_error());
+                }
+                return Ok(err.into_inner());
             }
         }
     }
 }
 
+/// Non-blocking acquire for [`Session::call_now`]. The JS thread must never
+/// park on a worker-pool task's session hold, so contention reports
+/// "session is busy" and the host falls back to `call`. Poison recovers per
+/// the policy above (a poisoned session is never misreported as busy).
+fn try_lock_session<'a>(
+    inner: &'a Mutex<CodeModeSession>,
+) -> Result<MutexGuard<'a, CodeModeSession>> {
+    match inner.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(TryLockError::Poisoned(err)) => Ok(err.into_inner()),
+        Err(TryLockError::WouldBlock) => Err(Error::from_reason("session is busy")),
+    }
+}
+
 pub struct SessionCallTask {
     inner: Arc<Mutex<CodeModeSession>>,
-    call_count: Arc<AtomicU32>,
     tool: String,
     args: Value,
     cancelled: Arc<AtomicBool>,
@@ -223,9 +237,9 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         let mut locked = lock_session(&self.inner, &self.cancelled)?;
-        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled, &self.call_count);
+        let session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
         let result = session
-            .session()
+            .session
             .call(&self.tool, std::mem::take(&mut self.args));
         result.map_err(map_err)
     }
@@ -237,7 +251,6 @@ impl<'task> ScopedTask<'task> for SessionCallTask {
 
 pub struct SessionBatchTask {
     inner: Arc<Mutex<CodeModeSession>>,
-    call_count: Arc<AtomicU32>,
     calls: Vec<JsBatchCall>,
     cancelled: Arc<AtomicBool>,
 }
@@ -250,18 +263,15 @@ impl Task for SessionBatchTask {
     fn compute(&mut self) -> Result<Self::Output> {
         let started = Instant::now();
         let mut locked = lock_session(&self.inner, &self.cancelled)?;
-        let mut session = SessionCancelGuard::arm(&mut locked, &self.cancelled, &self.call_count);
+        let session = SessionCancelGuard::arm(&mut locked, &self.cancelled);
         let mut all_ok = true;
         let mut results = Vec::with_capacity(self.calls.len());
-        let mut response_bytes = MAX_BATCH_RESPONSE_BYTES - MAX_BATCH_VALUE_BYTES;
+        let mut response_bytes = BATCH_ENVELOPE_RESERVE_BYTES;
         for call in std::mem::take(&mut self.calls) {
             if self.cancelled.load(Ordering::Acquire) {
                 return Err(cancelled_error());
             }
-            let result = match session.session().call(
-                &call.tool,
-                call.args.unwrap_or(Value::Object(Default::default())),
-            ) {
+            let result = match session.session.call(&call.tool, call.args.unwrap_or(default_args())) {
                 Ok(value) => JsBatchCallResult {
                     id: call.id,
                     ok: true,
@@ -282,7 +292,7 @@ impl Task for SessionBatchTask {
         Ok(JsBatchResponse {
             all_ok,
             results,
-            call_count: session.session().call_count().min(u32::MAX as usize) as u32,
+            call_count: session.session.call_count().min(u32::MAX as usize) as u32,
             wall_ms: started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32,
             mode: "serial-napi".to_string(),
         })
@@ -293,12 +303,27 @@ impl Task for SessionBatchTask {
     }
 }
 
-fn enforce_result_budget(
+/// Batch envelope reserve, derived exactly as codemode defines it (`batch.rs`:
+/// `MAX_BATCH_VALUE_BYTES = MAX_BATCH_RESPONSE_BYTES -
+/// BATCH_ENVELOPE_RESERVE_BYTES`). Retunes of either constant flow here with
+/// no lockstep edit; never re-derive the subtraction inline.
+const BATCH_ENVELOPE_RESERVE_BYTES: usize = MAX_BATCH_RESPONSE_BYTES - MAX_BATCH_VALUE_BYTES;
+
+/// One per-result budget step of the napi batch wave. Public so the bilateral
+/// budget suite can pin parity with codemode's `enforce_batch_response_budget`
+/// without a live libuv task. See `tests/codemode/ffi_batch_budget.rs`.
+pub fn enforce_result_budget(
     mut result: JsBatchCallResult,
     response_bytes: &mut usize,
 ) -> Result<JsBatchCallResult> {
     let bytes = encoded_len(&result).map_err(map_err)?;
-    if response_bytes.saturating_add(bytes) <= MAX_BATCH_VALUE_BYTES {
+    // Same acceptance rule as codemode `enforce_batch_response_budget`
+    // (`batch.rs`): one spare byte per result for the envelope separator.
+    if response_bytes
+        .saturating_add(bytes)
+        .saturating_add(1)
+        <= MAX_BATCH_VALUE_BYTES
+    {
         *response_bytes += bytes;
         return Ok(result);
     }
@@ -307,7 +332,9 @@ fn enforce_result_budget(
     result.error = Some(format!(
         "codemode batch response exceeds {MAX_BATCH_RESPONSE_BYTES} bytes"
     ));
-    *response_bytes = response_bytes.saturating_add(encoded_len(&result).map_err(map_err)?);
+    *response_bytes = response_bytes
+        .saturating_add(encoded_len(&result).map_err(map_err)?)
+        .saturating_add(1);
     Ok(result)
 }
 
@@ -322,7 +349,6 @@ impl Session {
         session.max_calls = 10_000;
         Ok(Self {
             inner: Arc::new(Mutex::new(session)),
-            call_count: Arc::new(AtomicU32::new(0)),
             root,
         })
     }
@@ -340,9 +366,8 @@ impl Session {
         Ok(AsyncTask::with_optional_signal(
             SessionCallTask {
                 inner: Arc::clone(&self.inner),
-                call_count: Arc::clone(&self.call_count),
                 tool,
-                args: args.unwrap_or(Value::Object(Default::default())),
+                args: args.unwrap_or(default_args()),
                 cancelled,
             },
             signal,
@@ -357,19 +382,15 @@ impl Session {
     /// session so the JS host can fall back to `call`.
     #[napi]
     pub fn call_now(&self, tool: String, args: Option<Value>) -> Result<Value> {
-        let args = args.unwrap_or(Value::Object(Default::default()));
-        if tool == "search" {
-            let mut session = self
-                .inner
-                .try_lock()
-                .map_err(|_| Error::from_reason("session is busy"))?;
+        let args = args.unwrap_or(default_args());
+        if tool == ToolName::Search.as_str() {
+            let mut session = try_lock_session(&self.inner)?;
             let Some(value) = session.take_cached_search(&args).map_err(map_err)? else {
                 // Unique search stays on `call()` / libuv. Return null so the
                 // JS host can fall through without throwing (V8 exception tax
                 // on every unique Pi search).
                 return Ok(Value::Null);
             };
-            publish_call_count(&session, &self.call_count);
             return Ok(value);
         }
         if !is_fast_lookup(&tool) {
@@ -377,12 +398,8 @@ impl Session {
                 "callNow is only for bounded metadata/symbol lookups; use call() for search/index/semantic/chain",
             ));
         }
-        let mut session = self
-            .inner
-            .try_lock()
-            .map_err(|_| Error::from_reason("session is busy"))?;
+        let mut session = try_lock_session(&self.inner)?;
         let result = session.call(&tool, args);
-        publish_call_count(&session, &self.call_count);
         result.map_err(map_err)
     }
 
@@ -404,7 +421,6 @@ impl Session {
         Ok(AsyncTask::with_optional_signal(
             SessionBatchTask {
                 inner: Arc::clone(&self.inner),
-                call_count: Arc::clone(&self.call_count),
                 calls,
                 cancelled,
             },
@@ -412,13 +428,17 @@ impl Session {
         ))
     }
 
-    /// How many tool calls this session has executed.
+    /// How many tool calls this session has executed, served from the
+    /// session itself (single source of truth; saturates at u32::MAX).
     #[napi(getter)]
     pub fn call_count(&self) -> u32 {
-        self.call_count.load(Ordering::Relaxed)
+        // Poison policy stated on `lock_session`: this getter is infallible,
+        // so it recovers the count through the poison instead of wedging
+        // (previously it silently reported 0).
+        let session = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        session.call_count().min(u32::MAX as usize) as u32
     }
 
-    /// Project root for this session.
     #[napi(getter)]
     pub fn root(&self) -> String {
         self.root.clone()

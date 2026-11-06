@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::{
-    canonicalize_affected_path, expand_incremental_path_list, IndexOptions, IndexStore, Indexer,
+    expand_incremental_path_list, IndexOptions, IndexStore, Indexer,
     Language, SearchOptions, Searcher, MAX_EXCERPT_LINES, MAX_INCREMENTAL_PATHS,
 };
 use ast_sgrep_plugins::{
@@ -12,14 +12,21 @@ use ast_sgrep_plugins::{
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use crate::jail::{JailKind, JailResolve, jail_join};
 use crate::tools::{call_tool, CallError};
 
 /// Maximum encoded value returned by one Code Mode tool call.
 pub const MAX_CALL_RESPONSE_BYTES: usize = ast_sgrep_core::MAX_STDIN_LINE_BYTES;
+
+/// Maximum hits a Code Mode tool call may request. Pinned by the clamp edges
+/// in `tests/codemode/ffi_surface.rs` (0/1/500/600) — behavior unchanged, do
+/// not raise without updating that pin. (Core `MAX_OUTPUT_RESULTS` is 1000;
+/// the session ceiling stays 500 by contract.)
+pub(crate) const MAX_SESSION_LIMIT: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -33,6 +40,9 @@ pub struct SessionConfig {
     /// updates inline, so sessions answer on current disk without any
     /// explicit index call. Hosts that drive freshness themselves opt out.
     pub ambient_freshness: bool,
+    /// Minimum interval between ambient freshness probes. Tests set zero to
+    /// exercise the probe path without wall-clock sleeps.
+    pub ambient_cooldown: std::time::Duration,
 }
 
 impl Default for SessionConfig {
@@ -52,6 +62,7 @@ impl Default for SessionConfig {
             default_format: OutputFormat::AgentCapsule,
             ambient_freshness: std::env::var("ASGREP_NO_AMBIENT_FRESHNESS").ok().as_deref()
                 != Some("1"),
+            ambient_cooldown: std::time::Duration::from_secs(1),
         }
     }
 }
@@ -147,12 +158,26 @@ fn resolve_session_index_path(root: &Path, path: PathBuf) -> PathBuf {
 }
 
 /// Order-independent stat fingerprint over the indexer's candidate set.
-/// Mirrors `collect_index_candidates` exactly (same dir skips, same ignore
-/// matcher, same file filter) so a missing file cannot hide from the probe.
+/// Must stay in lockstep with `Indexer::collect_index_candidates` (same dir
+/// skips, same ignore gating, same file filter) and with
+/// `IndexStore::file_stat_fingerprint` (same path + mtime fold) so a missing
+/// file cannot hide from the probe.
 /// Returns `None` when any stat is unreadable — the caller then runs the
 /// writer instead of treating the tree as unchanged.
+///
+/// Contract: the ambient writer always indexes with
+/// `IndexOptions::default()`, so the probe derives `respect_gitignore` from
+/// that same default instead of hardcoding ignore behavior. The candidate
+/// predicate (`index_candidate_admitted`) and the fold
+/// (`fold_file_stat_identity`) are owned by core and called by both the
+/// indexer and this probe. Directory pruning stays walk-local: core's
+/// predicate covers file-level admission only (`filter_entry` pruning and
+/// the non-UTF8 `rel` rejection need walk state the predicate does not
+/// take).
 fn ambient_tree_fingerprint(root: &Path) -> Option<u64> {
-    use ast_sgrep_core::gitignore::{should_skip_dir, should_skip_file, IgnoreMatcher};
+    use ast_sgrep_core::gitignore::{should_skip_dir, IgnoreMatcher};
+    // Same flag the ambient writer uses; see `ambient_refresh`.
+    let respect_gitignore = IndexOptions::default().respect_gitignore;
     let ignore = IgnoreMatcher::new(root);
     let mut fp: u64 = 0;
     for entry in walkdir::WalkDir::new(root)
@@ -162,7 +187,7 @@ fn ambient_tree_fingerprint(root: &Path) -> Option<u64> {
             if should_skip_dir(e.path()) {
                 return false;
             }
-            if e.file_type().is_dir() {
+            if respect_gitignore && e.file_type().is_dir() {
                 if let Ok(rel) = e.path().strip_prefix(root) {
                     if !rel.as_os_str().is_empty() && ignore.is_dir_ignored(rel) {
                         return false;
@@ -179,7 +204,7 @@ fn ambient_tree_fingerprint(root: &Path) -> Option<u64> {
         let Ok(rel) = entry.path().strip_prefix(root) else {
             continue;
         };
-        if ignore.is_ignored(rel) || should_skip_file(entry.path()) {
+        if !ast_sgrep_core::index_candidate_admitted(respect_gitignore, &ignore, rel, entry.path()) {
             continue;
         }
         let Ok(rel_str) = ast_sgrep_core::indexed_rel_path(rel) else {
@@ -191,13 +216,12 @@ fn ambient_tree_fingerprint(root: &Path) -> Option<u64> {
             .ok()?
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?;
-        // Must match IndexStore::file_stat_fingerprint (path + mtime parts).
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in rel_str.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        fp ^= h ^ (modified.as_secs()) ^ (u64::from(modified.subsec_nanos()).rotate_left(17));
+        ast_sgrep_core::fold_file_stat_identity(
+            &mut fp,
+            &rel_str,
+            modified.as_secs() as i64,
+            modified.subsec_nanos(),
+        );
     }
     Some(fp)
 }
@@ -240,6 +264,10 @@ impl CodeModeSession {
         &self.config
     }
 
+    pub fn config_mut(&mut self) -> &mut SessionConfig {
+        &mut self.config
+    }
+
     pub fn call_count(&self) -> usize {
         self.calls
     }
@@ -279,32 +307,38 @@ impl CodeModeSession {
         }
     }
 
-    fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
-        let configured = self.config.root.canonicalize().with_context(|| {
-            format!(
-                "cannot resolve session root: {}",
-                self.config.root.display()
-            )
-        })?;
+    pub(crate) fn root_arg(&self, args: &Value) -> anyhow::Result<PathBuf> {
         let Some(raw) = args.get("root").and_then(|v| v.as_str()) else {
-            return Ok(configured);
+            return self.config.root.canonicalize().with_context(|| {
+                format!(
+                    "cannot resolve session root: {}",
+                    self.config.root.display()
+                )
+            });
         };
-        let requested = Path::new(raw);
-        let candidate = if requested.is_absolute() {
-            requested.to_path_buf()
-        } else {
-            configured.join(requested)
-        };
-        let candidate = candidate
-            .canonicalize()
-            .with_context(|| format!("cannot resolve requested root: {}", candidate.display()))?;
-        if !candidate.starts_with(&configured) {
-            return Err(anyhow!(
-                "requested root is outside the configured session root: {}",
-                candidate.display()
-            ));
+        // Per-call root overrides resolve through the jail: `..` rejects even
+        // when it would resolve back inside, the workspace root canonicalizes
+        // so a symlinked root cannot widen containment, and every refusal
+        // keeps this function's legacy message.
+        match jail_join(&self.config.root, raw, JailResolve::Strict) {
+            Ok(root) => Ok(root),
+            Err(err) => Err(match err.kind {
+                JailKind::Traversal | JailKind::Outside => anyhow!(
+                    "requested root is outside the configured session root: {}",
+                    err.candidate.display()
+                ),
+                JailKind::UnresolvableRoot => anyhow!(
+                    "cannot resolve session root: {}",
+                    self.config.root.display()
+                ),
+                JailKind::Unresolvable => {
+                    let candidate = err.candidate.display().to_string();
+                    err.into_anyhow(format!("cannot resolve requested root: {candidate}"))
+                }
+                // No legacy arm: the old code never checked UTF-8 (fail closed).
+                JailKind::NonUtf8 => anyhow!(err.to_string()),
+            }),
         }
-        Ok(candidate)
     }
 
     fn resolve_format(&self, args: &Value) -> OutputFormat {
@@ -313,10 +347,6 @@ impl CodeModeSession {
             Some("capsule") | Some("agent-capsule") => OutputFormat::AgentCapsule,
             _ => self.config.default_format,
         }
-    }
-
-    pub(crate) fn jail_root(&self, args: &Value) -> anyhow::Result<PathBuf> {
-        self.root_arg(args)
     }
 
     pub(crate) fn with_searcher<F, T>(
@@ -343,7 +373,7 @@ impl CodeModeSession {
         lang_filter: Option<&str>,
         writer_generation: Option<u64>,
     ) -> anyhow::Result<std::sync::MutexGuard<'_, Option<CachedSearcher>>> {
-        let needed = needed_limit.clamp(1, 500);
+        let needed = needed_limit.clamp(1, MAX_SESSION_LIMIT);
         let writer_generation = writer_generation.unwrap_or_else(|| {
             ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref())
         });
@@ -368,7 +398,7 @@ impl CodeModeSession {
             }
             self.clear_render_cache();
             // Open at least as wide as config + this call so later smaller calls reuse.
-            let open_limit = needed.max(self.config.limit).clamp(1, 500);
+            let open_limit = needed.max(self.config.limit).clamp(1, MAX_SESSION_LIMIT);
             // Stamps stay off (capsules discard them). Response LRU stays on:
             // sticky Pi sessions repeat needles.
             let searcher = Searcher::new(SearchOptions {
@@ -396,8 +426,23 @@ impl CodeModeSession {
         }
         Ok(guard)
     }
+}
 
-    pub(crate) fn search(&mut self, args: &Value) -> anyhow::Result<Value> {
+/// Normalized search-render inputs shared by `search` and `peek_cached_search`.
+struct SearchRenderParts {
+    query: String,
+    lang_filter: Option<String>,
+    limit: usize,
+    semantic_only: bool,
+    excerpt_lines: usize,
+    format: OutputFormat,
+}
+
+impl CodeModeSession {
+    /// Six-step render normalization: query, scope, length, lang, limit, mode,
+    /// excerpt budget, format. Strict (`?`); `peek_cached_search` degrades to
+    /// `None` via `.ok()`.
+    fn search_render_parts(&self, args: &Value) -> anyhow::Result<SearchRenderParts> {
         let raw_query = args.get("query").and_then(|v| v.as_str()).context(
             "query is required. Call asgrep.search(\"text\") or asgrep.search({ query: \"text\" })",
         )?;
@@ -409,7 +454,7 @@ impl CodeModeSession {
             .and_then(|v| v.as_u64())
             .map(|n| n as usize)
             .unwrap_or(self.config.limit)
-            .clamp(1, 500);
+            .clamp(1, MAX_SESSION_LIMIT);
         let semantic_only = args
             .get("semantic_only")
             .and_then(|v| v.as_bool())
@@ -421,6 +466,26 @@ impl CodeModeSession {
             .unwrap_or(0)
             .min(MAX_EXCERPT_LINES);
         let format = self.resolve_format(args);
+        Ok(SearchRenderParts {
+            query,
+            lang_filter,
+            limit,
+            semantic_only,
+            excerpt_lines,
+            format,
+        })
+    }
+
+    pub(crate) fn search(&mut self, args: &Value) -> anyhow::Result<Value> {
+        let parts = self.search_render_parts(args)?;
+        let SearchRenderParts {
+            query,
+            lang_filter,
+            limit,
+            semantic_only,
+            excerpt_lines,
+            format,
+        } = parts;
         let root = self.root_arg(args)?;
         // Ambient freshness BEFORE any cache read: an update invalidates the
         // render cache too, so a maintenance notice never serves stale hits.
@@ -519,7 +584,7 @@ impl CodeModeSession {
             .and_then(|v| v.as_u64())
             .map(|n| n as usize)
             .unwrap_or(100)
-            .clamp(1, 500);
+            .clamp(1, MAX_SESSION_LIMIT);
         let top_n = args
             .get("top_n")
             .and_then(|v| v.as_u64())
@@ -595,27 +660,17 @@ impl CodeModeSession {
     /// Used by NAPI `callNow` so sticky repeats skip the libuv hop. Unique
     /// queries return `None` and must use `call()`.
     pub fn peek_cached_search(&self, args: &Value) -> Option<Value> {
-        let raw_query = args.get("query").and_then(|v| v.as_str())?;
-        let query = scoped_search_query(args, raw_query);
-        ast_sgrep_core::validate_query_len(&query).ok()?;
-        let lang_filter = optional_lang(args).ok()?;
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(self.config.limit)
-            .clamp(1, 500);
-        let semantic_only = args
-            .get("semantic_only")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let excerpt_lines = args
-            .get("excerpt_lines")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(0)
-            .min(MAX_EXCERPT_LINES);
-        let format = self.resolve_format(args);
+        // Lenient twin of `search`'s preamble: any normalization failure
+        // degrades to `None` via `.ok()`.
+        let parts = self.search_render_parts(args).ok()?;
+        let SearchRenderParts {
+            query,
+            lang_filter,
+            limit,
+            semantic_only,
+            excerpt_lines,
+            format,
+        } = parts;
         let root = self.root_arg(args).ok()?;
         let current =
             ast_sgrep_core::read_writer_generation(&root, self.config.index_path.as_deref());
@@ -672,12 +727,11 @@ impl CodeModeSession {
     /// fail-closed). Returns `{"files", "ms"}` when maintenance ran, else
     /// `None` (unchanged tree adds no field — responses stay byte-stable).
     fn ambient_refresh(&mut self, root: &Path) -> Option<Value> {
-        const AMBIENT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(1);
         if !self.config.ambient_freshness {
             return None;
         }
         if let Some(last) = self.last_ambient {
-            if last.elapsed() < AMBIENT_COOLDOWN {
+            if last.elapsed() < self.config.ambient_cooldown {
                 return None;
             }
         }
@@ -811,14 +865,12 @@ pub fn encoded_len(value: &impl serde::Serialize) -> Result<usize, serde_json::E
     Ok(writer.0)
 }
 
-pub(crate) fn encoded_json_len(value: &Value) -> Result<usize, serde_json::Error> {
-    encoded_len(value)
-}
-
 /// Admit the final wire value before publishing it or committing an edit.
+/// Conservative `json_size_bound` runs first; exact `encoded_len` only when
+/// that bound exceeds the session cap.
 pub(crate) fn admit_response(value: &Value) -> Result<(), CallError> {
     if json_size_bound(value) > MAX_CALL_RESPONSE_BYTES
-        && encoded_json_len(value)? > MAX_CALL_RESPONSE_BYTES
+        && encoded_len(value)? > MAX_CALL_RESPONSE_BYTES
     {
         return Err(CallError::Other(anyhow!(
             "codemode response exceeds {MAX_CALL_RESPONSE_BYTES} bytes"
@@ -828,7 +880,7 @@ pub(crate) fn admit_response(value: &Value) -> Result<(), CallError> {
 }
 
 /// Conservative JSON wire-size upper bound (every string byte as `\u00XX`).
-/// Exact `encoded_json_len` runs only when this bound exceeds the session cap.
+/// Exact `encoded_len` runs only when this bound exceeds the session cap.
 fn json_size_bound(value: &Value) -> usize {
     match value {
         Value::Null => 4,
@@ -956,26 +1008,34 @@ fn incremental_paths(args: &Value, root: &Path) -> anyhow::Result<Option<Vec<Pat
         if raw.is_empty() {
             return Err(anyhow!("index_repo paths entries must be non-empty"));
         }
-        let path = Path::new(raw);
-        if path
-            .components()
-            .any(|component| component == Component::ParentDir)
-        {
-            return Err(anyhow!("index_repo path traversal rejected: {raw}"));
-        }
-        let candidate = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
+        // Targeted reindex tolerates a missing leaf (new/deleted files keep
+        // working); `..` and containment still reject with this tool's
+        // legacy messages.
+        let canonical = match jail_join(&root, raw, JailResolve::LenientLeaf) {
+            Ok(path) => path,
+            Err(err) => {
+                return Err(match err.kind {
+                    JailKind::Traversal => {
+                        anyhow!("index_repo path traversal rejected: {raw}")
+                    }
+                    JailKind::UnresolvableRoot => {
+                        anyhow!("cannot resolve index root: {}", root.display())
+                    }
+                    JailKind::Unresolvable => {
+                        let candidate = err.candidate.display().to_string();
+                        err.into_anyhow(format!("cannot resolve index path: {candidate}"))
+                    }
+                    JailKind::Outside => anyhow!(
+                        "index_repo path is outside project root: {}",
+                        err.candidate.display()
+                    ),
+                    // No legacy arm: the old code never checked UTF-8 (fail closed).
+                    JailKind::NonUtf8 => {
+                        anyhow!("index_repo path is not valid UTF-8: {raw}")
+                    }
+                });
+            }
         };
-        let canonical = canonicalize_affected_path(&candidate)
-            .with_context(|| format!("cannot resolve index path: {}", candidate.display()))?;
-        if !canonical.starts_with(&root) {
-            return Err(anyhow!(
-                "index_repo path is outside project root: {}",
-                candidate.display()
-            ));
-        }
         if seen.insert(canonical.clone()) {
             paths.push(canonical);
         }
@@ -1020,4 +1080,50 @@ fn optional_lang(args: &Value) -> anyhow::Result<Option<String>> {
         ));
     };
     Ok(Some(language.as_str().to_string()))
+}
+
+#[cfg(test)]
+mod ambient_probe_tests {
+    use super::*;
+
+    /// The ambient probe and the store must agree on the candidate set when
+    /// ignore rules exclude files: gitignored entries are absent from both
+    /// fingerprints, so an unchanged tree never triggers a rewrite.
+    #[test]
+    fn probe_matches_store_on_gitignored_fixture() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join("kept.rs"), "pub fn kept() {}\n").expect("kept");
+        std::fs::write(dir.path().join("ignored.rs"), "pub fn ignored() {}\n")
+            .expect("ignored");
+        std::fs::create_dir(dir.path().join("ignored_dir")).expect("ignored dir");
+        std::fs::write(
+            dir.path().join("ignored_dir").join("deep.rs"),
+            "pub fn deep() {}\n",
+        )
+        .expect("deep");
+        std::fs::write(
+            dir.path().join(".gitignore"),
+            "ignored.rs\nignored_dir/\n",
+        )
+        .expect("gitignore");
+
+        let index_path = dir.path().join("probe.db");
+        let mut indexer = Indexer::new(IndexOptions {
+            root: dir.path().to_path_buf(),
+            index_path: Some(index_path.clone()),
+            embed_semantic: false,
+            ..IndexOptions::default()
+        })
+        .expect("indexer");
+        indexer.index_all().expect("index");
+
+        let store = IndexStore::open_readonly(dir.path(), Some(index_path.as_path()))
+            .expect("store");
+        let indexed = store.file_stat_fingerprint().expect("store fingerprint");
+        let disk = ambient_tree_fingerprint(dir.path()).expect("probe fingerprint");
+        assert_eq!(
+            disk, indexed,
+            "probe and store disagree on gitignored fixture"
+        );
+    }
 }

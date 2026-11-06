@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
-pub use budget::{DetailLevel, OutputBudget, RenderedHit};
+pub use budget::{Budget, DetailLevel, OutputBudget, RenderedHit};
 
 use ast_sgrep_core::{follow_ups_for_hit, hit_why, plan_suggested_next, HitKind, SearchResponse};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,11 +27,12 @@ impl OutputFormat {
     }
 }
 
-/// Snippet limits for compact agent output.
+/// Snippet limits for pure compact agent output.
 ///
-/// A token unit is one UTF-8 byte. This is a deterministic, model-independent
-/// upper bound for byte-fallback tokenizers rather than an estimate tied to one
-/// vendor vocabulary.
+/// Legacy half of [`Budget`] (F24): the per-result/response ceilings live on
+/// canonically. The byte=token unit contract is documented there; this keeps
+/// its field shape (and `Default` 96/768) so existing construction sites keep
+/// compiling. Convert with `Budget::from`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactBudget {
     pub per_result_tokens: usize,
@@ -47,22 +48,103 @@ impl Default for CompactBudget {
     }
 }
 
-pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde_json::Value {
-    format_response_with(response, format, 0)
+/// Options for the single format entry point (F24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatOptions {
+    /// Excerpt lines carried by the capsule arm; other arms ignore it.
+    pub excerpt_lines: usize,
+    /// Canonical budget; the pure compact arm uses the per-result/response
+    /// half, the budgeted overlay uses the max-tokens/detail half.
+    pub budget: Budget,
 }
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            excerpt_lines: 0,
+            budget: Budget::default(),
+        }
+    }
+}
+
+impl From<CompactBudget> for Budget {
+    /// Legacy compact half converts losslessly; the detail half takes
+    /// `OutputBudget::default()` (900/Block), matching what the budgeted
+    /// overlay always paired a bare compact budget with.
+    fn from(compact: CompactBudget) -> Self {
+        let detail = OutputBudget::default();
+        Self {
+            per_result_tokens: compact.per_result_tokens,
+            response_tokens: compact.response_tokens,
+            max_tokens: detail.max_tokens,
+            default_detail: detail.default_detail,
+        }
+    }
+}
+
+impl From<OutputBudget> for Budget {
+    /// Legacy detail half converts losslessly; the compact half takes
+    /// `CompactBudget::default()` (96/768), matching the base pass
+    /// `to_budgeted_compact_json` always rendered under.
+    fn from(detail: OutputBudget) -> Self {
+        let compact = CompactBudget::default();
+        Self {
+            per_result_tokens: compact.per_result_tokens,
+            response_tokens: compact.response_tokens,
+            max_tokens: detail.max_tokens,
+            default_detail: detail.default_detail,
+        }
+    }
+}
+
+/// Legacy shim (F24): delegates to [`format_response_with_options`].
+pub fn format_response(response: &SearchResponse, format: OutputFormat) -> serde_json::Value {
+    format_response_with_options(response, format, FormatOptions::default())
+}
+/// Legacy shim (F24): delegates to [`format_response_with_options`].
 pub fn format_response_with(
     response: &SearchResponse,
     format: OutputFormat,
     excerpt_lines: usize,
 ) -> serde_json::Value {
-    format_response_with_budget(response, format, excerpt_lines, CompactBudget::default())
+    format_response_with_options(
+        response,
+        format,
+        FormatOptions {
+            excerpt_lines,
+            ..FormatOptions::default()
+        },
+    )
 }
-
+/// Legacy shim (F24): delegates to [`format_response_with_options`].
+/// The compact arm stays the pure (byte-truncated) render, exactly as
+/// before — pass the budget to [`render_compact_budgeted`] for the overlay.
 pub fn format_response_with_budget(
     response: &SearchResponse,
     format: OutputFormat,
     excerpt_lines: usize,
     compact_budget: CompactBudget,
+) -> serde_json::Value {
+    format_response_with_options(
+        response,
+        format,
+        FormatOptions {
+            excerpt_lines,
+            budget: Budget::from(compact_budget),
+        },
+    )
+}
+
+/// Single format entry point (F24, kills N2).
+///
+/// The only dispatch over [`OutputFormat`] in this crate. `PreviewMode`
+/// branches in mcp (`render_compact_envelope`) and cli (`render_search_json`)
+/// must route here in the later pass instead of re-implementing the arm
+/// choice; see the external call-site note on [`render_compact`].
+pub fn format_response_with_options(
+    response: &SearchResponse,
+    format: OutputFormat,
+    options: FormatOptions,
 ) -> serde_json::Value {
     match format {
         OutputFormat::Native => serde_json::to_value(response)
@@ -70,15 +152,62 @@ pub fn format_response_with_budget(
         OutputFormat::GitHub => to_github_json(response),
         OutputFormat::GitLab => to_gitlab_json(response),
         OutputFormat::Agent => to_agent_json(response),
-        OutputFormat::AgentCapsule => to_agent_capsule_json(response, excerpt_lines),
-        OutputFormat::Compact => to_compact_json(response, compact_budget),
+        OutputFormat::AgentCapsule => to_agent_capsule_json(response, options.excerpt_lines),
+        OutputFormat::Compact => render_compact(response, &options.budget),
+    }
+}
+/// Single display-basename helper for every adapter arm (F23, kills H1).
+///
+/// GitHub `name` and GitLab `basename` route through this instead of each
+/// inlining `rsplit('/')`. It uses the same `Path::file_name` component
+/// semantics `core::paths::indexed_rel_path` validates DB keys against, and
+/// tolerates a trailing slash (`"src/"` yields `"src"`, where the old
+/// inline `rsplit` yielded `""`). Pending cross-cutting C-A, this is the one
+/// site to absorb into `core::paths`.
+pub fn hit_basename(file: &str) -> &str {
+    std::path::Path::new(file)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| file.rsplit('/').next().expect("str::rsplit yields at least one item"))
+}
+/// Single owner of the answer-set-cut mapping (F25, kills H3).
+///
+/// Every adapter arm routes its cut flag through here, so the four key names
+/// stay in one match instead of one idiom per arm:
+///
+/// - GitHub `incomplete_results`: always present (page-full heuristic OR cut).
+/// - Agent/capsule `truncated`: skip-when-false, so untruncated wire bytes
+///   are identical (br-tku).
+/// - Compact `zc`: skip-when-false on the droppable `z*` tail (same reason).
+/// - Native: no envelope key; the flag rides in `SearchResponse` itself.
+/// - GitLab: no cut key; that shape never carried one (preserved).
+pub fn emit_truncation(
+    envelope: &mut serde_json::Value,
+    format: OutputFormat,
+    cut: bool,
+) {
+    match format {
+        OutputFormat::Native | OutputFormat::GitLab => {}
+        OutputFormat::GitHub => {
+            envelope["incomplete_results"] = serde_json::Value::Bool(cut);
+        }
+        OutputFormat::Agent | OutputFormat::AgentCapsule => {
+            if cut {
+                envelope["truncated"] = serde_json::Value::Bool(true);
+            }
+        }
+        OutputFormat::Compact => {
+            if cut {
+                envelope["zc"] = serde_json::Value::Bool(true);
+            }
+        }
     }
 }
 /// Project a response into a GitHub-like page. total_count is the returned page size (no corpus-wide match count).
 pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
     let items: Vec<_> = response.hits.iter().map(|hit| serde_json::json!({
-        "name": hit.file.rsplit('/').next().unwrap_or(&hit.file), "path": hit.file, "score": hit.score, "language": hit.language,
-        "text_matches": [{"fragment": hit.excerpt, "matches": [ { "text": hit.symbol.as_deref().or(hit.callee.as_deref()).unwrap_or(""), "indices": [0] }]}],
+        "name": hit_basename(&hit.file), "path": hit.file, "score": hit.score, "language": hit.language,
+        "text_matches": [{"fragment": hit.excerpt, "matches": [ { "text": hit_symbol(hit).unwrap_or(""), "indices": [0] }]}],
         "metadata": {
             "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
             "line_start": hit.line_start, "line_end": hit.line_end,
@@ -87,15 +216,21 @@ pub fn to_github_json(response: &SearchResponse) -> serde_json::Value {
     let incomplete = response.limit > 0 && items.len() >= response.limit;
     // br-tku: the real answer-set cut (br-tvv) must not be diluted by the
     // page-full heuristic.
-    serde_json::json!({
-        "total_count": items.len(), "incomplete_results": incomplete || response.truncated, "items": items, "query": response.query, "provider": "ast-sgrep"
-    })
+    let mut envelope = serde_json::json!({
+        "total_count": items.len(), "items": items, "query": response.query, "provider": "ast-sgrep"
+    });
+    emit_truncation(
+        &mut envelope,
+        OutputFormat::GitHub,
+        incomplete || response.truncated,
+    );
+    envelope
 }
 /// Project local results into a GitLab-like shape. This adapter has no repository context,
 /// so ref is always HEAD and project_id is always null; consumers must supply that context.
 pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
     let data: Vec<_> = response.hits.iter().map(|hit| serde_json::json!({
-        "basename": hit.file.rsplit('/').next().unwrap_or(&hit.file), "data": hit.excerpt,
+        "basename": hit_basename(&hit.file), "data": hit.excerpt,
         "path": hit.file, "filename": hit.file, "ref": "HEAD", "startline": hit.line_start, "project_id": null,
         "meta": {
             "kind": hit.kind.as_str(), "signal": hit.signal, "contributors": hit.contributors, "score": hit.score, "margin": hit.margin,
@@ -104,7 +239,12 @@ pub fn to_gitlab_json(response: &SearchResponse) -> serde_json::Value {
     })).collect();
     serde_json::json!({"data": data, "query": response.query, "provider": "ast-sgrep"})
 }
-fn hit_symbol(hit: &ast_sgrep_core::SearchHit) -> Option<&str> {
+/// Single symbol-fallback helper for every adapter arm (F23, kills H2/S3).
+///
+/// The 3-chain `symbol.or(callee).or(caller)`; GitHub text matches and
+/// compact snippet rows route through this, so no arm can silently diverge
+/// with a narrower inline chain again.
+pub fn hit_symbol(hit: &ast_sgrep_core::SearchHit) -> Option<&str> {
     hit.symbol
         .as_deref()
         .or(hit.callee.as_deref())
@@ -133,9 +273,7 @@ pub fn to_agent_json(response: &SearchResponse) -> serde_json::Value {
         "stack_hint": "Use asgrep for hybrid search; defs:/callers:/literal: prefixes for graph and exact text; asgrep semantic for embedding-only.", "suggested_next": suggested, "hits": hits,
     });
     // br-tku: skip-when-false keeps untruncated wire bytes identical.
-    if response.truncated {
-        envelope["truncated"] = serde_json::Value::Bool(true);
-    }
+    emit_truncation(&mut envelope, OutputFormat::Agent, response.truncated);
     envelope
 }
 const PREVIEW_MAX_CHARS: usize = 120;
@@ -181,19 +319,32 @@ pub fn to_agent_capsule_json(response: &SearchResponse, excerpt_lines: usize) ->
     }
     // br-tku: this is the serve/plugin default render — the flag MUST
     // survive here or every model consumer downstream is blind to cuts.
-    if response.truncated {
-        envelope["truncated"] = serde_json::Value::Bool(true);
-    }
+    emit_truncation(&mut envelope, OutputFormat::AgentCapsule, response.truncated);
     envelope
 }
-/// Compact envelope whose per-result detail is chosen under a token budget
-/// (m38g), instead of truncating every excerpt to the same ceiling.
+/// Legacy shim (F24): budgeted overlay; delegates to
+/// [`render_compact_budgeted`]. Keeps its field shape so existing
+/// `OutputBudget { max_tokens, default_detail }` sites compile.
 pub fn to_budgeted_compact_json(
     response: &SearchResponse,
     budget: budget::OutputBudget,
 ) -> serde_json::Value {
-    let rendered = budget::select(&response.hits, budget);
-    let mut envelope = to_compact_json(response, CompactBudget::default());
+    render_compact_budgeted(response, &Budget::from(budget))
+}
+
+/// Budgeted overlay on the pure compact envelope (F24, m38g).
+///
+/// Renders the base via [`render_compact`], then patches each row's snippet
+/// with the [`budget::select_with`] body for this hit and appends the
+/// per-result detail label, plus `zd` accounting. Same bytes as the old
+/// `to_budgeted_compact_json`: the base pass always runs under the budget's
+/// compact half (96/768 for a converted `OutputBudget`).
+pub fn render_compact_budgeted(
+    response: &SearchResponse,
+    budget: &Budget,
+) -> serde_json::Value {
+    let rendered = budget::select_with(&response.hits, budget);
+    let mut envelope = render_compact(response, budget);
     if let Some(hits) = envelope
         .get_mut("h")
         .and_then(serde_json::Value::as_array_mut)
@@ -213,7 +364,50 @@ pub fn to_budgeted_compact_json(
     envelope
 }
 
+/// Single owner of `PreviewMode::None` snippet blanking (F24 staging).
+///
+/// mcp (`render_compact_envelope`) and cli (`render_search_json`) each inline
+/// this loop today; the later pass routes both through here. Zeroes row
+/// snippets in place, leaving ids, kinds, and the `z*` tail untouched.
+pub fn blank_compact_snippets(envelope: &mut serde_json::Value) {
+    let Some(hits) = envelope
+        .get_mut("h")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for hit in hits {
+        let Some(row) = hit.as_array_mut() else {
+            continue;
+        };
+        if let Some(snippet) = row.get_mut(4) {
+            *snippet = serde_json::Value::String(String::new());
+        }
+    }
+}
+
+/// Legacy shim (F24): pure compact render; delegates to [`render_compact`].
+/// Keeps its field shape so existing `CompactBudget { .. }` sites compile.
 pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serde_json::Value {
+    render_compact(response, &Budget::from(budget))
+}
+
+/// Single pure-compact renderer (F24).
+///
+/// The base byte-truncated envelope both compact shapes share: path table,
+/// rows capped at the budget's per-result/response ceilings, `zb`/`zt`
+/// accounting. Uses only the compact half of `budget`; the detail half
+/// belongs to [`render_compact_budgeted`].
+///
+/// External call-site note (later pass, do NOT edit those crates here):
+/// mcp `render_compact_envelope` (crates/ast-sgrep-mcp/src/lib.rs) and cli
+/// `render_search_json` (crates/ast-sgrep-cli/src/search_cmd.rs) re-implement
+/// the PreviewMode::{None,Short,Full} choice between zeroed +
+/// [`blank_compact_snippets`], [`render_compact`], and
+/// [`render_compact_budgeted`]. Move those branches here unchanged; do not
+/// merge the arms (cli None+tokens renders budgeted-Metadata where mcp
+/// None+tokens renders zeroed+blank).
+pub fn render_compact(response: &SearchResponse, budget: &Budget) -> serde_json::Value {
     let mut paths = std::collections::BTreeMap::<String, String>::new();
     let mut path_ids = std::collections::BTreeMap::<String, String>::new();
     for path in response
@@ -285,9 +479,7 @@ pub fn to_compact_json(response: &SearchResponse, budget: CompactBudget) -> serd
     }
     // br-tku: the answer-set cut rides the z* tail (z-indexed, absent when
     // false) so compact consumers can drop it with the rest of the tail.
-    if response.truncated {
-        envelope["zc"] = serde_json::Value::Bool(true);
-    }
+    emit_truncation(&mut envelope, OutputFormat::Compact, response.truncated);
     envelope
 }
 
@@ -580,6 +772,31 @@ pub struct MissContext {
 }
 
 impl MissContext {
+    /// Single constructor (F25, kills N4/H4).
+    ///
+    /// Every zero-hit builder passes the same five signals; the
+    /// bodyless-args teaching flag derives from the query text here, so no
+    /// builder can silently drop it. Later pass: mcp `diagnose_miss`
+    /// (crates/ast-sgrep-mcp/src/lib.rs), cli `miss_context`
+    /// (crates/ast-sgrep-cli/src/search_cmd.rs), and codemode `call`
+    /// (crates/ast-sgrep-codemode/src/session.rs) construct via this instead
+    /// of struct literals + ad-hoc `pattern_miss`.
+    pub fn collect(
+        query: &str,
+        tried: Vec<String>,
+        unavailable: Vec<String>,
+        scope: Vec<(String, String)>,
+        indexed_files: Option<usize>,
+    ) -> Self {
+        Self {
+            tried,
+            unavailable,
+            scope,
+            indexed_files,
+            pattern_miss: is_bodyless_fn_args_pattern(query),
+        }
+    }
+
     /// Classify the miss from the signals available. Order matters: an empty
     /// index explains everything else, and filters explain a miss before a
     /// genuine absence does. The pattern-shape contract refines only the
@@ -602,21 +819,18 @@ impl MissContext {
     }
 }
 
-/// Compact diagnostic envelope for a zero-hit search (6a3i).
+/// Single miss-key emitter (F25, kills H3/N4).
 ///
-/// A miss should be the cheapest response the engine can produce, and still say
-/// enough that the agent's next move is obvious rather than a guess.
-pub fn to_compact_miss_json(query: &str, context: &MissContext) -> serde_json::Value {
+/// Stamps `why`/`next` (from [`MissContext::reason`] precedence) plus
+/// `tried`/`down`/`scope` when non-empty onto ANY envelope. The compact miss
+/// routes through here; later pass: cli `render_search_json` and codemode
+/// `call` stamp their non-compact zero-hit envelopes through here instead of
+/// re-implementing the reason/next two-liner.
+pub fn emit_miss(envelope: &mut serde_json::Value, context: &MissContext) {
     let reason = context.reason();
     let first_filter = context.scope.first().map(|(name, _)| name.as_str());
-    let mut envelope = serde_json::json!({
-        "v": 1,
-        "q": query,
-        "h": [],
-        "zn": 0,
-        "why": reason.as_str(),
-        "next": reason.next_step(first_filter),
-    });
+    envelope["why"] = serde_json::Value::String(reason.as_str().to_owned());
+    envelope["next"] = serde_json::Value::String(reason.next_step(first_filter).to_owned());
     if !context.tried.is_empty() {
         envelope["tried"] = serde_json::Value::from(context.tried.clone());
     }
@@ -632,6 +846,20 @@ pub fn to_compact_miss_json(query: &str, context: &MissContext) -> serde_json::V
                 .collect(),
         );
     }
+}
+
+/// Compact diagnostic envelope for a zero-hit search (6a3i).
+///
+/// A miss should be the cheapest response the engine can produce, and still say
+/// enough that the agent's next move is obvious rather than a guess.
+pub fn to_compact_miss_json(query: &str, context: &MissContext) -> serde_json::Value {
+    let mut envelope = serde_json::json!({
+        "v": 1,
+        "q": query,
+        "h": [],
+        "zn": 0,
+    });
+    emit_miss(&mut envelope, context);
     envelope
 }
 

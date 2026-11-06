@@ -51,6 +51,7 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
         ambient_freshness: false,
+        ambient_cooldown: std::time::Duration::from_secs(1),
     });
     assert_eq!(
         relative.config().index_path,
@@ -63,6 +64,7 @@ fn session_pins_index_and_taxonomy_splits_unknown_from_invalid() {
         use_embed: false,
         default_format: OutputFormat::AgentCapsule,
         ambient_freshness: false,
+        ambient_cooldown: std::time::Duration::from_secs(1),
     });
     assert_eq!(
         absolute.config().index_path,

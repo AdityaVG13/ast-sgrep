@@ -5,7 +5,7 @@
 //! sequential searches on one connection (Amdahl).
 
 use crate::catalog::tool_catalog;
-use crate::session::{encoded_len, CodeModeSession, SessionConfig};
+use crate::session::{encoded_len, CodeModeSession, SessionConfig, MAX_SESSION_LIMIT};
 use crate::tools::CallError;
 use ast_sgrep_core::io_bounds::{read_bounded_line, BoundedLine};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use std::time::Instant;
 pub const MAX_BATCH_CALLS: usize = 32;
 /// Maximum encoded batch response size.
 pub const MAX_BATCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-const BATCH_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
+pub const BATCH_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_VALUE_BYTES: usize = MAX_BATCH_RESPONSE_BYTES - BATCH_ENVELOPE_RESERVE_BYTES;
 pub const MAX_BATCH_ID_BYTES: usize = 128;
 pub const MAX_BATCH_TOOL_BYTES: usize = 128;
@@ -261,7 +261,7 @@ fn apply_config(mut config: SessionConfig, request: &BatchRequest) -> SessionCon
         config.ambient_freshness = ambient;
     }
     if let Some(limit) = request.limit {
-        config.limit = limit.clamp(1, 500);
+        config.limit = limit.clamp(1, MAX_SESSION_LIMIT);
     }
     config
 }

@@ -93,7 +93,7 @@ pub(crate) fn match_java_synchronized_meta(
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
     let body_name = ja_synchronized_meta_template(pattern)?;
-    let tree = parse_source(Language::Java, source).ok()?;
+    let tree = parse_source_silent(Language::Java, source)?;
     let mut out = Vec::new();
     walk_java_synchronized_meta(tree.root_node(), source, pattern, &body_name, &mut out);
     Some(out)
@@ -287,7 +287,7 @@ pub(crate) fn php_namespace_block_template(pattern: &str) -> Option<PhpNamespace
 
 pub(crate) fn match_php_namespace_block(source: &str, pattern: &str) -> Option<Vec<PatternMatch>> {
     let template = php_namespace_block_template(pattern)?;
-    let tree = parse_source(Language::Php, source).ok()?;
+    let tree = parse_source_silent(Language::Php, source)?;
     let mut out = Vec::new();
     walk_php_namespace_block(tree.root_node(), source, pattern, &template, &mut out);
     Some(out)
@@ -351,7 +351,7 @@ pub(crate) fn php_namespace_block_match(
             // zero-trailing, two-trailing, and prefix-mismatch faces all
             // refuse.
             let doc = format!("<?php\nnamespace __Px {{ {prefix} }}\n");
-            let tpl_tree = parse_source(Language::Php, &doc).ok()?;
+            let tpl_tree = parse_source_silent(Language::Php, &doc)?;
             if tpl_tree.root_node().has_error() {
                 return None;
             }

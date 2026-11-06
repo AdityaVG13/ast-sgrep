@@ -1,4 +1,4 @@
-use crate::query::{ParsedQuery, QueryMode};
+use crate::query::{strip_wrapping_quotes, ParsedQuery, QueryMode};
 use crate::rank::{
     rrf_score, score_symbol, LEXICAL_RRF_SCALE, RRF_K, SCORE_ANCHOR, SCORE_CALLER_BASE,
     SCORE_DEF_BASE, SCORE_EMBED, SCORE_EXACT_SYMBOL, SCORE_GRAPH, SCORE_PATTERN,
@@ -32,7 +32,7 @@ pub fn classify(parsed: &ParsedQuery) -> QueryIntent {
 }
 fn classify_hybrid(raw: &str) -> QueryIntent {
     let t = raw.trim();
-    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+    if strip_wrapping_quotes(t) != t {
         return QueryIntent::Literal;
     }
     if looks_structural(t) {
@@ -115,7 +115,11 @@ fn preceding_paren_is_call(before_including_paren: &str) -> bool {
         .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 fn ident_like(token: &str) -> bool {
-    if token.contains("::") || token.contains('_') || token.ends_with("()") {
+    if token.contains("::")
+        || token.contains('_')
+        || token.contains('-')
+        || token.ends_with("()")
+    {
         return true;
     }
     let mut prev_lower = false;

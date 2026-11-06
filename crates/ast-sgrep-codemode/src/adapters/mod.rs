@@ -8,7 +8,7 @@ pub use anthropic::{anthropic_discovery_tools, anthropic_tools};
 pub use cloudflare::cloudflare_connector;
 pub use openai::openai_tools;
 
-use crate::catalog::{tool_catalog, ToolDef};
+use crate::catalog::tool_catalog;
 use serde_json::{json, Value};
 
 /// Shared envelope describing this Code Mode surface for any host.
@@ -28,8 +28,4 @@ pub fn surface_manifest() -> Value {
         },
         "tool_count": tool_catalog().len(),
     })
-}
-
-pub(crate) fn schema_for(def: &ToolDef) -> Value {
-    def.input_schema.clone()
 }

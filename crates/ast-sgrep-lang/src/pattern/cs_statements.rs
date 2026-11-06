@@ -206,7 +206,7 @@ pub(crate) fn match_csharp_statement(source: &str, pattern: &str) -> Option<Vec<
     if cs_template_binds_nothing(&template) {
         return Some(Vec::new());
     }
-    let tree = parse_source(Language::CSharp, source).ok()?;
+    let tree = parse_source_silent(Language::CSharp, source)?;
     let mut out = Vec::new();
     walk_csharp_statement(tree.root_node(), source, pattern, &template, &mut out);
     Some(out)
@@ -387,7 +387,7 @@ pub(crate) fn csharp_statement_bind(
         } => {
             let doc = format!("class __AsgrepCtx {{ void M() {{ {substituted} }} }}");
             let prefix_len = "class __AsgrepCtx { void M() { ".len();
-            let tpl_tree = parse_source(Language::CSharp, &doc).ok()?;
+            let tpl_tree = parse_source_silent(Language::CSharp, &doc)?;
             if tpl_tree.root_node().has_error() {
                 return None;
             }
@@ -452,7 +452,7 @@ pub(crate) fn match_return_paren_meta(
         return None;
     }
     let name = capture_name(inner[..close].trim())?;
-    let tree = parse_source(lang, source).ok()?;
+    let tree = parse_source_silent(lang, source)?;
     let mut out = Vec::new();
     walk_return_paren_meta(tree.root_node(), source, pattern, name, &mut out);
     Some(out)

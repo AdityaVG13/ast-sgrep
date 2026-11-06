@@ -79,7 +79,6 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         terms: vec!["alpha".into()],
         path_scope: None,
         path_scope_error: None,
-        path_scope_exact: false,
     };
     let parsed_many = ParsedQuery {
         raw: "alpha beta gamma".into(),
@@ -88,7 +87,6 @@ fn cbnw_asgrep_ceiling_is_single_list_rrf() {
         terms: vec!["alpha".into(), "beta".into(), "gamma".into()],
         path_scope: None,
         path_scope_error: None,
-        path_scope_exact: false,
     };
     ast_sgrep_core::intent::route_hits(&parsed_one, &mut one);
     ast_sgrep_core::intent::route_hits(&parsed_many, &mut many);

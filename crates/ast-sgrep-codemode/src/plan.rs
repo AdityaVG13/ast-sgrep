@@ -17,7 +17,8 @@ pub struct PlanStep {
     pub id: String,
     /// Catalog tool name.
     pub tool: String,
-    /// Arguments; string values may be `$step.path` references.
+    /// Arguments; string values may be `$step.path` references. A `$$`
+    /// prefix escapes to one literal `$` with no ref resolution.
     #[serde(default)]
     pub args: Value,
 }
@@ -88,6 +89,9 @@ pub fn parse_plan(value: &Value) -> Result<Plan, CallError> {
 
 fn resolve_value(value: &Value, outputs: &HashMap<String, Value>) -> Result<Value, CallError> {
     match value {
+        // `$$` escapes to one literal `$` with no ref resolution, so a
+        // literal `$`-leading plan arg stays expressible.
+        Value::String(s) if s.starts_with("$$") => Ok(Value::String(format!("${}", &s[2..]))),
         Value::String(s) if s.starts_with('$') => resolve_ref(s, outputs),
         Value::Array(items) => {
             let mut out = Vec::with_capacity(items.len());
@@ -144,7 +148,7 @@ fn resolve_ref(expr: &str, outputs: &HashMap<String, Value>) -> Result<Value, Ca
 }
 
 /// Convenience: wrap a single tool call as a one-step plan result.
-pub fn single_result(_tool: &str, value: Value) -> PlanResult {
+pub fn single_result(value: Value) -> PlanResult {
     let mut steps = HashMap::new();
     steps.insert("main".into(), value.clone());
     PlanResult {

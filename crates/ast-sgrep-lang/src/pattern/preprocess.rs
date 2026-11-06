@@ -16,7 +16,7 @@ pub(crate) fn sg_pattern_gate_accepts(lang: Language, pattern: &str) -> bool {
         return false;
     }
     let doc = sg_preprocess_pattern(lang, pattern);
-    let Ok(tree) = parse_source(lang, &doc) else {
+    let Some(tree) = parse_source_silent(lang, &doc) else {
         return false;
     };
     let root = tree.root_node();
@@ -49,7 +49,7 @@ pub(crate) fn sg_pattern_gate_bare_single(lang: Language, pattern: &str) -> bool
         return false;
     }
     let doc = sg_preprocess_pattern(lang, pattern);
-    let Ok(tree) = parse_source(lang, &doc) else {
+    let Some(tree) = parse_source_silent(lang, &doc) else {
         return false;
     };
     is_sg_single_node(tree.root_node())
@@ -459,6 +459,58 @@ pub(crate) fn normalize_expando_meta_spelling(lang: Language, pattern: &str) -> 
             // The inverse rewrite: one MixedCase `$` becomes the expando char
             // (`$Bx` -> `µBx`), the literal NAME tail is copied verbatim.
             None => out.push(expando),
+        }
+        out.push_str(&pattern[name_start..end]);
+        last = end;
+    }
+    out.push_str(&pattern[last..]);
+    Cow::Owned(out)
+}
+
+/// Language-agnostic expando→`$` normalization for the language-free
+/// classification ingresses.
+///
+/// `signature.rs` and the `needs_ast_grep_fallback` answerability ingress take
+/// no `Language`, so they cannot use [`normalize_expando_meta_spelling`].
+/// This folds META-shaped runs of EVERY known expando char (`µ`, U+10000)
+/// back to `$` runs with the same [`expando_meta_spans`] whole-node verdict
+/// the lang-aware ingress uses — non-meta expando text (`µAble`,
+/// lowercase-led tails) stays verbatim, so literal-identifier faces keep their
+/// exact signatures.
+///
+/// Two deliberate boundaries (both fail SAFE — derivation degrades to `None`
+/// or kind-narrowing and the lang-aware native walk decides):
+/// - No `suffix_continuations`: ruby folds a trailing `?` into the identifier
+///   node, so ruby `µA?` is literal while this reads the `$A?` meta face.
+/// - No inverse (`$Bx`→expando) rewrites: those are lang-specific literal
+///   readings; `$` spellings keep their exact historical derivation.
+///
+/// This is the ONE normalization behind classification for the lang-free
+/// ingresses — every trim-only ingress normalizes through this, so no caller
+/// must pre-normalize (the precondition split that served "exact" index rows
+/// for expando spellings while the walk answered hits).
+pub(crate) fn normalize_any_expando_meta_spelling(pattern: &str) -> Cow<'_, str> {
+    let mut edits: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for expando in ['µ', '\u{10000}'] {
+        edits.extend(expando_meta_spans(pattern, expando, &[]).into_iter().map(
+            |s| (s.start, s.name_start, s.end, s.run_count),
+        ));
+    }
+    if edits.is_empty() {
+        return Cow::Borrowed(pattern);
+    }
+    edits.sort_by_key(|(start, _, _, _)| *start);
+    let mut out = String::with_capacity(pattern.len());
+    let mut last = 0usize;
+    for (start, name_start, end, run_count) in edits {
+        // Spans for distinct expando chars cannot overlap (a byte belongs to
+        // at most one expando run); skip defensively all the same.
+        if start < last {
+            continue;
+        }
+        out.push_str(&pattern[last..start]);
+        for _ in 0..run_count {
+            out.push('$');
         }
         out.push_str(&pattern[name_start..end]);
         last = end;

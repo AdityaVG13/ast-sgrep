@@ -107,7 +107,7 @@ pub fn write_json(report: &Report, path: &Path) -> std::io::Result<()> {
 }
 pub fn sample_root() -> PathBuf {
     let relative = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sample");
-    relative.canonicalize().unwrap_or(relative)
+    crate::paths::canonicalize_path(&relative, true).unwrap_or(relative)
 }
 fn warm_searcher(root: &Path, index_dir: &Path) -> Result<Searcher> {
     let index_path = index_dir.join("index.db");

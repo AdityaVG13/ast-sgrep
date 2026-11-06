@@ -383,24 +383,24 @@ pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec
 pub fn read_legacy_emb(
     r: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
-    Ok((
-        r.get(0)?,
-        r.get(1)?,
-        r.get(1)?,
-        r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-        r.get(2)?,
-        emb_vec(r, 4)?,
-    ))
+    Ok(ast_sgrep_embed::SemanticChunkRow {
+        path: r.get(0)?,
+        line_start: r.get(1)?,
+        line_end: r.get(1)?,
+        symbol: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        text: r.get(2)?,
+        embedding: emb_vec(r, 4)?,
+    })
 }
 pub fn read_sem_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {
-    Ok((
-        r.get(0)?,
-        r.get(1)?,
-        r.get(2)?,
-        r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-        r.get(4)?,
-        emb_vec(r, 5)?,
-    ))
+    Ok(ast_sgrep_embed::SemanticChunkRow {
+        path: r.get(0)?,
+        line_start: r.get(1)?,
+        line_end: r.get(2)?,
+        symbol: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        text: r.get(4)?,
+        embedding: emb_vec(r, 5)?,
+    })
 }
 /// ` AND f.language = ?1` when a language bind is present.
 pub fn lang_and_clause(lang: Option<&str>) -> &'static str {
@@ -437,8 +437,11 @@ fn configure_connection_inner(
     } else {
         Duration::from_secs(5)
     };
+    let t_tune = crate::env_flag::profile_clock();
     conn.busy_timeout(busy)?;
     conn.set_prepared_statement_cache_capacity(128);
+    crate::env_flag::emit_profile_stage_since("sqlite_tune", t_tune);
+    let t_pragmas = crate::env_flag::profile_clock();
     if read_only {
         // No `PRAGMA query_only`: SQLITE_OPEN_READ_ONLY already fail-closes
         // main-schema writes at the VFS layer, while query_only also blocks
@@ -494,6 +497,7 @@ fn configure_connection_inner(
             conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -71680;")?;
         }
     }
+    crate::env_flag::emit_profile_stage_since("sqlite_pragmas", t_pragmas);
     Ok(())
 }
 

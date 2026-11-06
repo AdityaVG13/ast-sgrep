@@ -591,7 +591,7 @@ pub(crate) fn bind_nonfaithful_receiver(
 /// an identifier, else the last named child's own tail (member chains end in
 /// the property identifier). The swift `navigation_suffix` wrapper is
 /// transparent here — its named child IS the chain tail (see
-/// [`faithful_path_from_node`]); `?.` sites never reach captures at all (the
+/// [`resolve_path`]); `?.` sites never reach captures at all (the
 /// path resolvers' `?`-kind veto fires first).
 pub(crate) fn chain_tail_identifier<'a>(
     node: &Node<'a>,

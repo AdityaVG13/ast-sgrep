@@ -38,7 +38,7 @@ pub(crate) fn match_csharp_expression_root(
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
     let template = cs_expression_template(pattern)?;
-    let tree = parse_source(Language::CSharp, source).ok()?;
+    let tree = parse_source_silent(Language::CSharp, source)?;
     let mut out = Vec::new();
     walk_csharp_expression_root(tree.root_node(), source, pattern, &template, &mut out);
     Some(out)
@@ -328,7 +328,7 @@ pub(crate) fn match_java_sync_block_nested(
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
     let block = ja_sync_block_nested_template(pattern)?;
-    let tree = parse_source(Language::Java, source).ok()?;
+    let tree = parse_source_silent(Language::Java, source)?;
     let mut out = Vec::new();
     walk_java_sync_block_nested(tree.root_node(), source, pattern, &block, &mut out);
     Some(out)
@@ -359,7 +359,7 @@ pub(crate) fn walk_java_sync_block_nested(
 
 pub(crate) fn match_java_sync_method(source: &str, pattern: &str) -> Option<Vec<PatternMatch>> {
     let template = ja_sync_method_template(pattern)?;
-    let tree = parse_source(Language::Java, source).ok()?;
+    let tree = parse_source_silent(Language::Java, source)?;
     let mut out = Vec::new();
     walk_kind(
         tree.root_node(),
@@ -932,7 +932,7 @@ pub(crate) fn match_statement_root_140(
     match lang {
         Language::Kotlin => {
             if let Some(template) = kt_typealias_template(pattern) {
-                let tree = parse_source(lang, source).ok()?;
+                let tree = parse_source_silent(lang, source)?;
                 let mut out = Vec::new();
                 walk_kind(tree.root_node(), "type_alias", true, &mut out, |n| {
                     kt_typealias_match(n, source, pattern, &template)
@@ -940,7 +940,7 @@ pub(crate) fn match_statement_root_140(
                 return Some(out);
             }
             let template = kt_for_template(pattern)?;
-            let tree = parse_source(lang, source).ok()?;
+            let tree = parse_source_silent(lang, source)?;
             let mut out = Vec::new();
             walk_kind(tree.root_node(), "for_statement", true, &mut out, |n| {
                 kt_for_match(n, source, pattern, &template)
@@ -949,7 +949,7 @@ pub(crate) fn match_statement_root_140(
         }
         Language::Swift => {
             let template = swift_for_template(pattern)?;
-            let tree = parse_source(lang, source).ok()?;
+            let tree = parse_source_silent(lang, source)?;
             let mut out = Vec::new();
             walk_kind(tree.root_node(), "for_statement", true, &mut out, |n| {
                 swift_for_match(n, source, pattern, &template)
@@ -958,7 +958,7 @@ pub(crate) fn match_statement_root_140(
         }
         Language::Rust => {
             let template = rs_let_else_template(pattern)?;
-            let tree = parse_source(lang, source).ok()?;
+            let tree = parse_source_silent(lang, source)?;
             let mut out = Vec::new();
             walk_kind(tree.root_node(), "let_declaration", true, &mut out, |n| {
                 rs_let_else_match(n, source, pattern, &template)
@@ -967,7 +967,7 @@ pub(crate) fn match_statement_root_140(
         }
         Language::C => {
             let template = c_goto_template(pattern)?;
-            let tree = parse_source(lang, source).ok()?;
+            let tree = parse_source_silent(lang, source)?;
             let mut out = Vec::new();
             walk_kind(tree.root_node(), "goto_statement", true, &mut out, |n| {
                 c_goto_match(n, source, pattern, &template)
@@ -979,7 +979,7 @@ pub(crate) fn match_statement_root_140(
             // keeps its accepted-empty envelope via sg_goto_semi_pattern and
             // never reaches here.
             let template = go_goto_bare_template(pattern)?;
-            let tree = parse_source(lang, source).ok()?;
+            let tree = parse_source_silent(lang, source)?;
             let mut out = Vec::new();
             walk_go_goto_bare(tree.root_node(), source, pattern, &template, &mut out);
             Some(out)

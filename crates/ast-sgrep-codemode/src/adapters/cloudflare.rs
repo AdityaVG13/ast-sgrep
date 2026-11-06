@@ -4,7 +4,6 @@
 //! progressive discovery via search/describe. This adapter emits a JSON
 //! connector manifest hosts can load; it does not embed the Agents SDK.
 
-use crate::adapters::schema_for;
 use crate::catalog::tool_catalog;
 use serde_json::{json, Value};
 
@@ -18,7 +17,7 @@ pub fn cloudflare_connector() -> Value {
                 "description": def.description,
                 "kind": def.kind,
                 "readOnly": def.read_only,
-                "parameters": schema_for(&def),
+                "parameters": def.input_schema.clone(),
                 "returns": {
                     "description": "JSON value (agent, capsule, chain, status, or transform result)"
                 }

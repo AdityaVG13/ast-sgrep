@@ -105,7 +105,7 @@ pub(crate) fn member_chain_matches(
             // match through per-position slots instead (literals byte-exact,
             // metas bind, rest binds the remaining source bytes).
             if let Some(slots) = &segment.arg_slots {
-                arg_slots_match(slots, nodes, source, &mut captures)?;
+                match_arg_slots(slots, nodes, source, &mut captures, ArgSlotMode::Backtracking)?;
             } else if let Some(names) = &segment.arg_metas {
                 for (name, argument) in names.iter().zip(nodes.iter()) {
                     if let Some(text) = node_text(argument, source) {
@@ -465,9 +465,10 @@ pub(crate) fn optional_call_chain_decompose<'a>(
 }
 
 /// Enforce ONE call segment's argument contract. Mixed-rest slot lists ride
-/// the registered plain-call rest-slot semantics (`call_arg_slots_match`:
-/// trailing rest + single ⇒ n ≥ 2, k ≥ 2 rests ⇒ n ≥ k-1, non-trailing
-/// rest ⇒ n == 1 — the `?.`-chain faces answer at exactly those arities).
+/// the registered plain-call rest-slot semantics (`match_arg_slots` with
+/// `ArgSlotMode::Positional`: trailing rest + single ⇒ n ≥ 2, k ≥ 2 rests
+/// ⇒ n ≥ k-1, non-trailing rest ⇒ n == 1 — the `?.`-chain faces answer at
+/// exactly those arities).
 /// Plain templates enforce arity and bind both whole-list and positional
 /// captures, including repeated-name equality across segments.
 pub(crate) fn chain_segment_args_contract(
@@ -478,7 +479,7 @@ pub(crate) fn chain_segment_args_contract(
 ) -> Option<()> {
     if let Some(slots) = &segment.arg_slots {
         let nodes = argument_nodes(node, &["arguments"])?;
-        return call_arg_slots_match(slots, &nodes, source, captures);
+        return match_arg_slots(slots, &nodes, source, captures, ArgSlotMode::Positional);
     }
     if !arguments_match(node, segment.args.as_ref(), &["arguments"]) {
         return None;
@@ -1029,10 +1030,31 @@ pub(crate) fn call_match_path(
     path_matches(&callee, path).then_some(callee)
 }
 
-/// Callee resolution for call-pattern matching and `call:` index rows.
-///
-/// Returns the dotted path segments, the full callee source text, and whether
-/// the chain was reassembled from split fields rather than read off one node.
+/// Which receiver fidelity the unified callee resolver enforces — the one
+/// resolution path for the S2 extractor family (`call_callee` /
+/// `call_target_path` / `call_target_path_faithful`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CalleeStrictness {
+    /// Match/index resolution: receivers flatten through the last
+    /// identifier (`a["b"]` contributes `a`), keeping every registered
+    /// match and `call:` row.
+    Lenient,
+    /// Metavariable-binding resolution: a receiver chain that flattens
+    /// through a call/paren/index node has no faithful per-segment text,
+    /// so the path vetoes instead of unifying on flattened tails.
+    Faithful,
+}
+
+/// Resolve a call node's callee into dotted path segments plus whether the
+/// chain was reassembled from split fields rather than read off one node —
+/// the single dispatch behind the former `call_callee` /
+/// `call_target_path_faithful` pair. The split-field arms (java
+/// `method_invocation`, ruby receiver-dot `call`, php
+/// `member_call_expression`, php `scoped_call_expression`) live here once;
+/// the strictness flag only selects the leaf path builder (`resolve_path`).
+/// MoonBit `dot_apply_expression` stays with `call_target_path`: its
+/// match-path shape (`call_field_node` + lenient path) is registered
+/// separately from its index-row shape.
 ///
 /// - Grammars that split a member call across `object` + `name` fields
 ///   (java `method_invocation`) previously exposed only the trailing `name`
@@ -1043,7 +1065,12 @@ pub(crate) fn call_match_path(
 ///   are path calls only with a `.` operator AND a parenthesized argument
 ///   list. Bare `text.upcase` and operator `"a" + "b"` calls stay unmatched,
 ///   exactly matching the reference (pinned probes).
-pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<String>, bool)> {
+pub(crate) fn resolve_callee<'a>(
+    node: &Node<'a>,
+    source: &'a str,
+    strictness: CalleeStrictness,
+) -> Option<(Vec<String>, bool)> {
+    let strict = matches!(strictness, CalleeStrictness::Faithful);
     // `method_invocation` is java(/kotlin-family) member calls: the member
     // operator is `.`, so dot-separated patterns express them. php's
     // `member_call_expression` also splits object/name but its operator is
@@ -1054,7 +1081,7 @@ pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<S
             node.child_by_field_name("object"),
             node.child_by_field_name("name"),
         ) {
-            let mut segs = path_from_node(&obj, source)?;
+            let mut segs = resolve_path(&obj, source, strict)?;
             segs.push(node_text(&name, source)?.to_string());
             return Some((segs, true));
         }
@@ -1074,7 +1101,13 @@ pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<S
     // shape instead of the trailing-name shape — every bare-name pattern
     // stays empty on member calls. `call_target` falls back to the raw
     // callee bytes for the index row.
-    if node.kind() == "member_call_expression" || node.kind() == "nullsafe_member_call_expression" {
+    //
+    // The nullsafe spelling shares the object/name field split, but only
+    // the lenient path resolves it here — the faithful path serves the
+    // nullsafe faces through its own lane, which never reaches this arm.
+    if node.kind() == "member_call_expression"
+        || (!strict && node.kind() == "nullsafe_member_call_expression")
+    {
         // The nullsafe spelling shares the object/name field split; its
         // segments serve the flat nullsafe slot faces (the receiver-side
         // `nullsafe_member_access` link still vetoes empty —
@@ -1088,7 +1121,9 @@ pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<S
                     segments.push(name_text.to_string());
                     return Some((segments, true));
                 }
-                return Some((Vec::new(), true));
+                if !strict {
+                    return Some((Vec::new(), true));
+                }
             }
         }
     }
@@ -1116,7 +1151,25 @@ pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<S
         }
     }
     let field = call_field_node(node)?;
-    path_from_node(&field, source).map(|segs| (segs, false))
+    resolve_path(&field, source, strict).map(|segs| (segs, false))
+}
+
+/// Callee resolution for call-pattern matching and `call:` index rows.
+///
+/// Returns the dotted path segments, the full callee source text, and whether
+/// the chain was reassembled from split fields rather than read off one node.
+///
+/// - Grammars that split a member call across `object` + `name` fields
+///   (java `method_invocation`) previously exposed only the trailing `name`
+///   identifier: literal dotted patterns (`System.out.println($$$A)`) were
+///   silently empty while trailing-name patterns (`println($$$A)`)
+///   over-matched.
+/// - Ruby receiver-dot calls carry the callee as `receiver` + `method`; they
+///   are path calls only with a `.` operator AND a parenthesized argument
+///   list. Bare `text.upcase` and operator `"a" + "b"` calls stay unmatched,
+///   exactly matching the reference (pinned probes).
+pub(crate) fn call_callee<'a>(node: &Node<'a>, source: &'a str) -> Option<(Vec<String>, bool)> {
+    resolve_callee(node, source, CalleeStrictness::Lenient)
 }
 
 /// Strict object-side segments for a php member call. A `variable_name`
@@ -1351,77 +1404,41 @@ pub(crate) fn call_target_path(node: &Node, source: &str) -> Option<Vec<String>>
 /// `y.first().first()`), so a flattened tail has no faithful per-segment
 /// text and must not unify via `bind_capture`.
 pub(crate) fn call_target_path_faithful(node: &Node, source: &str) -> Option<Vec<String>> {
-    if node.kind() == "method_invocation" {
-        if let (Some(obj), Some(name)) = (
-            node.child_by_field_name("object"),
-            node.child_by_field_name("name"),
-        ) {
-            let mut segs = faithful_path_from_node(&obj, source)?;
-            segs.push(node_text(&name, source)?.to_string());
-            return Some(segs);
-        }
-    }
-    if node.kind() == "call" {
-        // Ruby receiver-dot calls keep their registered flattening
-        // (pinned ruby probes); only the member-chain decomposition below
-        // is refined here.
-        if ruby_receiver_callee(node, source).is_some() {
-            return call_target_path(node, source);
-        }
-    }
-    // Php static calls decompose into exactly the scope and name positions
-    // the reference unifies against (raw texts — `$inst`/`$dyn` included).
-    // The scope is ONE node, so its text is faithful by construction;
-    // there is no flattening to veto. The plain `->` member-call twin —
-    // object and name are single faithful nodes/strict chains (the strict
-    // object resolver refuses flattening), so the raw texts unify exactly
-    // like the reference.
-    if node.kind() == "member_call_expression" {
-        if let (Some(object), Some(name)) = (
-            node.child_by_field_name("object"),
-            node.child_by_field_name("name"),
-        ) {
-            if let (Some(mut segments), Some(name_text)) = (
-                php_member_object_segments(&object, source),
-                node_text(&name, source),
-            ) {
-                segments.push(name_text.to_string());
-                return Some(segments);
-            }
-        }
-    }
-    if node.kind() == "scoped_call_expression" {
-        if let (Some(scope), Some(name)) = (
-            node.child_by_field_name("scope"),
-            node.child_by_field_name("name"),
-        ) {
-            if let (Some(scope_text), Some(name_text)) =
-                (node_text(&scope, source), node_text(&name, source))
-            {
-                return Some(vec![scope_text.to_string(), name_text.to_string()]);
-            }
-        }
-    }
-    let field = call_field_node(node)?;
-    faithful_path_from_node(&field, source)
+    // Ruby receiver-dot calls keep their registered flattening (pinned
+    // ruby probes): the unified resolver returns the lenient ruby chain
+    // for them even under `Faithful`, exactly like the former dedicated
+    // arm that deferred to `call_target_path` here.
+    resolve_callee(node, source, CalleeStrictness::Faithful).map(|(segments, _)| segments)
 }
 
-/// Like [`path_from_node`], but returning `None` instead of falling back to
-/// `last_identifier_in_chain` — a chain segment that is not a plain
-/// identifier or member expression (a call receiver, paren, subscript…)
-/// has no faithful segment text. The swift/kotlin grammars wrap each member
-/// link in a `navigation_suffix` node — the suffix is part of the
-/// member-chain decomposition, so the faithful resolver reads straight
-/// through it (its named child contributes the next segment). The wrapper
-/// never hides a `?.` connector: swift spells the optional link as a
-/// separate named `?` SIBLING before the suffix, and the loop's `?`-kind
-/// veto below fires on it — the `.`-template stays connector token-exact.
-pub(crate) fn faithful_path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
+/// Resolve one receiver node into dotted path segments — the single path
+/// builder behind the former `path_from_node` / `faithful_path_from_node`
+/// pair. `strict = false` flattens through the last identifier (match and
+/// index resolution); `strict = true` vetoes every non-plain chain link
+/// (metavariable binding). The swift/kotlin grammars wrap each member link
+/// in a `navigation_suffix` node — the suffix is part of the member-chain
+/// decomposition, so the strict resolver reads straight through it (its
+/// named child contributes the next segment). The wrapper never hides a
+/// `?.` connector: swift spells the optional link as a separate named `?`
+/// SIBLING before the suffix, and the loop's `?`-kind veto below fires on
+/// it — the `.`-template stays connector token-exact.
+pub(crate) fn resolve_path(node: &Node, source: &str, strict: bool) -> Option<Vec<String>> {
+    if !strict {
+        if let Some(accessor) = crate::extract::dot_accessor_text(node, source) {
+            return Some(vec![accessor.to_string()]);
+        }
+    }
     if is_ident_kind(node.kind()) || KEYWORD_RECEIVER_KINDS.contains(&node.kind()) {
         return node_text(node, source).map(|t| vec![t.to_string()]);
     }
-    if !is_member_expr_kind(node.kind()) && !is_navigation_suffix_kind(node.kind()) {
-        return None;
+    if !is_member_expr_kind(node.kind()) && !(strict && is_navigation_suffix_kind(node.kind())) {
+        // Lenient: a chain segment that is not a plain member expression
+        // flattens to its last identifier. Strict: it has no faithful
+        // segment text — veto instead.
+        if strict {
+            return None;
+        }
+        return last_identifier_in_chain(node, source).map(|s| vec![s]);
     }
     let mut segs = Vec::new();
     let mut cursor = node.walk();
@@ -1438,25 +1455,32 @@ pub(crate) fn faithful_path_from_node(node: &Node, source: &str) -> Option<Vec<S
             // Anonymous punctuation (`.` separators) is not a chain segment.
             continue;
         }
-        // Chain decomposition is comment-transparent — `a /*c*/ .b(1)`,
-        // `a. /*c*/ b(1)`, `a /*c*/ . /*d*/ b(1)` and the 3-link
-        // `a /*c*/ .b /*d*/ .c(1)` all answer `a.b(...)`/`a.b.c(...)`, and
-        // a meta head binds the CLEAN identifier text (`$A` = `a` at the
-        // identifier's byte range). Skip trivia/extra children so
-        // comment-bearing chains stay on the faithful arm instead of
-        // routing to the nonfaithful receiver slice (mirroring
-        // `argument_nodes`' filters); the `?`-kind veto above runs FIRST,
-        // so `a?. /*c*/ b(1)` keeps its registered refusal, and non-member
-        // children (subscript/call receivers) still veto below.
-        if is_trivia_kind(child.kind()) || child.is_extra() {
-            continue;
+        if strict {
+            // Chain decomposition is comment-transparent — `a /*c*/ .b(1)`,
+            // `a. /*c*/ b(1)`, `a /*c*/ . /*d*/ b(1)` and the 3-link
+            // `a /*c*/ .b /*c*/ .c(1)` all answer `a.b(...)`/`a.b.c(...)`,
+            // and a meta head binds the CLEAN identifier text (`$A` = `a` at
+            // the identifier's byte range). Skip trivia/extra children so
+            // comment-bearing chains stay on the faithful arm instead of
+            // routing to the nonfaithful receiver slice (mirroring
+            // `argument_nodes`' filters); the `?`-kind veto above runs
+            // FIRST, so `a?. /*c*/ b(1)` keeps its registered refusal. The
+            // lenient path needs no skip: a comment child is not an
+            // identifier or member node, so the last-identifier fallback
+            // below yields nothing for it and it is skipped the same way.
+            if is_trivia_kind(child.kind()) || child.is_extra() {
+                continue;
+            }
         }
-        // Unlike `path_from_node`, a NAMED child with no faithful path
-        // (a call/paren/subscript receiver) VETOES the whole chain
-        // instead of being silently skipped — its "segments" would be
-        // flattened lies about the receiver shape.
-        let mut p = faithful_path_from_node(&child, source)?;
-        segs.append(&mut p);
+        // Unlike the lenient fallback, a NAMED child with no strict path
+        // (a call/paren/subscript receiver) VETOES the whole chain in
+        // strict mode — its "segments" would be flattened lies about the
+        // receiver shape.
+        match resolve_path(&child, source, strict) {
+            Some(mut p) => segs.append(&mut p),
+            None if strict => return None,
+            None => {}
+        }
     }
     (!segs.is_empty()).then_some(segs)
 }
@@ -1471,29 +1495,7 @@ pub(crate) const KEYWORD_RECEIVER_KINDS: &[&str] =
     &["self", "this", "self_expression", "this_expression"];
 
 pub(crate) fn path_from_node(node: &Node, source: &str) -> Option<Vec<String>> {
-    if let Some(accessor) = crate::extract::dot_accessor_text(node, source) {
-        return Some(vec![accessor.to_string()]);
-    }
-    if is_ident_kind(node.kind()) || KEYWORD_RECEIVER_KINDS.contains(&node.kind()) {
-        return node_text(node, source).map(|t| vec![t.to_string()]);
-    }
-    if !is_member_expr_kind(node.kind()) {
-        return last_identifier_in_chain(node, source).map(|s| vec![s]);
-    }
-    let mut segs = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        // Optional-chain separators veto the path (see
-        // `faithful_path_from_node`) — anonymous `?.` tokens and named
-        // `optional_chain` nodes alike.
-        if child.kind().contains('?') || child.kind().contains("optional") {
-            return None;
-        }
-        if let Some(mut p) = path_from_node(&child, source) {
-            segs.append(&mut p);
-        }
-    }
-    (!segs.is_empty()).then_some(segs)
+    resolve_path(node, source, false)
 }
 
 pub(crate) fn path_matches(actual: &[String], pattern: &[Option<String>]) -> bool {

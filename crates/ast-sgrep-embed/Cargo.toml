@@ -34,3 +34,7 @@ path = "../../tests/embed/flat_rank.rs"
 [[test]]
 name = "lazy_table"
 path = "../../tests/embed/lazy_table.rs"
+
+[[test]]
+name = "no_embed_trace"
+path = "../../tests/embed/no_embed_trace.rs"

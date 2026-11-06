@@ -17,10 +17,13 @@
 //!   `recv_timeout`); a regressed server fails the test instead of hanging CI.
 //!   The one-shot drivers ride [`LiveSession`], so every driver read and
 //!   every driver wait is bounded the same way (15s).
-//! - `index_tree` / `indexed_tree` index with **default** `IndexOptions`
-//!   resolution (not an explicit `index_path`) so the planted index lands
-//!   exactly where the server process opens it. By design, not hermetic:
-//!   do not set `ASGREP_INDEX_PATH` around these fixtures.
+//! - `index_tree` / `indexed_tree` plant at the explicit default-state path
+//!   ([`crate::index_db_path`]), so the planted index lands exactly where the
+//!   server process opens it and ambient `ASGREP_INDEX_PATH` cannot redirect
+//!   it. Embed stays on (deliberate delta vs
+//!   [`crate::hermetic_index_options`]): the planted DB carries the active
+//!   embed identity so the server's first refresh stays incremental — see
+//!   [`index_tree`].
 //! - Determinism: builders and extractors are pure functions of their inputs.
 //!   Process drivers are deterministic up to server behavior; `rpc_session`
 //!   preserves request order (sequential send/recv) while `rpc_pipeline`
@@ -40,34 +43,13 @@ use tempfile::TempDir;
 /// Custom flows can pass their own name to [`init_payload`].
 pub const TESTKIT_CLIENT_NAME: &str = "asgrep-testkit";
 
-/// Per-read bound for [`LiveSession::recv`]. Slow phases use [`LiveSession::recv_timeout`].
-const RECV_TIMEOUT: Duration = Duration::from_secs(15);
-/// Bound for [`LiveSession::wait_clean`] before the child is killed.
-const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+use crate::spawn::{SPAWN_POLL_INTERVAL, SPAWN_RECV_TIMEOUT, SPAWN_WAIT_TIMEOUT};
 
 /// Locate the `asgrep-mcp` binary: `CARGO_BIN_EXE_asgrep-mcp` when cargo sets
 /// it for the test target, else `$CARGO_TARGET_DIR/<profile>/`, else the
 /// workspace `target/<profile>/` relative to this crate's manifest.
 pub fn mcp_bin() -> PathBuf {
-    if let Some(p) = option_env!("CARGO_BIN_EXE_asgrep-mcp") {
-        return PathBuf::from(p);
-    }
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let exe = format!("asgrep-mcp{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-        let candidate = PathBuf::from(dir).join(profile).join(&exe);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(profile)
-        .join(exe)
+    crate::locate_test_bin(option_env!("CARGO_BIN_EXE_asgrep-mcp"), "asgrep-mcp")
 }
 
 /// JSON-RPC `initialize` handshake payload (id `"__init"`,
@@ -182,17 +164,22 @@ impl LiveSession {
         self.send(&initialized_notif());
     }
 
+    /// Write one raw line + flush. Panics when stdin is closed or the write fails.
+    fn write_line(&mut self, line: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        writeln!(stdin, "{line}").expect("write MCP stdin");
+        stdin.flush().expect("flush MCP stdin");
+    }
+
     /// Write one JSON line + flush. Panics when stdin is closed or the write fails.
     pub fn send(&mut self, payload: &Value) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        writeln!(stdin, "{payload}").expect("write MCP stdin");
-        stdin.flush().expect("flush MCP stdin");
+        self.write_line(&payload.to_string());
     }
 
     /// Read one JSON response, bounded by the 15s default. Panics on timeout,
     /// EOF, or non-JSON output.
     pub fn recv(&self) -> Value {
-        self.recv_timeout(RECV_TIMEOUT)
+        self.recv_timeout(SPAWN_RECV_TIMEOUT)
     }
 
     /// Read one JSON response with an explicit bound. Same panics as [`Self::recv`].
@@ -210,9 +197,9 @@ impl LiveSession {
     /// relations that compare wire bytes, not re-serialized values. Panics
     /// on timeout or EOF.
     pub fn recv_raw(&self) -> String {
-        let line = match self.lines.recv_timeout(RECV_TIMEOUT) {
+        let line = match self.lines.recv_timeout(SPAWN_RECV_TIMEOUT) {
             Ok(line) => line,
-            Err(_) => panic!("timed out after {RECV_TIMEOUT:?} waiting for MCP output"),
+            Err(_) => panic!("timed out after {SPAWN_RECV_TIMEOUT:?} waiting for MCP output"),
         }
         .expect("MCP closed stdout while a response was pending");
         line.trim_end_matches(['\r', '\n']).to_owned()
@@ -222,9 +209,7 @@ impl LiveSession {
     /// Unparsable lines must be ignored (no echo, no hang); the next valid
     /// call still answers. Panics when stdin is closed or the write fails.
     pub fn send_raw_line(&mut self, line: &str) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        writeln!(stdin, "{line}").expect("write MCP stdin");
-        stdin.flush().expect("flush MCP stdin");
+        self.write_line(line);
     }
 
     /// INTENT: plant a torn request — write bytes with no trailing newline,
@@ -267,12 +252,12 @@ impl LiveSession {
             if let Some(status) = self.child.try_wait().expect("poll MCP") {
                 return status;
             }
-            if started.elapsed() > WAIT_TIMEOUT {
+            if started.elapsed() > SPAWN_WAIT_TIMEOUT {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                panic!("killed MCP did not terminate within {WAIT_TIMEOUT:?}");
+                panic!("killed MCP did not terminate within {SPAWN_WAIT_TIMEOUT:?}");
             }
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(SPAWN_POLL_INTERVAL);
         }
     }
 
@@ -289,12 +274,12 @@ impl LiveSession {
             if let Some(status) = self.child.try_wait().expect("poll MCP") {
                 return status;
             }
-            if started.elapsed() > WAIT_TIMEOUT {
+            if started.elapsed() > SPAWN_WAIT_TIMEOUT {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                panic!("MCP did not exit within {WAIT_TIMEOUT:?}");
+                panic!("MCP did not exit within {SPAWN_WAIT_TIMEOUT:?}");
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(SPAWN_POLL_INTERVAL);
         }
     }
 }
@@ -579,11 +564,20 @@ pub fn assert_tool_error_shape(response: &Value) {
     );
 }
 
-/// Index `path` with default `IndexOptions` resolution — the planted index
-/// lands where the server opens it. Panics on index failure. See module docs.
+/// INTENT: plant the default-state index pair — explicit
+/// [`crate::index_db_path`] (immune to ambient `ASGREP_INDEX_PATH`), default
+/// [`IndexOptions`] otherwise — so the planted index lands exactly where the
+/// server opens it. Deliberate delta vs [`crate::hermetic_index_options`]:
+/// embed stays ON: the planted DB carries the active embed identity, so the
+/// server's first refresh is incremental (a single-file modify reindexes 1
+/// file). Planting embed-off forces a one-time full semantic rewrite on first
+/// refresh (measured: `files_indexed` 2 vs 1 on the modify phase) and breaks
+/// the refresh-stat pins in `tests/mcp/invalidation_matrix.rs`. Panics on
+/// index failure.
 pub fn index_tree(path: &Path) {
     Indexer::new(IndexOptions {
         root: path.to_path_buf(),
+        index_path: Some(crate::index_db_path(path)),
         ..IndexOptions::default()
     })
     .expect("indexer")
@@ -591,10 +585,12 @@ pub fn index_tree(path: &Path) {
     .expect("index_all");
 }
 
-/// Temp tree with `files` (`(relative path, body)` pairs), indexed via
-/// [`index_tree`]. The caller keeps the [`TempDir`] alive. Panics on IO or
+/// Temp tree with `files` (`(relative path, body)` pairs; parents created),
+/// indexed via [`index_tree`]. Accepts borrowed or owned pairs (`&str` or
+/// `String` bodies alike), so generated-name fixtures pass owned strings
+/// directly. The caller keeps the [`TempDir`] alive. Panics on IO or
 /// index failure.
-pub fn indexed_tree(files: &[(&str, &str)]) -> TempDir {
+pub fn indexed_tree<A: AsRef<str>, B: AsRef<str>>(files: &[(A, B)]) -> TempDir {
     let temp = crate::fixture::file_tree(files);
     index_tree(temp.path());
     temp
@@ -613,18 +609,19 @@ pub fn small_tree() -> TempDir {
 
 /// Wide unindexed tree with `files` single-symbol files: `index_repo` over it
 /// is the reliably-slow tool call. Symbols carry a distinctive prefix so a
-/// follow-up search proves the index is queryable. The caller keeps the
-/// [`TempDir`] alive.
+/// follow-up search proves the index is queryable. Generated names are owned
+/// `String`s, routed through [`crate::fixture::file_tree`]. The caller keeps
+/// the [`TempDir`] alive.
 pub fn big_tree(files: usize) -> TempDir {
-    let temp = tempfile::tempdir().unwrap();
-    for index in 0..files {
-        std::fs::write(
-            temp.path().join(format!("f{index}.rs")),
-            format!("pub fn k2requelch_{index}() {{}}\n"),
-        )
-        .unwrap();
-    }
-    temp
+    let owned: Vec<(String, String)> = (0..files)
+        .map(|index| {
+            (
+                format!("f{index}.rs"),
+                format!("pub fn k2requelch_{index}() {{}}\n"),
+            )
+        })
+        .collect();
+    crate::fixture::file_tree(&owned)
 }
 
 /// INTENT: distinct `<path_id>` prefixes across compact hit ids — the only
@@ -645,10 +642,10 @@ pub fn distinct_hit_paths(hits: &[Value]) -> std::collections::HashSet<String> {
 }
 
 /// INTENT: generated-name indexed fixture — six single-symbol files plus the
-/// target file, so limit 2 vs limit 8 differ. [`indexed_tree`] only takes
-/// literal `&[(&str, &str)]`, so generated names need owned strings. Bodies
-/// carry the shared `shared_token` stem the surface suites query. The caller
-/// keeps the [`TempDir`] alive. Panics on IO or index failure.
+/// target file, so limit 2 vs limit 8 differ. Bodies carry the shared
+/// `shared_token` stem the surface suites query. [`indexed_tree`] takes
+/// borrowed or owned pairs, so generated names pass straight through. The
+/// caller keeps the [`TempDir`] alive. Panics on IO or index failure.
 pub fn multi_hit_tree() -> TempDir {
     let mut owned: Vec<(String, String)> = (1..=6)
         .map(|index| {
@@ -662,11 +659,7 @@ pub fn multi_hit_tree() -> TempDir {
         "src/lib.rs".to_owned(),
         "fn target_symbol() {}\n".to_owned(),
     ));
-    let refs: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(path, body)| (path.as_str(), body.as_str()))
-        .collect();
-    indexed_tree(&refs)
+    indexed_tree(&owned)
 }
 
 /// Overwrite the durable `<root>/.asgrep/index.db` with deterministic
@@ -688,15 +681,18 @@ pub fn rpc_at(payload: Value, root: &Path) -> Value {
     responses.pop().expect("one response")
 }
 
+/// INTENT: canonical `keyword_search` args (limit 8, resend_seen) shared by
+/// [`search_call`] and [`CallSession::search_text`] so the query shape cannot
+/// drift per call site. Pure constructor.
+pub fn keyword_search_args(query: &str) -> Value {
+    json!({"query": query, "limit": 8, "resend_seen": true})
+}
+
 /// INTENT: canonical `keyword_search` envelope (limit 8, resend_seen) shared
 /// by every invalidation phase so query shape cannot drift per test. One
 /// canonical copy of the helper duplicated across the suites.
 pub fn search_call(id: u32, query: &str) -> Value {
-    tool_call(
-        id,
-        "keyword_search",
-        json!({"query": query, "limit": 8, "resend_seen": true}),
-    )
+    tool_call(id, "keyword_search", keyword_search_args(query))
 }
 
 /// INTENT: hit body-shape discriminant (no `why` + `zn >= 1` + nonempty `h`).
@@ -752,10 +748,7 @@ impl CallSession {
 
     /// Successful lexical search; returns the raw body bytes.
     pub fn search_text(&mut self, query: &str) -> String {
-        let response = self.call(
-            "keyword_search",
-            json!({"query": query, "limit": 8, "resend_seen": true}),
-        );
+        let response = self.call("keyword_search", keyword_search_args(query));
         assert_tool_success(&response);
         tool_text(&response).to_owned()
     }
@@ -793,7 +786,6 @@ pub fn hit_path_set(body: &Value) -> std::collections::BTreeSet<String> {
         ast_sgrep_plugins::resolve_compact_paths(body)
             .into_iter()
             .collect();
-    // The `p` table must name exactly the hit paths: no stale extras.
     let table_paths: std::collections::BTreeSet<String> = table.values().cloned().collect();
     let hits = body["h"].as_array().expect("hit h array");
     assert_eq!(

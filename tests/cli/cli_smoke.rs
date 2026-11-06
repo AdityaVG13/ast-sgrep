@@ -10,14 +10,12 @@ fn asgrep_bin() -> PathBuf {
 #[test]
 fn cli_smoke() {
     let session = CliSession::sample(asgrep_bin());
-    let status = session
-        .run(&[
-            "--index-path",
-            session.index_path.to_str().unwrap(),
-            "status",
-            session.root.to_str().unwrap(),
-        ])
-        .unwrap();
+    let status = session.run(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "status",
+        session.root.to_str().unwrap(),
+    ]);
     assert!(
         status.status.success(),
         "stdout: {}\nstderr: {}",

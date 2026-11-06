@@ -15,6 +15,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ast-sgrep-cli = { path = "../ast-sgrep-cli", version = "2.7.0" }
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.7.0" }
+# Exact pin (not caret): this is the F30 versioned contract pin. A CLI
+# release must re-verify `src/cli_contract.rs` (contract v1: exactly one
+# entry point, `run_watch_process`) before this pin moves. Path wins locally.
+ast-sgrep-cli = { path = "../ast-sgrep-cli", version = "=2.7.0" }
+ast-sgrep-core.workspace = true
 notify.workspace = true

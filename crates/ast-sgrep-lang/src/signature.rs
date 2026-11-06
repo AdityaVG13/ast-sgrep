@@ -3,7 +3,9 @@
 //! Exact string formats here are part of the on-disk `pattern_nodes` contract —
 //! keep them byte-identical when refactoring.
 
-use crate::pattern::{classify_native, is_pattern_ident, DECL_PATTERN_PREFIXES};
+use crate::pattern::{
+    classify_native, is_pattern_ident, normalize_any_expando_meta_spelling, DECL_PATTERN_PREFIXES,
+};
 
 /// Declaration keyword prefixes used when classifying patterns / building index keys.
 /// Shared with `classify_native` via [`DECL_PATTERN_PREFIXES`].
@@ -117,7 +119,10 @@ pub fn index_can_serve_pattern(pattern: &str, signatures: &[String]) -> bool {
     if signatures.is_empty() || signatures.iter().any(|s| s.starts_with("kind:")) {
         return false;
     }
-    let pattern = pattern.trim();
+    // Self-normalizing ingress (see `normalize_any_expando_meta_spelling`):
+    // an expando spelling must read exactly like its `$` twin here.
+    let pattern = normalize_any_expando_meta_spelling(pattern.trim());
+    let pattern: &str = &pattern;
     if STATEMENT_KEYWORDS.contains(&pattern) {
         return false;
     }
@@ -131,7 +136,9 @@ pub fn index_can_serve_pattern(pattern: &str, signatures: &[String]) -> bool {
 ///
 /// Returns `None` when the pattern shape is not indexable (exotic / nested).
 pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
-    let pattern = pattern.trim();
+    // Self-normalizing ingress (see `normalize_any_expando_meta_spelling`).
+    let pattern = normalize_any_expando_meta_spelling(pattern.trim());
+    let pattern: &str = &pattern;
     if pattern.is_empty() {
         return Some(vec![]);
     }
@@ -222,7 +229,9 @@ pub fn cached_pattern_signatures(pattern: &str) -> Option<Vec<String>> {
 /// narrows the file set; the native tree-sitter matcher still decides every
 /// hit, so over-broad kind candidates never change results.
 pub fn candidate_kind_signatures(pattern: &str) -> Option<Vec<String>> {
-    let pattern = pattern.trim();
+    // Self-normalizing ingress (see `normalize_any_expando_meta_spelling`).
+    let pattern = normalize_any_expando_meta_spelling(pattern.trim());
+    let pattern: &str = &pattern;
     if pattern.is_empty() {
         return None;
     }
@@ -240,7 +249,10 @@ pub fn candidate_kind_signatures(pattern: &str) -> Option<Vec<String>> {
 /// Declaration keywords alone are never returned (they are not cross-language
 /// literals). Metavariable-only callees yield `None`.
 pub fn required_pattern_literal(pattern: &str) -> Option<String> {
-    let pattern = pattern.trim();
+    // Self-normalizing ingress (see `normalize_any_expando_meta_spelling`):
+    // the literal is read off the `$` twin, never off raw expando bytes.
+    let pattern = normalize_any_expando_meta_spelling(pattern.trim());
+    let pattern: &str = &pattern;
     if pattern.is_empty() {
         return None;
     }

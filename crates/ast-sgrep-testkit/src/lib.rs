@@ -5,6 +5,8 @@
 //! The `lsp` feature (E17 B3) is the only path that prod-depends
 //! `ast-sgrep-lsp`. Default Bill is core + lang only.
 
+use std::path::PathBuf;
+
 mod cli;
 mod cli_oracle;
 mod cli_recovery;
@@ -30,7 +32,7 @@ mod lsp;
 mod mcp;
 mod num;
 mod scrub;
-mod verdict;
+mod spawn;
 pub use cli::{
     asgrep_bin, assert_failure_envelope, assert_finite_unit, assert_fixture_hits,
     assert_human_error, assert_human_success, assert_no_success_shape, assert_operational_envelope,
@@ -42,8 +44,7 @@ pub use cli::{
 };
 pub use cli_oracle::{
     oracle_build_json, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json,
-    oracle_run_raw, oracle_search_corpus, run_drain_timeout, sorted_surface_keys, write_root_bytes,
-    OracleCorpus,
+    oracle_run_raw, oracle_search_corpus, run_drain_timeout, sorted_surface_keys, OracleCorpus,
 };
 #[cfg(unix)]
 pub use cli_recovery::kill9;
@@ -63,9 +64,9 @@ pub use codemode::{
 };
 #[cfg(feature = "codemode")]
 pub use codemode_invalidation::{
-    external_reindex, find_limit8, hit_bytes, hit_count, hit_file_set, hit_files, hit_name_set,
-    hits_file, index_dir_db_path, search_limit8, seeded_py_repo, session_at_limit8,
-    status_file_count, status_writer_generation, targeted_refresh, write_py, SEEDED_ALPHA_TOKEN,
+    external_reindex, find_limit8, index_dir_db_path, search_limit8, seeded_py_repo,
+    session_at_limit8, status_file_count, status_writer_generation, targeted_refresh, write_py,
+    SEEDED_ALPHA_TOKEN,
 };
 #[cfg(feature = "codemode")]
 pub use codemode_recovery::{
@@ -73,7 +74,9 @@ pub use codemode_recovery::{
     remove_db_with_sidecars, serve_transcript_indexed, set_db_user_version, status_counts,
     twin_repos,
 };
-pub use core_invalidation::{hermetic_indexer, HitTuple, InvalidationFixture};
+pub use core_invalidation::{
+    hermetic_index_options, hermetic_indexer, hermetic_search_options, HitTuple, InvalidationFixture,
+};
 pub use core_oracle::{
     build_core_index, chain_store, core_index_options, core_search_options, core_searcher,
     crossover_corpus, finish_options, fused_keys, hit_files_in_order, mixed_hits, pair_examples,
@@ -82,7 +85,7 @@ pub use core_oracle::{
     write_core_fixture, CorePipelineFixture,
 };
 pub use core_recovery::{
-    assert_torn, build_and_quiet, corpus_session, home_names, quarantine_path, quiesced_db_bytes,
+    assert_torn, build_and_quiet, corpus_session, quarantine_path, quiesced_db_bytes,
     search_parity_key, search_parity_keys, store_snapshot, upsert_test_file, RECOVERY_CORPUS,
 };
 pub use fault::{
@@ -98,12 +101,12 @@ pub use golden::{
     canonicalize_chain_response, canonicalize_extraction, canonicalize_text, golden_text_pretty,
     updating_goldens,
 };
-pub use hit::{fused_key, hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey};
+pub use hit::{fused_key, hit_key_bits, hit_keys, mk_hit, sorted_contributors, HitKey, ScoredHitKey};
 pub use index::{
     core_search_hit_keys, index_sample, json_hit_keys, reopen_indexer, response_hit_keys,
-    searcher_from, HitKey as SurfaceHitKey, IndexedFixture,
+    searcher_from, IndexedFixture,
 };
-pub use isolation::{isolated_index_session, with_temp_index, IsolatedIndexSession};
+pub use isolation::{isolated_index_session, IsolatedIndexSession};
 pub use lang::{
     assert_has_callee, assert_has_symbol, assert_language_conformance, match_lines, parse,
     run_in_fresh_thread, ExpectedCall, ExpectedPattern, ExpectedSymbol, LanguageConformanceCase,
@@ -113,13 +116,14 @@ pub use lang_pipeline::{
 };
 #[cfg(feature = "lsp")]
 pub use lsp::{
-    edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys, sample_backend,
+    edit_full_replace, edit_ranged, edit_ranged_len, lsp_search_hit_keys,
 };
 pub use mcp::{
     assert_hit_envelope, assert_jsonrpc_error, assert_miss_envelope, assert_ping_ok,
     assert_tool_error_shape, assert_tool_success, assert_tool_success_shape, assert_tools_list_ok,
     big_tree, cancelled_notif, collect_responses, corrupt_index_db, distinct_hit_paths,
     expected_tool_names, index_tree, indexed_tree, init_payload, initialized_notif, is_error,
+    keyword_search_args,
     mcp_bin, multi_hit_tree, ping, response_by_id, rpc_at, rpc_pipeline, rpc_session,
     rpc_session_env, rpc_session_raw, search_call, small_tree, snippet_bytes,
     spawn_raw_no_handshake, tool_body, tool_call, tool_error_discriminant, tool_text, tools_list,
@@ -129,4 +133,33 @@ pub use mcp::{
 pub use mcp::{assert_hit_path_set, hit_path_set};
 pub use num::{approx_eq, chunk_row, fold_rank_scored, lcg_vec, ranked_indices};
 pub use scrub::Scrubber;
-pub use verdict::TestVerdict;
+pub use spawn::{
+    spawn_hermetic, SpawnMode, SPAWN_POLL_INTERVAL, SPAWN_RECV_TIMEOUT, SPAWN_RUN_TIMEOUT,
+    SPAWN_WAIT_TIMEOUT,
+};
+
+/// Shared test-binary locator: an explicit compile-time path (cargo's
+/// `CARGO_BIN_EXE_<name>`, resolved via `option_env!` at the call site)
+/// wins, else `$CARGO_TARGET_DIR/<profile>/`, else the workspace
+/// `target/<profile>/` relative to this crate's manifest.
+pub(crate) fn locate_test_bin(explicit: Option<&str>, exe: &str) -> PathBuf {
+    if let Some(p) = explicit {
+        return PathBuf::from(p);
+    }
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let exe = format!("{exe}{}", std::env::consts::EXE_SUFFIX);
+    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+        let candidate = PathBuf::from(dir).join(profile).join(&exe);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(profile)
+        .join(exe)
+}

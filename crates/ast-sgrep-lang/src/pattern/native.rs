@@ -400,7 +400,7 @@ pub(crate) fn classify_member_call_mixed_args(p: &str) -> Option<NativeKind> {
         // the zero-arity sites).
         Vec::new()
     } else {
-        parse_member_arg_slots(args)?
+        parse_arg_slots(args, ArgSlotGrammar::Member)?
     };
     let path = parse_call_path(&callee)?;
     Some(NativeKind::MemberCall {
@@ -592,7 +592,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
         match validate_argument_pattern(args) {
             Some(()) => None,
             None => {
-                let slots = parse_member_arg_slots(args)?;
+                let slots = parse_arg_slots(args, ArgSlotGrammar::Member)?;
                 Some(slots)
             }
         }
@@ -607,7 +607,7 @@ pub fn classify_native(pattern: &str) -> Option<NativeKind> {
         // rests with singles) stay unclassified here exactly as before.
         match validate_argument_pattern(args) {
             Some(()) => None,
-            None => parse_call_arg_slots(args).map(Some)?,
+            None => parse_arg_slots(args, ArgSlotGrammar::PlainCall).map(Some)?,
         }
     };
     if let Some(path) = parse_call_path(callee) {

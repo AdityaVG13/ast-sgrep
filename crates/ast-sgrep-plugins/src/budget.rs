@@ -59,7 +59,41 @@ impl Default for OutputBudget {
     }
 }
 
-/// One result rendered at a chosen detail level.
+/// Canonical token budget for one compact response (F24, kills H6/S4).
+///
+/// Merges `CompactBudget`'s per-result/response byte ceilings (pure compact
+/// pass) with `OutputBudget`'s detail-selection ceiling (budgeted overlay).
+/// `Budget::default()` reproduces both legacy defaults at once (96/768 for
+/// the compact half, 900/Block for the detail half), so every legacy
+/// constructor converts losslessly via `From`.
+///
+/// A token unit is one UTF-8 byte: the canonical home of the byte=token
+/// contract (conservative, model-independent ceiling; see `TokenUnits`).
+/// The legacy halves keep one-line pointers here instead of a second copy
+/// of the rationale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    /// Byte ceiling per snippet row (pure compact pass).
+    pub per_result_tokens: TokenUnits,
+    /// Byte ceiling across all snippet rows (pure compact pass).
+    pub response_tokens: TokenUnits,
+    /// Token-unit ceiling for the detail-selection overlay (budgeted pass).
+    pub max_tokens: TokenUnits,
+    /// Detail level a result gets before the budget is considered.
+    pub default_detail: DetailLevel,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            per_result_tokens: 96,
+            response_tokens: 768,
+            max_tokens: 900,
+            default_detail: DetailLevel::Block,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedHit {
     pub detail: DetailLevel,
@@ -72,8 +106,6 @@ pub struct RenderedHit {
 /// are contiguous.
 pub const GAP_MARKER: &str = "…";
 
-/// Render a hit at a given detail level (m38g).
-///
 /// Every level returns verifiable source text or nothing. No level generates a
 /// summary, because a summary can describe behavior the code does not have.
 pub fn render(hit: &SearchHit, detail: DetailLevel) -> RenderedHit {
@@ -87,7 +119,6 @@ pub fn render(hit: &SearchHit, detail: DetailLevel) -> RenderedHit {
     RenderedHit { detail, body, cost }
 }
 
-/// Declaration signature plus the matched line (m38g).
 fn signature_and_match(hit: &SearchHit) -> String {
     let lines: Vec<&str> = hit.excerpt.lines().collect();
     let Some(signature) = lines.iter().find(|line| !line.trim().is_empty()) else {
@@ -167,7 +198,6 @@ fn ast_block(hit: &SearchHit) -> String {
 
 const BLOCK_MAX_LINES: usize = 12;
 
-/// Lines that carry block structure or control flow.
 fn is_structural_line(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -188,7 +218,17 @@ fn is_structural_line(line: &str) -> bool {
 /// comparison breaks ties by index, so the same input always yields the same
 /// assignment. Ranked-first results are funded before later ones, then leftover
 /// budget is spent upgrading results in rank order -- the density-greedy step.
+/// Legacy entry (F24): converts to [`Budget`] and delegates to
+/// [`select_with`]. Kept so `OutputBudget { max_tokens, default_detail }`
+/// construction sites keep compiling; new code takes `&Budget`.
 pub fn select(hits: &[SearchHit], budget: OutputBudget) -> Vec<RenderedHit> {
+    select_with(hits, &crate::Budget::from(budget))
+}
+
+/// Canonical detail-selection entry (F24): choose a detail level per hit so
+/// the whole response fits `budget.max_tokens`, upgrading in rank order up
+/// to `budget.default_detail`. Deterministic by construction (see below).
+pub fn select_with(hits: &[SearchHit], budget: &Budget) -> Vec<RenderedHit> {
     if hits.is_empty() {
         return Vec::new();
     }
@@ -225,7 +265,6 @@ pub fn select(hits: &[SearchHit], budget: OutputBudget) -> Vec<RenderedHit> {
     chosen
 }
 
-/// Total token units a rendering plan occupies.
 pub fn plan_cost(rendered: &[RenderedHit]) -> TokenUnits {
     rendered.iter().map(|r| r.cost).sum()
 }

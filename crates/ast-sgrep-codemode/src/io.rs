@@ -6,6 +6,7 @@
 //! `edit` is a unique-string replace + targeted reindex — never a second
 //! Searcher open.
 
+use crate::jail::{JailKind, JailResolve, jail_join};
 use crate::session::{admit_response, CodeModeSession};
 use anyhow::{anyhow, Context};
 use ast_sgrep_core::{
@@ -13,7 +14,7 @@ use ast_sgrep_core::{
 };
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub const MAX_READ_REFS: usize = 32;
 pub const MAX_READ_CHARS: usize = 100_000;
@@ -40,7 +41,7 @@ impl CodeModeSession {
 
     /// Batched line windows. One Searcher, many refs — SQLite seeks, not N opens.
     pub(crate) fn read_windows(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let root = self.jail_root(args)?;
+        let root = self.root_arg(args)?;
         let context_lines = args
             .get("context_lines")
             .or_else(|| args.get("contextLines"))
@@ -84,7 +85,7 @@ impl CodeModeSession {
 
     /// Unique string replace, then targeted index update.
     pub(crate) fn edit_files(&mut self, args: &Value) -> anyhow::Result<Value> {
-        let root = self.jail_root(args)?;
+        let root = self.root_arg(args)?;
         let edits = collect_edits(args)?;
         if edits.is_empty() {
             return Err(anyhow!("edit requires path+oldText+newText or edits[]"));
@@ -182,10 +183,18 @@ impl CodeModeSession {
     }
 }
 
+/// Prefix routing for `find` queries. Contract (parity with
+/// `packages/pi/extension/src/codemode/dispatch.ts` `/^blast:/i`): the
+/// `blast:` prefix matches case-insensitively; `blast:` + a path-like target
+/// (contains `/`, `\`, or `.`) routes to `imports:`, any other `blast:`
+/// target to `callers:`.
 pub fn dispatch_find_query(raw: &str) -> String {
     let trimmed = raw.trim();
-    if let Some(target) = trimmed.strip_prefix("blast:") {
-        let target = target.trim();
+    if trimmed
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("blast:"))
+    {
+        let target = trimmed[6..].trim();
         if target.contains('/') || target.contains('\\') || target.contains('.') {
             return format!("imports:{target}");
         }
@@ -426,39 +435,36 @@ fn unique_replace(haystack: &str, old: &str, new: &str) -> anyhow::Result<String
 }
 
 fn jail_rel_path(root: &Path, raw: &str) -> anyhow::Result<PathBuf> {
-    let requested = Path::new(raw);
-    if requested
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
-        return Err(anyhow!("path must not contain '..'"));
-    }
-    let candidate = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
+    // Reads and edits resolve through the jail: `..` rejects on decoded
+    // components (platform-correct), the root canonicalizes, and every
+    // refusal keeps this function's legacy message.
+    let resolved = match jail_join(root, raw, JailResolve::Strict) {
+        Ok(path) => path,
+        Err(err) => {
+            return Err(match err.kind {
+                JailKind::Traversal => anyhow!("path must not contain '..'"),
+                JailKind::Unresolvable | JailKind::UnresolvableRoot => {
+                    err.into_anyhow(format!("cannot resolve path {raw}"))
+                }
+                JailKind::NonUtf8 => {
+                    anyhow!("canonical path is not valid UTF-8: {raw}")
+                }
+                JailKind::Outside => anyhow!("path escapes session root: {raw}"),
+            });
+        }
     };
-    let canon = candidate
-        .canonicalize()
-        .with_context(|| format!("cannot resolve path {raw}"))?;
-    if canon.to_str().is_none() {
-        return Err(anyhow!("canonical path is not valid UTF-8: {raw}"));
-    }
-    if !canon.starts_with(root) {
-        return Err(anyhow!("path escapes session root: {raw}"));
-    }
     // Reject static FIFOs/devices before opening: even a capped read can block
     // at File::open on a FIFO with no writer. External writers are not locked.
-    if !fs::metadata(&canon)
+    if !fs::metadata(&resolved)
         .with_context(|| format!("cannot inspect path {raw}"))?
         .is_file()
     {
         return Err(anyhow!("path is not a regular file: {raw}"));
     }
-    Ok(canon
+    Ok(resolved
         .strip_prefix(root)
         .map(|p| p.to_path_buf())
-        .unwrap_or(canon))
+        .unwrap_or(resolved))
 }
 
 fn rel_display(path: &Path) -> String {

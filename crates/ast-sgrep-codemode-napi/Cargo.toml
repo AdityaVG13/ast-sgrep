@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 name = "ast_sgrep_codemode_napi"
 
 [dependencies]
-ast-sgrep-codemode = { path = "../ast-sgrep-codemode", version = "2.7.0" }
+ast-sgrep-codemode.workspace = true
 napi = { version = "3", default-features = false, features = ["napi9", "serde-json", "anyhow"] }
 napi-derive = "3"
 serde = { workspace = true }
@@ -30,7 +30,7 @@ napi-build = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["codemode"] }
+ast-sgrep-testkit = { workspace = true, features = ["codemode"] }
 
 # Integration tests live in the repo-root tests/ tree.
 # ffi_shared.rs is a shared-only module (no #[test]), included via #[path].
@@ -49,3 +49,7 @@ path = "../../tests/codemode/ffi_bilateral.rs"
 [[test]]
 name = "ffi_js_client"
 path = "../../tests/codemode/ffi_js_client.rs"
+
+[[test]]
+name = "ffi_batch_budget"
+path = "../../tests/codemode/ffi_batch_budget.rs"

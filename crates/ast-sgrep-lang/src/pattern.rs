@@ -44,6 +44,11 @@ pub(crate) mod statements;
 pub(crate) mod structural;
 pub(crate) mod templates;
 
+/// ONE trivia convention (H7): every pattern module sees the canonical
+/// predicates through this glob (`use super::*`), so no lane keeps a
+/// private copy that can drift.
+pub(crate) use crate::trivia::*;
+
 pub use answerable::*;
 pub(crate) use bind::*;
 pub(crate) use calls::*;

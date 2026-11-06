@@ -352,22 +352,25 @@ pub struct SearchOptions {
 }
 impl Default for SearchOptions {
     fn default() -> Self {
-        use crate::env_flag::env_flag;
+        Self::from_core_config(&crate::config::CoreConfig::from_env())
+    }
+}
+impl SearchOptions {
+    /// Options derived from a config resolved at construction. [`Default`]
+    /// delegates here with a fresh [`crate::config::CoreConfig::from_env`],
+    /// so values stay byte-identical while the parsing lives in one place.
+    pub fn from_core_config(config: &crate::config::CoreConfig) -> Self {
         Self {
             root: PathBuf::from("."),
             index_path: None,
-            limit: Self::default_limit(),
+            limit: config.default_limit,
             lang_filter: None,
-            use_embed: !env_flag("ASGREP_NO_EMBED"),
-            use_tantivy: env_flag("ASGREP_TANTIVY"),
-            use_semantic_only: env_flag("ASGREP_SEMANTIC_ONLY"),
+            use_embed: config.use_embed,
+            use_tantivy: config.use_tantivy,
+            use_semantic_only: config.use_semantic_only,
             use_repository_vocabulary: true,
-            ann_threshold: std::env::var("ASGREP_ANN_THRESHOLD")
-                .ok()
-                .and_then(|v| v.parse().ok()),
-            ann_probes: std::env::var("ASGREP_ANN_PROBES")
-                .ok()
-                .and_then(|v| v.parse().ok()),
+            ann_threshold: config.ann_threshold,
+            ann_probes: config.ann_probes,
             case_insensitive: false,
             context_before: 0,
             context_after: 0,
@@ -375,20 +378,13 @@ impl Default for SearchOptions {
             file_filter: None,
         }
     }
-}
-impl SearchOptions {
     /// Candidate retention shared by search passes and the final result gates.
     pub(crate) fn retained_limit(&self) -> usize {
         self.limit
     }
 
     pub fn default_limit() -> usize {
-        crate::limits::clamp_output_limit(
-            std::env::var("ASGREP_LIMIT")
-                .ok()
-                .and_then(|v| v.parse().ok()),
-            16,
-        )
+        crate::config::CoreConfig::from_env().default_limit
     }
     /// Stable fingerprint of options that affect search results (nyui).
     pub fn cache_identity(&self) -> String {

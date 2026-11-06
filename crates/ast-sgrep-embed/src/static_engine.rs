@@ -253,9 +253,7 @@ impl StaticEmbedder {
         }
         ids
     }
-}
 
-impl StaticEmbedder {
     /// Mean-pool `text`'s token rows and L2-normalize.
     ///
     /// `table: Some(_)` pools from the materialized f32 table (the batch /
@@ -265,20 +263,28 @@ impl StaticEmbedder {
     /// (~65 MB) per process. f16→f32 is exact widening and the summation
     /// order is identical, so both sources yield bit-identical vectors
     /// (pinned by `tests/embed/static_engine.rs` dual-path parity).
+    /// One pooled row element from either source: the materialized f32
+    /// table (`Some`) or the f16 bytes decoded on demand (`None`).
+    /// Single call site in [`Self::pool`] keeps both paths on one
+    /// summation order so lazy/batch stay bit-identical.
+    #[inline]
+    fn row_elem(table: Option<&[f32]>, base: usize, d: usize) -> f32 {
+        match table {
+            Some(w) => w[base + d],
+            None => {
+                let b = (base + d) * 2;
+                f16_to_f32(u16::from_le_bytes([WEIGHTS[b], WEIGHTS[b + 1]]))
+            }
+        }
+    }
+
     fn pool(&self, text: &str, table: Option<&[f32]>) -> Vec<f32> {
         let ids = self.token_ids(text);
         let mut v = vec![0.0f32; STATIC_DIM];
         for id in &ids {
             let base = *id as usize * STATIC_DIM;
             for (d, x) in v.iter_mut().enumerate() {
-                let p = match table {
-                    Some(w) => w[base + d],
-                    None => {
-                        let b = (base + d) * 2;
-                        f16_to_f32(u16::from_le_bytes([WEIGHTS[b], WEIGHTS[b + 1]]))
-                    }
-                };
-                *x += p;
+                *x += Self::row_elem(table, base, d);
             }
         }
         if !ids.is_empty() {

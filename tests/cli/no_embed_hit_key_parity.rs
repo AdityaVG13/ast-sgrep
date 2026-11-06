@@ -165,7 +165,7 @@ fn surface_equivalence_both_error_table() {
         bad_regex,
         session.root.to_str().unwrap(),
     ]);
-    let cli_failed = cli.as_ref().map(|o| !o.status.success()).unwrap_or(true);
+    let cli_failed = !cli.status.success();
 
     let core = ast_sgrep_core::Searcher::new(ast_sgrep_core::SearchOptions {
         root: session.root.clone(),

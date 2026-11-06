@@ -23,86 +23,36 @@
 use crate::cli_recovery::RUN_TIMEOUT;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Output;
+use std::time::Duration;
 use tempfile::TempDir;
 
 /// INTENT: hermetic run that drains stdout/stderr while waiting, with a hard
-/// timeout. Scrubs inherited `ASGREP_*` (the parent env must not shift flag
+/// timeout, via [`crate::spawn_hermetic`] (`Drain` + bound, no `cwd`
+/// override). Scrubs inherited `ASGREP_*` (the parent env must not shift flag
 /// defaults), pins `NO_COLOR=1` + `HF_HUB_OFFLINE=1`. Unlike
 /// [`crate::cli_recovery::run_timeout`] the pipes are pumped by reader threads
 /// during the wait, so outputs larger than the pipe buffer cannot deadlock the
 /// child. No `current_dir` override: oracle invocations pass absolute paths.
-/// Panics past `timeout`, killing the child.
+/// Panics past `timeout`, killing the child. See [`crate::spawn::SpawnMode`]
+/// for the deadlock facet this shape exists for.
 pub fn run_drain_timeout(
     bin: &Path,
     args: &[&str],
     envs: &[(&str, &str)],
     timeout: Duration,
 ) -> Output {
-    let mut cmd = Command::new(bin);
-    cmd.args(args)
-        .env("NO_COLOR", "1")
-        .env("HF_HUB_OFFLINE", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let scrub: Vec<String> = std::env::vars()
-        .map(|(key, _)| key)
-        .filter(|key| key.starts_with("ASGREP_"))
-        .collect();
-    for var in &scrub {
-        cmd.env_remove(var);
-    }
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-    let mut child = cmd.spawn().expect("spawn asgrep");
-    let stdout_handle = std::thread::spawn({
-        let stdout = child.stdout.take().expect("asgrep stdout");
-        move || {
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut std::io::BufReader::new(stdout), &mut buf)
-                .expect("drain asgrep stdout");
-            buf
-        }
-    });
-    let stderr_handle = std::thread::spawn({
-        let stderr = child.stderr.take().expect("asgrep stderr");
-        move || {
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut std::io::BufReader::new(stderr), &mut buf)
-                .expect("drain asgrep stderr");
-            buf
-        }
-    });
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait().expect("try_wait") {
-            Some(status) => {
-                return Output {
-                    status,
-                    stdout: stdout_handle.join().expect("stdout drain"),
-                    stderr: stderr_handle.join().expect("stderr drain"),
-                };
-            }
-            None => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let status = child.wait().expect("wait after kill");
-                    let stderr = stderr_handle.join().unwrap_or_default();
-                    panic!(
-                        "asgrep {args:?} exceeded {timeout:?} (status {status}); stderr: {}",
-                        String::from_utf8_lossy(&stderr)
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-    }
+    crate::spawn::spawn_hermetic(
+        bin,
+        args,
+        envs,
+        None,
+        crate::spawn::SpawnMode::Drain,
+        Some(timeout),
+    )
 }
 
-/// INTENT: single oracle spawn point via [`run_drain_timeout`] with the
-/// suite-standard [`RUN_TIMEOUT`]. Panics past the timeout.
+/// INTENT: oracle spawn point — [`run_drain_timeout`] with [`RUN_TIMEOUT`].
 fn spawn(bin: &Path, args: &[&str]) -> Output {
     run_drain_timeout(bin, args, &[], RUN_TIMEOUT)
 }
@@ -126,12 +76,6 @@ pub fn oracle_run_json(bin: &Path, args: &[&str]) -> (i32, Value, Vec<u8>, Strin
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let value = crate::parse_stdout(&output);
     (code, value, output.stdout, stderr)
-}
-
-/// INTENT: root-relative byte plant (non-UTF8 capable); delegates the
-/// mkdir+write to [`crate::write_file`]. Panics on IO failure.
-pub fn write_root_bytes(root: &Path, rel: &str, bytes: &[u8]) {
-    crate::write_file(&root.join(rel), bytes);
 }
 
 /// INTENT: verb-parametrized build runner returning the raw envelope: `index`
@@ -181,7 +125,7 @@ impl OracleCorpus {
         let root = temp.path().join("corpus");
         std::fs::create_dir_all(&root).expect("mkdirs");
         for (rel, bytes) in files {
-            write_root_bytes(&root, rel, bytes);
+            crate::write_file(&root.join(rel), bytes);
         }
         let index = temp.path().join("index.db");
         let (code, value, _, stderr) = oracle_build_json(bin, "index", &root, &index);
@@ -197,12 +141,14 @@ impl OracleCorpus {
         )
     }
 
-    /// INTENT: method-shape shims so ad-hoc beats read as corpus operations.
+    /// INTENT: raw-bytes face for ad-hoc beats: exit code, raw stdout bytes,
+    /// and scrubbed stderr text (no JSON parsing).
     pub fn run_raw(&self, args: &[&str]) -> (i32, Vec<u8>, String) {
         oracle_run_raw(&self.bin, args)
     }
 
-    /// INTENT: method-shape shims so ad-hoc beats read as corpus operations.
+    /// INTENT: JSON face for ad-hoc beats: parses stdout as JSON and also
+    /// returns the raw bytes for byte-identity asserts.
     pub fn run_json(&self, args: &[&str]) -> (i32, Value, Vec<u8>, String) {
         oracle_run_json(&self.bin, args)
     }
@@ -270,9 +216,9 @@ impl OracleCorpus {
         self.run_raw(&refs)
     }
 
-    /// INTENT: outline runners (JSON + human faces): outline takes `--root` +
-    /// a root-relative path (no `--no-embed`), exactly as the pass3/pass4
-    /// originals.
+    /// INTENT: outline JSON-face runner: outline takes `--root` + a
+    /// root-relative path (no `--no-embed`), exactly as the pass3/pass4
+    /// originals; parses stdout as JSON.
     pub fn outline_json(&self, rel: &str) -> (i32, Value, Vec<u8>, String) {
         self.run_json(&[
             "--index-path",
@@ -286,9 +232,8 @@ impl OracleCorpus {
         ])
     }
 
-    /// INTENT: outline runners (JSON + human faces): outline takes `--root` +
-    /// a root-relative path (no `--no-embed`), exactly as the pass3/pass4
-    /// originals.
+    /// INTENT: outline human-face runner: same `--root` + relative-path shape
+    /// as [`Self::outline_json`] but returns raw text via [`Self::run_raw`].
     pub fn outline_human(&self, rel: &str) -> (i32, Vec<u8>, String) {
         self.run_raw(&[
             "--index-path",
@@ -324,7 +269,7 @@ impl OracleCorpus {
 /// INTENT: order-free surface-key sort for the limit/filter/differential
 /// facets; the backend's served order is pinned elsewhere (prefix-stability
 /// facet). Pure.
-pub fn sorted_surface_keys(mut keys: Vec<crate::index::HitKey>) -> Vec<crate::index::HitKey> {
+pub fn sorted_surface_keys(mut keys: Vec<crate::HitKey>) -> Vec<crate::HitKey> {
     keys.sort();
     keys
 }

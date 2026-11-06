@@ -189,31 +189,33 @@ pub(crate) fn run_keyword_search(root: &Path, cli: &Cli, query: &str) -> anyhow:
     )
 }
 
-/// The boolean-listing result set — matching paths, sorted and deduped (a
-/// file with N hits is listed once). The parity lane compares PATH-SET
-/// equality vs the reference's `--files-with-matches`; no perf claim (hits
-/// are still computed, this only reshapes output).
-fn files_from_hits(response: &SearchResponse) -> Vec<String> {
+/// Sorted/deduped file paths with hits, in path order. Single source for the
+/// ordering of both the boolean listing below and the per-file counts —
+/// a file with N hits is listed once.
+fn sorted_hit_files(response: &SearchResponse) -> Vec<String> {
     let mut files: Vec<String> = response.hits.iter().map(|h| h.file.clone()).collect();
     files.sort();
     files.dedup();
     files
 }
 
+/// The boolean-listing result set — matching paths, sorted and deduped (a
+/// file with N hits is listed once). The parity lane compares PATH-SET
+/// equality vs the reference's `--files-with-matches`; no perf claim (hits
+/// are still computed, this only reshapes output).
+fn files_from_hits(response: &SearchResponse) -> Vec<String> {
+    sorted_hit_files(response)
+}
+
 /// The grep `-c` result set — `(path, matches)` sorted by path. Derived from
 /// the same hit set as `files_from_hits`; zero-match files stay absent.
 fn counts_from_hits(response: &SearchResponse) -> Vec<(String, u64)> {
-    let mut order: Vec<String> = Vec::new();
     let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for hit in &response.hits {
-        let count = counts.entry(hit.file.clone()).or_insert(0);
-        *count += 1;
-        if *count == 1 {
-            order.push(hit.file.clone());
-        }
+        *counts.entry(hit.file.clone()).or_insert(0) += 1;
     }
-    order.sort();
-    order
+    // Ordering comes from the shared helper, not a second sort.
+    sorted_hit_files(response)
         .into_iter()
         .map(|file| {
             let count = counts[&file];
@@ -318,6 +320,22 @@ pub(crate) fn run_multi_pattern_search(
     )
 }
 
+/// Insert an additive top-level ARRAY field into a machine envelope object
+/// (no-op when the envelope is not an object). Shared by the `files` and
+/// `counts` ingress paths so the two inserts cannot drift apart.
+fn insert_array_field(
+    value: &mut serde_json::Value,
+    key: &str,
+    iter: impl IntoIterator<Item = serde_json::Value>,
+) {
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            key.into(),
+            serde_json::Value::Array(iter.into_iter().collect()),
+        );
+    }
+}
+
 fn print_search_response(
     command: &str,
     response: &ast_sgrep_core::SearchResponse,
@@ -340,29 +358,23 @@ fn print_search_response(
     // top-level `files` array (paths ARRAY, additive — hits and per-format
     // schemas untouched; the field only appears when the flag is passed).
     if tuning.files_with_matches {
-        if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "files".into(),
-                serde_json::Value::Array(
-                    files_from_hits(response)
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect(),
-                ),
-            );
-        }
+        insert_array_field(
+            &mut value,
+            "files",
+            files_from_hits(response)
+                .into_iter()
+                .map(serde_json::Value::String),
+        );
     }
     // grep -c habit: same additive pattern as `files` above.
     if tuning.count {
-        if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "counts".into(),
-                serde_json::json!(counts_from_hits(response)
-                    .into_iter()
-                    .map(|(file, count)| serde_json::json!({ "file": file, "count": count }))
-                    .collect::<Vec<_>>()),
-            );
-        }
+        insert_array_field(
+            &mut value,
+            "counts",
+            counts_from_hits(response)
+                .into_iter()
+                .map(|(file, count)| serde_json::json!({ "file": file, "count": count })),
+        );
     }
     print_machine_json_with_style(
         command,
@@ -493,6 +505,11 @@ fn blank_compact_snippets(envelope: &mut serde_json::Value) {
     }
 }
 
+/// Command name -> search channel reported in `MissContext::tried`.
+/// The default path fuses channels rather than running just one.
+const MISS_CHANNEL_TABLE: &[(&str, &str)] =
+    &[("keyword", "lexical"), ("semantic", "semantic")];
+
 /// Describe a zero-hit CLI search: which channel ran, and what scoped it (6a3i).
 fn miss_context(command: &str, cli: &Cli, query: &str) -> ast_sgrep_plugins::MissContext {
     let mut scope = Vec::new();
@@ -501,12 +518,11 @@ fn miss_context(command: &str, cli: &Cli, query: &str) -> ast_sgrep_plugins::Mis
     }
     ast_sgrep_plugins::MissContext {
         // Report the CHANNEL that ran, not the command name the user typed.
-        tried: vec![match command {
-            "keyword" => "lexical".to_owned(),
-            "semantic" => "semantic".to_owned(),
-            // The default path fuses channels rather than running just one.
-            _ => "hybrid".to_owned(),
-        }],
+        tried: vec![MISS_CHANNEL_TABLE
+            .iter()
+            .find(|(name, _)| *name == command)
+            .map(|(_, channel)| (*channel).to_owned())
+            .unwrap_or_else(|| "hybrid".to_owned())],
         unavailable: Vec::new(),
         scope,
         indexed_files: None,

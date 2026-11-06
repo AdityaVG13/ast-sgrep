@@ -14,6 +14,7 @@ pub mod bench_suite;
 pub mod call_path;
 pub mod chain;
 pub mod codemod;
+pub mod config;
 pub mod env_flag;
 pub mod fusion;
 pub mod gitignore;
@@ -26,6 +27,7 @@ pub mod io_bounds;
 pub mod limits;
 pub mod names_sidecar;
 pub mod pattern;
+pub mod paths;
 pub mod perf_profile;
 pub mod pipeline_parts;
 pub mod query;
@@ -64,18 +66,20 @@ pub mod fts {
             .join(" OR ")
     }
 }
+pub use config::CoreConfig;
 pub use ast_sgrep_lang::Language;
 pub use fusion::{
     analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
     FusionExample, LearnedFusionModel, WeightSensitivity,
 };
 pub use index::{
-    canonicalize_affected_path, expand_incremental_path_list, indexed_rel_path, FileIndexStats,
-    IndexOptions, IndexStats, Indexer, INDEX_CANCELLED, MAX_INCREMENTAL_PATHS,
+    canonicalize_affected_path, expand_incremental_path_list, index_candidate_admitted,
+    indexed_rel_path, FileIndexStats, IndexOptions, IndexStats, Indexer, INDEX_CANCELLED,
+    MAX_INCREMENTAL_PATHS,
 };
 pub use io_bounds::{read_text_capped, MAX_INDEX_FILE_BYTES};
 pub use limits::{
-    clamp_agent_limit, clamp_output_limit, validate_query_len, DEFAULT_AGENT_LIMIT,
+    clamp_agent_limit, clamp_limit, clamp_output_limit, validate_query_len, DEFAULT_AGENT_LIMIT,
     MAX_EXCERPT_LINES, MAX_FILE_FILTER_CHARS, MAX_OUTPUT_RESULTS, MAX_QUERY_CHARS,
     MAX_REGEX_PATTERN_CHARS, MAX_SEARCH_HIT_EXCERPT_BYTES, MAX_STDIN_LINE_BYTES,
 };
@@ -92,7 +96,7 @@ pub use search::{
 pub use store::{
     bump_writer_generation, index_db_path, read_writer_generation, try_index_db_path,
     writer_generation_path, Durability, IndexStatus, IndexStore, SymbolRow, INDEX_SCHEMA_VERSION,
-    WRITER_GENERATION_FILE,
+    WRITER_GENERATION_FILE, fold_file_stat_identity,
 };
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -100,8 +104,23 @@ pub enum StoreError {
     Database(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Fail-closed empty index: no index file at this root, or a file
+    /// without the core tables. The message keeps the documented
+    /// `index is empty` phrase (docs/validation/negative-ledgers.md);
+    /// match the variant via [`StoreError::is_empty_index`], never the text.
+    #[error("{0}")]
+    EmptyIndex(String),
     #[error("{0}")]
     Other(String),
+}
+impl StoreError {
+    /// Typed empty-index gate (mcp P2): true only for [`Self::EmptyIndex`].
+    /// Message text stays the fail-closed phrase so exit codes, envelopes,
+    /// and existing message asserts are unchanged; callers match this,
+    /// never `to_string().contains("index is empty")`.
+    pub fn is_empty_index(&self) -> bool {
+        matches!(self, Self::EmptyIndex(_))
+    }
 }
 impl StoreError {
     pub fn schema_newer_than_binary(on_disk: i64, supported: i64) -> Self {
@@ -118,7 +137,9 @@ impl StoreError {
         Some((disk.parse().ok()?, supported.parse().ok()?))
     }
 
-    pub(crate) fn is_corrupt_database(&self) -> bool {
+    /// True for sqlite-layer corruption (`DatabaseCorrupt` | `NotADatabase`):
+    /// the fail-closed corruption probe shared by recovery paths and suites.
+    pub fn is_corrupt_database(&self) -> bool {
         matches!(
             self,
             Self::Database(rusqlite::Error::SqliteFailure(error, _))

@@ -718,7 +718,7 @@ pub(crate) fn match_statement_root_142(
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
     let template = statement_root_142_template(lang, pattern)?;
-    let tree = parse_source(lang, source).ok()?;
+    let tree = parse_source_silent(lang, source)?;
     let mut out = Vec::new();
     walk_root_142(tree.root_node(), source, pattern, &template, &mut out);
     Some(out)
@@ -964,7 +964,7 @@ pub(crate) fn root146_php_decl_match(
         }
         PhpNamespaceBody::Mixed { prefix, tail } => {
             let doc = format!("<?php\n{kw} __Px {{ {prefix} }}\n", kw = kind.keyword());
-            let tpl_tree = parse_source(Language::Php, &doc).ok()?;
+            let tpl_tree = parse_source_silent(Language::Php, &doc)?;
             if tpl_tree.root_node().has_error() {
                 return None;
             }

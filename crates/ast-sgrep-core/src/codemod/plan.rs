@@ -107,11 +107,12 @@ pub fn plan_codemod(
     // and matches only this source basename's backups.
     recover_orphans(&root, &indexed_paths)?;
     if indexed_paths.is_empty() {
-        bail!(
+        return Err(crate::StoreError::EmptyIndex(format!(
             "index is empty for {}; run: asgrep index {} --json",
             root.display(),
             root.display()
-        );
+        ))
+        .into());
     }
 
     // The prefilter literal must not be computed on raw bytes when the

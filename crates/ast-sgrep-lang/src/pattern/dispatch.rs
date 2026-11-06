@@ -216,7 +216,7 @@ fn match_pattern_inner(
                 .split(|c: char| c.is_ascii_whitespace() || c == '(')
                 .next()
                 .is_some_and(|head| matches!(head, "lock" | "using"))
-            && cached_general_template(lang, pattern).is_some()
+            && general_template_for(lang, pattern).is_some()
         {
             return Ok(match_structural_general(lang, source, pattern));
         }

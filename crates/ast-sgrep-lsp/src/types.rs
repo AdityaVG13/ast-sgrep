@@ -147,3 +147,40 @@ pub const SYMBOL_KIND_CLASS: u32 = 5;
 pub const SYMBOL_KIND_INTERFACE: u32 = 11;
 pub const SYMBOL_KIND_ENUM: u32 = 10;
 pub const SYMBOL_KIND_STRUCT: u32 = 23;
+
+/// Single-sourced LSP wire strings: request/notification method names, and
+/// `workspace/executeCommand` command ids. The `HANDLERS` dispatch table
+/// (`server.rs`), the `handle_notification` match, `initialize_result`
+/// capabilities, and the `execute_command` match must all draw from here —
+/// add a method/command once, not at each site.
+pub const METHOD_INITIALIZE: &str = "initialize";
+pub const METHOD_SHUTDOWN: &str = "shutdown";
+pub const METHOD_WORKSPACE_SYMBOL: &str = "workspace/symbol";
+pub const METHOD_ASGREP_SEARCH: &str = "asgrep/search";
+pub const METHOD_DOCUMENT_SYMBOL: &str = "textDocument/documentSymbol";
+pub const METHOD_DEFINITION: &str = "textDocument/definition";
+pub const METHOD_REFERENCES: &str = "textDocument/references";
+pub const METHOD_PREPARE_CALL_HIERARCHY: &str = "textDocument/prepareCallHierarchy";
+pub const METHOD_INCOMING_CALLS: &str = "callHierarchy/incomingCalls";
+pub const METHOD_OUTGOING_CALLS: &str = "callHierarchy/outgoingCalls";
+pub const METHOD_EXECUTE_COMMAND: &str = "workspace/executeCommand";
+pub const METHOD_INITIALIZED: &str = "initialized";
+pub const METHOD_DID_OPEN: &str = "textDocument/didOpen";
+pub const METHOD_DID_SAVE: &str = "textDocument/didSave";
+pub const METHOD_DID_CHANGE: &str = "textDocument/didChange";
+pub const METHOD_DID_CLOSE: &str = "textDocument/didClose";
+pub const METHOD_EXIT: &str = "exit";
+
+pub const COMMAND_SEARCH: &str = "asgrep.search";
+pub const COMMAND_SEARCH_SEMANTIC: &str = "asgrep.search.semantic";
+pub const COMMAND_REINDEX: &str = "asgrep.reindex";
+pub const COMMAND_CALLERS: &str = "asgrep.callers";
+pub const COMMAND_DEFS: &str = "asgrep.defs";
+
+/// Single-sourced search-result limits: per-call-site budgets plus the
+/// `asgrep/search` hard cap (`clamp_lsp_search_limit`).
+pub const WORKSPACE_SYMBOL_LIMIT: usize = 50;
+pub const GOTO_DEFINITION_LIMIT: usize = 16;
+pub const FIND_REFERENCES_LIMIT: usize = 128;
+pub const EXECUTE_COMMAND_SEARCH_LIMIT: usize = 32;
+pub const MAX_SEARCH_RESULTS: usize = 1000;

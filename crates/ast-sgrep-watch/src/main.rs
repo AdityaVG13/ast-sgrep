@@ -5,10 +5,12 @@
 //! the `notify` dependency — and with it the CoreFoundation/CoreServices
 //! framework link on macOS — so one-shot search never pays that dyld tax.
 //! Argv arrives verbatim from the shim and is re-parsed with the identical
-//! parser and error boundary (`ast_sgrep_cli::run_watch_process`).
+//! parser and error boundary (`cli_contract::run_watch_process`, pinned to
+//! CLI contract v1 — see `cli_contract`).
 
+mod cli_contract;
 mod watch;
 
 fn main() {
-    ast_sgrep_cli::run_watch_process(watch::run_watch)
+    cli_contract::run_watch_process(watch::run_watch)
 }

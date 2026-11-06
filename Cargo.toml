@@ -84,3 +84,16 @@ simsimd = "=6.5.16"
 rustix = { version = "1", features = ["fs"] }
 cap-std = "=4.0.3"
 cap-fs-ext = "=4.0.3"
+
+# Single-source pins for intra-workspace deps (F34): members name siblings via
+# `dep.workspace = true`, so a version bump touches only this table.
+# Paths are relative to the workspace root.
+ast-sgrep-cli = { path = "crates/ast-sgrep-cli", version = "2.7.0" }
+ast-sgrep-codemode = { path = "crates/ast-sgrep-codemode", version = "2.7.0" }
+ast-sgrep-core = { path = "crates/ast-sgrep-core", version = "2.7.0" }
+ast-sgrep-embed = { path = "crates/ast-sgrep-embed", version = "2.7.0" }
+ast-sgrep-lang = { path = "crates/ast-sgrep-lang", version = "2.7.0" }
+ast-sgrep-lsp = { path = "crates/ast-sgrep-lsp", version = "2.7.0" }
+ast-sgrep-mmap = { path = "crates/ast-sgrep-mmap", version = "2.7.0" }
+ast-sgrep-plugins = { path = "crates/ast-sgrep-plugins", version = "2.7.0" }
+ast-sgrep-testkit = { path = "crates/ast-sgrep-testkit", version = "2.7.0" }

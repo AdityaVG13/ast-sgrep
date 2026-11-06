@@ -23,7 +23,6 @@ use ast_sgrep_core::query::{ParsedQuery, QueryMode};
 use ast_sgrep_core::search::{HitKind, SearchHit};
 use ast_sgrep_core::store::{CallerRow, SymbolRow, UpsertFileInput};
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, SearchResponse, Searcher};
-use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -44,14 +43,7 @@ pub struct CorePipelineFixture {
 /// INTENT: build the corpus+DB pair from `(rel, body)` files (parents
 /// created). Panics on IO failure.
 pub fn write_core_fixture(files: &[(&str, &str)]) -> CorePipelineFixture {
-    let corpus = tempfile::tempdir().expect("corpus tempdir");
-    for (rel, body) in files {
-        let path = corpus.path().join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("mkdir");
-        }
-        fs::write(&path, body).expect("write fixture");
-    }
+    let corpus = crate::fixture::file_tree(files);
     let index = tempfile::tempdir().expect("index tempdir");
     let db = index.path().join("index.db");
     CorePipelineFixture {
@@ -62,27 +54,20 @@ pub fn write_core_fixture(files: &[(&str, &str)]) -> CorePipelineFixture {
     }
 }
 
-/// INTENT: force-reindex, embed-off index options over the fixture.
+/// INTENT: force-reindex, embed-off index options over the fixture: the
+/// [`crate::hermetic_index_options`] triple plus `force_reindex`.
 /// Pure constructor.
 pub fn core_index_options(root: &Path, db: &Path) -> IndexOptions {
     IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
         force_reindex: true,
-        embed_semantic: false,
-        ..IndexOptions::default()
+        ..crate::hermetic_index_options(root, db)
     }
 }
 
-/// INTENT: embed-off search options with an explicit limit. Pure constructor.
+/// INTENT: embed-off search options with an explicit limit: the
+/// [`crate::hermetic_search_options`] triple. Pure constructor.
 pub fn core_search_options(root: &Path, db: &Path, limit: usize) -> SearchOptions {
-    SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        limit,
-        use_embed: false,
-        ..SearchOptions::default()
-    }
+    crate::hermetic_search_options(root, db, limit)
 }
 
 /// INTENT: full build leg — fresh indexer over the fixture, whole tree
@@ -115,25 +100,17 @@ pub fn searcher_at_root(root: &Path) -> Searcher {
 }
 
 /// INTENT: order-sensitive identity of a ranked response (file, span, kind,
-/// symbol, exact score bits) — two full runs agree iff these agree. Pure
-/// projection; [`crate::response_hit_keys`] has no score bits, so pipeline
-/// bit-identity needs this richer key.
+/// symbol, exact score bits) — two full runs agree iff these agree. Projects
+/// through the canonical [`crate::ScoredHitKey`]; [`crate::response_hit_keys`]
+/// has no score bits, so pipeline bit-identity needs this richer key.
+/// Pure projection.
 pub fn response_hit_keys_with_scores(
     response: &SearchResponse,
-) -> Vec<(String, u32, u32, String, Option<String>, u64)> {
+) -> Vec<(String, u64, u32, String, Option<String>, u64)> {
     response
         .hits
         .iter()
-        .map(|hit| {
-            (
-                hit.file.clone(),
-                hit.line_start,
-                hit.line_end,
-                hit.kind.as_str().to_string(),
-                hit.symbol.clone(),
-                hit.score.to_bits(),
-            )
-        })
+        .map(|hit| crate::ScoredHitKey::from_search_hit(hit).as_tuple())
         .collect()
 }
 
@@ -337,7 +314,6 @@ pub fn parsed_query(raw: &str, terms: &[&str]) -> ParsedQuery {
         terms: terms.iter().map(|t| t.to_string()).collect(),
         path_scope: None,
         path_scope_error: None,
-        path_scope_exact: false,
     }
 }
 

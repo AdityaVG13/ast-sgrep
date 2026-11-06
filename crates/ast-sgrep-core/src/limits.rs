@@ -17,17 +17,23 @@ pub const MAX_FILE_FILTER_CHARS: usize = 1_024;
 /// Hard ceiling for a single NDJSON / JSON-RPC line on stdio agent surfaces.
 pub const MAX_STDIN_LINE_BYTES: usize = 1_048_576;
 
+/// Clamp a requested limit into `1..=max`, falling back to `default`
+/// when `requested` is `None` or zero. Single source of truth for the
+/// output/agent clamps below.
+pub fn clamp_limit(requested: Option<usize>, default: usize, max: usize) -> usize {
+    let base = requested.filter(|n| *n > 0).unwrap_or(default.max(1));
+    base.clamp(1, max.max(1))
+}
+
 /// Clamp a requested limit into `1..=MAX_OUTPUT_RESULTS`, falling back to `default`
 /// when `requested` is `None` or zero.
 pub fn clamp_output_limit(requested: Option<usize>, default: usize) -> usize {
-    let base = requested.filter(|n| *n > 0).unwrap_or(default.max(1));
-    base.clamp(1, MAX_OUTPUT_RESULTS)
+    clamp_limit(requested, default, MAX_OUTPUT_RESULTS)
 }
 
 /// Stricter agent-surface clamp (`1..=DEFAULT_AGENT_LIMIT`).
 pub fn clamp_agent_limit(requested: Option<usize>, default: usize) -> usize {
-    let base = requested.filter(|n| *n > 0).unwrap_or(default.max(1));
-    base.clamp(1, DEFAULT_AGENT_LIMIT)
+    clamp_limit(requested, default, DEFAULT_AGENT_LIMIT)
 }
 
 /// Reject oversize search queries. Empty is allowed (mode parsers treat it as no hits).

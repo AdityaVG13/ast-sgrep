@@ -10,7 +10,7 @@
 //! at `integrity_check`, but never verify as silently healthy.
 use ast_sgrep_core::{IndexStore, StoreError};
 use ast_sgrep_testkit::{
-    assert_torn, build_and_quiet, home_names, isolated_index_session, truncate_file,
+    assert_torn, build_and_quiet, dir_listing, isolated_index_session, truncate_file,
     upsert_test_file,
 };
 use std::path::Path;
@@ -147,7 +147,7 @@ fn torn_bytes_never_silently_healthy() {
         }
 
         for kept in [&ro_kept, &rw_kept] {
-            let after = home_names(kept.index_path.parent().unwrap());
+            let after = dir_listing(kept.index_path.parent().unwrap());
             assert!(
                 after.iter().all(|n| !n.contains(".corrupt")),
                 "failed splice opens must not quarantine: {after:?}"
@@ -253,7 +253,7 @@ fn torn_bytes_never_silently_healthy() {
                     assert_eq!(file_count, 0, "{label} writable must serve zero torn rows")
                 }
             }
-            let after = home_names(probe.index_path.parent().unwrap());
+            let after = dir_listing(probe.index_path.parent().unwrap());
             assert!(
                 after.iter().all(|n| !n.contains(".corrupt")),
                 "{label}: failed opens must not quarantine: {after:?}"

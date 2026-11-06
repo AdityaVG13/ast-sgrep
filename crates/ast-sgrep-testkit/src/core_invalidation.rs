@@ -23,17 +23,45 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// INTENT: the hermetic [`Indexer`] triple every core invalidation test opens
-/// with — explicit `index_path`, no tantivy, no embed. Pinning the triple in
-/// one constructor keeps the four suite copies from drifting a flag.
+/// with — explicit `index_path`, no tantivy, no embed. Built on
+/// [`hermetic_index_options`], so the four suite copies share one triple and
+/// core flag additions touch one constructor.
 pub fn hermetic_indexer(root: &Path, db: &Path) -> Indexer {
-    Indexer::new(IndexOptions {
+    Indexer::new(hermetic_index_options(root, db)).unwrap()
+}
+
+/// INTENT: hermetic [`IndexOptions`] — explicit `index_path`, no tantivy, no
+/// embed. The single source behind [`hermetic_indexer`] and every hermetic
+/// core build leg (see [`crate::core_index_options`],
+/// [`crate::build_and_quiet`]). Callers add `force_reindex` / `use_tantivy`
+/// via struct update. Pure constructor.
+pub fn hermetic_index_options(root: &Path, db: &Path) -> IndexOptions {
+    IndexOptions {
         root: root.to_path_buf(),
         index_path: Some(db.to_path_buf()),
         use_tantivy: false,
         embed_semantic: false,
         ..IndexOptions::default()
-    })
-    .unwrap()
+    }
+}
+
+/// INTENT: hermetic [`SearchOptions`] — explicit `index_path`, caller limit,
+/// no tantivy, no embed. The single source behind
+/// [`InvalidationFixture::searcher`] and every lexical search leg. Callers
+/// add `use_embed` / `use_tantivy` via struct update when the facet under
+/// test varies them (see [`crate::core_search_hit_keys`],
+/// [`crate::search_parity_key`]). Pure constructor. Delta vs
+/// [`crate::searcher_at_root`]: that opens the default state layout
+/// (`index_path: None`) and deliberately does NOT route through here.
+pub fn hermetic_search_options(root: &Path, db: &Path, limit: usize) -> SearchOptions {
+    SearchOptions {
+        root: root.to_path_buf(),
+        index_path: Some(db.to_path_buf()),
+        limit,
+        use_embed: false,
+        use_tantivy: false,
+        ..SearchOptions::default()
+    }
 }
 
 /// One battery hit: (query, kind, file, line_start, line_end, symbol, caller, callee).
@@ -84,31 +112,22 @@ impl InvalidationFixture {
         abs
     }
 
-    /// Hermetic [`Indexer`] over this fixture (see [`hermetic_indexer`]).
     pub fn indexer(&self) -> Indexer {
         hermetic_indexer(&self.root, &self.db)
     }
 
-    /// Full refresh (`index_all`).
     pub fn reindex(&self) -> IndexStats {
         self.indexer().index_all().unwrap()
     }
 
-    /// Incremental refresh of `paths` (`update_paths`).
     pub fn update(&self, paths: &[PathBuf]) -> WatchUpdateStats {
         self.indexer().update_paths(paths).unwrap()
     }
 
-    /// Lexical [`Searcher`] over this fixture (limit 256, no embed).
+    /// Lexical [`Searcher`] over this fixture (limit 256, no embed): the
+    /// [`crate::hermetic_search_options`] triple pinned to this fixture.
     pub fn searcher(&self) -> Searcher {
-        Searcher::new(SearchOptions {
-            root: self.root.clone(),
-            index_path: Some(self.db.clone()),
-            limit: 256,
-            use_embed: false,
-            ..SearchOptions::default()
-        })
-        .unwrap()
+        Searcher::new(crate::hermetic_search_options(&self.root, &self.db, 256)).unwrap()
     }
 
     /// Sorted hit tuples for a fixed query battery.
@@ -180,7 +199,6 @@ impl InvalidationFixture {
         files
     }
 
-    /// Stored `index_data_version` generation.
     pub fn generation(&self) -> i64 {
         self.open_store().index_data_version().unwrap()
     }

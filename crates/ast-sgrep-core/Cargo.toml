@@ -18,9 +18,9 @@ workspace = true
 default = []
 
 [dependencies]
-ast-sgrep-embed = { path = "../ast-sgrep-embed", version = "2.7.0" }
+ast-sgrep-embed.workspace = true
 anyhow.workspace = true
-ast-sgrep-lang = { path = "../ast-sgrep-lang", version = "2.7.0" }
+ast-sgrep-lang.workspace = true
 blake3.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -30,7 +30,7 @@ walkdir.workspace = true
 rayon.workspace = true
 regex.workspace = true
 memchr.workspace = true
-ast-sgrep-mmap = { path = "../ast-sgrep-mmap", version = "2.7.0" }
+ast-sgrep-mmap.workspace = true
 bytemuck.workspace = true
 cap-std.workspace = true
 
@@ -40,8 +40,10 @@ rustix.workspace = true
 [target.'cfg(windows)'.dependencies]
 cap-fs-ext.workspace = true
 
+# INTENDED dev-only cycle (F38): core tests use testkit fixtures while
+# testkit depends on core. Do not "fix" by splitting crates.
 [dev-dependencies]
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit" }
+ast-sgrep-testkit.workspace = true
 cap-std.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
@@ -106,6 +108,9 @@ path = "../../tests/core/freshness_identity.rs"
 [[test]]
 name = "identifier_ranking"
 path = "../../tests/core/identifier_ranking.rs"
+[[test]]
+name = "index_db_path_drift"
+path = "../../tests/core/index_db_path_drift.rs"
 [[test]]
 name = "index_schema_rekey_freshness"
 path = "../../tests/core/index_schema_rekey_freshness.rs"
@@ -224,17 +229,8 @@ path = "../../tests/core/oracle_stages.rs"
 name = "oracle_pipeline"
 path = "../../tests/core/oracle_pipeline.rs"
 [[test]]
-name = "error_api_pass1"
-path = "../../tests/core/error_api_pass1.rs"
-[[test]]
-name = "error_api_pass2"
-path = "../../tests/core/error_api_pass2.rs"
-[[test]]
-name = "error_api_pass3"
-path = "../../tests/core/error_api_pass3.rs"
-[[test]]
-name = "error_api_pass4"
-path = "../../tests/core/error_api_pass4.rs"
+name = "error_api_matrix"
+path = "../../tests/core/error_api_matrix.rs"
 [[test]]
 name = "invalidation_staleness"
 path = "../../tests/core/invalidation_staleness.rs"
@@ -316,3 +312,12 @@ path = "../../tests/core/fts_external_content.rs"
 [[test]]
 name = "wal_close_bounds"
 path = "../../tests/core/wal_close_bounds.rs"
+[[test]]
+name = "paths_policy"
+path = "../../tests/core/paths_policy.rs"
+[[test]]
+name = "core_config"
+path = "../../tests/core/core_config.rs"
+[[test]]
+name = "embed_hit_limit"
+path = "../../tests/core/embed_hit_limit.rs"

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
-//! Shared kit for the consolidated core error-API suites (`error_api_pass1..4`,
+//! Shared kit for the consolidated core error-API suite (`error_api_matrix`,
 //! included via `#[path = "error_testkit.rs"]`).
 //!
 //! Reuse rule: anything the testkit crate already provides is imported from

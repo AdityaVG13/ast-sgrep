@@ -6,17 +6,10 @@ pub mod support;
 pub mod types;
 pub use backend::LspBackend;
 pub use server::LspServer;
-pub use support::path_to_file_uri;
 
 pub mod uri {
     pub use crate::support::{
         canonicalize_workspace_root, file_uri_to_path, path_to_file_uri, uri_to_rel_path,
-    };
-}
-
-pub mod convert {
-    pub use crate::support::{
-        call_hierarchy_endpoint, line_range, line_range_ext, location_value, workspace_symbol,
     };
 }
 

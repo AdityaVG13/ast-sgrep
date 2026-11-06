@@ -20,7 +20,7 @@ pub(crate) use sqlite::CallEvidenceRow;
 pub(crate) use sqlite::FileIdentity;
 pub use sqlite::{
     CallerRow, ImportRow, IndexStore, IndexedLineRow, RefreshLinesInput, SymbolLocationRow,
-    SymbolRow, UpsertFileInput, INDEX_SCHEMA_VERSION,
+    SymbolRow, UpsertFileInput, INDEX_SCHEMA_VERSION, fold_file_stat_identity,
 };
 use std::path::{Path, PathBuf};
 pub use writer_generation::{

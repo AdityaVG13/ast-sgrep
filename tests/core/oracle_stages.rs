@@ -808,10 +808,16 @@ fn planner_resolution_and_file_filters() {
 
     // Facet 3: file filters — skip tables, indexable extensions, ignore + negation.
     use std::path::Path;
-    // Directory skip set is exactly the VCS + tool pair.
-    assert_eq!(DEFAULT_SKIP_DIR_NAMES.len(), 2);
+    // Directory skip set is exactly the VCS + tool pair (membership plus
+    // exhaustiveness, no literal count).
     assert!(DEFAULT_SKIP_DIR_NAMES.contains(&".git"));
     assert!(DEFAULT_SKIP_DIR_NAMES.contains(&".asgrep"));
+    assert!(
+        DEFAULT_SKIP_DIR_NAMES
+            .iter()
+            .all(|d| *d == ".git" || *d == ".asgrep"),
+        "unexpected skip dir: {DEFAULT_SKIP_DIR_NAMES:?}"
+    );
     assert!(should_skip_dir(Path::new(".git")));
     assert!(should_skip_dir(Path::new("a/.git")));
     assert!(should_skip_dir(Path::new(".asgrep")));
@@ -835,10 +841,16 @@ fn planner_resolution_and_file_filters() {
     assert!(is_indexable_extension("MD"));
     assert!(!is_indexable_extension("xyz"));
     assert!(!is_indexable_extension(""));
-    assert_eq!(DOCUMENT_EXTENSIONS.len(), 6);
-    for ext in ["toml", "md", "txt", "json", "yaml", "yml"] {
+    let expected_doc_exts = ["toml", "md", "txt", "json", "yaml", "yml"];
+    for ext in expected_doc_exts {
         assert!(DOCUMENT_EXTENSIONS.contains(&ext), "{ext}");
     }
+    assert!(
+        DOCUMENT_EXTENSIONS
+            .iter()
+            .all(|ext| expected_doc_exts.contains(ext)),
+        "unexpected extension: {DOCUMENT_EXTENSIONS:?}"
+    );
 
     // Default rules ignore VCS/tool directory CONTENTS; a same-named FILE is kept.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -891,8 +903,9 @@ fn planner_resolution_and_file_filters() {
 #[test]
 fn lexicon_and_scip_knowledge() {
     // Facet 1: lexicon — support gate, PPMI values, expansion stability.
-    assert_eq!(MIN_SUPPORT, 3);
-    assert_eq!(MAX_PER_TERM, 8);
+    // Exact gate/cap values live in the generated constants contract
+    // (tests/cli/constants_contract_generated.rs); the probes below read the
+    // constants symbolically so retunes flow through.
     // Subtoken splitter: camel + snake agree, stops and short tokens drop.
     assert_eq!(subtokens("refreshToken"), vec!["refresh", "token"]);
     assert_eq!(subtokens("refresh_token"), vec!["refresh", "token"]);
@@ -928,14 +941,14 @@ fn lexicon_and_scip_knowledge() {
 
     // Balanced corpus: joint 1/2 against expected 1/4, so PPMI is ln 2.
     let mut builder = LexiconBuilder::new();
-    for _ in 0..3 {
+    for _ in 0..MIN_SUPPORT {
         builder.observe(&observation(&["alpha", "beta"]));
         builder.observe(&observation(&["gamma", "delta"]));
     }
     let associations = builder.finish();
     assert_eq!(associations.len(), 4);
     for association in &associations {
-        assert_eq!(association.support, 3);
+        assert_eq!(association.support, MIN_SUPPORT);
         assert!(
             (association.ppmi - 2.0f64.ln()).abs() < 1e-12,
             "{association:?}"

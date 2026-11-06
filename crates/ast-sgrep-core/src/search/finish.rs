@@ -110,8 +110,16 @@ pub fn finish_response(
     {
         compatibility_options.file_filter = None;
     }
-    finish_response_checked(parsed, &compatibility_options, hits, dedup)
-        .expect("compatibility options were validated")
+    finish_response_checked(
+        parsed,
+        &compatibility_options,
+        hits,
+        dedup,
+        crate::config::CoreConfig::from_env()
+            .ledger_path
+            .as_deref(),
+    )
+    .expect("compatibility options were validated")
 }
 
 pub(crate) fn finish_response_checked(
@@ -119,8 +127,9 @@ pub(crate) fn finish_response_checked(
     options: &SearchOptions,
     hits: Vec<SearchHit>,
     dedup: bool,
+    ledger_path: Option<&std::path::Path>,
 ) -> Result<SearchResponse> {
-    finish_response_checked_lazy(parsed, options, hits, dedup, None, false)
+    finish_response_checked_lazy(parsed, options, hits, dedup, None, false, ledger_path)
 }
 
 /// Apply the same path contract before channel joins and final ranking.
@@ -137,12 +146,10 @@ pub(super) fn filter_hit_paths(
         })?;
         hits.retain(|h| re.is_match(&h.file));
     } else if let Some(scope) = parsed.path_scope.as_deref() {
-        let glob = if parsed.path_scope_exact {
-            scope.to_string()
-        } else {
-            crate::query::path_scope_glob(scope)
-        };
-        let re = super::compile_glob(&glob).map_err(|e| {
+        // `path_scope` already holds the resolve-time filter glob (exact
+        // file rel-path or `dir/**`/wildcard glob) — compile it directly.
+        // No branch, no second glob derivation.
+        let re = super::compile_glob(scope).map_err(|e| {
             crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
         })?;
         hits.retain(|h| re.is_match(&h.file));
@@ -163,6 +170,7 @@ pub(crate) fn finish_response_checked_lazy(
     dedup: bool,
     lazy_excerpt_store: Option<&crate::store::IndexStore>,
     skip_fs_byte_estimates: bool,
+    ledger_path: Option<&std::path::Path>,
 ) -> Result<SearchResponse> {
     if dedup {
         hits = dedup_hits(hits);
@@ -201,7 +209,7 @@ pub(crate) fn finish_response_checked_lazy(
             truncated: false,
             query_expansions: Vec::new(),
         };
-        super::record_ledger_from_env(&response);
+        super::record_ledger(ledger_path, &response);
         return Ok(response);
     }
     let gate_limit = options.retained_limit();
@@ -267,15 +275,16 @@ pub(crate) fn finish_response_checked_lazy(
         && options.use_embed
     {
         // Token-parrot files have high coverage on *some* row (usually the
-        // Asgrep comment). The synonym file's rows stay near zero coverage;
-        // that is the 2D pin. Per-row coverage on the Def/Embed excerpt is
-        // often zero for both, so the file max is the discriminator.
+        // Asgrep comment). Snake/camel Def names also parrot (`merge_pending_*`,
+        // `mergePending*`) vs whole-word excerpt coverage 0. The synonym file
+        // stays near zero; that is the 2D pin. File max is the discriminator.
         let mut file_cov: HashMap<&str, u32> = HashMap::with_capacity(keyed.len());
         for (cov, hit) in &keyed {
+            let parrot = (*cov).max(identifier_term_coverage(&parsed.terms, hit));
             file_cov
                 .entry(hit.file.as_str())
-                .and_modify(|seen| *seen = (*seen).max(*cov))
-                .or_insert(*cov);
+                .and_modify(|seen| *seen = (*seen).max(parrot))
+                .or_insert(parrot);
         }
         let max_file_cov = file_cov.values().copied().max().unwrap_or(0);
         let min_file_cov = file_cov.values().copied().min().unwrap_or(0);
@@ -332,10 +341,15 @@ pub(crate) fn finish_response_checked_lazy(
         // If that row sits past rank 2, swap it into the head so a later
         // tighter clamp (MCP/codemode open_limit → request) still sees it.
         let steal_head = |hits: &[SearchHit]| {
+            // Prefer a non-Def in the clamp head so a definition stays put.
+            // All-Def pages have no such victim; still steal rank 2 (index 1)
+            // so a later tighter clamp keeps the rescued file.
             (0..hits.len().min(2))
                 .rev()
                 .find(|&i| hits[i].kind != HitKind::Def)
                 .or_else(|| hits.iter().position(|hit| hit.kind != HitKind::Def))
+                .or_else(|| (hits.len() >= 2).then_some(1))
+                .or_else(|| hits.first().map(|_| 0))
         };
         if let Some(pos) = hits.iter().position(|hit| hit.file == embed.file) {
             if !hits[pos].contributors.iter().any(|k| *k == HitKind::Embed) {
@@ -349,7 +363,7 @@ pub(crate) fn finish_response_checked_lazy(
                     hits.swap(steal, pos);
                 }
             }
-        } else if let Some(index) = steal_head(&hits).or_else(|| hits.len().checked_sub(1)) {
+        } else if let Some(index) = steal_head(&hits) {
             hits[index] = embed;
         } else {
             hits.push(embed);
@@ -375,7 +389,7 @@ pub(crate) fn finish_response_checked_lazy(
         truncated: pre_gate_count > gate_limit,
         query_expansions: Vec::new(),
     };
-    super::record_ledger_from_env(&response);
+    super::record_ledger(ledger_path, &response);
     Ok(response)
 }
 pub(super) fn enforce_result_gates(
@@ -452,6 +466,23 @@ pub(super) fn excerpt_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
                 let lowered = excerpt_lower.get_or_insert_with(|| hit.excerpt.to_lowercase());
                 contains_term_token(lowered, &term.to_lowercase())
             }
+        })
+        .count() as u32
+}
+
+fn identifier_term_coverage(terms: &[String], hit: &SearchHit) -> u32 {
+    let Some(symbol) = hit.symbol.as_deref() else {
+        return 0;
+    };
+    if terms.is_empty() {
+        return 0;
+    }
+    let tokens = identifier_tokens(symbol);
+    terms
+        .iter()
+        .filter(|term| {
+            let needle = term.to_lowercase();
+            tokens.iter().any(|token| token == &needle)
         })
         .count() as u32
 }

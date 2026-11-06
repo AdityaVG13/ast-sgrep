@@ -327,6 +327,35 @@ fn print_index_skipped(stats: Option<&IndexStats>, index_ms: Option<f64>) {
     }
 }
 
+/// Mean-aggregate per-case avgs/cvs (+ geomean), record bench history, and
+/// enforce the keep-gate ratchet. Single home for the aggregate → update →
+/// enforce sequence copied across the suite/batch cold+warmed blocks.
+struct HistoryRecord {
+    avg: f64,
+    cv: f64,
+    geomean: Option<f64>,
+    history: Option<serde_json::Value>,
+}
+
+fn record_history(
+    label: &str,
+    subject: &str,
+    avgs: &[f64],
+    cvs: &[f64],
+) -> anyhow::Result<HistoryRecord> {
+    let avg = mean_ms(avgs);
+    let cv = mean_ms(cvs);
+    let geomean = crate::keep_gate::geomean_ms(avgs);
+    let history = update_bench_history(label, avg, cv, geomean)?;
+    enforce_bench_ratchet(&history, subject)?;
+    Ok(HistoryRecord {
+        avg,
+        cv,
+        geomean,
+        history,
+    })
+}
+
 /// Shared collapse: suite, single-query, and batch enforce the same keep gate.
 /// A quarantine (too noisy to judge) warns by default so bench stays usable
 /// as a measurement tool — the run is recorded but never blessed — while a
@@ -464,21 +493,20 @@ fn run_bench_suite(
         .iter()
         .filter_map(|r| r["avg_search_ms"].as_f64())
         .collect();
-    let suite_avg = mean_ms(&case_avgs);
-    let suite_cv = mean_ms(
-        &results
-            .iter()
-            .filter_map(|r| r["cv_pct"].as_f64())
-            .collect::<Vec<_>>(),
-    );
-    let suite_geomean = crate::keep_gate::geomean_ms(&case_avgs);
-    let history = update_bench_history(
+    let case_cvs: Vec<f64> = results
+        .iter()
+        .filter_map(|r| r["cv_pct"].as_f64())
+        .collect();
+    let suite = record_history(
         &format!("suite:{fixture_name}:{selected}"),
-        suite_avg,
-        suite_cv,
-        suite_geomean,
+        &format!("suite {selected}"),
+        &case_avgs,
+        &case_cvs,
     )?;
-    enforce_bench_ratchet(&history, &format!("suite {selected}"))?;
+    let suite_avg = suite.avg;
+    let suite_cv = suite.cv;
+    let suite_geomean = suite.geomean;
+    let history = suite.history;
     // Warmed block: warm once, re-time every case on the sticky-session
     // path. Identity contracts apply to the warmed block too — a warmed
     // quality miss is reported, never folded into the cold suite_ok.
@@ -517,16 +545,16 @@ fn run_bench_suite(
                 "ok": case_ok,
             });
         }
-        let warmed_avg = mean_ms(&warmed_avgs);
-        let warmed_cv = mean_ms(&warmed_cvs);
-        let warmed_geomean = crate::keep_gate::geomean_ms(&warmed_avgs);
-        let warmed_history = update_bench_history(
+        let warmed = record_history(
             &format!("warmed:suite:{fixture_name}:{selected}"),
-            warmed_avg,
-            warmed_cv,
-            warmed_geomean,
+            &format!("warmed suite {selected}"),
+            &warmed_avgs,
+            &warmed_cvs,
         )?;
-        enforce_bench_ratchet(&warmed_history, &format!("warmed suite {selected}"))?;
+        let warmed_avg = warmed.avg;
+        let warmed_cv = warmed.cv;
+        let warmed_geomean = warmed.geomean;
+        let warmed_history = warmed.history;
         Some(serde_json::json!({
             "avg_search_ms": warmed_avg,
             "geomean_search_ms": warmed_geomean,
@@ -677,7 +705,7 @@ fn run_bench(
         print_index_skipped(stats_opt.as_ref(), Some(index_ms));
         println!("Query: {query}");
         println!("Avg search: {avg:.2}ms over {iterations} iterations (cv {cv:.1}%, {hits} hits)");
-        if let Some(w) = warmed.as_ref().filter(|w| w.is_object()) {
+        if let Some(w) = warmed.as_ref() {
             println!(
                 "Warmed search: {:.2}ms over {iterations} iterations (cv {:.1}%, {} hits)",
                 w["avg_search_ms"].as_f64().unwrap_or(0.0),
@@ -768,14 +796,10 @@ fn run_bench_batch(
         .iter()
         .filter_map(|r| r["avg_search_ms"].as_f64())
         .collect();
-    let batch_avg = mean_ms(&batch_avgs);
-    let batch_cv = mean_ms(
-        &results
-            .iter()
-            .filter_map(|r| r["cv_pct"].as_f64())
-            .collect::<Vec<_>>(),
-    );
-    let batch_geomean = crate::keep_gate::geomean_ms(&batch_avgs);
+    let batch_cvs: Vec<f64> = results
+        .iter()
+        .filter_map(|r| r["cv_pct"].as_f64())
+        .collect();
     // Preserve order and duplicates: these are the queries actually timed,
     // independent of incidental blank lines/outer whitespace in the input file.
     let batch_label = format!(
@@ -786,8 +810,16 @@ fn run_bench_batch(
             .unwrap_or("queries"),
         serde_json::to_string(&queries)?
     );
-    let history = update_bench_history(&batch_label, batch_avg, batch_cv, batch_geomean)?;
-    enforce_bench_ratchet(&history, &format!("batch {}", queries_path.display()))?;
+    let batch = record_history(
+        &batch_label,
+        &format!("batch {}", queries_path.display()),
+        &batch_avgs,
+        &batch_cvs,
+    )?;
+    let batch_avg = batch.avg;
+    let batch_cv = batch.cv;
+    let batch_geomean = batch.geomean;
+    let history = batch.history;
     // Warmed block: warm once, re-time every query. Lean report (no top_10):
     // the warmed block exists for latency comparison; hit-identity is the
     // suite's job.
@@ -820,19 +852,16 @@ fn run_bench_batch(
                 "hits": hits,
             });
         }
-        let warmed_avg = mean_ms(&warmed_avgs);
-        let warmed_cv = mean_ms(&warmed_cvs);
-        let warmed_geomean = crate::keep_gate::geomean_ms(&warmed_avgs);
-        let warmed_history = update_bench_history(
+        let warmed = record_history(
             &format!("warmed:{batch_label}"),
-            warmed_avg,
-            warmed_cv,
-            warmed_geomean,
-        )?;
-        enforce_bench_ratchet(
-            &warmed_history,
             &format!("warmed batch {}", queries_path.display()),
+            &warmed_avgs,
+            &warmed_cvs,
         )?;
+        let warmed_avg = warmed.avg;
+        let warmed_cv = warmed.cv;
+        let warmed_geomean = warmed.geomean;
+        let warmed_history = warmed.history;
         Some(serde_json::json!({
             "avg_search_ms": warmed_avg,
             "geomean_search_ms": warmed_geomean,

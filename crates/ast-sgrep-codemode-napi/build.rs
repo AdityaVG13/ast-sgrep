@@ -7,6 +7,10 @@ fn main() {
     // on both targets, so this only newly affects test executables.
     // (Windows/MSVC cannot leave symbols unresolved; napi tests need
     // node.lib there. CI's windows-smoke covers the CLI, not napi tests.)
+    // Canonical supported-target list: package.json `napi.targets` (5 triples
+    // incl. windows-msvc). Keep this match in sync when that list changes:
+    // every non-Windows entry needs an arm here; Windows stays in `_`
+    // deliberately (MSVC limitation above, not an oversight).
     // Target (not host): build scripts compile for the host triple.
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("macos") => {

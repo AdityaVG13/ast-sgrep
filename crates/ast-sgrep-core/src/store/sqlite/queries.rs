@@ -17,7 +17,7 @@ use std::sync::Arc;
 const FILE_STAT_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 const FILE_STAT_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-pub(crate) fn fold_file_stat_identity(fp: &mut u64, path: &str, mtime_secs: i64, mtime_nanos: u32) {
+pub fn fold_file_stat_identity(fp: &mut u64, path: &str, mtime_secs: i64, mtime_nanos: u32) {
     let mut hash = FILE_STAT_SEED;
     for &byte in path.as_bytes() {
         hash ^= u64::from(byte);
@@ -384,14 +384,14 @@ impl IndexStore {
             let mut stmt = self.conn.prepare_cached(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
                 let id: i64 = r.get(0)?;
-                let row = (
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                    r.get(5)?,
-                    Vec::new(),
-                );
+                let row = ast_sgrep_embed::SemanticChunkRow {
+                    path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    line_end: r.get(3)?,
+                    symbol: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    text: r.get(5)?,
+                    embedding: Vec::new(),
+                };
                 Ok((id, row))
             })?;
             for row in rows {
@@ -434,14 +434,14 @@ impl IndexStore {
             let mut stmt = self.conn.prepare_cached(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(batch.iter()), |r| {
                 let id: i64 = r.get(0)?;
-                let row = (
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                    r.get(5)?,
-                    Vec::new(),
-                );
+                let row = ast_sgrep_embed::SemanticChunkRow {
+                    path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    line_end: r.get(3)?,
+                    symbol: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    text: r.get(5)?,
+                    embedding: Vec::new(),
+                };
                 let fields = crate::semantic_chunk::SemanticFieldVectors {
                     name: r.get(6)?,
                     docs: r.get(7)?,
@@ -481,14 +481,14 @@ impl IndexStore {
                 // Fail closed on corrupt blobs (parity with read_sem_row / emb_vec).
                 // unwrap_or_default() previously dropped corrupt IVF candidates as
                 // empty vectors, silently skewing ANN re-rank results (pass3).
-                let row = (
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                    r.get(5)?,
-                    emb_vec(r, 6)?,
-                );
+                let row = ast_sgrep_embed::SemanticChunkRow {
+                    path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    line_end: r.get(3)?,
+                    symbol: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    text: r.get(5)?,
+                    embedding: emb_vec(r, 6)?,
+                };
                 Ok((id, row))
             })?;
             out.extend(rows.collect::<std::result::Result<Vec<_>, _>>()?);
@@ -636,14 +636,14 @@ impl IndexStore {
             "sc.id, f.path, sc.line_start, sc.line_end, sc.symbol_name, sc.text, sc.vector",
             |r| {
                 let id: i64 = r.get(0)?;
-                let row = (
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                    r.get(5)?,
-                    emb_vec(r, 6)?,
-                );
+                let row = ast_sgrep_embed::SemanticChunkRow {
+                    path: r.get(1)?,
+                    line_start: r.get(2)?,
+                    line_end: r.get(3)?,
+                    symbol: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    text: r.get(5)?,
+                    embedding: emb_vec(r, 6)?,
+                };
                 Ok((id, row))
             },
         )

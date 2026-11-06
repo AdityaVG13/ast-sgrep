@@ -87,16 +87,6 @@ impl Scrubber {
         s
     }
 
-    /// Doctor envelopes: [`standard`] only (messages stay; do not blank errors).
-    pub fn doctor() -> Self {
-        Self::standard()
-    }
-
-    /// Status envelopes: [`standard`] only.
-    pub fn status() -> Self {
-        Self::standard()
-    }
-
     pub fn apply(&self, input: &str) -> String {
         let mut out = input.to_string();
         for rule in &self.rules {

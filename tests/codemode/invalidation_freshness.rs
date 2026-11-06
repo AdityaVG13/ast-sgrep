@@ -399,8 +399,8 @@ fn ambient_refreshes(session: &mut CodeModeSession) -> u64 {
 /// never-open-writer (stale forever).
 #[test]
 fn m_ambient_stat_probe_skips_unchanged_tree() {
-    let cooldown = std::time::Duration::from_millis(1100);
     let (root, _index, mut session) = setup();
+    session.config_mut().ambient_cooldown = std::time::Duration::ZERO;
 
     session
         .call("find", json!({ "query": ALPHA, "limit": 8 }))
@@ -411,7 +411,6 @@ fn m_ambient_stat_probe_skips_unchanged_tree() {
         "unchanged tree must not open the writer on the first probe"
     );
 
-    std::thread::sleep(cooldown);
     session
         .call("find", json!({ "query": ALPHA, "limit": 8 }))
         .expect("unchanged find");
@@ -422,7 +421,6 @@ fn m_ambient_stat_probe_skips_unchanged_tree() {
     );
 
     write_py(root.path(), "alpha.py", BETA);
-    std::thread::sleep(cooldown);
     let fresh = session
         .call("find", json!({ "query": BETA, "limit": 8 }))
         .expect("post-edit find");

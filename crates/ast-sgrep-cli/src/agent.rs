@@ -103,6 +103,49 @@ pub(crate) fn capabilities_json(_cli: &Cli) -> anyhow::Result<Value> {
     Ok(caps)
 }
 
+/// Key for the bare-default row in [`COMMAND_EXAMPLES`] (no subcommand).
+const BARE_DEFAULT_EXAMPLE: &str = "bare";
+
+/// Per-command example command lines for the clap catalog and clap usage
+/// teaching. Single source — to annotate a command, add a row here, not a
+/// new literal at the use site.
+const COMMAND_EXAMPLES: &[(&str, &str)] = &[
+    (
+        "search",
+        r#"asgrep search --json --format compact "auth refresh" ."#,
+    ),
+    ("keyword", r#"asgrep keyword --json "auth refresh" ."#),
+    (
+        "semantic",
+        r#"asgrep semantic --json "where is auth refreshed" ."#,
+    ),
+    (
+        "chain",
+        r#"asgrep chain "callers:process_request" ."#,
+    ),
+    (
+        "call-path",
+        r#"asgrep call-path main validate_input ."#,
+    ),
+    (
+        "codemod",
+        r#"asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#,
+    ),
+    // Bare default (no subcommand): the fallback for commands without a row.
+    (
+        BARE_DEFAULT_EXAMPLE,
+        r#"asgrep --json --format compact "auth refresh" ."#,
+    ),
+];
+
+/// Example command line for `name` (`None` when the command has no example row).
+pub(crate) fn command_example(name: &str) -> Option<&'static str> {
+    COMMAND_EXAMPLES
+        .iter()
+        .find(|(row, _)| *row == name)
+        .map(|(_, example)| *example)
+}
+
 fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String>) {
     const SEARCH_TUNING: &[&str] = &[
         "--no-embed",
@@ -114,7 +157,6 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         "--excerpt-lines",
         "--snippet-tokens",
         "--response-snippet-tokens",
-        "--dry-run",
         // m38g: whole-response token budget that picks per-result detail.
         "--budget-tokens",
     ];
@@ -173,13 +215,11 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
         if !aliases.is_empty() {
             entry["aliases"] = json!(aliases);
         }
-        if matches!(name.as_str(), "search" | "keyword" | "semantic") {
+        if crate::is_search_family(name.as_str()) {
             entry["robot_output"] = json!("--format implies --json; formats: native|agent|agent-capsule|compact|github|gitlab");
-            entry["example"] = json!(match name.as_str() {
-                "keyword" => r#"asgrep keyword --json "auth refresh" ."#,
-                "semantic" => r#"asgrep semantic --json "where is auth refreshed" ."#,
-                _ => r#"asgrep search --json --format compact "auth refresh" ."#,
-            });
+            if let Some(example) = command_example(&name) {
+                entry["example"] = json!(example);
+            }
         }
         if name == "reindex" {
             entry["safe_mutating"] = json!({
@@ -202,9 +242,9 @@ fn clap_catalog(command: &clap::Command) -> (Vec<Value>, Vec<String>, Vec<String
                 "apply": "asgrep codemod --yes --pattern '<pattern>' --rewrite '<rewrite>' <ROOT>",
                 "note": "apply requires --yes (alias --force); --dry-run emits a JSON plan without writing source"
             });
-            entry["example"] = json!(
-                r#"asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#
-            );
+            if let Some(example) = command_example("codemod") {
+                entry["example"] = json!(example);
+            }
         }
         commands.push(entry);
     }
@@ -457,10 +497,13 @@ const KNOWN_LONG_FLAGS: &[&str] = &[
     "rerank",
     "rerank-top-k",
     "format",
+    "preview",
     "excerpt-lines",
     "snippet-tokens",
     "response-snippet-tokens",
     "file-filter",
+    "files-with-matches",
+    "count",
     "path",
     "budget-tokens",
     "help",
@@ -485,6 +528,7 @@ const KNOWN_LONG_FLAGS: &[&str] = &[
     "requests",
     "yes",
     "force",
+    "target",
 ];
 
 const COLOR_NOOPS: &[&str] = &["color", "colour", "no-color", "no-colour"];
@@ -1007,17 +1051,7 @@ pub(crate) fn rewrite_typos(
                 // An exact non-search subcommand (`-w read REF`): the word
                 // channel must never prefix a ref or non-query positional.
                 if canonical == text
-                    && !matches!(
-                        text,
-                        "search"
-                            | "keyword"
-                            | "semantic"
-                            | "defs"
-                            | "callers"
-                            | "imports"
-                            | "find"
-                            | "query"
-                    )
+                    && !crate::cli_args::Commands::is_search_channel_name(text)
                 {
                     nonsearch_subcommand = true;
                 }
@@ -1166,37 +1200,20 @@ pub(crate) fn query_looks_like_subcommand_typo(query: &str) -> Option<&'static s
         ("index_repo", "index"),
     ];
     if let Some((_, canonical)) = EXACT_VOCAB.iter().find(|(alias, _)| *alias == lower) {
+        // Targets must name canonical commands (checked against `Commands::name`
+        // via `all_names` so the table cannot drift from the clap inventory).
+        debug_assert!(
+            crate::cli_args::Commands::all_names().contains(canonical),
+            "EXACT_VOCAB target must be a canonical command"
+        );
         return Some(*canonical);
     }
-    const COMMANDS: &[&str] = &[
-        "index",
-        "status",
-        "reindex",
-        "search",
-        "keyword",
-        "semantic",
-        "chain",
-        "call-path",
-        "bench",
-        "watch",
-        "capabilities",
-        "version",
-        "robot-docs",
-        "doctor",
-        "read",
-        "outline",
-        "eval",
-        "codemod",
-        "codemode-batch",
-        "serve",
-        "find",
-        "query",
-        "defs",
-        "callers",
-        "imports",
-    ];
-    COMMANDS
+    // Canonical names come from `Commands::all_names` (single source next to
+    // `Commands::name`); the search aliases come from
+    // `Commands::search_aliases` so the pair cannot drift.
+    crate::cli_args::Commands::all_names()
         .iter()
+        .chain(crate::cli_args::Commands::search_aliases().iter())
         .map(|command| (*command, edit_distance(&lower, command)))
         .min_by_key(|(_, distance)| *distance)
         .filter(|(command, distance)| {
@@ -1254,23 +1271,20 @@ pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
     let missing_query = msg.contains("required arguments were not provided")
         && (msg.contains("<QUERY>") || msg.contains("QUERY"));
     if missing_query {
-        let example = match command {
-            "keyword" => r#"Example: asgrep keyword --json "auth refresh" ."#,
-            "semantic" => r#"Example: asgrep semantic --json "where is auth refreshed" ."#,
-            "search" => r#"Example: asgrep search --json --format compact "auth refresh" ."#,
-            "chain" => r#"Example: asgrep chain "callers:process_request" ."#,
-            "call-path" => r#"Example: asgrep call-path main validate_input ."#,
-            _ => r#"Example: asgrep --json --format compact "auth refresh" ."#,
-        };
+        // Every row comes from COMMAND_EXAMPLES; commands without a row fall
+        // back to the bare-default row (no subcommand).
+        let row = command_example(command)
+            .or_else(|| command_example(BARE_DEFAULT_EXAMPLE))
+            .expect("COMMAND_EXAMPLES carries a bare-default row");
         msg.push('\n');
-        msg.push_str(example);
+        msg.push_str(&format!("Example: {row}"));
         msg.push_str("\nTip: QUERY is required; optional ROOT defaults to `.`.");
     }
     if command == "codemod" && msg.contains("required arguments were not provided") {
         msg.push('\n');
-        msg.push_str(
-            r#"Example: asgrep codemod --dry-run --pattern 'legacy($ARG)' --rewrite 'modern($ARG)' ."#,
-        );
+        // Single-sourced from COMMAND_EXAMPLES so the tip cannot drift.
+        let row = command_example("codemod").expect("COMMAND_EXAMPLES carries a codemod row");
+        msg.push_str(&format!("Example: {row}"));
         msg.push_str(
             "\nTip: always plan with --dry-run first; apply requires --yes (alias --force).",
         );

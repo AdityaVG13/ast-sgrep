@@ -582,7 +582,7 @@ pub(crate) fn match_directive_root(
     pattern: &str,
 ) -> Option<Vec<PatternMatch>> {
     let template = admitted_directive_template(lang, pattern)?;
-    let tree = parse_source(lang, source).ok()?;
+    let tree = parse_source_silent(lang, source)?;
     let mut out = Vec::new();
     match &template {
         DirectiveTemplate::PyImport { .. } => {

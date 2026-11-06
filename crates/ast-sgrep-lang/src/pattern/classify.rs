@@ -82,6 +82,264 @@ pub struct CallChainSegment {
     pub arg_slots: Option<Vec<ArgSlot>>,
 }
 
+/// Which connector spelling a chain pattern splits on — the one split path
+/// for the S4 twin classifiers (`classify_call_chain` /
+/// `classify_member_call_chain`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChainConnector {
+    /// Dotted chains (`a.b($X).c($Y)`, `a?.b($X)?.c($Y)`).
+    Dot,
+    /// Php member chains (`$o->m($A)->n($B)`, `?->` nullsafe links).
+    Arrow,
+}
+
+/// Split one chain pattern on depth-0 connectors, recording per-link flags.
+///
+/// The caller admits the connector spelling first (`.`/`(` for dotted,
+/// `->` for member). Returns the raw segments plus `into_flags`, where
+/// `into_flags[j]` is true when the connector INTO segment j is spelled
+/// optional (`?.`) or nullsafe (`?->`). A trailing connector-`?` with no
+/// next link refuses (rust-try spellings and connector-less tails have no
+/// classified contract); every other `?` judgment stays with the caller,
+/// exactly as the twin loops enforced it.
+pub(crate) fn split_chain_segments(
+    p: &str,
+    connector: ChainConnector,
+) -> Option<(Vec<String>, Vec<bool>)> {
+    match connector {
+        ChainConnector::Dot => {
+            // Split on depth-0 dots; parentheses and subscripts nest.
+            let mut raw_segments: Vec<String> = Vec::new();
+            let mut depth = 0usize;
+            let mut current = String::new();
+            for ch in p.chars() {
+                match ch {
+                    '(' | '[' => {
+                        depth += 1;
+                        current.push(ch);
+                    }
+                    ')' | ']' => {
+                        depth = depth.saturating_sub(1);
+                        current.push(ch);
+                    }
+                    '.' if depth == 0 => raw_segments.push(std::mem::take(&mut current)),
+                    _ => current.push(ch),
+                }
+            }
+            raw_segments.push(current);
+            if raw_segments.len() < 2 {
+                return None;
+            }
+            // A trailing `?` on a segment spells the OPTIONAL connector
+            // INTO the NEXT segment — the head link (`$O?.first()...`) and
+            // the mid-chain links (`$O.first()?.second()`). A trailing `?`
+            // on the LAST segment has no next link and no classified
+            // contract (rust-try spellings), and any other `?` (ternaries,
+            // conditional arguments) keeps the loud refusal.
+            let last = raw_segments.len() - 1;
+            let mut into_flags = vec![false; raw_segments.len()];
+            for (index, raw) in raw_segments.iter().enumerate() {
+                if raw.trim_end().ends_with('?') {
+                    if index == last {
+                        return None;
+                    }
+                    into_flags[index + 1] = true;
+                }
+            }
+            Some((raw_segments, into_flags))
+        }
+        ChainConnector::Arrow => {
+            // Split on depth-0 `->`; parentheses and subscripts nest. A `?`
+            // immediately before a split is the nullsafe `?->` connector
+            // INTO the next segment — stripped from the left segment and
+            // recorded.
+            let bytes = p.as_bytes();
+            let mut raw_segments: Vec<String> = Vec::new();
+            let mut into_flags: Vec<bool> = vec![false];
+            let mut depth = 0usize;
+            let mut segment_start = 0usize;
+            let mut i = 0usize;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' => {
+                        depth += 1;
+                        i += 1;
+                    }
+                    b')' | b']' => {
+                        depth = depth.saturating_sub(1);
+                        i += 1;
+                    }
+                    b'-' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => {
+                        let mut segment = p[segment_start..i].to_string();
+                        let nullsafe = segment.ends_with('?');
+                        if nullsafe {
+                            segment.pop();
+                        }
+                        raw_segments.push(segment);
+                        into_flags.push(nullsafe);
+                        i += 2;
+                        segment_start = i;
+                    }
+                    _ => i += 1,
+                }
+            }
+            raw_segments.push(p[segment_start..].to_string());
+            if raw_segments.len() < 2 {
+                return None;
+            }
+            Some((raw_segments, into_flags))
+        }
+    }
+}
+
+/// The classified argument contract of one chain segment — the single
+/// argument table behind the former twin copies in `classify_call_chain` /
+/// `classify_member_call_chain` (args template, whole-list capture,
+/// per-position meta binds, mixed slots).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChainArgList {
+    pub args: Option<ArgumentTemplate>,
+    pub args_capture: Option<(String, bool)>,
+    pub arg_metas: Option<Vec<String>>,
+    pub arg_slots: Option<Vec<ArgSlot>>,
+}
+
+/// Split one raw chain segment into its head name and optional
+/// argument-list text. A call segment must CLOSE at its argument list and
+/// carry a pure-metavariable or identifier head; anything else (including
+/// an argument-free receiver/property link) reports `None` for the caller
+/// to admit under its own receiver/property discipline.
+fn split_chain_call_head(raw: &str) -> Option<(&str, Option<&str>)> {
+    let open = raw.find('(')?;
+    // A call segment must end at its argument list.
+    if !raw.ends_with(')') {
+        return None;
+    }
+    if !(is_pure_metavariable(name_head(raw, open)) || is_pattern_ident(name_head(raw, open))) {
+        return None;
+    }
+    Some((
+        name_head(raw, open),
+        Some(raw[open + 1..raw.len() - 1].trim()),
+    ))
+}
+
+/// Split one chain head name into its literal/capture binding: a pure
+/// metavariable captures, anything else matches literally.
+fn chain_name_binding(name_part: &str) -> (Option<String>, Option<String>) {
+    if is_pure_metavariable(name_part) {
+        (None, capture_name(name_part).map(str::to_string))
+    } else {
+        (Some(name_part.to_string()), None)
+    }
+}
+
+/// Classify one chain segment's argument list — the single argument table
+/// for both chain lanes.
+///
+/// `mixed` selects the `$$$`-mixed tail: `None` refuses it (the dotted lane
+/// without a `?.` spelling — the reference refuses `a.b.c($A, $$$B)` at
+/// every arity), `Some(grammar)` parses slots with that lane's grammar.
+/// `PlainCall` keeps the dotted-optional detached contract (no args
+/// template — the positional matcher in `chain_segment_args_contract`
+/// decides the arity); `Member` attaches the template the member walker
+/// enforces (`Any` for rest-carrying lists, exact count otherwise).
+pub(crate) fn classify_chain_arg_list(
+    args_text: Option<&str>,
+    mixed: Option<ArgSlotGrammar>,
+) -> Option<ChainArgList> {
+    let mut arg_slots: Option<Vec<ArgSlot>> = None;
+    let args = match args_text {
+        None => None,
+        Some("") => Some(ArgumentTemplate::Exactly(0)),
+        // `$$$` / `$$$NAME` is the reference's ANY-arity rest argument
+        // (the chains bind EMPTY argument lists, multi A=[]).
+        Some("$$$") => Some(ArgumentTemplate::Any),
+        Some(args) if args.starts_with("$$$") && is_metavar_name(&args[3..]) => {
+            Some(ArgumentTemplate::Any)
+        }
+        // Plain single/metavar lists keep the exact-arity contract; a
+        // rest metavariable mixed with singles has no reference
+        // evidence and never templates (the single-call classifier
+        // refuses the same mix through validate_argument_pattern).
+        Some(args) if !args.contains("$$$") && args.split(',').all(is_pure_metavariable) => {
+            Some(ArgumentTemplate::Exactly(args.split(',').count()))
+        }
+        Some(args) if args.contains("$$$") => {
+            let grammar = mixed?;
+            let slots = parse_arg_slots(args, grammar)?;
+            match grammar {
+                ArgSlotGrammar::PlainCall => {
+                    arg_slots = Some(slots);
+                    None
+                }
+                ArgSlotGrammar::Member => {
+                    let template = if slots.iter().any(|slot| matches!(slot, ArgSlot::Rest(_))) {
+                        ArgumentTemplate::Any
+                    } else {
+                        ArgumentTemplate::Exactly(slots.len())
+                    };
+                    arg_slots = Some(slots);
+                    Some(template)
+                }
+            }
+        }
+        Some(args) => {
+            // The member-only tail: a literal/mixed list with no rest
+            // rides the member slot grammar (meta-only lists keep the
+            // registered `arg_metas`/`args_capture` arms below, so this
+            // stays `None` for them). The dotted lane refuses every such
+            // face here — its mixed dotted faces already answer through
+            // the general lane.
+            if !matches!(mixed, Some(ArgSlotGrammar::Member)) {
+                return None;
+            }
+            let slots = parse_arg_slots(args, ArgSlotGrammar::Member)?;
+            let template = if slots.iter().any(|slot| matches!(slot, ArgSlot::Rest(_))) {
+                ArgumentTemplate::Any
+            } else {
+                ArgumentTemplate::Exactly(slots.len())
+            };
+            arg_slots = Some(slots);
+            Some(template)
+        }
+    };
+    let args_capture = match args_text {
+        Some("$$$") => None,
+        Some(args) => {
+            if let Some(name) = args.strip_prefix("$$$") {
+                is_metavar_name(name).then(|| (name.to_string(), true))
+            } else {
+                capture_name(args).map(|name| (name.to_string(), false))
+            }
+        }
+        None => None,
+    };
+    // A comma list of 2+ single metas binds each name to its positional
+    // candidate argument.
+    let arg_metas = match args_text {
+        Some(args)
+            if !args.contains("$$$")
+                && args.split(',').all(is_pure_metavariable)
+                && args.contains(',') =>
+        {
+            let names: Vec<String> = args
+                .split(',')
+                .filter_map(capture_name)
+                .map(str::to_string)
+                .collect();
+            (!names.is_empty()).then_some(names)
+        }
+        _ => None,
+    };
+    Some(ChainArgList {
+        args,
+        args_capture,
+        arg_metas,
+        arg_slots,
+    })
+}
+
 /// Classify a dotted member-call chain with per-segment argument lists.
 /// `None` unless MORE THAN ONE segment carries an argument list — every
 /// single-argument-list face keeps the simple [`NativeKind::Call`] lane.
@@ -98,43 +356,8 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
     if !p.contains('.') || !p.contains('(') {
         return None;
     }
-    // Split on depth-0 dots; parentheses and subscripts nest.
-    let mut raw_segments: Vec<String> = Vec::new();
-    let mut depth = 0usize;
-    let mut current = String::new();
-    for ch in p.chars() {
-        match ch {
-            '(' | '[' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' | ']' => {
-                depth = depth.saturating_sub(1);
-                current.push(ch);
-            }
-            '.' if depth == 0 => raw_segments.push(std::mem::take(&mut current)),
-            _ => current.push(ch),
-        }
-    }
-    raw_segments.push(current);
-    if raw_segments.len() < 2 {
-        return None;
-    }
-    // A trailing `?` on a segment spells the OPTIONAL connector INTO the NEXT
-    // segment — the head link (`$O?.first().second()`) and the mid-chain
-    // links (`$O.first()?.second()`). A trailing `?` on the LAST segment has
-    // no next link and no classified contract (rust-try spellings), and any
-    // other `?` (ternaries, conditional arguments) keeps the loud refusal.
+    let (raw_segments, optional_flags) = split_chain_segments(p, ChainConnector::Dot)?;
     let last = raw_segments.len() - 1;
-    let mut optional_flags = vec![false; raw_segments.len()];
-    for (index, raw) in raw_segments.iter().enumerate() {
-        if raw.trim_end().ends_with('?') {
-            if index == last {
-                return None;
-            }
-            optional_flags[index + 1] = true;
-        }
-    }
     let mut segments = Vec::with_capacity(raw_segments.len());
     let mut call_segments = 0usize;
     // The chain spells at least one `?.` connector — the admission that
@@ -153,22 +376,10 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
         if raw.contains('?') {
             return None;
         }
-        let (name_part, args_text) = match raw.find('(') {
-            Some(open) => {
-                // A call segment must end at its argument list.
-                if !raw.ends_with(')') {
-                    return None;
-                }
-                if !(is_pure_metavariable(name_head(raw, open))
-                    || is_pattern_ident(name_head(raw, open)))
-                {
-                    return None;
-                }
+        let (name_part, args_text) = match split_chain_call_head(raw) {
+            Some((name, args)) => {
                 call_segments += 1;
-                (
-                    name_head(raw, open),
-                    Some(raw[open + 1..raw.len() - 1].trim()),
-                )
+                (name, args)
             }
             None => {
                 // Only the leading receiver segment may be argument-free —
@@ -187,90 +398,30 @@ pub(crate) fn classify_call_chain(p: &str) -> Option<NativeKind> {
                 (raw, None)
             }
         };
-        let (literal, capture) = if is_pure_metavariable(name_part) {
-            (None, capture_name(name_part).map(str::to_string))
-        } else {
-            (Some(name_part.to_string()), None)
-        };
-        let mut arg_slots: Option<Vec<ArgSlot>> = None;
-        let args = match args_text {
-            None => None,
-            Some("") => Some(ArgumentTemplate::Exactly(0)),
-            // `$$$` / `$$$NAME` is the reference's ANY-arity rest argument
-            // (the chains bind EMPTY argument lists, multi A=[]).
-            Some("$$$") => Some(ArgumentTemplate::Any),
-            Some(args) if args.starts_with("$$$") && is_metavar_name(&args[3..]) => {
-                Some(ArgumentTemplate::Any)
-            }
-            // Plain single/metavar lists keep the exact-arity contract; a
-            // rest metavariable mixed with singles has no reference
-            // evidence and never templates (the single-call classifier
-            // refuses the same mix through validate_argument_pattern).
-            Some(args) if !args.contains("$$$") && args.split(',').all(is_pure_metavariable) => {
-                Some(ArgumentTemplate::Exactly(args.split(',').count()))
-            }
-            // A MIXED rest list (one or two rests with singles, or two rests)
-            // classifies ONLY for `?.`-spelled chains, riding the registered
-            // plain-call rest-slot semantics (`parse_call_arg_slots` +
-            // `call_arg_slots_match`): the reference answers the chain faces
-            // at exactly those arities (trailing rest + single ⇒ n ≥ 2,
-            // k ≥ 2 rests ⇒ n ≥ k-1, non-trailing rest ⇒ n == 1). Dotted
-            // chains keep the refusal (the reference refuses `a.b.c($A,
-            // $$$B)` at every arity), and `parse_call_arg_slots`' same-name
-            // collision refusal keeps the census-loud envelope
-            // (`a?.b?.c($$$A, $A)`).
-            Some(args) if args.contains("$$$") => {
-                if !optional_spelled {
-                    return None;
-                }
-                {
-                    let slots = parse_call_arg_slots(args)?;
-                    arg_slots = Some(slots)
-                }
-                None
-            }
-            Some(_) => return None,
-        };
-        let args_capture = match args_text {
-            Some("$$$") => None,
-            Some(args) => {
-                if let Some(name) = args.strip_prefix("$$$") {
-                    is_metavar_name(name).then(|| (name.to_string(), true))
-                } else {
-                    capture_name(args).map(|name| (name.to_string(), false))
-                }
-            }
-            None => None,
-        };
-        // A comma list of 2+ single metas binds each name to its positional
-        // candidate argument.
-        let arg_metas = match args_text {
-            Some(args)
-                if !args.contains("$$$")
-                    && args.split(',').all(is_pure_metavariable)
-                    && args.contains(',') =>
-            {
-                let names: Vec<String> = args
-                    .split(',')
-                    .filter_map(capture_name)
-                    .map(str::to_string)
-                    .collect();
-                (!names.is_empty()).then_some(names)
-            }
-            _ => None,
-        };
+        let (literal, capture) = chain_name_binding(name_part);
+        // A MIXED rest list (one or two rests with singles, or two rests)
+        // classifies ONLY for `?.`-spelled chains, riding the registered
+        // plain-call rest-slot semantics: the reference answers the chain
+        // faces at exactly those arities (trailing rest + single ⇒ n ≥ 2,
+        // k ≥ 2 rests ⇒ n ≥ k-1, non-trailing rest ⇒ n == 1). Dotted
+        // chains keep the refusal (the reference refuses `a.b.c($A,
+        // $$$B)` at every arity), and the plain grammar's same-name
+        // collision refusal keeps the census-loud envelope
+        // (`a?.b?.c($$$A, $A)`).
+        let mixed = optional_spelled.then_some(ArgSlotGrammar::PlainCall);
+        let arg_list = classify_chain_arg_list(args_text, mixed)?;
         segments.push(CallChainSegment {
             literal,
             capture,
-            args,
-            args_capture,
-            arg_metas,
+            args: arg_list.args,
+            args_capture: arg_list.args_capture,
+            arg_metas: arg_list.arg_metas,
             // The dotted chain lane keeps its registered meta-only argument
             // contract (every mixed dotted face already answers through the
             // general lane). The `?.`-spelled chain lane carries mixed-rest
             // slot lists here — the walker enforces them with the registered
             // plain-call rest-slot semantics.
-            arg_slots,
+            arg_slots: arg_list.arg_slots,
         });
     }
     // The 3+-segment optional chain is its own kind — the two-segment
@@ -369,43 +520,7 @@ pub(crate) fn classify_member_call_chain(p: &str) -> Option<NativeKind> {
     if !p.contains('(') {
         return classify_php_member_property(p);
     }
-    // Split on depth-0 `->`; parentheses and subscripts nest. A `?`
-    // immediately before a split is the nullsafe `?->` connector INTO the
-    // next segment — stripped from the left segment and recorded.
-    let bytes = p.as_bytes();
-    let mut raw_segments: Vec<String> = Vec::new();
-    let mut nullsafe_flags: Vec<bool> = vec![false];
-    let mut depth = 0usize;
-    let mut segment_start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' => {
-                depth += 1;
-                i += 1;
-            }
-            b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                i += 1;
-            }
-            b'-' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => {
-                let mut segment = p[segment_start..i].to_string();
-                let nullsafe = segment.ends_with('?');
-                if nullsafe {
-                    segment.pop();
-                }
-                raw_segments.push(segment);
-                nullsafe_flags.push(nullsafe);
-                i += 2;
-                segment_start = i;
-            }
-            _ => i += 1,
-        }
-    }
-    raw_segments.push(p[segment_start..].to_string());
-    if raw_segments.len() < 2 {
-        return None;
-    }
+    let (raw_segments, nullsafe_flags) = split_chain_segments(p, ChainConnector::Arrow)?;
     let mut segments = Vec::with_capacity(raw_segments.len());
     let mut call_segments = 0usize;
     for (index, raw) in raw_segments.iter().enumerate() {
@@ -419,22 +534,10 @@ pub(crate) fn classify_member_call_chain(p: &str) -> Option<NativeKind> {
         if raw.is_empty() {
             return None;
         }
-        let (name_part, args_text) = match raw.find('(') {
-            Some(open) => {
-                // A call segment must end at its argument list.
-                if !raw.ends_with(')') {
-                    return None;
-                }
-                if !(is_pure_metavariable(name_head(raw, open))
-                    || is_pattern_ident(name_head(raw, open)))
-                {
-                    return None;
-                }
+        let (name_part, args_text) = match split_chain_call_head(raw) {
+            Some((name, args)) => {
                 call_segments += 1;
-                (
-                    name_head(raw, open),
-                    Some(raw[open + 1..raw.len() - 1].trim()),
-                )
+                (name, args)
             }
             None if index == 0 => {
                 // Only the leading receiver segment may be argument-free.
@@ -474,73 +577,22 @@ pub(crate) fn classify_member_call_chain(p: &str) -> Option<NativeKind> {
                 }
             }
         };
-        let (literal, capture) = if is_pure_metavariable(name_part) {
-            (None, capture_name(name_part).map(str::to_string))
-        } else {
-            (Some(name_part.to_string()), None)
-        };
+        let (literal, capture) = chain_name_binding(name_part);
         // Same argument table as [`classify_call_chain`] — `is_pure_metavariable`
         // already carries the canonical `$$A` arm, so 2-dollar chain arguments
         // classify exactly like `$A`. Lists mixing literal tokens with metas
         // classify through per-position slots (literal/metal/rest binding);
         // meta-only lists keep the registered arms byte-compatible.
-        let (args, arg_slots) = match args_text {
-            None => (None, None),
-            Some("") => (Some(ArgumentTemplate::Exactly(0)), None),
-            Some("$$$") => (Some(ArgumentTemplate::Any), None),
-            Some(args) if args.starts_with("$$$") && is_metavar_name(&args[3..]) => {
-                (Some(ArgumentTemplate::Any), None)
-            }
-            Some(args) if !args.contains("$$$") && args.split(',').all(is_pure_metavariable) => (
-                Some(ArgumentTemplate::Exactly(args.split(',').count())),
-                None,
-            ),
-            Some(args) => {
-                let slots = parse_member_arg_slots(args)?;
-                let has_rest = slots.iter().any(|slot| matches!(slot, ArgSlot::Rest(_)));
-                let template = if has_rest {
-                    ArgumentTemplate::Any
-                } else {
-                    ArgumentTemplate::Exactly(slots.len())
-                };
-                (Some(template), Some(slots))
-            }
-        };
-        let args_capture = match args_text {
-            Some("$$$") => None,
-            Some(args) => {
-                if let Some(name) = args.strip_prefix("$$$") {
-                    is_metavar_name(name).then(|| (name.to_string(), true))
-                } else {
-                    capture_name(args).map(|name| (name.to_string(), false))
-                }
-            }
-            None => None,
-        };
         // Same per-argument table as [`classify_call_chain`] —
         // `$w->q2($A, $B)` binds A and B positionally.
-        let arg_metas = match args_text {
-            Some(args)
-                if !args.contains("$$$")
-                    && args.split(',').all(is_pure_metavariable)
-                    && args.contains(',') =>
-            {
-                let names: Vec<String> = args
-                    .split(',')
-                    .filter_map(capture_name)
-                    .map(str::to_string)
-                    .collect();
-                (!names.is_empty()).then_some(names)
-            }
-            _ => None,
-        };
+        let arg_list = classify_chain_arg_list(args_text, Some(ArgSlotGrammar::Member))?;
         segments.push(CallChainSegment {
             literal,
             capture,
-            args,
-            args_capture,
-            arg_metas,
-            arg_slots,
+            args: arg_list.args,
+            args_capture: arg_list.args_capture,
+            arg_metas: arg_list.arg_metas,
+            arg_slots: arg_list.arg_slots,
         });
     }
     // Single-call-segment faces keep the [`NativeKind::MemberCall`] /

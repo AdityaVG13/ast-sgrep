@@ -9,8 +9,7 @@ pub fn sample_file(rel: &str) -> String {
     std::fs::read_to_string(sample_root().join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
-/// Write `body` to `path`, creating parent directories (`mkdir -p`).
-/// Panics on IO failure. Deterministic: fixed bytes in, fixed bytes out.
+/// INTENT: `mkdir -p` + write `body` to `path`; panics on IO failure.
 pub fn write_file(path: &Path, body: &[u8]) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -51,11 +50,13 @@ pub fn write_temp(bytes: &[u8]) -> tempfile::NamedTempFile {
 }
 
 /// Temp tree with `files` (`(relative path, body)` pairs; parents created).
-/// The caller keeps the [`tempfile::TempDir`] alive. Panics on IO failure.
-pub fn file_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+/// Accepts borrowed or owned pairs alike, so generated-name fixtures pass
+/// owned `String`s straight through. The caller keeps the
+/// [`tempfile::TempDir`] alive. Panics on IO failure.
+pub fn file_tree<A: AsRef<str>, B: AsRef<str>>(files: &[(A, B)]) -> tempfile::TempDir {
     let temp = tempfile::TempDir::new().expect("file_tree tempdir");
     for (rel, body) in files {
-        write_file(&temp.path().join(rel), body.as_bytes());
+        write_file(&temp.path().join(rel.as_ref()), body.as_ref().as_bytes());
     }
     temp
 }

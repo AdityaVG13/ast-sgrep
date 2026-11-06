@@ -917,7 +917,7 @@ pub(crate) fn pattern_has_placeholder_in_literal(
                 .parent()
                 .is_some_and(|parent| parent.kind() == "raw_string_literal"));
     if !exempt
-        && (kind.contains("string") || kind.contains("comment") || kind.contains("regex"))
+        && (kind.contains("string") || is_trivia_kind(kind) || kind.contains("regex"))
         && node_text(node, doc).is_some_and(|text| text.contains(GENERAL_MV_PREFIX))
     {
         // The placeholder may reach a string node ONLY through interpolation
@@ -1002,7 +1002,7 @@ pub(crate) fn try_build_general_template(
     multi_names: &BTreeSet<String>,
     root_gate: bool,
 ) -> Option<GeneralTemplate> {
-    let tree = parse_source(lang, &doc).ok()?;
+    let tree = parse_source_silent(lang, &doc)?;
     let root = tree.root_node();
     if root.has_error() {
         return None;

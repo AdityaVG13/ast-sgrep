@@ -910,16 +910,84 @@ pub(crate) fn is_pure_metavariable(arg: &str) -> bool {
         || arg.strip_prefix("$$").is_some_and(is_metavar_name)
 }
 
-/// Parse a php member-call argument list into per-position slots — the same
-/// token grammar as [`parse_rhs_arg_slots`] (pure metavariable
-/// `$$$NAME`/`$NAME`/`$$NAME` slots or single literal TOKENs, at most one
-/// rest). The "at least one literal" floor is GONE: meta-only lists
-/// classify through the slots now (the `;`-terminated flat spelling had no
-/// answering arm — see [`classify_member_call_mixed_args`]) and same-name
-/// meta lists inherit bind_capture's conflict semantics. The floor was
-/// vacuous at the other two call sites (pure-meta lists never reach them).
-pub(crate) fn parse_member_arg_slots(args: &str) -> Option<Vec<ArgSlot>> {
-    parse_rhs_arg_slots(args)
+/// Which lane's token grammar the unified slot parser enforces — the one
+/// classification path for the S3 arg-slot family (`calls.rs` + `php.rs` +
+/// `native.rs` + `classify.rs` all route here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgSlotGrammar {
+    /// Plain (dotted/bare) calls: pure-metavariable slots only — literal
+    /// tokens refuse (fail-closed); rests obey the reference's rest-slot
+    /// contract (exactly one rest with singles, or ≥2 rests with no
+    /// singles, all names distinct).
+    PlainCall,
+    /// Php member calls / assignment-RHS faces: metavariable slots AND
+    /// single literal TOKENs, at most one rest. The "at least one literal"
+    /// floor is GONE: meta-only lists classify through the slots now (the
+    /// `;`-terminated flat spelling had no answering arm — see
+    /// [`classify_member_call_mixed_args`]) and same-name meta lists
+    /// inherit bind_capture's conflict semantics. The floor was vacuous at
+    /// the other two call sites (pure-meta lists never reach them).
+    Member,
+}
+
+/// Parse an argument list into per-position slots under one lane's grammar.
+/// This is the single parser behind the former triple
+/// (`parse_call_arg_slots` / `parse_member_arg_slots` /
+/// `parse_rhs_arg_slots`): the comma-split loop is shared, only the token
+/// admission (`allow_literal`) and the rest-count/collision tail differ.
+pub fn parse_arg_slots(args: &str, grammar: ArgSlotGrammar) -> Option<Vec<ArgSlot>> {
+    let mut slots = Vec::new();
+    let mut rests = 0usize;
+    let mut singles = 0usize;
+    let allow_literal = matches!(grammar, ArgSlotGrammar::Member);
+    for part in args.split(',') {
+        let slot = classify_arg_part(part.trim(), allow_literal)?;
+        rests += matches!(slot, ArgSlot::Rest(_)) as usize;
+        singles += matches!(slot, ArgSlot::Meta(_)) as usize;
+        slots.push(slot);
+    }
+    match grammar {
+        // The assignment-RHS slot grammar — at most one rest (multiple
+        // rests have no unambiguous contract).
+        ArgSlotGrammar::Member => (rests <= 1).then_some(slots),
+        // The PLAIN-call rest-slot grammar — pure metavariable slots where
+        // at least one is a `$$$NAME` rest. Sole rests and pure-single
+        // lists never reach here (earlier templates classify them);
+        // literal tokens and 2+-rests-with-singles refuse (fail-closed). A
+        // rest sharing its NAME with another slot in the SAME list also
+        // refuses: the k >= 2 arm binds every HEAD rest to `""` and only
+        // the tail rest to the whole-args text, so a shared name would
+        // conflict-bind and silently empty the face. Distinct names only.
+        ArgSlotGrammar::PlainCall => {
+            if !((rests == 1 && singles >= 1) || (rests >= 2 && singles == 0)) {
+                return None;
+            }
+            // Same-name collision refusal, order-independent: a rest
+            // sharing its name with a single (either position), or any two
+            // rests sharing a name, refuses (classify None -> ingress
+            // loud).
+            let rest_names: Vec<&str> = slots
+                .iter()
+                .filter_map(|slot| match slot {
+                    ArgSlot::Rest(name) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for (index, name) in rest_names.iter().enumerate() {
+                if rest_names[index + 1..].contains(name) {
+                    return None;
+                }
+            }
+            for slot in &slots {
+                if let ArgSlot::Meta(name) = slot {
+                    if rest_names.contains(&name.as_str()) {
+                        return None;
+                    }
+                }
+            }
+            Some(slots)
+        }
+    }
 }
 
 /// Classify one comma-separated argument part into its slot: a `$$$NAME`
@@ -938,80 +1006,55 @@ fn classify_arg_part(part: &str, allow_literal: bool) -> Option<ArgSlot> {
     }
 }
 
-/// The assignment-RHS argument-list slot grammar — the shared
-/// member/rhs token grammar ([`parse_member_arg_slots`] reuses this body):
-/// a meta/rest-only list (`f($A, $$$B)` — probed reference answers) and
-/// the sole whole-list rest (`f($$$A)` — answers every arity incl. the
-/// empty list) parse here. At most one rest (multiple rests have no
-/// unambiguous contract).
-pub(crate) fn parse_rhs_arg_slots(args: &str) -> Option<Vec<ArgSlot>> {
-    let mut slots = Vec::new();
-    let mut rests = 0usize;
-    for part in args.split(',') {
-        let slot = classify_arg_part(part.trim(), true)?;
-        rests += matches!(slot, ArgSlot::Rest(_)) as usize;
-        slots.push(slot);
-    }
-    (rests <= 1).then_some(slots)
+/// Which matching semantics the unified slot matcher enforces — the one
+/// match path for the S3 slot family (`structural.rs` + `calls.rs` +
+/// `php.rs` all route here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArgSlotMode {
+    /// Plain-call POSITIONAL semantics — deliberately NOT the php member
+    /// lane's backtracking matcher: no backtracking of the split
+    /// (`q($$$A, $B)` answers ONLY the 1-arg row, never the 2-arg row).
+    ///   - a TRAILING rest sharing the list with singles binds >= 1 argument
+    ///     (`q($A, $$$B)` refuses the 1-arg row);
+    ///   - a NON-TRAILING rest binds EXACTLY ZERO and the singles anchor the
+    ///     candidate arity to the single count (`q($$$A, $B)` only the 1-arg
+    ///     row; `q($A, $$$B, $C)` only the 2-arg row);
+    ///   - k >= 2 rests with no singles answer every arity >= k-1 (head rests
+    ///     bind zero, the tail binds all — the split choice is unobservable).
+    Positional,
+    /// Member/RHS BACKTRACKING semantics: literal slots compare the
+    /// candidate argument text byte-exactly; meta slots bind positionally;
+    /// a rest slot binds the remaining arguments' ORIGINAL source bytes
+    /// (comma-joined in the source, zero-or-more) in the multi namespace
+    /// and backtracks over split points. A trailing rest SHARING the list
+    /// with an earlier slot must bind at least one argument (`$w->q9(1,
+    /// $$$A)` refuses `q9(1)`, `f($v, $$$A)` refuses `f($v)`); a
+    /// whole-list rest may bind zero (`q9($$$A)` answers `q9()`) and a
+    /// non-trailing rest may bind zero (registered mid-rest probes).
+    Backtracking,
 }
 
-/// The PLAIN-call rest-slot grammar — pure metavariable slots where at
-/// least one is a `$$$NAME` rest. Sole rests and pure-single lists never
-/// reach here (earlier templates classify them); literal tokens and
-/// 2+-rests-with-singles refuse (fail-closed). A rest sharing its NAME
-/// with another slot in the SAME list also refuses: the k >= 2 arm binds
-/// every HEAD rest to `""` and only the tail rest to the whole-args text,
-/// so a shared name would conflict-bind and silently empty the face.
-/// Distinct names only.
-pub(crate) fn parse_call_arg_slots(args: &str) -> Option<Vec<ArgSlot>> {
-    let mut slots = Vec::new();
-    let mut rests = 0usize;
-    let mut singles = 0usize;
-    for part in args.split(',') {
-        let slot = classify_arg_part(part.trim(), false)?;
-        rests += matches!(slot, ArgSlot::Rest(_)) as usize;
-        singles += matches!(slot, ArgSlot::Meta(_)) as usize;
-        slots.push(slot);
-    }
-    if !((rests == 1 && singles >= 1) || (rests >= 2 && singles == 0)) {
-        return None;
-    }
-    // Same-name collision refusal, order-independent: a rest sharing its
-    // name with a single (either position), or any two rests sharing a name,
-    // refuses (classify None -> ingress loud).
-    let rest_names: Vec<&str> = slots
-        .iter()
-        .filter_map(|slot| match slot {
-            ArgSlot::Rest(name) => Some(name.as_str()),
-            _ => None,
-        })
-        .collect();
-    for (index, name) in rest_names.iter().enumerate() {
-        if rest_names[index + 1..].contains(name) {
-            return None;
+/// Match per-position slots under one lane's semantics: the single matcher
+/// behind the former pair (`call_arg_slots_match` /
+/// `arg_slots_match`+`arg_slots_match_from`). The plain lane keeps its
+/// positional contract; the member/RHS lane keeps its backtracking
+/// contract — one entry, no per-lane copies.
+pub(crate) fn match_arg_slots(
+    slots: &[ArgSlot],
+    nodes: &[Node],
+    source: &str,
+    captures: &mut BTreeMap<String, String>,
+    mode: ArgSlotMode,
+) -> Option<()> {
+    match mode {
+        ArgSlotMode::Positional => match_positional_slots(slots, nodes, source, captures),
+        ArgSlotMode::Backtracking => {
+            match_backtracking_slots_from(slots, nodes, source, captures, true)
         }
     }
-    for slot in &slots {
-        if let ArgSlot::Meta(name) = slot {
-            if rest_names.contains(&name.as_str()) {
-                return None;
-            }
-        }
-    }
-    Some(slots)
 }
 
-/// REST-SLOT argument semantics for plain calls — deliberately NOT the php
-/// member lane's backtracking matcher: no backtracking of the split
-/// (`q($$$A, $B)` answers ONLY the 1-arg row, never the 2-arg row).
-///   - a TRAILING rest sharing the list with singles binds >= 1 argument
-///     (`q($A, $$$B)` refuses the 1-arg row);
-///   - a NON-TRAILING rest binds EXACTLY ZERO and the singles anchor the
-///     candidate arity to the single count (`q($$$A, $B)` only the 1-arg
-///     row; `q($A, $$$B, $C)` only the 2-arg row);
-///   - k >= 2 rests with no singles answer every arity >= k-1 (head rests
-///     bind zero, the tail binds all — the split choice is unobservable).
-pub(crate) fn call_arg_slots_match(
+fn match_positional_slots(
     slots: &[ArgSlot],
     nodes: &[Node],
     source: &str,
@@ -1062,7 +1105,7 @@ pub(crate) fn call_arg_slots_match(
     let mut consumed = 0usize;
     // The TAIL rest binds the whole argument text; every head rest binds
     // zero (the split is unobservable in hit sets — 106B INFO-3). Names are
-    // distinct by parse_call_arg_slots's collision refusal.
+    // distinct by the plain lane's collision refusal (see [`ArgSlotGrammar`]).
     let tail_rest_index = slots
         .iter()
         .rposition(|slot| matches!(slot, ArgSlot::Rest(_)));
@@ -1118,27 +1161,10 @@ pub(crate) fn is_literal_arg_token(part: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
-/// Per-position slot matching. Literal slots compare the candidate argument
-/// text byte-exactly; meta slots bind positionally; a rest slot binds the
-/// remaining arguments' ORIGINAL source bytes (comma-joined in the source,
-/// zero-or-more) in the multi namespace and backtracks over split points.
-/// A trailing rest SHARING the list with an earlier slot must bind at least
-/// one argument (`$w->q9(1, $$$A)` refuses `q9(1)`, `f($v, $$$A)` refuses
-/// `f($v)`); a whole-list rest may bind zero (`q9($$$A)` answers `q9()`)
-/// and a non-trailing rest may bind zero (registered mid-rest probes).
-pub(crate) fn arg_slots_match(
-    slots: &[ArgSlot],
-    nodes: &[Node],
-    source: &str,
-    captures: &mut BTreeMap<String, String>,
-) -> Option<()> {
-    arg_slots_match_from(slots, nodes, source, captures, true)
-}
-
 /// `first` marks the un-recursed entry call: a sole-slot rest (first and
 /// last at once) is the whole-list rest that may bind an empty argument
 /// list.
-pub(crate) fn arg_slots_match_from(
+fn match_backtracking_slots_from(
     slots: &[ArgSlot],
     nodes: &[Node],
     source: &str,
@@ -1150,12 +1176,12 @@ pub(crate) fn arg_slots_match_from(
         Some((ArgSlot::Literal(lit), rest)) => {
             let text = node_text(nodes.first()?, source)?;
             (text == lit).then_some(())?;
-            arg_slots_match_from(rest, &nodes[1..], source, captures, false)
+            match_backtracking_slots_from(rest, &nodes[1..], source, captures, false)
         }
         Some((ArgSlot::Meta(name), rest)) => {
             let text = node_text(nodes.first()?, source)?;
             bind_capture(captures, name, text)?;
-            arg_slots_match_from(rest, &nodes[1..], source, captures, false)
+            match_backtracking_slots_from(rest, &nodes[1..], source, captures, false)
         }
         Some((ArgSlot::Rest(name), rest)) => {
             let lower = if rest.is_empty() && !(first && slots.len() == 1) {
@@ -1174,7 +1200,7 @@ pub(crate) fn arg_slots_match_from(
                 };
                 let mut trial = captures.clone();
                 if bind_capture_kind(&mut trial, name, &text, true).is_some()
-                    && arg_slots_match_from(rest, remain, source, &mut trial, false).is_some()
+                    && match_backtracking_slots_from(rest, remain, source, &mut trial, false).is_some()
                 {
                     *captures = trial;
                     return Some(());
@@ -1269,6 +1295,18 @@ pub(crate) fn parse_source(lang: Language, source: &str) -> anyhow::Result<tree_
     parser
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("failed to parse source"))
+}
+
+/// THE silent-parse convention (P4): source-parse failure → `None`.
+///
+/// Every lane that answers empty on unparseable source goes through this
+/// one function instead of scattering `.ok()?` / `let Ok(..) else` at each
+/// call site, so "no match" vs "unparseable" has a single documented home
+/// and a single future instrumentation point. Loud lanes keep using
+/// [`parse_source`] with `?`. Same outcomes — `None` maps to each caller's
+/// existing empty value (`Vec::new()`, `None`, `false`, early return).
+pub(crate) fn parse_source_silent(lang: Language, source: &str) -> Option<tree_sitter::Tree> {
+    parse_source(lang, source).ok()
 }
 
 pub(crate) fn compiled_query(

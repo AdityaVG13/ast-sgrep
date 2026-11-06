@@ -147,7 +147,7 @@ pub(crate) fn build_literal_template(lang: Language, pattern: &str) -> Option<Li
     // only ever ADDS matches.
     if lang == Language::Php {
         let doc = format!("<?php {pattern}");
-        if let Ok(tree) = parse_source(lang, &doc) {
+        if let Some(tree) = parse_source_silent(lang, &doc) {
             if !tree.root_node().has_error() {
                 return Some(LiteralTemplate {
                     doc,
@@ -157,7 +157,7 @@ pub(crate) fn build_literal_template(lang: Language, pattern: &str) -> Option<Li
             }
         }
     }
-    if let Ok(tree) = parse_source(lang, pattern) {
+    if let Some(tree) = parse_source_silent(lang, pattern) {
         if !tree.root_node().has_error() {
             return Some(LiteralTemplate {
                 doc: pattern.to_string(),
@@ -168,7 +168,7 @@ pub(crate) fn build_literal_template(lang: Language, pattern: &str) -> Option<Li
     }
     let (prefix, suffix) = general_expression_context(lang)?;
     let doc = format!("{prefix}{pattern}{suffix}");
-    let tree = parse_source(lang, &doc).ok()?;
+    let tree = parse_source_silent(lang, &doc)?;
     if tree.root_node().has_error() {
         return None;
     }

@@ -15,7 +15,7 @@ use ast_sgrep_core::{
     IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError, INDEX_SCHEMA_VERSION,
 };
 use ast_sgrep_testkit::{
-    err_of, home_names, isolated_index_session, truncate_file, write_garbage, IsolatedIndexSession,
+    err_of, dir_listing, isolated_index_session, truncate_file, write_garbage, IsolatedIndexSession,
 };
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -112,7 +112,7 @@ fn store_open_fail_closed_matrix() {
             );
         }
         assert_eq!(std::fs::read(&db).unwrap(), torn);
-        let after = home_names(&temp);
+        let after = dir_listing(&temp);
         assert!(
             after.iter().all(|n| !n.contains(".corrupt")),
             "ordinary open must not quarantine: {after:?}"
@@ -158,8 +158,8 @@ fn store_open_fail_closed_matrix() {
         );
         let err = err_of(IndexStore::open_readonly(&root, Some(&db)));
         assert!(
-            matches!(err, StoreError::Other(_)),
-            "missing read-only open must error as Other, got {err:?}"
+            matches!(err, StoreError::EmptyIndex(_)),
+            "missing read-only open must error as EmptyIndex, got {err:?}"
         );
         assert!(
             !temp.join("ghost").exists(),
@@ -168,7 +168,7 @@ fn store_open_fail_closed_matrix() {
         let fresh = temp.join("untouched-root");
         std::fs::create_dir_all(&fresh).unwrap();
         let err = err_of(IndexStore::open_readonly(&fresh, None));
-        assert!(matches!(err, StoreError::Other(_)));
+        assert!(matches!(err, StoreError::EmptyIndex(_)));
         assert!(!fresh.join(".asgrep").exists());
     }
 
@@ -218,11 +218,11 @@ fn store_open_fail_closed_matrix() {
         );
         let err = err_of(IndexStore::open_readonly(&root, Some(&db)));
         assert!(
-            matches!(err, StoreError::Other(_)),
-            "directory-as-db must fail read-only open as Other, got {err:?}"
+            matches!(err, StoreError::EmptyIndex(_)),
+            "directory-as-db must fail read-only open as EmptyIndex, got {err:?}"
         );
         assert!(
-            home_names(&db).is_empty(),
+            dir_listing(&db).is_empty(),
             "failed opens must not write into the directory"
         );
     }

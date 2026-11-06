@@ -11,9 +11,9 @@
 use ast_sgrep_core::tantivy_index::sidecar_path;
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, StoreError, INDEX_SCHEMA_VERSION};
 use ast_sgrep_testkit::{
-    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, home_names, quarantine_path,
+    assert_torn, build_and_quiet, corpus_session, err_of, flip_bytes, dir_listing, quarantine_path,
     quiesced_db_bytes, remove_sqlite_sidecars, search_parity_keys, store_snapshot, truncate_file,
-    upsert_test_file, RECOVERY_CORPUS,
+    upsert_test_file, RECOVERY_CORPUS, SPAWN_POLL_INTERVAL,
 };
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -86,7 +86,7 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
             child.try_wait().unwrap().is_none(),
             "child exited before the kill window"
         );
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(SPAWN_POLL_INTERVAL);
     }
     let pid = child.id();
     let killed = std::process::Command::new("kill")
@@ -100,12 +100,12 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
             break status;
         }
         assert!(Instant::now() < deadline, "killed child never reaped");
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(SPAWN_POLL_INTERVAL);
     };
     assert_eq!(status.signal(), Some(9), "child must die by SIGKILL");
 
     // RECOVER: plain reopen rolls back the uncommitted tx; no quarantine.
-    assert!(home_names(db.parent().unwrap())
+    assert!(dir_listing(db.parent().unwrap())
         .iter()
         .all(|n| !n.contains(".corrupt")));
     let store = IndexStore::open(&root, Some(&db)).unwrap();
@@ -128,7 +128,7 @@ fn sigkill_mid_bulk_tx_loses_only_uncommitted() {
     // REBUILD: an explicit force-reindex over the recovered store converges
     // and still serves the baseline, still unquarantined.
     build_and_quiet(&root, &db, true, false);
-    assert!(home_names(db.parent().unwrap())
+    assert!(dir_listing(db.parent().unwrap())
         .iter()
         .all(|n| !n.contains(".corrupt")));
     assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_before);
@@ -236,8 +236,8 @@ fn missing_or_zeroed_store_cold_starts_to_baseline() {
         assert!(!db.exists());
         let err = err_of(IndexStore::open_readonly(&root, Some(&db)));
         assert!(
-            matches!(err, StoreError::Other(_)),
-            "missing db must refuse read-only as Other, got {err:?}"
+            matches!(err, StoreError::EmptyIndex(_)),
+            "missing db must refuse read-only as EmptyIndex, got {err:?}"
         );
 
         build_and_quiet(&root, &db, false, false);
@@ -245,7 +245,7 @@ fn missing_or_zeroed_store_cold_starts_to_baseline() {
         assert_eq!(integrity(&root, &db), "ok");
         assert_eq!(store_snapshot(&root, &db), snap_before);
         assert_eq!(search_parity_keys(&root, &db, QUERIES, false), hits_before);
-        assert!(home_names(db.parent().unwrap())
+        assert!(dir_listing(db.parent().unwrap())
             .iter()
             .all(|n| !n.contains(".corrupt")));
     }

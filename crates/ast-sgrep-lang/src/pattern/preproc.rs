@@ -47,7 +47,7 @@ pub(crate) fn match_preproc_directive(
     } else {
         (CondBinding::parse(condition)?, None)
     };
-    let tree = parse_source(lang, source).ok()?;
+    let tree = parse_source_silent(lang, source)?;
     let mut out = Vec::new();
     walk_preproc_directive(
         tree.root_node(),
@@ -199,7 +199,7 @@ pub(crate) fn canonical_metavariable_count(condition: &str) -> usize {
 pub(crate) fn structural_condition_template(condition: &str) -> Option<GeneralTemplate> {
     let (substituted, placeholders, multi_names) = substitute_general_metavariables(condition)?;
     let doc = format!("#if {substituted}\n#endif\n");
-    let tree = parse_source(Language::C, &doc).ok()?;
+    let tree = parse_source_silent(Language::C, &doc)?;
     let root = tree.root_node();
     if root.has_error() || root.named_child(0).is_none() {
         return None;

@@ -103,7 +103,7 @@ fn plan_lifecycle_parses_validates_resolves_and_reruns_deterministically() {
     assert_eq!(result.call_count, 1);
     assert!(result.return_value.get("tools").is_some());
     let value = json!({"a": 1});
-    let single = single_result("search", value.clone());
+    let single = single_result(value.clone());
     assert!(single.ok);
     assert_eq!(single.call_count, 1);
     assert_eq!(single.return_value, value);

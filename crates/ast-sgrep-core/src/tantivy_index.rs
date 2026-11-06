@@ -216,8 +216,8 @@ pub fn sidecar_path(root: &Path, index_path: Option<&Path>) -> PathBuf {
 
 fn source_identity(root: &Path, index_path: Option<&Path>) -> String {
     let db = index_db_path(root, index_path);
-    let db = db.canonicalize().unwrap_or(db);
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let db = crate::paths::canonicalize_path(&db, true).unwrap_or(db);
+    let root = crate::paths::canonicalize_path(root, true).unwrap_or_else(|_| root.to_path_buf());
     let mut hasher = blake3::Hasher::new();
     for path in [&db, &root] {
         let bytes = path.as_os_str().as_encoded_bytes();

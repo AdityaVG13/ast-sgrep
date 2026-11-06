@@ -783,7 +783,7 @@ pub(crate) fn php_operand_has_two_dollar_token(p: &str) -> bool {
 pub(crate) fn php_operand_children<'a>(node: Node<'a>) -> Vec<Node<'a>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
-        .filter(|child| child.kind() != "php_tag" && !child.kind().contains("comment"))
+        .filter(|child| child.kind() != "php_tag" && !is_trivia_kind(child.kind()))
         .collect()
 }
 
@@ -870,7 +870,7 @@ pub(crate) fn walk_php_assignments(
             let mut child_cursor = node.walk();
             let cand_comments: Vec<String> = node
                 .children(&mut child_cursor)
-                .filter(|child| child.kind().contains("comment"))
+                .filter(|child| is_trivia_kind(child.kind()))
                 .filter_map(|child| node_text(&child, source).map(str::to_string))
                 .collect();
             cand_comments == head_comments
@@ -880,7 +880,7 @@ pub(crate) fn walk_php_assignments(
             let mut child_cursor = node.walk();
             let any_comment = node
                 .children(&mut child_cursor)
-                .any(|child| child.kind().contains("comment"));
+                .any(|child| is_trivia_kind(child.kind()));
             !any_comment
         };
         let op_token_ok = head_comment_ok
@@ -1130,7 +1130,7 @@ pub(crate) fn php_rhs_expr_matches(
                     return false;
                 }
                 let inner = &text[open + 1..close];
-                let Some(slots) = parse_rhs_arg_slots(inner) else {
+                let Some(slots) = parse_arg_slots(inner, ArgSlotGrammar::Member) else {
                     return false;
                 };
                 if cand.kind() != "arguments" {
@@ -1141,7 +1141,7 @@ pub(crate) fn php_rhs_expr_matches(
                     .named_children(&mut cand_cursor)
                     .filter(|child| !is_trivia_kind(child.kind()))
                     .collect();
-                return arg_slots_match(&slots, &nodes, source, captures).is_some();
+                return match_arg_slots(&slots, &nodes, source, captures, ArgSlotMode::Backtracking).is_some();
             }
         }
     }
@@ -1174,7 +1174,7 @@ pub(crate) fn php_rhs_expr_matches(
     };
     let mut cand_index = 0usize;
     for pat_child in &pat_children {
-        if pat_child.kind().contains("comment") {
+        if is_trivia_kind(pat_child.kind()) {
             let Some(want) = node_text(pat_child, pat_source) else {
                 return false;
             };
@@ -1182,7 +1182,7 @@ pub(crate) fn php_rhs_expr_matches(
             while cand_index < cand_children.len() {
                 let cand_child = &cand_children[cand_index];
                 cand_index += 1;
-                if cand_child.kind().contains("comment")
+                if is_trivia_kind(cand_child.kind())
                     && node_text(cand_child, source).is_some_and(|text| text == want)
                 {
                     matched = true;
@@ -1195,7 +1195,7 @@ pub(crate) fn php_rhs_expr_matches(
             continue;
         }
         while cand_index < cand_children.len()
-            && cand_children[cand_index].kind().contains("comment")
+            && is_trivia_kind(cand_children[cand_index].kind())
         {
             cand_index += 1;
         }
@@ -1223,7 +1223,7 @@ pub(crate) fn php_rhs_expr_matches(
     }
     // Trailing candidate comments are transparent; any other leftover
     // candidate child breaks the alignment.
-    while cand_index < cand_children.len() && cand_children[cand_index].kind().contains("comment") {
+    while cand_index < cand_children.len() && is_trivia_kind(cand_children[cand_index].kind()) {
         cand_index += 1;
     }
     cand_index == cand_children.len()

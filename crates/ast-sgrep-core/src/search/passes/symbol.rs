@@ -1,4 +1,4 @@
-use super::super::fusion::{FileCsr, NameIntern};
+use super::super::fusion::NameIntern;
 use crate::query::ParsedQuery;
 use crate::rank::{
     best_symbol_score_normalized, max_normalize_idf, normalize_query_terms, score_caller_weighted,
@@ -13,7 +13,6 @@ use crate::store::sql::{
 use crate::store::IndexStore;
 use crate::Result;
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
 const SYMBOL_SQL_LIMIT: usize = 500;
 const CALLER_SQL_LIMIT: usize = 500;
 const MODE_SQL_LIMIT: usize = 200;
@@ -85,113 +84,6 @@ const CALLER_SELECT: &str = "SELECT f.path, f.language, c.caller, c.callee, c.li
 type CallerQueryRow = (String, Option<String>, String, String, u32);
 type CallerFilter = fn(&[String], Option<&str>) -> (String, Vec<String>);
 pub type SymbolSpanRow = (String, Option<String>, String, String, u32, u32);
-
-/// Snapshot-held unique hybrid: one SQL load of defs, then RAM substring match.
-#[derive(Clone)]
-#[allow(dead_code)]
-pub(crate) struct WarmedSymbolTable {
-    rows: Arc<Vec<SymbolSpanRow>>,
-    names_lower: Arc<Vec<String>>,
-    by_file: Arc<FileCsr>,
-}
-
-#[allow(dead_code)]
-impl WarmedSymbolTable {
-    pub(crate) fn load(store: &IndexStore) -> Result<Self> {
-        const WARMED_SYMBOL_CAP: usize = 262_144;
-        let rows = query_symbol_spans(store, "", Vec::new(), SYMBOL_KIND_ORDER, WARMED_SYMBOL_CAP)?;
-        let names_lower: Vec<String> = rows.iter().map(|row| row.2.to_lowercase()).collect();
-        let by_file = FileCsr::build(
-            rows.iter()
-                .enumerate()
-                .map(|(i, row)| (row.0.as_str(), i as u32))
-                .collect(),
-        );
-        Ok(Self {
-            rows: Arc::new(rows),
-            names_lower: Arc::new(names_lower),
-            by_file: Arc::new(by_file),
-        })
-    }
-
-    fn matches_for_files(
-        &self,
-        options: &SearchOptions,
-        terms: &[String],
-        allowed_files: &HashSet<String>,
-        limit: usize,
-    ) -> Vec<SymbolSpanRow> {
-        let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-        // Select indices first, materialize rows last: the old shape cloned every
-        // substring match (hundreds on common terms) before sorting and truncating
-        // to `limit`. Same iteration order, same sort keys, same quotas, only the
-        // rows that survive the budget are cloned.
-        let mut matched: Vec<usize> = Vec::new();
-        for path in allowed_files {
-            for &i in self.by_file.get(path) {
-                let i = i as usize;
-                if !matches_lang(self.rows[i].1.as_deref(), options.lang_filter.as_deref()) {
-                    continue;
-                }
-                if terms_lower
-                    .iter()
-                    .any(|term| self.names_lower[i].contains(term.as_str()))
-                {
-                    matched.push(i);
-                }
-            }
-        }
-        let rows = &self.rows;
-        matched.sort_by(|&left, &right| cmp_symbol_rows(&rows[left], &rows[right]));
-        // Quotas precede admission; term-fairness applies within each quota
-        // bucket (see `quota_term_fair_partition`). Mirrors the cold SQL
-        // lane's three fair arms.
-        let mut matched = quota_term_fair_partition(
-            matched,
-            |&i| kind_rank(rows[i].3.as_str()),
-            |&i| {
-                terms_lower
-                    .iter()
-                    .position(|term| self.names_lower[i].contains(term.as_str()))
-                    .unwrap_or(terms_lower.len())
-            },
-            limit,
-        );
-        matched.sort_by(|&left, &right| cmp_symbol_rows(&rows[left], &rows[right]));
-        matched.into_iter().map(|i| rows[i].clone()).collect()
-    }
-
-    fn term_cooccurrences(&self, norm_terms: &[String]) -> Vec<u64> {
-        cooccurrences_over_names(norm_terms, self.names_lower.iter())
-    }
-
-    /// Per-term IDF weights over the warmed table (the whole symbol table):
-    /// one pass counting, per normalized term, how many names contain it —
-    /// the same predicate as matching. Mirrors [`name_table_idf_weights`]
-    /// so warm and cold lanes score defs identically.
-    fn idf_weights(&self, normalized_terms: &[String]) -> Vec<f64> {
-        self.idf_weights_with_dfs(normalized_terms).0
-    }
-
-    /// [`Self::idf_weights`] plus the raw per-term document counts, so
-    /// callers can distinguish "term is rare" from "term names no symbol
-    /// at all" (verb-alias discovery gates on df == 0, and a df of zero
-    /// maximizes IDF, so weights alone cannot make that distinction).
-    fn idf_weights_with_dfs(&self, normalized_terms: &[String]) -> (Vec<f64>, Vec<u64>) {
-        let mut dfs = vec![0u64; normalized_terms.len()];
-        for name in self.names_lower.iter() {
-            for (i, term) in normalized_terms.iter().enumerate() {
-                if name.contains(term.as_str()) {
-                    dfs[i] += 1;
-                }
-            }
-        }
-        let total = self.names_lower.len() as u64;
-        let mut weights: Vec<f64> = dfs.iter().map(|&df| term_idf(df, total)).collect();
-        max_normalize_idf(&mut weights);
-        (weights, dfs)
-    }
-}
 
 pub fn kind_rank(kind: &str) -> u8 {
     match kind {
@@ -389,8 +281,8 @@ pub fn term_fair_select<T>(items: Vec<T>, term_of: impl Fn(&T) -> usize, limit: 
 /// 500 sites does not make its tokens 500x more common as name evidence (and
 /// the distinct scan stays cheap where the raw callers scan is not on this
 /// repo). `source`/`column` are internal constants, never user input.
-/// Mirrors `WarmedSymbolTable::idf_weights` so warm and cold lanes score
-/// identically.
+/// Delegates to [`name_table_idf_weights_with_dfs`] so both entry points
+/// score identically.
 ///
 /// Counting runs in Rust over one streamed scan of the vocabulary instead of
 /// per-term SQL `LIKE '%term%'` aggregates: SQLite's LIKE loop walked every
@@ -398,8 +290,8 @@ pub fn term_fair_select<T>(items: Vec<T>, term_of: impl Fn(&T) -> usize, limit: 
 /// `content_matches_literal` sweep per row (memchr2-accelerated) is far
 /// cheaper. For ASCII terms and ASCII-case folds the predicate is the same
 /// class SQLite's LIKE implements; for non-ASCII case folds it now agrees
-/// with `WarmedSymbolTable::idf_weights` (Rust lowercase folding), which the
-/// SQL LIKE lane never did — this makes the warm/cold idf contract hold
+/// with [`name_table_idf_weights_with_dfs`] (Rust lowercase folding), which the
+/// SQL LIKE lane never did — this makes the sidecar/SQL idf contract hold
 /// exactly instead of approximately.
 fn name_table_idf_weights(
     store: &IndexStore,
@@ -411,7 +303,7 @@ fn name_table_idf_weights(
 
 /// [`name_table_idf_weights`] plus the raw per-term document counts
 /// (verb-alias discovery gates on df == 0; see
-/// [`WarmedSymbolTable::idf_weights_with_dfs`]).
+/// [`name_table_idf_weights`]).
 fn name_table_idf_weights_with_dfs(
     store: &IndexStore,
     population: crate::names_sidecar::NamePopulation,
@@ -1433,6 +1325,20 @@ fn exact_eq_filter(column: &str, value: &str, lang: Option<&str>) -> (String, Ve
     append_lang_filter(&mut parts, &mut bind, lang);
     (where_clause(&parts), bind)
 }
+
+/// Exact `defs:`/`callers:` lookup is case-insensitive but spelling-literal.
+/// Token-equal aliases (`authRefresh` / `auth-refresh` → `auth_refresh`) must
+/// still hit, or the prefixed lane returns empty and identifier_match never
+/// runs. Original spelling stays first so `defs:Searcher` still prefers the
+/// typed form.
+pub(crate) fn exact_symbol_aliases(name: &str) -> Vec<String> {
+    let mut names = vec![name.to_string()];
+    let snake = crate::search::critic::identifier_tokens(name).join("_");
+    if !snake.is_empty() && !snake.eq_ignore_ascii_case(name) {
+        names.push(snake);
+    }
+    names
+}
 pub(crate) fn caller_hits_for_terms(
     store: &IndexStore,
     options: &SearchOptions,
@@ -1471,20 +1377,34 @@ pub fn search_callers(
     options: &SearchOptions,
     parsed: &ParsedQuery,
 ) -> Result<Vec<SearchHit>> {
-    let Some(q) = prefixed_mode_query(parsed) else {
+    let Some(mut q) = prefixed_mode_query(parsed) else {
         return Ok(vec![]);
     };
-    let name = q.terms.first().map(String::as_str).unwrap_or("");
+    let name = q.terms.first().cloned().unwrap_or_default();
     if name.is_empty() {
         return Ok(vec![]);
     }
+    let aliases = exact_symbol_aliases(&name);
+    // Scoring is substring/exact on terms. Without the snake alias in
+    // `q.terms`, CalleeOnly drops `auth_refresh` rows fetched for
+    // `callers:authRefresh`.
+    q.terms = aliases.clone();
+    let limit = mode_sql_limit(options);
+    let mut rows = Vec::new();
     if let Ok(Some(bundle)) = store.read_bundle(None) {
-        let rows = crate::store::bundle_graph::callers_exact(
-            &bundle,
-            name,
-            options.lang_filter.as_deref(),
-            mode_sql_limit(options),
-        );
+        for alias in &aliases {
+            if rows.len() >= limit {
+                break;
+            }
+            rows.extend(crate::store::bundle_graph::callers_exact(
+                &bundle,
+                alias,
+                options.lang_filter.as_deref(),
+                limit - rows.len(),
+            ));
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.4.cmp(&b.4)).then(a.2.cmp(&b.2)));
+        rows.dedup_by(|a, b| a.0 == b.0 && a.2 == b.2 && a.3 == b.3 && a.4 == b.4);
         return caller_rows_to_hits(
             store,
             rows,
@@ -1495,15 +1415,23 @@ pub fn search_callers(
             true,
         );
     }
-    let (where_clause, bind) = exact_eq_filter("c.callee", name, options.lang_filter.as_deref());
-    let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
-    let rows = query_limit_map(
-        store.connection(),
-        &sql,
-        bind,
-        mode_sql_limit(options),
-        map_caller_row,
-    )?;
+    for alias in &aliases {
+        if rows.len() >= limit {
+            break;
+        }
+        let (where_clause, bind) =
+            exact_eq_filter("c.callee", alias, options.lang_filter.as_deref());
+        let sql = format!("{CALLER_SELECT}{where_clause} LIMIT ?{}", bind.len() + 1);
+        rows.extend(query_limit_map(
+            store.connection(),
+            &sql,
+            bind,
+            limit - rows.len(),
+            map_caller_row,
+        )?);
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.4.cmp(&b.4)).then(a.2.cmp(&b.2)));
+    rows.dedup_by(|a, b| a.0 == b.0 && a.2 == b.2 && a.3 == b.3 && a.4 == b.4);
     caller_rows_to_hits(
         store,
         rows,
@@ -1519,33 +1447,50 @@ pub fn search_defs(
     options: &SearchOptions,
     parsed: &ParsedQuery,
 ) -> Result<Vec<SearchHit>> {
-    let Some(q) = prefixed_mode_query(parsed) else {
+    let Some(mut q) = prefixed_mode_query(parsed) else {
         return Ok(vec![]);
     };
-    let name = q.terms.first().map(String::as_str).unwrap_or("");
+    let name = q.terms.first().cloned().unwrap_or_default();
     if name.is_empty() {
         return Ok(vec![]);
     }
+    let aliases = exact_symbol_aliases(&name);
+    q.terms = aliases.clone();
+    let limit = mode_sql_limit(options);
+    let mut rows = Vec::new();
     if let Ok(Some(bundle)) = store.read_bundle(None) {
-        let mut rows = crate::store::bundle_graph::defs_exact(
-            &bundle,
-            name,
-            options.lang_filter.as_deref(),
-            mode_sql_limit(options),
-        );
+        for alias in &aliases {
+            if rows.len() >= limit {
+                break;
+            }
+            rows.extend(crate::store::bundle_graph::defs_exact(
+                &bundle,
+                alias,
+                options.lang_filter.as_deref(),
+                limit - rows.len(),
+            ));
+        }
         rows.sort_by(cmp_symbol_rows);
+        rows.dedup_by(|a, b| a.0 == b.0 && a.2 == b.2 && a.4 == b.4);
         return symbol_span_rows_to_hits(store, rows, options, &q, HitKind::Def, |n| {
             score_def(&q.terms, n)
         });
     }
-    let (where_clause, bind) = exact_eq_filter("s.name", name, options.lang_filter.as_deref());
-    let rows = query_symbol_spans(
-        store,
-        &where_clause,
-        bind,
-        SYMBOL_KIND_ORDER,
-        mode_sql_limit(options),
-    )?;
+    for alias in &aliases {
+        if rows.len() >= limit {
+            break;
+        }
+        let (where_clause, bind) = exact_eq_filter("s.name", alias, options.lang_filter.as_deref());
+        rows.extend(query_symbol_spans(
+            store,
+            &where_clause,
+            bind,
+            SYMBOL_KIND_ORDER,
+            limit - rows.len(),
+        )?);
+    }
+    rows.sort_by(cmp_symbol_rows);
+    rows.dedup_by(|a, b| a.0 == b.0 && a.2 == b.2 && a.4 == b.4);
     symbol_span_rows_to_hits(store, rows, options, &q, HitKind::Def, |n| {
         score_def(&q.terms, n)
     })

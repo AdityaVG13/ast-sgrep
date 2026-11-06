@@ -1,6 +1,5 @@
 //! OpenAI Responses API shapes for programmatic tool calling.
 
-use crate::adapters::schema_for;
 use crate::catalog::tool_catalog;
 use serde_json::{json, Value};
 
@@ -15,14 +14,14 @@ pub fn openai_tools() -> Value {
     })];
 
     for def in tool_catalog() {
-        if def.name.starts_with("catalog_") {
+        if def.is_discovery() {
             continue;
         }
         let mut tool = json!({
             "type": "function",
             "name": def.name,
             "description": def.description,
-            "parameters": schema_for(&def),
+            "parameters": def.input_schema.clone(),
             "strict": true,
         });
         if def.read_only {

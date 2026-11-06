@@ -308,7 +308,6 @@ name = "ast-sgrep-mmap"
 version = "2.7.0"
 dependencies = [
  "memmap2",
- "tempfile",
 ]
 
 [[package]]

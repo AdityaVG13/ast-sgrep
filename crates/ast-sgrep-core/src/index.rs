@@ -44,7 +44,7 @@ fn run_index_parallel<R: Send>(thread_limit: Option<usize>, work: impl FnOnce() 
     }
 }
 
-pub use crate::index_watch::canonicalize_affected_path;
+pub use crate::paths::{canonicalize_affected_path, indexed_rel_path};
 
 /// Maximum exact paths accepted by one incremental update request.
 pub const MAX_INCREMENTAL_PATHS: usize = 1_024;
@@ -110,56 +110,6 @@ fn walk_indexable_files(dir: &Path, max: usize) -> Vec<PathBuf> {
     files
 }
 
-/// Indexed relative paths must be valid UTF-8. Lossy conversion is forbidden:
-/// two distinct non-UTF8 `OsStr` paths must not collide into one DB key.
-///
-/// Also rejects absolute paths and `..` / root / prefix components so an
-/// untrusted relative key cannot escape the project root when later joined
-/// (defense-in-depth alongside MCP `parse_node_id` and search 89er).
-pub fn indexed_rel_path(rel: &Path) -> Result<String> {
-    use std::path::Component;
-    if rel.as_os_str().is_empty() {
-        return Err(crate::StoreError::Other(
-            "empty relative path rejected (asgrep-kqhp)".into(),
-        ));
-    }
-    if rel.is_absolute()
-        || rel.components().any(|c| {
-            matches!(
-                c,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(crate::StoreError::Other(format!(
-            "path traversal rejected (asgrep-kqhp): {}",
-            rel.display()
-        )));
-    }
-    let raw = rel.to_str().ok_or_else(|| {
-        crate::StoreError::Other(format!(
-            "non-UTF8 path rejected (asgrep-kqhp): {}",
-            rel.display()
-        ))
-    })?;
-    if raw.contains('\0') {
-        return Err(crate::StoreError::Other(format!(
-            "NUL in path rejected (asgrep-kqhp): {}",
-            rel.display()
-        )));
-    }
-    #[cfg(windows)]
-    {
-        Ok(raw.replace('\\', "/"))
-    }
-    #[cfg(not(windows))]
-    {
-        // A backslash is an ordinary filename byte on Unix. Rewriting it after
-        // component validation can turn `..\\escape.rs` into a traversal path
-        // and can collide with the distinct `dir/file.rs` name.
-        Ok(raw.to_owned())
-    }
-}
 #[derive(Debug, Clone)]
 pub struct SplitLines {
     pub lines: Vec<(u32, String)>,
@@ -261,6 +211,9 @@ pub struct Indexer {
     root_dir: crate::io_bounds::RootDir,
     parsers: ParserRegistry,
     options: IndexOptions,
+    /// Env knobs resolved ONCE at construction ([`crate::config::CoreConfig`]).
+    /// Index-time call sites read from here, never from process env.
+    config: crate::config::CoreConfig,
     ignore: crate::gitignore::IgnoreMatcher,
     sidecars_dirty: SidecarsDirty,
     cancel: Option<Arc<AtomicBool>>,
@@ -302,6 +255,27 @@ impl WatchUpdateStats {
     }
 }
 
+/// File-level admission gate shared by the bulk indexer and the Code Mode
+/// ambient probe. Returns false when `rel` (root-relative) is gitignored
+/// (under `respect_gitignore`) or `abs` trips the static skip filter.
+/// Directory pruning (`should_skip_dir` / `is_dir_ignored`) stays with the
+/// walk's `filter_entry`; the non-UTF8 `rel` rejection stays with the
+/// caller because it needs the `String` the fold hashes.
+pub fn index_candidate_admitted(
+    respect_gitignore: bool,
+    ignore: &crate::gitignore::IgnoreMatcher,
+    rel: &Path,
+    abs: &Path,
+) -> bool {
+    if respect_gitignore && ignore.is_ignored(rel) {
+        return false;
+    }
+    if should_skip_file(abs) {
+        return false;
+    }
+    true
+}
+
 pub(crate) fn open_index_store(options: &IndexOptions) -> Result<IndexStore> {
     IndexStore::open_with_durability(
         &options.root,
@@ -317,11 +291,22 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
 }
 
 impl Indexer {
-    pub fn new(mut options: IndexOptions) -> Result<Self> {
-        if let Some(msg) = crate::env_flag::retired_embed_request() {
-            return Err(crate::StoreError::Other(msg));
+    pub fn new(options: IndexOptions) -> Result<Self> {
+        let config = crate::config::CoreConfig::from_env();
+        Self::with_config(options, config)
+    }
+    /// Construction with an explicitly resolved [`crate::config::CoreConfig`].
+    /// [`new`](Self::new) resolves `CoreConfig::from_env()` here so env is
+    /// read exactly once per Indexer.
+    pub fn with_config(
+        mut options: IndexOptions,
+        config: crate::config::CoreConfig,
+    ) -> Result<Self> {
+        if let Some(msg) = config.retired_embed_error.as_deref() {
+            return Err(crate::StoreError::Other(msg.to_string()));
         }
-        options.root = options.root.canonicalize().unwrap_or(options.root.clone());
+        options.root = crate::paths::canonicalize_path(&options.root, true)
+            .unwrap_or(options.root.clone());
         options.lang_filter =
             ast_sgrep_lang::Language::canonical_filter(options.lang_filter.as_deref());
         let root_dir = crate::io_bounds::RootDir::open(&options.root)?;
@@ -352,6 +337,7 @@ impl Indexer {
             root_dir,
             parsers: ParserRegistry::new(),
             options,
+            config,
             ignore,
             sidecars_dirty: SidecarsDirty::default(),
             cancel: None,
@@ -360,6 +346,17 @@ impl Indexer {
     }
     pub fn store(&self) -> &IndexStore {
         &self.store
+    }
+    /// Env knobs resolved once at construction. Index-time call sites read
+    /// from here, never from process env.
+    pub fn core_config(&self) -> &crate::config::CoreConfig {
+        &self.config
+    }
+    /// Override the construction-resolved config (lets harnesses pin knobs
+    /// without touching process env). Consulted lazily where read per query.
+    pub fn with_core_config(mut self, config: crate::config::CoreConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// Cooperative cancel for in-process hosts (Pi/NAPI). CLI leaves this unset.
@@ -754,7 +751,7 @@ impl Indexer {
                         stats.files_skipped += 1;
                         continue;
                     };
-                    if (respect_gitignore && ignore.is_ignored(rel)) || should_skip_file(&path) {
+                    if !index_candidate_admitted(respect_gitignore, ignore, rel, &path) {
                         stats.files_skipped += 1;
                         continue;
                     }
@@ -839,7 +836,7 @@ impl Indexer {
         // `auto` writes the bundle; explicit `sql` is the no-bundle control arm.
         let armed = crate::store::read_bundle::readpath()
             != crate::store::read_bundle::ReadPath::Sql
-            || crate::env_flag::env_flag("ASGREP_WRITE_READ_BUNDLE");
+            || self.config.write_read_bundle;
         if !armed {
             return Ok(());
         }

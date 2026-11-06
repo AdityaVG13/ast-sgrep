@@ -80,14 +80,17 @@ pub fn err_of<T>(result: Result<T, StoreError>) -> StoreError {
 }
 
 /// INTENT: total `StoreError` discriminant projection (0 = Database,
-/// 1 = Io, 2 = Other): the cross-cutting error-comparison primitive —
-/// equal discriminants mean the same failure layer reached the caller.
+/// 1 = Io, 2 = Other or EmptyIndex): the cross-cutting error-comparison
+/// primitive — equal discriminants mean the same failure layer reached the
+/// caller. EmptyIndex shares 2 with Other: both are fail-closed non-sqlite
+/// refusals carrying a remediation message, so every existing
+/// discriminant-2 drill (deleted/missing index) keeps its meaning.
 /// Message text never participates. Pure projection.
 pub fn store_error_discriminant(err: &StoreError) -> u8 {
     match err {
         StoreError::Database(_) => 0,
         StoreError::Io(_) => 1,
-        StoreError::Other(_) => 2,
+        StoreError::Other(_) | StoreError::EmptyIndex(_) => 2,
     }
 }
 
@@ -100,23 +103,13 @@ pub fn sqlite_code(err: &StoreError) -> Option<ErrorCode> {
     }
 }
 
-/// INTENT: caller-side replica of the crate-private
-/// `StoreError::is_corrupt_database` predicate (`DatabaseCorrupt` |
-/// `NotADatabase` under the `Database` discriminant). It MUST stay a
-/// replica: the predicate is `pub(crate)` in `ast-sgrep-core`, unnameable
-/// from any test target, so suites prove corruption stays detectable
-/// through the public `Database` discriminant + rusqlite kind alone, at
-/// every layer. Keep the match arms in sync with core by hand. Pure
-/// projection.
+/// INTENT: corruption-kind probe delegating to the canonical core predicate
+/// ([`StoreError::is_corrupt_database`]): `DatabaseCorrupt` |
+/// `NotADatabase` under the `Database` discriminant. Callers prove
+/// corruption stays detectable at every layer through this one predicate.
+/// Pure projection.
 pub fn is_corrupt_kind(err: &StoreError) -> bool {
-    matches!(
-        err,
-        StoreError::Database(rusqlite::Error::SqliteFailure(code, _))
-            if matches!(
-                code.code,
-                ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase
-            )
-    )
+    err.is_corrupt_database()
 }
 
 /// INTENT: WAL-total corruption fault — deterministic garbage over `db`

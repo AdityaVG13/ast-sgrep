@@ -397,7 +397,7 @@ pub(crate) fn split_top_level_commas(text: &str) -> Vec<&str> {
 
 pub(crate) fn match_py_delete_meta(source: &str, pattern: &str) -> Option<Vec<PatternMatch>> {
     let template = py_delete_template(pattern)?;
-    let tree = parse_source(Language::Python, source).ok()?;
+    let tree = parse_source_silent(Language::Python, source)?;
     let mut out = Vec::new();
     walk_py_delete_meta(tree.root_node(), source, pattern, &template, &mut out);
     Some(out)

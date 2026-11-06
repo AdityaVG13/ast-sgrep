@@ -182,6 +182,21 @@ fn blast_path_becomes_imports() {
 }
 
 #[test]
+fn blast_prefix_matches_case_insensitively() {
+    // Parity with dispatch.ts `/^blast:/i`: any ASCII casing of the prefix
+    // routes the same way (symbol -> callers, path-like -> imports).
+    assert_eq!(
+        dispatch_find_query("BLAST:process_request"),
+        "callers:process_request"
+    );
+    assert_eq!(
+        dispatch_find_query("Blast:src/auth.ts"),
+        "imports:src/auth.ts"
+    );
+    assert_eq!(dispatch_find_query("bLaSt:x"), "callers:x");
+}
+
+#[test]
 fn unprefixed_is_word() {
     assert_eq!(dispatch_find_query("hello"), "word:hello");
 }

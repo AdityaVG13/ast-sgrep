@@ -20,16 +20,16 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ast-sgrep-core = { path = "../ast-sgrep-core", version = "2.7.0" }
-ast-sgrep-plugins = { path = "../ast-sgrep-plugins", version = "2.7.0" }
+ast-sgrep-core.workspace = true
+ast-sgrep-plugins.workspace = true
 fastmcp-rust = "0.13.0"
 asupersync = "0.5"
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-ast-sgrep-codemode = { path = "../ast-sgrep-codemode" }
-ast-sgrep-testkit = { path = "../ast-sgrep-testkit", features = ["plugins"] }
+ast-sgrep-codemode.workspace = true
+ast-sgrep-testkit = { workspace = true, features = ["plugins"] }
 tempfile.workspace = true
 
 # Integration tests live in the repo-root tests/ tree.
@@ -58,17 +58,8 @@ path = "../../tests/mcp/recovery_relations.rs"
 name = "recovery_drills"
 path = "../../tests/mcp/recovery_drills.rs"
 [[test]]
-name = "error_api_pass1"
-path = "../../tests/mcp/error_api_pass1.rs"
-[[test]]
-name = "error_api_pass2"
-path = "../../tests/mcp/error_api_pass2.rs"
-[[test]]
-name = "error_api_pass3"
-path = "../../tests/mcp/error_api_pass3.rs"
-[[test]]
-name = "error_api_pass4"
-path = "../../tests/mcp/error_api_pass4.rs"
+name = "error_api_matrix"
+path = "../../tests/mcp/error_api_matrix.rs"
 [[test]]
 name = "invalidation_contract"
 path = "../../tests/mcp/invalidation_contract.rs"

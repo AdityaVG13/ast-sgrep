@@ -42,7 +42,7 @@ impl RootDir {
         #[cfg(not(any(unix, windows)))]
         {
             Ok(Self {
-                path: root.canonicalize()?,
+                path: crate::paths::canonicalize_path(root, true)?,
             })
         }
     }
@@ -122,7 +122,7 @@ impl RootDir {
             // handle-relative implementation above. Canonicalize and confine
             // before opening; this is safe against static escapes, though not
             // equivalent to the supported platforms' race-free resolution.
-            let path = self.path.join(rel).canonicalize()?;
+            let path = crate::paths::canonicalize_path(&self.path.join(rel), true)?;
             if !path.starts_with(&self.path) {
                 return Err(StoreError::Other(format!(
                     "indexed path escaped project root: {}",

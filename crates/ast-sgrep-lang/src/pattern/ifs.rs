@@ -26,10 +26,6 @@ pub(crate) const BLOCK_KINDS: &[&str] = &[
 /// single block-like child before counting (Swift `function_body { statements }`).
 pub(crate) const STMT_WRAPPER_KINDS: &[&str] = &["function_body", "then", "statements"];
 
-pub(crate) fn is_trivia_kind(kind: &str) -> bool {
-    kind.contains("comment")
-}
-
 // Matcher-lane shape: (lang/node/source/pattern/captures/...) is threaded
 // deliberately; bundling would churn every lane for no behavior gain.
 #[allow(clippy::too_many_arguments)]

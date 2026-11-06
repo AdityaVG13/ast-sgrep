@@ -92,13 +92,11 @@ fn durability_profiles_control_synchronous_pragma() {
         assert_eq!(store.durability(), profile);
         assert_eq!(sync(&store), steady, "{profile:?} at rest");
 
-        // Bulk write batch.
         store.begin_bulk_tx().expect("begin bulk");
         assert_eq!(sync(&store), in_write, "{profile:?} inside bulk tx");
         store.commit_bulk_tx().expect("commit bulk");
         assert_eq!(sync(&store), steady, "{profile:?} after bulk commit");
 
-        // Per-file write batch.
         store.begin_file_tx().expect("begin file");
         assert_eq!(sync(&store), in_write, "{profile:?} inside file tx");
         store.rollback_file_tx().expect("rollback file");

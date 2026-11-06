@@ -129,25 +129,8 @@ pub(crate) const MEMBER_EXPR_KINDS: &[&str] = &[
     "method_expression",
 ];
 
-/// Comment / string trivia kinds skipped by pattern and call extraction.
-pub(crate) const COMMENT_OR_STRING_KINDS: &[&str] = &[
-    "comment",
-    "line_comment",
-    "block_comment",
-    "multiline_comment",
-    "string_literal",
-    "raw_string_literal",
-    "string",
-    "line_string_literal",
-    "multi_line_string_literal",
-    "template_string",
-    "interpreted_string_literal",
-    "quoted_string_literal",
-    "documentation_block_comment",
-    "multiline_string_literal",
-    "bytes_literal",
-    "regex_literal",
-];
+use crate::trivia::{SKIP_IDENT_COMMENT_KINDS, is_comment_or_string_kind};
+pub(crate) use crate::trivia::COMMENT_OR_STRING_KINDS;
 
 /// String-like kinds used when resolving import path literals.
 pub(crate) const STRING_KINDS: &[&str] = &[
@@ -165,11 +148,6 @@ pub(crate) fn is_ident_kind(kind: &str) -> bool {
 #[inline]
 pub(crate) fn is_member_expr_kind(kind: &str) -> bool {
     MEMBER_EXPR_KINDS.contains(&kind)
-}
-
-#[inline]
-fn is_comment_or_string_kind(kind: &str) -> bool {
-    COMMENT_OR_STRING_KINDS.contains(&kind)
 }
 
 /// Last identifier text under `node` in child order. Unlike
@@ -881,7 +859,6 @@ pub(crate) fn collect_identifiers(node: &Node, source: &str) -> Vec<String> {
     ids
 }
 
-const SKIP_IDENT_COMMENT_KINDS: &[&str] = &["comment", "line_comment", "block_comment"];
 
 fn collect_identifiers_rec(node: &Node, source: &str, ids: &mut Vec<String>) {
     if is_ident_kind(node.kind()) {

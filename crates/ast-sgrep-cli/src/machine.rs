@@ -144,17 +144,15 @@ pub(crate) fn print_machine_failure(command: &str, kind: &str, exit_code: i32, m
 }
 
 pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool {
+    let command = raw_command_name(args);
     args.iter().any(|a| {
         a == "--json"
             || a == "-j"
             || a == "--robot-triage"
             || a == "--format"
             || a.to_str().is_some_and(|raw| raw.starts_with("--format="))
-    }) || (raw_command_name(args) == "codemod" && args.iter().any(|a| a == "--dry-run"))
-        || matches!(
-            raw_command_name(args).as_str(),
-            "capabilities" | "doctor" | "codemode-batch"
-        )
+    }) || (command == "codemod" && args.iter().any(|a| a == "--dry-run"))
+        || crate::cli_args::Commands::is_always_machine_command_name(command.as_str())
 }
 
 pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> String {

@@ -86,14 +86,12 @@ fn run_search(session: &CliSession, patterns: &[&str], extra: &[&str]) -> (i32, 
     }
     args.push("--lang".into());
     args.push("rust".into());
-    match session.run(&args.iter().map(String::as_str).collect::<Vec<_>>()) {
-        Ok(o) => (
-            o.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&o.stdout).into_owned(),
-            String::from_utf8_lossy(&o.stderr).into_owned(),
-        ),
-        Err(e) => panic!("run failed: {e}"),
-    }
+    let o = session.run(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    (
+        o.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
 }
 
 #[test]

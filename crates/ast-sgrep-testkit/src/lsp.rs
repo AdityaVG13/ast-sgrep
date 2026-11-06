@@ -1,5 +1,4 @@
-use crate::index::{index_sample, json_hit_keys, HitKey, IndexedFixture};
-use ast_sgrep_core::IndexOptions;
+use crate::{hit::HitKey, index::json_hit_keys};
 use ast_sgrep_lsp::types::{Position, Range, TextDocumentContentChangeEvent};
 use ast_sgrep_lsp::{settings::AsgrepSettings, LspBackend};
 use std::path::Path;
@@ -48,18 +47,6 @@ pub fn edit_ranged_len(
         text: text.to_string(),
     }
 }
-pub fn sample_backend() -> (IndexedFixture, LspBackend) {
-    let indexed = index_sample(IndexOptions {
-        force_reindex: true,
-        ..IndexOptions::default()
-    });
-    let root = indexed.indexer.store().root().to_path_buf();
-    let index_path = indexed.indexer.store().db_path().to_path_buf();
-    let mut backend = LspBackend::new(root);
-    backend.set_index_path(index_path);
-    backend.ensure_index().expect("ensure index");
-    (indexed, backend)
-}
 /// LSP in-process search → surface hit keys.
 ///
 /// `use_embed` aligns with core/CLI. Soft-skip when embed is requested but the
@@ -75,7 +62,6 @@ pub fn lsp_search_hit_keys(
     backend.set_index_path(index_path.to_path_buf());
     backend
         .apply_settings(AsgrepSettings {
-            // Product: no_embed=true disables embed; no_embed=false enables it.
             no_embed: Some(!use_embed),
             ..AsgrepSettings::default()
         })

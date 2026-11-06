@@ -13,7 +13,7 @@ use ast_sgrep_core::chain::{expand_chain, ChainConfig};
 use ast_sgrep_core::search::{finish_response, margin_is_decisive, HitKind};
 use ast_sgrep_core::semantic_ann::{
     ann_result_is_sufficient, ann_threshold, should_use_ann, SemanticAnnIndex,
-    DEFAULT_ADAPTIVE_PROBE_PERCENT, DEFAULT_ANN_THRESHOLD,
+    DEFAULT_ANN_THRESHOLD,
 };
 use ast_sgrep_core::{IndexStore, ParsedQuery};
 use ast_sgrep_testkit::{chain_store, finish_options, mk_hit};
@@ -252,16 +252,16 @@ fn finish_margin_contract() {
 /// ABSORBS: none (KEEP standalone: `ann_threshold_boundary_table`).
 #[test]
 fn ann_threshold_boundary_table() {
-    // SOLE test touching ASGREP_ANN_THRESHOLD (parallel-safe).
+    // SOLE test touching ASGREP_ANN_THRESHOLD (parallel-safe). Boundary probes
+    // read the defaults symbolically; exact values live in the generated
+    // constants contract (tests/cli/constants_contract_generated.rs).
     let key = "ASGREP_ANN_THRESHOLD";
     std::env::remove_var(key);
-    assert_eq!(DEFAULT_ANN_THRESHOLD, 2000);
-    assert_eq!(DEFAULT_ADAPTIVE_PROBE_PERCENT, 90);
-    assert_eq!(ann_threshold(None), 2000);
+    assert_eq!(ann_threshold(None), DEFAULT_ANN_THRESHOLD);
     assert_eq!(ann_threshold(Some(5)), 5); // explicit override wins
                                            // should_use_ann is `count >= threshold` (inclusive lower edge).
-    assert!(!should_use_ann(1999, None));
-    assert!(should_use_ann(2000, None));
+    assert!(!should_use_ann(DEFAULT_ANN_THRESHOLD - 1, None));
+    assert!(should_use_ann(DEFAULT_ANN_THRESHOLD, None));
     assert!(!should_use_ann(9, Some(10)));
     assert!(should_use_ann(10, Some(10)));
     // Env supplies the default; override still wins; garbage falls back.
@@ -269,7 +269,7 @@ fn ann_threshold_boundary_table() {
     assert_eq!(ann_threshold(None), 50);
     assert_eq!(ann_threshold(Some(7)), 7);
     std::env::set_var(key, "bogus");
-    assert_eq!(ann_threshold(None), 2000);
+    assert_eq!(ann_threshold(None), DEFAULT_ANN_THRESHOLD);
     std::env::remove_var(key);
     // ann_result_is_sufficient: found >= min(limit, total).
     assert!(ann_result_is_sufficient(5, 10, 5)); // 5 >= min(5,10)=5

@@ -48,12 +48,9 @@ pub fn corpus_session() -> IsolatedIndexSession {
 /// `reindex_all` vs `index_all`, `use_tantivy` the sidecar lane.
 pub fn build_and_quiet(root: &Path, db: &Path, force: bool, use_tantivy: bool) {
     let mut indexer = Indexer::new(IndexOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        embed_semantic: false,
         force_reindex: force,
         use_tantivy,
-        ..IndexOptions::default()
+        ..crate::hermetic_index_options(root, db)
     })
     .unwrap();
     if force {
@@ -103,11 +100,8 @@ pub fn store_snapshot(root: &Path, db: &Path) -> String {
 /// pinned by key-vector equality.
 pub fn search_parity_key(root: &Path, db: &Path, query: &str, use_tantivy: bool) -> Vec<String> {
     let searcher = Searcher::new(SearchOptions {
-        root: root.to_path_buf(),
-        index_path: Some(db.to_path_buf()),
-        use_embed: false,
         use_tantivy,
-        ..SearchOptions::default()
+        ..crate::hermetic_search_options(root, db, SearchOptions::default_limit())
     })
     .unwrap();
     let mut keys: Vec<String> = searcher
@@ -164,18 +158,6 @@ pub fn quarantine_path(db: &Path, suffix: &str) -> PathBuf {
     let mut name = db.file_name().unwrap().to_os_string();
     name.push(suffix);
     db.with_file_name(name)
-}
-
-/// INTENT: sorted directory listing for quarantine/sidecar-absence asserts.
-/// Takes the directory itself (not the db): the directory-as-db facet lists a
-/// path that IS a directory, which a db-parent form cannot express.
-pub fn home_names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
 }
 
 /// INTENT: single-row upsert with fixed test metadata (python, mtime 1, LF):

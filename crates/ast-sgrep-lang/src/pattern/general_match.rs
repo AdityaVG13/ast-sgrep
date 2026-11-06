@@ -8,10 +8,6 @@ use tree_sitter::Node;
 
 /// Language-free: does ANY grammar build a general-lane template?
 pub(crate) fn general_lane_supported(pattern: &str) -> bool {
-    general_lane_supported_uncached(pattern)
-}
-
-pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
     // The conditional-directive family is natively answerable when the
     // condition parses under the shared [`CondBinding`] rule — lone
     // metavariable, metavar-free text, a single metavariable nested in the
@@ -157,7 +153,10 @@ pub(crate) fn general_lane_supported_uncached(pattern: &str) -> bool {
     })
 }
 
-pub(crate) fn cached_general_template(lang: Language, pattern: &str) -> Option<GeneralTemplate> {
+/// Build the general-lane template for (`lang`, `pattern`) — a fresh build on
+/// every call. The historical `cached_` name promised a memoization that was
+/// never there; the rename keeps the contract honest (H3).
+pub(crate) fn general_template_for(lang: Language, pattern: &str) -> Option<GeneralTemplate> {
     if general_lane_text_eligible_for(lang, pattern) && !lane_comment_refused(lang, pattern) {
         let (substituted, placeholders, multi_names) = substitute_general_metavariables(pattern)?;
         build_general_template(lang, pattern, &substituted, &placeholders, &multi_names)
@@ -171,7 +170,7 @@ pub(crate) fn match_structural_general(
     source: &str,
     pattern: &str,
 ) -> Vec<PatternMatch> {
-    let Some(template) = cached_general_template(lang, pattern) else {
+    let Some(template) = general_template_for(lang, pattern) else {
         return Vec::new();
     };
     // The csharp meta-body lock/using faces are ACCEPTED bind-nothing faces
@@ -179,7 +178,7 @@ pub(crate) fn match_structural_general(
     if template.force_empty {
         return Vec::new();
     }
-    let Ok(tree) = parse_source(lang, source) else {
+    let Some(tree) = parse_source_silent(lang, source) else {
         return Vec::new();
     };
     let root = general_template_root(&template);
@@ -435,7 +434,7 @@ pub(crate) fn match_structural_chain_gated(
     if out.is_empty() {
         return out;
     }
-    let Ok(tree) = parse_source(lang, source) else {
+    let Some(tree) = parse_source_silent(lang, source) else {
         return Vec::new();
     };
     let root = tree.root_node();

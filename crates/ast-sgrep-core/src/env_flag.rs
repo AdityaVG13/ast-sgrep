@@ -23,23 +23,40 @@ pub fn env_flag(name: &str) -> bool {
 /// refuse on its own so MCP/LSP/library callers cannot silently serve
 /// static vectors under a neural request).
 pub fn retired_embed_request() -> Option<String> {
-    if env_flag("ASGREP_NEURAL_EMBED") {
-        return Some(
-            "ASGREP_NEURAL_EMBED was removed: asgrep has one embedding engine (compiled-in static); unset it and re-run `asgrep index` once to migrate old indexes"
-                .to_string(),
-        );
-    }
-    if let Ok(backend) = std::env::var("ASGREP_EMBED_BACKEND") {
-        let backend = backend.trim();
-        if !backend.is_empty() && !backend.eq_ignore_ascii_case("static") {
-            return Some(format!(
-                "ASGREP_EMBED_BACKEND={backend} was removed: asgrep has one embedding engine (compiled-in static); unset it and re-run `asgrep index` once to migrate old indexes"
-            ));
-        }
-    }
-    None
+    crate::config::retired_embed_error()
 }
 
+/// CLI-latency-gauntlet sub-stage timers (`ASGREP_PROFILE=1`, same gate and
+/// `{"stage","ms"}` stderr contract formerly kept in a CLI profiler module,
+/// since removed; core keeps its own gate). Cached single read; default-off the hot path pays
+/// one branch and zero `Instant::now()` calls.
+pub fn profile_stages_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("ASGREP_PROFILE").is_some_and(|v| v == "1"))
+}
+
+/// Process/total clock: `Some(now)` only when sub-stage profiling, else `None`.
+pub fn profile_clock() -> Option<std::time::Instant> {
+    profile_stages_enabled().then(std::time::Instant::now)
+}
+
+/// Emit one stage line; no-op when profiling is off or the clock is `None`.
+pub fn emit_profile_stage(stage: &str, wall: std::time::Duration) {
+    if profile_stages_enabled() {
+        eprintln!(
+            "{{\"stage\":\"{stage}\",\"ms\":{:.3}}}",
+            wall.as_secs_f64() * 1000.0
+        );
+    }
+}
+
+/// Emit elapsed-since-`profile_clock()`; no-op on `None`.
+pub fn emit_profile_stage_since(stage: &str, since: Option<std::time::Instant>) {
+    if let Some(t) = since {
+        emit_profile_stage(stage, t.elapsed());
+    }
+}
 /// Measurement kill-switch for process memos (`ASGREP_NOCACHE`).
 ///
 /// `all` or a comma-separated group list (`response,warm,corpus,codemode,render`).
@@ -48,17 +65,7 @@ pub fn retired_embed_request() -> Option<String> {
 pub fn memo_off(group: &str) -> bool {
     use std::sync::OnceLock;
     static GROUPS: OnceLock<Vec<String>> = OnceLock::new();
-    let groups = GROUPS.get_or_init(|| {
-        std::env::var("ASGREP_NOCACHE")
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(|part| part.trim().to_ascii_lowercase())
-                    .filter(|part| !part.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
+    let groups =
+        GROUPS.get_or_init(|| crate::config::CoreConfig::from_env().nocache_groups);
     groups.iter().any(|value| value == "all" || value == group)
 }

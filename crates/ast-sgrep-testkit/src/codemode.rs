@@ -37,6 +37,7 @@ pub fn config_at(root: &Path) -> SessionConfig {
         // Hermetic kit: no ambient writes; freshness tests live in the CLI
         // e2e suite (tests/cli/codemode_ambient.rs).
         ambient_freshness: false,
+        ambient_cooldown: std::time::Duration::from_secs(1),
     }
 }
 
@@ -68,14 +69,8 @@ pub fn batch_request(calls: Vec<BatchCall>) -> BatchRequest {
 /// `Auto` default byte-identically.
 pub fn batch_request_with_mode(calls: Vec<BatchCall>, mode: ParallelMode) -> BatchRequest {
     BatchRequest {
-        root: None,
-        index_path: None,
-        use_embed: None,
-        limit: None,
-        parallel: None,
         parallel_mode: Some(mode),
-        ambient_freshness: None,
-        calls,
+        ..batch_request(calls)
     }
 }
 
@@ -112,13 +107,8 @@ pub fn serve_lines(input: String, root: &Path) -> (Result<(), CallError>, Vec<St
 /// (explicit temp db, never the ambient index home).
 pub fn config_at_indexed(root: &Path, index_path: &Path) -> SessionConfig {
     SessionConfig {
-        root: root.to_path_buf(),
         index_path: Some(index_path.to_path_buf()),
-        limit: 5,
-        use_embed: false,
-        default_format: OutputFormat::AgentCapsule,
-        // Hermetic kit: explicit db lifecycle, no ambient writes.
-        ambient_freshness: false,
+        ..config_at(root)
     }
 }
 

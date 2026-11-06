@@ -21,8 +21,8 @@ use passes::lexical::lexical_pass;
 use passes::literal::{literal_file_pass, literal_pass};
 use passes::regex::regex_pass;
 use passes::symbol::{
-    anchor_pass, anchor_pass_for_files, search_callers, search_defs, search_imports, symbol_pass,
-    symbol_pass_for_files,
+    anchor_pass, anchor_pass_for_files, exact_symbol_aliases, search_callers, search_defs,
+    search_imports, symbol_pass, symbol_pass_for_files,
 };
 pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
 use std::collections::HashSet;
@@ -101,6 +101,9 @@ pub struct Searcher {
     /// db degrades to walk-only instead of erroring.
     inert: bool,
     options: SearchOptions,
+    /// Env knobs resolved ONCE at construction ([`crate::config::CoreConfig`]).
+    /// Search-time call sites read from here, never from process env.
+    config: crate::config::CoreConfig,
     use_field_rescoring: bool,
     /// When false, skip snapshot_stamp + query_expansions. Code Mode capsules
     /// discard both; unique-hybrid p50 paid git/HEAD + lexicon expand + extra
@@ -143,12 +146,6 @@ pub fn debug_channel_fork_count() -> u64 {
 
 static CHANNEL_FORK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// `ASGREP_SERIAL_CHANNELS=1` forces the serial channel order (A/B control
-/// arm and a safety valve for hosts where the sibling open is not welcome).
-fn channels_parallel_enabled() -> bool {
-    std::env::var_os("ASGREP_SERIAL_CHANNELS").as_deref() != Some(std::ffi::OsStr::new("1"))
-}
-
 /// L-Q3 (plan Phase 5): `ASGREP_QEMBED_EXPANDED=1` feeds the repo-PPMI
 /// expanded form to the embed lane. Paired frozen-suite measurement
 /// switch only — the default stays the query as written (measured:
@@ -176,7 +173,7 @@ pub fn choose_embed_query<'a>(
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
         // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
-        options.root = options.root.canonicalize().map_err(|e| {
+        options.root = crate::paths::canonicalize_path(&options.root, true).map_err(|e| {
             crate::StoreError::Other(format!(
                 "project root does not exist or is not a directory: {}: {e}",
                 options.root.display()
@@ -211,17 +208,36 @@ impl Searcher {
         // (Refusing the search outright over-refuses — cases where the walk
         // answers correctly against a passive db — so the guard degrades to
         // inert instead.) A fresh db with no binding keeps today's behavior.
+        let t_sqlite = crate::env_flag::profile_clock();
         let mut store = IndexStore::open_readonly(&options.root, options.index_path.as_deref())?;
+        crate::env_flag::emit_profile_stage_since("index_open_sqlite", t_sqlite);
+        let t_status = crate::env_flag::profile_clock();
         let foreign_root = foreign_root_bound(&store, &options.root)?;
+        crate::env_flag::emit_profile_stage_since("index_open_status", t_status);
         let inert = foreign_root;
         if foreign_root {
             store = IndexStore::open_in_memory(&options.root)?;
         }
-        let mut searcher = Self::with_store(store, options);
+        let mut searcher = Self::with_store_and_config(
+            store,
+            options,
+            crate::config::CoreConfig::from_env(),
+        );
         searcher.inert = inert;
         Ok(searcher)
     }
-    pub fn with_store(store: IndexStore, mut options: SearchOptions) -> Self {
+    pub fn with_store(store: IndexStore, options: SearchOptions) -> Self {
+        Self::with_store_and_config(store, options, crate::config::CoreConfig::from_env())
+    }
+    /// Construction with an explicitly resolved [`crate::config::CoreConfig`].
+    /// [`with_store`](Self::with_store) resolves `CoreConfig::from_env()`
+    /// here; prefer this when the config is already in hand so env is read
+    /// exactly once per Searcher.
+    pub fn with_store_and_config(
+        store: IndexStore,
+        mut options: SearchOptions,
+        config: crate::config::CoreConfig,
+    ) -> Self {
         // Bind SQL `f.language = ?` to Language::as_str so `--lang ts` matches
         // stored `typescript`. matches_lang already aliases; SQL did not.
         options.lang_filter =
@@ -244,6 +260,7 @@ impl Searcher {
             store,
             inert: foreign_root,
             options,
+            config,
             use_field_rescoring: true,
             stamp_response: true,
             cache_responses: true,
@@ -272,6 +289,17 @@ impl Searcher {
     pub fn options(&self) -> &SearchOptions {
         &self.options
     }
+    /// Env knobs resolved once at construction. Search-time call sites read
+    /// from here, never from process env.
+    pub fn core_config(&self) -> &crate::config::CoreConfig {
+        &self.config
+    }
+    /// Override the construction-resolved config (lets harnesses pin knobs
+    /// without touching process env). Consulted lazily where read per query.
+    pub fn with_core_config(mut self, config: crate::config::CoreConfig) -> Self {
+        self.config = config;
+        self
+    }
     /// Select concatenated-vector scoring (`false`) or the default per-field
     /// semantic rescoring (`true`). This eval-oriented setting lives on the
     /// searcher so adding it does not break exhaustive `SearchOptions` literals.
@@ -291,7 +319,7 @@ impl Searcher {
     /// Pin RAM line corpus, trigram df vocab, and semantic vectors so the
     /// first unique sticky search is not the session-open tax.
     pub fn warm_search_path(&self) -> Result<()> {
-        if crate::env_flag::memo_off("warm") {
+        if self.config.memo_off("warm") {
             return Ok(());
         }
         let _ = self.store.line_corpus()?;
@@ -386,19 +414,25 @@ impl Searcher {
     /// Run one multi-pass search inside a single read snapshot and stamp the
     fn fenced(&self, compute: impl FnOnce() -> Result<SearchResponse>) -> Result<SearchResponse> {
         let conn = self.store.connection();
+        let mut fence_wall = std::time::Duration::ZERO;
         // Pin one read snapshot for multi-pass search under concurrent reindex.
         // Nested/active transactions mean an outer scope already owns the snapshot.
         // When we *should* own one (autocommit) but BEGIN fails (busy/IO), fail
         // closed rather than run unfenced and risk a silently mixed generation.
         let owns_snapshot = if conn.is_autocommit() {
-            match conn.execute_batch("BEGIN DEFERRED") {
+            let t_begin = crate::env_flag::profile_clock();
+            let owned = match conn.execute_batch("BEGIN DEFERRED") {
                 Ok(()) => true,
                 Err(e) => {
                     return Err(crate::StoreError::Other(format!(
                         "failed to open read snapshot for search: {e}"
                     )));
                 }
+            };
+            if let Some(t) = t_begin {
+                fence_wall += t.elapsed();
             }
+            owned
         } else {
             false
         };
@@ -406,9 +440,14 @@ impl Searcher {
             if !self.stamp_response {
                 return compute();
             }
+            let t_pre = crate::env_flag::profile_clock();
             let (generation_before, lexicon_generation_before) =
                 self.store.search_data_versions()?;
+            if let Some(t) = t_pre {
+                fence_wall += t.elapsed();
+            }
             let mut response = compute()?;
+            let t_post = crate::env_flag::profile_clock();
             if owns_snapshot {
                 let (generation_after, lexicon_generation_after) =
                     self.store.search_data_versions()?;
@@ -427,9 +466,13 @@ impl Searcher {
             response.snapshot = self.snapshot_stamp(generation_before)?;
             response.query_expansions =
                 self.query_expansions(&response.query, lexicon_generation_before);
+            if let Some(t) = t_post {
+                fence_wall += t.elapsed();
+            }
             Ok(response)
         })();
 
+        let t_close = crate::env_flag::profile_clock();
         let close_result = if owns_snapshot {
             // A read snapshot is released either way; COMMIT is the cheap path.
             // If COMMIT fails, ROLLBACK unsticks the connection for later searches.
@@ -453,6 +496,12 @@ impl Searcher {
 
         // A close failure can leave the connection unusable and therefore takes
         // precedence over a compute/read failure. Otherwise return the search result.
+        if let Some(t) = t_close {
+            fence_wall += t.elapsed();
+        }
+        if crate::env_flag::profile_stages_enabled() {
+            crate::env_flag::emit_profile_stage("search_fence", fence_wall);
+        }
         close_result?;
         result
     }
@@ -658,10 +707,13 @@ impl Searcher {
         query: &str,
         compute: impl FnOnce() -> Result<SearchResponse>,
     ) -> Result<SearchResponse> {
-        if !self.cache_responses || crate::env_flag::memo_off("response") {
+        if !self.cache_responses || self.config.memo_off("response") {
             return self.fenced(compute);
         }
-        let Some(gen) = self.index_gen() else {
+        let t_gen = crate::env_flag::profile_clock();
+        let gen_opt = self.index_gen();
+        crate::env_flag::emit_profile_stage_since("search_gen", t_gen);
+        let Some(gen) = gen_opt else {
             return self.fenced(compute);
         };
         let key = self.cache_key(kind, query);
@@ -716,6 +768,7 @@ impl Searcher {
                 &self.options,
                 lexical_pass(&self.store, &self.options, &parsed)?,
                 true,
+                self.config.ledger_path.as_deref(),
             )
         })
     }
@@ -725,7 +778,13 @@ impl Searcher {
             let parsed = ParsedQuery::parse(query_str);
             let mut hits = symbol_pass(&self.store, &self.options, &parsed)?;
             hits.extend(anchor_pass(&self.store, &self.options, &parsed)?);
-            finish_response_checked(&parsed, &self.options, hits, true)
+            finish_response_checked(
+                &parsed,
+                &self.options,
+                hits,
+                true,
+                self.config.ledger_path.as_deref(),
+            )
         })
     }
     pub fn search(&self, query_str: &str) -> Result<SearchResponse> {
@@ -750,21 +809,30 @@ impl Searcher {
                 let hits = conjunction::run(self, &conj)?;
                 let mut response_query = conjunction::response_query(query_str, &conj);
                 resolve_path_scope(&self.options.root, &mut response_query)?;
-                return finish_response_checked(&response_query, &self.options, hits, true);
+                return finish_response_checked(
+                    &response_query,
+                    &self.options,
+                    hits,
+                    true,
+                    self.config.ledger_path.as_deref(),
+                );
             }
             let mut parsed = ParsedQuery::parse(query_str);
             resolve_path_scope(&self.options.root, &mut parsed)?;
+            let t_vocab = crate::env_flag::profile_clock();
             let critic_vocabulary = self.critic_vocabulary(&parsed);
+            crate::env_flag::emit_profile_stage_since("search_vocab", t_vocab);
             let hits = match parsed.mode {
                 QueryMode::Callers => search_callers(&self.store, &self.options, &parsed)?,
                 QueryMode::Defs => search_defs(&self.store, &self.options, &parsed)?,
                 QueryMode::Imports => search_imports(&self.store, &self.options, &parsed)?,
-                QueryMode::Pattern => crate::pattern::search_pattern(
+                QueryMode::Pattern => crate::pattern::search_pattern_with_config(
                     parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
                     self.options.retained_limit(),
+                    &self.config,
                 )?,
                 QueryMode::Literal | QueryMode::Word => {
                     let mut hits = literal_pass(&self.store, &self.options, &parsed)?;
@@ -784,7 +852,17 @@ impl Searcher {
                             // lane. Ranking enrichment must not widen a
                             // case-sensitive literal/word query's membership.
                             if !self.options.case_insensitive {
-                                defs.retain(|hit| hit.symbol.as_deref() == Some(spelling));
+                                // Exact spelling keeps `word:Searcher` from
+                                // admitting `searcher` (case-only fold). Token-
+                                // equal aliases must still pass: alias lookup
+                                // just admitted `auth_refresh` for
+                                // `word:authRefresh`, and `== spelling` drops it.
+                                let aliases = exact_symbol_aliases(spelling);
+                                defs.retain(|hit| {
+                                    hit.symbol.as_deref().is_some_and(|sym| {
+                                        aliases.iter().any(|alias| alias == sym)
+                                    })
+                                });
                             }
                             if !defs.is_empty() {
                                 let mut seen: std::collections::HashSet<(String, u32)> = defs
@@ -816,10 +894,11 @@ impl Searcher {
                 QueryMode::Hybrid => {
                     // Quoted → Literal intent must run phrase literal_pass (50hx).
                     if crate::intent::classify(&parsed) == crate::intent::QueryIntent::Literal {
-                        let phrase = strip_wrapping_quotes(&parsed.raw);
+                        let phrase = crate::query::strip_wrapping_quotes(&parsed.raw);
                         literal_pass(&self.store, &self.options, &ParsedQuery::literal(phrase))?
                     } else {
                         let mut hits = self.search_hybrid(&parsed)?;
+                        let t_fusion = crate::env_flag::profile_clock();
                         crate::intent::route_hits_opts(&parsed, &mut hits, !self.options.use_embed);
                         let intent = crate::intent::classify(&parsed);
                         let weights = crate::intent::weights_for(intent);
@@ -858,11 +937,13 @@ impl Searcher {
                                 &fused,
                             );
                         }
+                        crate::env_flag::emit_profile_stage_since("search_fusion", t_fusion);
                         hits
                     }
                 }
             };
-            {
+            let t_finish = crate::env_flag::profile_clock();
+            let response = {
                 let _span = crate::perf_profile::Span::start(
                     "search_finish_response",
                     "search",
@@ -875,8 +956,11 @@ impl Searcher {
                     true,
                     Some(&self.store),
                     !self.stamp_response,
+                    self.config.ledger_path.as_deref(),
                 )
-            }
+            };
+            crate::env_flag::emit_profile_stage_since("search_finish", t_finish);
+            response
         })
     }
     /// Multi-pattern ingress. Runs each pattern through the EXACT
@@ -952,12 +1036,13 @@ impl Searcher {
                 QueryMode::Callers => search_callers(&self.store, &options, &parsed),
                 QueryMode::Defs => search_defs(&self.store, &options, &parsed),
                 QueryMode::Imports => search_imports(&self.store, &options, &parsed),
-                QueryMode::Pattern => crate::pattern::search_pattern(
+                QueryMode::Pattern => crate::pattern::search_pattern_with_config(
                     parsed.terms.first().map(|s| s.as_str()).unwrap_or(""),
                     &self.store,
                     &self.options.root,
                     self.options.lang_filter.as_deref(),
                     options.limit,
+                    &self.config,
                 ),
                 QueryMode::Literal | QueryMode::Word => {
                     literal_pass(&self.store, &options, &parsed)
@@ -1003,6 +1088,7 @@ impl Searcher {
                     self.use_field_rescoring,
                 )?,
                 false,
+                self.config.ledger_path.as_deref(),
             )
         })
     }
@@ -1015,6 +1101,7 @@ impl Searcher {
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
+                self.config.ledger_path.as_deref(),
             )
         })
     }
@@ -1027,6 +1114,7 @@ impl Searcher {
                 &self.options,
                 regex_pass(&self.store, &self.options, &parsed)?,
                 true,
+                self.config.ledger_path.as_deref(),
             )
         })
     }
@@ -1039,6 +1127,7 @@ impl Searcher {
                 &self.options,
                 literal_pass(&self.store, &self.options, &parsed)?,
                 true,
+                self.config.ledger_path.as_deref(),
             )
         })
     }
@@ -1061,6 +1150,8 @@ impl Searcher {
             }
         }
         // Constraint cascade: each stage receives only files that survived the prior stage.
+        let t_lexical = crate::env_flag::profile_clock();
+        let t_lex_vocab = crate::env_flag::profile_clock();
         let expanded = {
             let _span = crate::perf_profile::Span::start(
                 "hybrid_vocab_expand",
@@ -1076,7 +1167,7 @@ impl Searcher {
         let semantic_query = choose_embed_query(
             parsed,
             expanded.as_ref(),
-            embed_query_expansion_enabled(std::env::var("ASGREP_QEMBED_EXPANDED").ok().as_deref()),
+            self.config.qembed_expanded,
         );
         // Candidate discovery: original 3+ char terms, then a few concept
         // extras for zero-overlap paraphrases (throttle -> rate/limit).
@@ -1181,11 +1272,13 @@ impl Searcher {
         // never mix index generations. Write guards inside the embed path
         // already skip `set_meta` on read-only stores, so the sibling persists
         // nothing.
+        crate::env_flag::emit_profile_stage_since("lex_vocab", t_lex_vocab);
+        let t_prefilter = crate::env_flag::profile_clock();
         let mut embed_worker = if intent == crate::intent::QueryIntent::Conceptual
             && self.options.use_embed
             && !self.inert
             && !self.snapshot_is_held()
-            && channels_parallel_enabled()
+            && self.config.parallel_channels
             && self.store.get_meta("embed_backend")?.as_deref() == Some("static")
         {
             let root = self.store.root().to_path_buf();
@@ -1265,12 +1358,16 @@ impl Searcher {
         // unconstrained semantic (same path as `search_semantic`), then fan-out.
         // Identifier / literal intents stay fail-closed on empty discovery.
         if lexical_files.is_empty() {
+            crate::env_flag::emit_profile_stage_since("lex_vocab", t_lex_vocab);
+            crate::env_flag::emit_profile_stage_since("lex_prefilter", t_prefilter);
+            crate::env_flag::emit_profile_stage_since("search_lexical", t_lexical);
             if let Some(handle) = embed_worker.take() {
                 // The escape path serves from the primary store exactly as
                 // before; drain the fork so its thread ends before we return.
                 let _ = handle.join();
             }
             if intent == crate::intent::QueryIntent::Conceptual && self.options.use_embed {
+                let t_escape_embed = crate::env_flag::profile_clock();
                 let mut hits = {
                     let _span = crate::perf_profile::Span::start(
                         "hybrid_conceptual_semantic_escape",
@@ -1285,6 +1382,7 @@ impl Searcher {
                         self.use_field_rescoring,
                     )?
                 };
+                crate::env_flag::emit_profile_stage_since("search_embed", t_escape_embed);
                 let _span = crate::perf_profile::Span::start(
                     "hybrid_conceptual_fanout_escape",
                     "search",
@@ -1333,6 +1431,8 @@ impl Searcher {
                 }
             }
         }
+        crate::env_flag::emit_profile_stage_since("lex_prefilter", t_prefilter);
+        let t_structural = crate::env_flag::profile_clock();
         let ast_matches = if conceptual {
             Vec::new()
         } else {
@@ -1419,6 +1519,9 @@ impl Searcher {
         // restricted pass, but no longer skip it just because the
         // structural page is already full.
         let learned_backend = self.store.get_meta("embed_backend")?.as_deref() == Some("static");
+        crate::env_flag::emit_profile_stage_since("lex_structural", t_structural);
+        crate::env_flag::emit_profile_stage_since("search_lexical", t_lexical);
+        let t_embed = crate::env_flag::profile_clock();
         let embed_as_generator = conceptual && self.options.use_embed && learned_backend;
         if self.options.use_embed {
             // Forked channel: accept the worker's results only when its
@@ -1453,7 +1556,7 @@ impl Searcher {
                     let _span = crate::perf_profile::Span::start(
                         "hybrid_embed_pass",
                         "search",
-                        "embed_pass_for_files_with_rescoring",
+                        "embed_pass_for_files_cached",
                     );
                     let trust_snapshot = self.snapshot_is_held();
                     if embed_as_generator {
@@ -1495,6 +1598,7 @@ impl Searcher {
                 hits.extend(semantic);
             }
         }
+        crate::env_flag::emit_profile_stage_since("search_embed", t_embed);
         Ok(hits)
     }
 }
@@ -1977,8 +2081,8 @@ fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) 
         read_bytes_estimate.saturating_sub(returned_excerpt_bytes),
     )
 }
-fn record_ledger_from_env(response: &SearchResponse) {
-    let Some(path) = std::env::var_os("ASGREP_LEDGER_PATH") else {
+fn record_ledger(ledger_path: Option<&Path>, response: &SearchResponse) {
+    let Some(path) = ledger_path else {
         return;
     };
     let path = Path::new(&path);
@@ -1994,11 +2098,11 @@ fn record_ledger_from_env(response: &SearchResponse) {
     let Ok(cwd) = std::env::current_dir() else {
         return;
     };
-    let Ok(cwd) = cwd.canonicalize() else {
+    let Ok(cwd) = crate::paths::canonicalize_path(&cwd, true) else {
         return;
     };
     let parent = path.parent().unwrap_or(path);
-    let Ok(parent_canon) = parent.canonicalize() else {
+    let Ok(parent_canon) = crate::paths::canonicalize_path(parent, true) else {
         // Parent may not exist yet; require it under cwd by prefix check on the raw absolute path.
         if !path.starts_with(&cwd) {
             eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
@@ -2042,11 +2146,15 @@ fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Resul
 /// Resolve an `in:` scope against the index root BEFORE any walk. A
 /// parse-time scope error refuses loudly (the
 /// historic silent drop ran the query unscoped); a scope that exists on disk
-/// as a FILE pins the exact file (`path_scope_exact`), a directory keeps the
+/// as a FILE pins the exact file rel-path, a directory keeps the
 /// `dir/**` glob, and a path matching nothing under the root refuses with a
 /// diagnostic instead of answering silent-empty. Wildcard scopes bypass disk
 /// resolution (their glob is the filter, existence of individual matches is
 /// the walk's own business).
+///
+/// The filter glob is derived HERE, once, and stored back into
+/// `parsed.path_scope` — finish compiles it directly with no branch and no
+/// second derivation.
 fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Result<()> {
     if let Some(err) = parsed.path_scope_error.as_deref() {
         return Err(crate::StoreError::Other(err.to_string()));
@@ -2054,12 +2162,14 @@ fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Resul
     let Some(scope) = parsed.path_scope.as_deref() else {
         return Ok(());
     };
-    if !scope.contains('*') && !scope.contains('?') {
+    let has_wildcard = scope.contains('*') || scope.contains('?');
+    let mut is_exact = false;
+    if !has_wildcard {
         // Check the authored path before lexical normalization: file/ must
         // still refuse instead of being changed into an admitted file.
         let target = root.join(scope);
         if target.is_file() {
-            parsed.path_scope_exact = true;
+            is_exact = true;
         } else if !target.is_dir() {
             return Err(crate::StoreError::Other(format!(
                 "in: scope '{scope}' matches no file or directory under {}",
@@ -2068,8 +2178,9 @@ fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Resul
         }
     }
     // Disk admission and hit filtering must use the same relative identity.
-    // Do not canonicalize filesystem paths: that would follow symlinks and
-    // rewrite authored glob components or literal Unix backslash filenames.
+    // Deliberately NOT `paths::canonicalize_path` (either policy): following
+    // symlinks would rewrite authored glob components or literal Unix
+    // backslash filenames. Lexical normalization is the policy here.
     let relative: std::path::PathBuf = std::path::Path::new(scope)
         .components()
         .filter(|component| !matches!(component, std::path::Component::CurDir))
@@ -2083,7 +2194,13 @@ fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Resul
     } else if scope.ends_with('/') || scope.ends_with("/.") {
         normalized.push('/');
     }
-    parsed.path_scope = Some(normalized);
+    // Exact files keep the bare rel-path filter; everything else expands
+    // through the single `path_scope_glob` helper.
+    parsed.path_scope = Some(if is_exact {
+        normalized
+    } else {
+        crate::query::path_scope_glob(&normalized)
+    });
     Ok(())
 }
 
@@ -2128,15 +2245,6 @@ fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
     result.push('$');
     regex::Regex::new(&result).map_err(|e| e.to_string())
 }
-fn strip_wrapping_quotes(raw: &str) -> &str {
-    let t = raw.trim();
-    if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
-        &t[1..t.len() - 1]
-    } else {
-        t
-    }
-}
-
 fn validate_query_arg(query: &str) -> Result<()> {
     crate::limits::validate_query_len(query).map_err(crate::StoreError::Other)
 }

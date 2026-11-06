@@ -96,6 +96,28 @@ pub fn search_pattern(
     lang_filter: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchHit>> {
+    search_pattern_with_config(
+        pattern,
+        store,
+        root,
+        lang_filter,
+        limit,
+        &crate::config::CoreConfig::from_env(),
+    )
+}
+
+/// [`search_pattern`] with an explicitly resolved
+/// [`crate::config::CoreConfig`]. [`Searcher`](crate::search::Searcher)
+/// passes its construction-resolved config; the plain entry point resolves
+/// `CoreConfig::from_env()` here so behavior is identical either way.
+pub fn search_pattern_with_config(
+    pattern: &str,
+    store: &crate::store::IndexStore,
+    root: &Path,
+    lang_filter: Option<&str>,
+    limit: usize,
+    config: &crate::config::CoreConfig,
+) -> Result<Vec<SearchHit>> {
     // Union index signatures with native tree-sitter matches.
     // Production does not spawn external ast-grep by default; native-only is the
     // honest completeness path when the index is partial.
@@ -138,7 +160,7 @@ pub fn search_pattern(
     // every reference-refused placement keep the ingress contract
     // byte-identical.
     if needs_ast_grep_fallback(pattern) && !comment_carrying_face_gate_accepted(pattern) {
-        return Err(structural_fallback_error(pattern));
+        return Err(structural_fallback_error(pattern, config));
     }
     // De-collide rest/single capture names (see
     // rename_colliding_callee_rest). Runs AFTER the ingress gate so a
@@ -202,6 +224,7 @@ pub fn search_pattern(
         lang_filter,
         has_pattern_rows,
         depth_truncated_in_scope,
+        config,
     )? {
         for hit in native_hits {
             if seen.insert((
@@ -229,7 +252,7 @@ pub fn search_pattern(
         // corpus holds languages with no native template for the pattern —
         // per-file `Ok(empty)` there is unanswerability, not source
         // robustness, and must stay loud.
-        return Err(structural_fallback_error(pattern));
+        return Err(structural_fallback_error(pattern, config));
     }
     // Post-walk honesty check (see depth_truncation_disagreement_check).
     depth_truncation_disagreement_check(
@@ -247,8 +270,11 @@ pub fn search_pattern(
 /// rejects. The message names the permanent non-delegation decision:
 /// external ast-grep is bench-only, so no gate state ever answers
 /// beyond-native patterns.
-fn structural_fallback_error(pattern: &str) -> crate::StoreError {
-    let state = if external_ast_grep_allowed() && find_ast_grep_binary().is_some() {
+fn structural_fallback_error(
+    pattern: &str,
+    config: &crate::config::CoreConfig,
+) -> crate::StoreError {
+    let state = if config.external_ast_grep_enabled && find_ast_grep_binary(config).is_some() {
         "external ast-grep is configured but is bench-only; search never delegates"
     } else {
         "structural fallback is disabled or unavailable"
@@ -341,6 +367,7 @@ fn native_walk_candidate_narrowed(
     lang_filter: Option<&str>,
     has_pattern_rows: bool,
     depth_truncated_in_scope: bool,
+    config: &crate::config::CoreConfig,
 ) -> Result<Option<(Vec<SearchHit>, usize)>> {
     let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(match_spelling) {
         Some(kinds) if has_pattern_rows && !depth_truncated_in_scope => {
@@ -355,6 +382,7 @@ fn native_walk_candidate_narrowed(
             lang_filter,
             true,
             candidate_paths,
+            config,
         ) {
             Ok(native) => Some((native.hits, native.unanswerable_corpus_languages)),
             Err(_) => None,
@@ -543,13 +571,6 @@ fn scan_meta_names(
         }
     }
 }
-/// When set, skip external ast-grep entirely (fail-closed / no-subprocess mode).
-fn external_ast_grep_allowed() -> bool {
-    !matches!(
-        std::env::var("ASGREP_DISABLE_AST_GREP").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
-}
 fn search_pattern_cached(
     pattern: &str,
     signatures: &[String],
@@ -594,6 +615,7 @@ pub fn profile_pattern_search(
     root: &Path,
     lang_filter: Option<&str>,
 ) -> Result<PatternSearchProfile> {
+    let config = crate::config::CoreConfig::from_env();
     let single_worker = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .build()
@@ -601,10 +623,10 @@ pub fn profile_pattern_search(
             crate::StoreError::Other(format!("failed to build pattern profiling pool: {error}"))
         })?;
     let baseline = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None))?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None, &config))?;
     let serial = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None))?;
-    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None)?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config))?;
+    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config)?;
     let identity = |hits: &[SearchHit]| {
         hits.iter()
             .map(|hit| (hit.file.clone(), hit.line_start, hit.line_end))
@@ -1237,12 +1259,13 @@ fn search_pattern_native_profiled(
     lang_filter: Option<&str>,
     use_prefilter: bool,
     candidate_paths: Option<std::collections::HashSet<String>>,
+    config: &crate::config::CoreConfig,
 ) -> Result<NativeSearchOutput> {
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
     let total_started = Instant::now();
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let (paths, walk_ns) = bfs_corpus_paths(&root)?;
+    let root = crate::paths::canonicalize_path(root, true).unwrap_or_else(|_| root.to_path_buf());
+    let (paths, walk_ns) = bfs_corpus_paths(&root, config)?;
     // NeverMatches-classified patterns cannot phantom-hit —
     // match_pattern routes them to the structural arm that answers empty, so
     // the only arms that can answer are the registered reference-exact
@@ -1442,13 +1465,9 @@ struct FileMatchCtx<'a> {
 /// duty remains <1% of machine capacity under continuous load. Operators
 /// on constrained hosts can lower ASGREP_WALK_THREADS (1-2); power users
 /// can raise it for faster cold walks.
-fn bfs_corpus_paths(root: &Path) -> Result<(Vec<PathBuf>, u128)> {
+fn bfs_corpus_paths(root: &Path, config: &crate::config::CoreConfig) -> Result<(Vec<PathBuf>, u128)> {
     let walk_started = Instant::now();
-    let walk_workers = std::env::var("ASGREP_WALK_THREADS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n >= 1)
-        .unwrap_or(4);
+    let walk_workers = config.walk_threads;
     let walk_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(walk_workers)
         .build()
@@ -1764,12 +1783,11 @@ fn wait_child_deadline(child: &mut Child, deadline: Instant, require_success: bo
 /// make differential parity circular and import unpinned version behavior
 /// into the trust boundary. Search never delegates; this gate serves the
 /// bench comparison lane only (`bench_ast_grep`).
-fn find_ast_grep_binary() -> Option<String> {
-    if !crate::env_flag::env_flag("ASGREP_ALLOW_AST_GREP") {
+fn find_ast_grep_binary(config: &crate::config::CoreConfig) -> Option<String> {
+    if !config.allow_ast_grep {
         return None;
     }
-    let path = std::env::var("ASGREP_AST_GREP").ok()?;
-    let path = Path::new(&path);
+    let path = config.ast_grep_path.as_deref()?;
     if !path.is_absolute() || !path.is_file() {
         return None;
     }
@@ -1791,9 +1809,9 @@ fn find_ast_grep_binary() -> Option<String> {
         .then(|| path.to_string_lossy().into_owned())
 }
 pub fn bench_ast_grep(pattern: &str, root: &Path, iterations: u32) -> Option<f64> {
-    let ast_grep = find_ast_grep_binary()?;
-    let root = root
-        .canonicalize()
+    let config = crate::config::CoreConfig::from_env();
+    let ast_grep = find_ast_grep_binary(&config)?;
+    let root = crate::paths::canonicalize_path(root, true)
         .unwrap_or_else(|_| root.to_path_buf())
         .to_string_lossy()
         .into_owned();

@@ -23,8 +23,6 @@ pub(crate) fn parse_node_id(id: &str) -> anyhow::Result<(&str, usize, usize)> {
         }
     } else if let Some((file, line)) = id.rsplit_once(':') {
         if line.is_empty() || line.contains('-') || !line.bytes().all(|b| b.is_ascii_digit()) {
-            // Unresolved compact ids and any other colon shape are malformed
-            // here; the message names the accepted forms.
             anyhow::bail!(
                 "node ID must end in #Lstart-Lend (single-line #Lstart and LSP path:start are also accepted)"
             );

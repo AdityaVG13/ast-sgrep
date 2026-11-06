@@ -32,34 +32,29 @@ pub fn embed_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, &'static str> {
         .map(|c| f32::from_le_bytes(*c))
         .collect())
 }
-pub type SemanticChunkRow = (String, u32, u32, String, String, Vec<f32>);
+#[derive(Clone, Debug, PartialEq)]
+pub struct SemanticChunkRow {
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub symbol: String,
+    pub text: String,
+    pub embedding: Vec<f32>,
+}
+
 pub fn rank_chunk_indices_by_vector(
     query_vec: &[f32],
     chunks: &[SemanticChunkRow],
     limit: usize,
 ) -> Vec<(usize, f32)> {
-    let qn = l2(query_vec);
     top_by_similarity(
         chunks
             .iter()
             .enumerate()
-            .filter(|(_, (_, _, _, _, _, emb))| emb.len() == query_vec.len())
-            .map(|(idx, (_, _, _, _, _, emb))| {
-                let den = qn * l2(emb);
-                (
-                    idx,
-                    if den > 0.0 {
-                        dot_similarity(query_vec, emb) / den
-                    } else {
-                        0.0
-                    },
-                )
-            })
+            .filter(|(_, row)| row.embedding.len() == query_vec.len())
+            .map(|(idx, row)| (idx, cosine_similarity(query_vec, &row.embedding)))
             .collect(),
         limit,
         Some(MIN_SIMILARITY),
     )
-}
-fn l2(v: &[f32]) -> f32 {
-    v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
