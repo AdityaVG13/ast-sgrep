@@ -106,7 +106,7 @@ pub fn finish_response(
     if compatibility_options
         .file_filter
         .as_ref()
-        .is_some_and(|filter| super::compile_glob(filter).is_err())
+        .is_some_and(|filter| super::scope::compile_glob(filter).is_err())
     {
         compatibility_options.file_filter = None;
     }
@@ -141,7 +141,7 @@ pub(super) fn filter_hit_paths(
 ) -> Result<()> {
     if let Some(ref filter) = options.file_filter {
         // Invalid globs error -- never silently skip the filter.
-        let re = super::compile_glob(filter).map_err(|e| {
+        let re = super::scope::compile_glob(filter).map_err(|e| {
             crate::StoreError::Other(format!("invalid file_filter glob '{filter}': {e}"))
         })?;
         hits.retain(|h| re.is_match(&h.file));
@@ -149,7 +149,7 @@ pub(super) fn filter_hit_paths(
         // `path_scope` already holds the resolve-time filter glob (exact
         // file rel-path or `dir/**`/wildcard glob) — compile it directly.
         // No branch, no second glob derivation.
-        let re = super::compile_glob(scope).map_err(|e| {
+        let re = super::scope::compile_glob(scope).map_err(|e| {
             crate::StoreError::Other(format!("invalid in: path scope '{scope}': {e}"))
         })?;
         hits.retain(|h| re.is_match(&h.file));

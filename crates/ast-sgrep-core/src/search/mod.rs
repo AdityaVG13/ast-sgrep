@@ -4,17 +4,21 @@ pub mod critic;
 pub mod field_weight;
 mod finish;
 mod fusion;
+mod ledger;
 pub mod passes;
 pub(crate) mod planner;
+mod scope;
 mod types;
 use crate::query::{ParsedQuery, QueryMode};
 use crate::store::IndexStore;
 use crate::Result;
+use self::scope::{resolve_path_scope, validate_query_arg};
 pub use critic::CriticNote;
 pub use field_weight::EmbedFieldScores;
 pub use finish::finish_response;
 pub(crate) use finish::finish_response_checked;
 pub use fusion::dedup_hits;
+pub(super) use ledger::{estimate_prevented_reads, record_ledger};
 pub(crate) use fusion::NameIntern;
 use passes::embed::run_embed_pass_cached;
 use passes::lexical::lexical_pass;
@@ -26,11 +30,8 @@ use passes::symbol::{
 };
 pub use planner::{follow_ups_for_hit, margin_is_decisive, plan_suggested_next};
 use std::collections::HashSet;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
 pub use types::{
     format_hit_line, hit_why, DegradedChannel, HitKind, HitSignal, QueryExpansion, SearchHit,
     SearchOptions, SearchResponse, SnapshotStamp, SpanHitInput,
@@ -1603,234 +1604,6 @@ impl Drop for Searcher {
     fn drop(&mut self) {
         self.release_read_snapshot();
     }
-}
-
-fn estimate_prevented_reads(root: &Path, hits: &[SearchHit]) -> (u64, u64, u64) {
-    use std::path::Component;
-    use std::sync::OnceLock;
-    const META_CACHE_CAP: usize = 4_096;
-    struct MetaCache {
-        entries: Vec<(String, u64)>,
-    }
-    static META_CACHE: OnceLock<Mutex<MetaCache>> = OnceLock::new();
-    let cache = META_CACHE.get_or_init(|| Mutex::new(MetaCache { entries: Vec::new() }));
-    let mut files = HashSet::new();
-    let mut read_bytes_estimate = 0u64;
-    {
-        let mut guard = lock_clear_on_poison(cache, |cache| cache.entries.clear());
-        for h in hits {
-            if !files.insert(h.file.as_str()) {
-                continue;
-            }
-            // Sanitize: reject absolute escapes and parent-directory joins (89er).
-            let hit_path = Path::new(&h.file);
-            if hit_path.is_absolute()
-                || hit_path.components().any(|c| {
-                    matches!(
-                        c,
-                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                    )
-                })
-            {
-                continue;
-            }
-            let key = root.join(hit_path).to_string_lossy().into_owned();
-            let len = match guard
-                .entries
-                .binary_search_by(|(name, _)| name.as_str().cmp(&key))
-            {
-                Ok(i) => guard.entries[i].1,
-                Err(_) => {
-                    let n = std::fs::metadata(&key).ok().map(|m| m.len()).unwrap_or(0);
-                    if guard.entries.len() >= META_CACHE_CAP {
-                        guard.entries.remove(0);
-                    }
-                    match guard
-                        .entries
-                        .binary_search_by(|(name, _)| name.as_str().cmp(&key))
-                    {
-                        Ok(_) => {}
-                        Err(i) => guard.entries.insert(i, (key, n)),
-                    }
-                    n
-                }
-            };
-            read_bytes_estimate += len;
-        }
-    }
-    let returned_excerpt_bytes = hits.iter().map(|h| h.excerpt.len() as u64).sum();
-    (
-        read_bytes_estimate,
-        returned_excerpt_bytes,
-        read_bytes_estimate.saturating_sub(returned_excerpt_bytes),
-    )
-}
-fn record_ledger(ledger_path: Option<&Path>, response: &SearchResponse) {
-    let Some(path) = ledger_path else {
-        return;
-    };
-    let path = Path::new(&path);
-    // Constrain ledger writes: absolute path required; no `..`; must stay under cwd (5xf2).
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: must be an absolute path without '..'");
-        return;
-    }
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    let Ok(cwd) = crate::paths::canonicalize_path(&cwd, true) else {
-        return;
-    };
-    let parent = path.parent().unwrap_or(path);
-    let Ok(parent_canon) = crate::paths::canonicalize_path(parent, true) else {
-        // Parent may not exist yet; require it under cwd by prefix check on the raw absolute path.
-        if !path.starts_with(&cwd) {
-            eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
-            return;
-        }
-        try_append_ledger(path, response);
-        return;
-    };
-    if !parent_canon.starts_with(&cwd) {
-        eprintln!("[asgrep] ignoring ASGREP_LEDGER_PATH: outside process cwd");
-        return;
-    }
-    try_append_ledger(path, response);
-}
-/// Best-effort ledger append: search must not fail, but write errors are visible.
-fn try_append_ledger(path: &Path, response: &SearchResponse) {
-    if let Err(e) = append_ledger_entry(path, response) {
-        eprintln!(
-            "[asgrep] warning: failed to write ASGREP_LEDGER_PATH {}: {e}",
-            path.display()
-        );
-    }
-}
-fn append_ledger_entry(path: &Path, response: &SearchResponse) -> std::io::Result<()> {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let mut line = serde_json::to_vec(&serde_json::json!({
-        "ts": ts, "query": response.query, "hits": response.hits.len(), "bytes": {
-            "read_bytes_estimate": response.read_bytes_estimate, "returned_excerpt_bytes": response.returned_excerpt_bytes,
-            "prevented_read_bytes": response.prevented_read_bytes, },
-    })).map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?
-        .write_all(&line)
-}
-/// Resolve an `in:` scope against the index root BEFORE any walk. A
-/// parse-time scope error refuses loudly (the
-/// historic silent drop ran the query unscoped); a scope that exists on disk
-/// as a FILE pins the exact file rel-path, a directory keeps the
-/// `dir/**` glob, and a path matching nothing under the root refuses with a
-/// diagnostic instead of answering silent-empty. Wildcard scopes bypass disk
-/// resolution (their glob is the filter, existence of individual matches is
-/// the walk's own business).
-///
-/// The filter glob is derived HERE, once, and stored back into
-/// `parsed.path_scope` — finish compiles it directly with no branch and no
-/// second derivation.
-fn resolve_path_scope(root: &std::path::Path, parsed: &mut ParsedQuery) -> Result<()> {
-    if let Some(err) = parsed.path_scope_error.as_deref() {
-        return Err(crate::StoreError::Other(err.to_string()));
-    }
-    let Some(scope) = parsed.path_scope.as_deref() else {
-        return Ok(());
-    };
-    let has_wildcard = scope.contains('*') || scope.contains('?');
-    let mut is_exact = false;
-    if !has_wildcard {
-        // Check the authored path before lexical normalization: file/ must
-        // still refuse instead of being changed into an admitted file.
-        let target = root.join(scope);
-        if target.is_file() {
-            is_exact = true;
-        } else if !target.is_dir() {
-            return Err(crate::StoreError::Other(format!(
-                "in: scope '{scope}' matches no file or directory under {}",
-                root.display()
-            )));
-        }
-    }
-    // Disk admission and hit filtering must use the same relative identity.
-    // Deliberately NOT `paths::canonicalize_path` (either policy): following
-    // symlinks would rewrite authored glob components or literal Unix
-    // backslash filenames. Lexical normalization is the policy here.
-    let relative: std::path::PathBuf = std::path::Path::new(scope)
-        .components()
-        .filter(|component| !matches!(component, std::path::Component::CurDir))
-        .collect();
-    let mut normalized = relative
-        .to_str()
-        .expect("components of a UTF-8 query scope remain UTF-8")
-        .replace(std::path::MAIN_SEPARATOR, "/");
-    if normalized.is_empty() {
-        normalized.push_str("**");
-    } else if scope.ends_with('/') || scope.ends_with("/.") {
-        normalized.push('/');
-    }
-    // Exact files keep the bare rel-path filter; everything else expands
-    // through the single `path_scope_glob` helper.
-    parsed.path_scope = Some(if is_exact {
-        normalized
-    } else {
-        crate::query::path_scope_glob(&normalized)
-    });
-    Ok(())
-}
-
-fn compile_glob(pattern: &str) -> std::result::Result<regex::Regex, String> {
-    if pattern.is_empty() {
-        return Err("file_filter must be non-empty".into());
-    }
-    if pattern.chars().count() > crate::limits::MAX_FILE_FILTER_CHARS {
-        return Err(format!(
-            "file_filter exceeds maximum of {} characters",
-            crate::limits::MAX_FILE_FILTER_CHARS
-        ));
-    }
-    if pattern
-        .chars()
-        .any(|c| c == '\0' || (c.is_control() && c != '\t'))
-    {
-        return Err("file_filter contains invalid control characters".into());
-    }
-    let mut result = String::from("^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '*' if chars.peek() == Some(&'*') => {
-                chars.next();
-                if chars.peek() == Some(&'/') {
-                    chars.next();
-                    result.push_str("(?:.*/)?");
-                } else {
-                    result.push_str(".*");
-                }
-            }
-            '*' => result.push_str(".*"),
-            '?' => result.push('.'),
-            c if "\\.+()|[]{}^$".contains(c) => {
-                result.push('\\');
-                result.push(c);
-            }
-            _ => result.push(c),
-        }
-    }
-    result.push('$');
-    regex::Regex::new(&result).map_err(|e| e.to_string())
-}
-fn validate_query_arg(query: &str) -> Result<()> {
-    crate::limits::validate_query_len(query).map_err(crate::StoreError::Other)
 }
 
 /// Resolve `.git/HEAD` to a commit id without spawning git (d3l5).

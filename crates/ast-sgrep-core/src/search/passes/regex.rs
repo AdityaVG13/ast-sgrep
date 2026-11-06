@@ -50,7 +50,7 @@ pub fn regex_pass(
     let file_filter = options
         .file_filter
         .as_deref()
-        .map(super::super::compile_glob)
+        .map(super::super::scope::compile_glob)
         .transpose()
         .map_err(StoreError::Other)?;
     let budget = regex_budget();
