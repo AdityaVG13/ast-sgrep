@@ -27,18 +27,17 @@
 
 #![forbid(unsafe_code)]
 
+mod args;
+mod envelope;
 mod handler;
 mod sandbox;
 
 use anyhow::Context;
 use ast_sgrep_core::{IndexOptions, IndexStore, Indexer, SearchOptions, Searcher, StoreError};
-use ast_sgrep_plugins::{
-    CompactBudget, DetailLevel, MissContext, OutputBudget, OutputFormat, compact_path_id,
-    format_response_with_budget, to_budgeted_compact_json, to_compact_miss_json,
-};
+use ast_sgrep_plugins::{MissContext, compact_path_id, to_compact_miss_json};
+use envelope::{fnv1a64, render_compact_envelope};
 use sandbox::read_node;
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -383,171 +382,6 @@ impl McpServer {
             }
             other => Err(anyhow::anyhow!("unknown tool: {other}")),
         }
-    }
-
-    fn map_wire_error(err: serde_json::Error) -> anyhow::Error {
-        let msg = err.to_string();
-        // Preserve the prior unknown-key phrasing agents already see.
-        if let Some(rest) = msg.strip_prefix("unknown field `") {
-            if let Some(field) = rest.split('`').next() {
-                return anyhow::anyhow!("unknown argument: {field}");
-            }
-        }
-        anyhow::anyhow!(msg)
-    }
-
-    fn bounded_usize(
-        name: &str,
-        value: u64,
-        minimum: usize,
-        maximum: usize,
-    ) -> anyhow::Result<usize> {
-        let value = usize::try_from(value).with_context(|| format!("{name} must be an integer"))?;
-        anyhow::ensure!(
-            (minimum..=maximum).contains(&value),
-            "{name} must be between {minimum} and {maximum}"
-        );
-        Ok(value)
-    }
-
-    fn resolve_root(&self, root: Option<String>) -> anyhow::Result<PathBuf> {
-        let candidate = match root {
-            None => self.root.clone(),
-            Some(value) => PathBuf::from(value),
-        };
-        self.sandbox_root(candidate)
-    }
-
-    /// Single wire-args boundary parse (F19): every tool args object enters
-    /// here, so the `is_object` check, the `Value` clone for `from_value`,
-    /// and the unknown-field mapping live in exactly one place.
-    fn parse_wire<T>(&self, args: &Value) -> anyhow::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        anyhow::ensure!(args.is_object(), "arguments must be an object");
-        serde_json::from_value(args.clone()).map_err(Self::map_wire_error)
-    }
-
-    fn parse_agent_search(&self, args: &Value) -> anyhow::Result<AgentSearchArgs> {
-        let wire: AgentSearchWire = self.parse_wire(args)?;
-        let query = wire.query.trim();
-        anyhow::ensure!(
-            !query.is_empty() && query.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS,
-            "query must contain 1 to {} characters",
-            ast_sgrep_core::MAX_QUERY_CHARS
-        );
-        let limit = match wire.limit {
-            None => self.limit,
-            Some(value) => Self::bounded_usize("limit", value, 1, MAX_AGENT_LIMIT)?,
-        };
-        // m38g: present budget must be in 1..=MAX; absent means no budget.
-        let budget_tokens = match wire.budget_tokens {
-            None => None,
-            Some(value) => Some(Self::bounded_usize(
-                "budget_tokens",
-                value,
-                1,
-                MAX_BUDGET_TOKENS,
-            )?),
-        };
-        let file_filter = match wire.file_filter {
-            None => None,
-            Some(raw) => {
-                let trimmed = raw.trim();
-                anyhow::ensure!(!trimmed.is_empty(), "file_filter must be non-empty");
-                anyhow::ensure!(
-                    trimmed.chars().count() <= ast_sgrep_core::MAX_QUERY_CHARS,
-                    "file_filter is too long"
-                );
-                Some(trimmed.to_owned())
-            }
-        };
-        let lang = match wire.lang {
-            None => None,
-            Some(raw) => {
-                let trimmed = raw.trim();
-                anyhow::ensure!(!trimmed.is_empty(), "lang must be non-empty");
-                Some(trimmed.to_owned())
-            }
-        };
-        let preview = match wire.preview {
-            None => PreviewMode::Short,
-            Some(raw) => PreviewMode::parse(&raw)?,
-        };
-        Ok(AgentSearchArgs {
-            query: query.to_owned(),
-            root: self.resolve_root(wire.root)?,
-            limit,
-            resend_seen: wire.resend_seen.unwrap_or(false),
-            budget_tokens,
-            file_filter,
-            lang,
-            preview,
-        })
-    }
-
-    fn parse_code_read(&self, args: &Value) -> anyhow::Result<CodeReadArgs> {
-        let wire: CodeReadWire = self.parse_wire(args)?;
-        anyhow::ensure!(
-            !wire.ids.is_empty() && wire.ids.len() <= MAX_READ_REFS,
-            "ids must contain 1 to 20 node IDs"
-        );
-        let context_lines = match wire.context_lines {
-            None => 0,
-            Some(value) => Self::bounded_usize("context_lines", value, 0, MAX_CONTEXT_LINES)?,
-        };
-        let max_chars = match wire.max_chars {
-            None => DEFAULT_READ_CHARS,
-            Some(value) => Self::bounded_usize("max_chars", value, 1, MAX_READ_CHARS)?,
-        };
-        Ok(CodeReadArgs {
-            ids: wire.ids,
-            root: self.resolve_root(wire.root)?,
-            context_lines,
-            max_chars,
-        })
-    }
-
-    fn parse_index_status(&self, args: &Value) -> anyhow::Result<IndexStatusArgs> {
-        let wire: IndexStatusWire = self.parse_wire(args)?;
-        Ok(IndexStatusArgs {
-            root: self.resolve_root(wire.root)?,
-        })
-    }
-
-    fn parse_index_repo(&self, args: &Value) -> anyhow::Result<IndexRepoArgs> {
-        let wire: IndexRepoWire = self.parse_wire(args)?;
-        Ok(IndexRepoArgs {
-            root: self.resolve_root(wire.root)?,
-            force: wire.force.unwrap_or(false),
-        })
-    }
-
-    /// Keep MCP tool roots under the configured workspace (v0mg).
-    fn sandbox_root(&self, candidate: PathBuf) -> anyhow::Result<PathBuf> {
-        let canonical = if candidate.exists() {
-            candidate
-                .canonicalize()
-                .with_context(|| format!("canonicalize root {}", candidate.display()))?
-        } else {
-            anyhow::bail!(
-                "project root does not exist or is not a directory: {}",
-                candidate.display()
-            );
-        };
-        anyhow::ensure!(
-            canonical.starts_with(&self.root),
-            "root {} escapes configured workspace {}",
-            canonical.display(),
-            self.root.display()
-        );
-        anyhow::ensure!(
-            canonical.is_dir(),
-            "project root is not a directory: {}",
-            canonical.display()
-        );
-        Ok(canonical)
     }
 
     fn search_options(
@@ -1024,74 +858,6 @@ impl McpServer {
         self.drop_cached_searcher();
         *Self::lock_or_recover(&self.compact_paths, |intern| *intern = None) = None;
     }
-}
-
-fn render_compact_envelope(
-    response: &ast_sgrep_core::SearchResponse,
-    preview: PreviewMode,
-    budget_tokens: Option<usize>,
-) -> Value {
-    match preview {
-        PreviewMode::None => {
-            let mut env = format_response_with_budget(
-                response,
-                OutputFormat::Compact,
-                0,
-                CompactBudget {
-                    per_result_tokens: 0,
-                    response_tokens: 0,
-                },
-            );
-            blank_compact_snippets(&mut env);
-            env
-        }
-        PreviewMode::Short => match budget_tokens {
-            Some(max_tokens) => to_budgeted_compact_json(
-                response,
-                OutputBudget {
-                    max_tokens,
-                    default_detail: DetailLevel::Block,
-                },
-            ),
-            None => format_response_with_budget(
-                response,
-                OutputFormat::Compact,
-                0,
-                CompactBudget::default(),
-            ),
-        },
-        PreviewMode::Full => to_budgeted_compact_json(
-            response,
-            OutputBudget {
-                max_tokens: budget_tokens.unwrap_or(8_192),
-                default_detail: DetailLevel::Full,
-            },
-        ),
-    }
-}
-
-fn blank_compact_snippets(envelope: &mut Value) {
-    let Some(hits) = envelope.get_mut("h").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for hit in hits {
-        let Some(row) = hit.as_array_mut() else {
-            continue;
-        };
-        if row.len() > 4 {
-            row[4] = Value::String(String::new());
-        }
-    }
-}
-
-/// FNV-1a over snippet bytes (v972). Content-keyed so an edited file re-sends.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[cfg(test)]
