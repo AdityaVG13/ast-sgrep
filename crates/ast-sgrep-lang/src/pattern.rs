@@ -21,6 +21,7 @@
 pub(crate) mod answerable;
 pub(crate) mod bind;
 pub(crate) mod call_walks;
+pub(crate) mod callee_resolve;
 pub(crate) mod calls;
 pub(crate) mod classify;
 pub(crate) mod collect;
@@ -70,6 +71,7 @@ pub(crate) use crate::trivia::*;
 pub use answerable::*;
 pub(crate) use bind::*;
 pub(crate) use call_walks::*;
+pub(crate) use callee_resolve::*;
 pub(crate) use calls::*;
 pub use classify::*;
 pub(crate) use collect::*;
