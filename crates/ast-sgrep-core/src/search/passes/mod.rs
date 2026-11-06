@@ -4,3 +4,4 @@ pub mod lexical;
 pub mod literal;
 pub mod regex;
 pub mod symbol;
+pub mod verb_alias;
