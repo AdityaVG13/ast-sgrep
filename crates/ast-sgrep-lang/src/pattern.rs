@@ -20,10 +20,12 @@
 
 pub(crate) mod answerable;
 pub(crate) mod arg_slots;
+pub(crate) mod argument_helpers;
 pub(crate) mod bind;
 pub(crate) mod call_walks;
 pub(crate) mod callee_resolve;
 pub(crate) mod calls;
+pub(crate) mod chain_links;
 pub(crate) mod classify;
 pub(crate) mod collect;
 pub(crate) mod comments;
@@ -78,10 +80,12 @@ pub(crate) use crate::trivia::*;
 
 pub use answerable::*;
 pub use arg_slots::*;
+pub(crate) use argument_helpers::*;
 pub(crate) use bind::*;
 pub(crate) use call_walks::*;
 pub(crate) use callee_resolve::*;
 pub(crate) use calls::*;
+pub(crate) use chain_links::*;
 pub use classify::*;
 pub(crate) use collect::*;
 pub(crate) use comments::*;
