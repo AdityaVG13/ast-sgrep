@@ -9,12 +9,9 @@ use crate::io_bounds::{RootDir, MAX_INDEX_FILE_BYTES};
 use crate::IndexStore;
 use anyhow::{bail, Context};
 use ast_sgrep_lang::{
-    classify_native, detect_language, match_pattern, required_pattern_literal, Language,
+    classify_native, detect_language, match_pattern, Language,
 };
 use std::path::Path;
-
-/// Byte-order mark stripped from pattern ingress (U+FEFF), as a scalar.
-const BOM_SCALAR: u32 = 0xFEFF;
 
 /// Build a deterministic edit plan from files already present in the index.
 /// Unsupported structural patterns are rejected rather than delegated to an
@@ -56,10 +53,9 @@ pub fn plan_codemod(
     // The BOM strip runs BEFORE the empty check — the raw U+FEFF is not
     // whitespace, so a BOM-only pattern previously slipped the guard,
     // survived as an empty string, and planned a nonsense zero-edit
-    // codemod instead of refusing loudly.
-    let pattern = pattern
-        .trim_start_matches(|c: char| c as u32 == BOM_SCALAR)
-        .trim();
+    // codemod instead of refusing loudly. Shared with the search lane's
+    // ingress (O4).
+    let pattern = crate::pattern::normalize_pattern_text(pattern);
     if pattern.is_empty() {
         bail!("codemod pattern must not be empty");
     }
@@ -121,14 +117,9 @@ pub fn plan_codemod(
     // answers after normalizing) does NOT require, so µ-free files were
     // silently dropped from the plan while the search lane answered them
     // (the reference rewrites sites across files the plan dropped). Guard
-    // with the same containment check the two search lanes use (index lane
-    // + byte prefilter): over-broad matches only disable the fast
-    // prefilter, never results.
-    let required_literal = if crate::pattern::pattern_may_carry_expando_meta(pattern) {
-        None
-    } else {
-        required_pattern_literal(pattern)
-    };
+    // Guard with the shared expando-aware helper (O4): over-broad matches
+    // only disable the fast prefilter, never results.
+    let required_literal = crate::pattern::required_literal_for(pattern);
     let lang_filter = Language::canonical_filter(lang_filter);
     let mut files = Vec::new();
     let mut read_only_refused = Vec::new();

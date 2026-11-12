@@ -25,10 +25,12 @@ use ast_sgrep_codemode::{
     ServeResponse, MAX_BATCH_CALLS, MAX_BATCH_ID_BYTES, MAX_BATCH_TOOL_BYTES,
 };
 use ast_sgrep_core::MAX_QUERY_CHARS;
-use error_testkit::{
-    assert_dispatch_equivalence, assert_other_preserves_cause, batch_call, batch_request,
-    config_at, discriminant, indexed_session_at, serve_lines, serve_request_line, session_at,
+use ast_sgrep_testkit::{
+    assert_other_preserves_cause, batch_call, batch_request,
+    call_error_discriminant as discriminant, config_at, indexed_session_at, serve_lines,
+    serve_request_line, session_at,
 };
+use error_testkit::assert_dispatch_equivalence;
 use serde_json::{json, Value};
 
 // ── E1 taxonomy inventory (from error_api_pass1.rs) ──

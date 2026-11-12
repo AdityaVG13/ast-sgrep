@@ -3,19 +3,16 @@
 //! and the `Native*` result types stay in `pattern.rs` (reached via `super`).
 
 use super::{
-    expand_dir, pattern_may_carry_expando_meta, read_pattern_bytes_capped, NativeFileResult,
+    expand_dir, read_pattern_bytes_capped, required_literal_for, NativeFileResult,
     NativeSearchOutput, PatternSearchProfile,
 };
-use crate::pattern_comment_syntax::{
-    comment_placement_template_route_refused, never_matches_comment_placement_sg_accepted,
-    php_leading_attribute_function_face, scan_pattern_comment_syntax,
-    scan_pattern_comment_syntax_for,
-};
+use crate::pattern_comment_syntax::PatternCommentScans;
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
 use crate::Result;
-use ast_sgrep_lang::{detect_language, match_pattern, required_pattern_literal};
+use ast_sgrep_lang::{detect_language, match_pattern};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -26,6 +23,7 @@ pub(crate) fn search_pattern_native_profiled(
     use_prefilter: bool,
     candidate_paths: Option<std::collections::HashSet<String>>,
     config: &crate::config::CoreConfig,
+    scans: &PatternCommentScans,
 ) -> Result<NativeSearchOutput> {
     let canonical = ast_sgrep_lang::Language::canonical_filter(lang_filter);
     let lang_filter = canonical.as_deref();
@@ -63,15 +61,14 @@ pub(crate) fn search_pattern_native_profiled(
     // (`block_leading`) is refused in every probed language (it spawns a
     // second top-level node) and leaves the exemption in ALL languages,
     // closing the silenced php leading-block faces.
-    let never_matches = matches!(
-        ast_sgrep_lang::classify_native(pattern),
-        Some(ast_sgrep_lang::NativeKind::NeverMatches)
-    );
-    // `search_pattern` computes the same scan for its early-return gate;
-    // this native-walk entry keeps its own (it has other callers, and the
-    // scan is one linear pass over the pattern text).
-    let comment_scan = scan_pattern_comment_syntax(pattern);
-    let comment_free = !(comment_scan.line || comment_scan.block || comment_scan.hash);
+    // Per-language walk-answerability arrives precomputed from search
+    // ingress (`PatternCommentScans::with_answerability`, d-NEEDLESS
+    // hoist 1): one gate verdict per language per search — the NeverMatches
+    // exemption, the template-route comment refusal, and the lang-side
+    // answerability with its single scoped override. The census below and
+    // the per-file skip consult this table instead of re-deriving
+    // classification gate verdicts per file.
+    let unanswerable = scans.unanswerable_table();
     // The NeverMatches exemption must ALSO defer to the lang-side
     // answerability on the COMMENT-FREE class. A two-statement
     // brace-compound spelling (`1_000 ($A) { $_0x1F }` — `)` followed by
@@ -92,12 +89,8 @@ pub(crate) fn search_pattern_native_profiled(
     // structure, so they keep answering; every other comment-carrying
     // NeverMatches face falls back to the census path, which the backstop
     // composes into the loud fail-closed class (fail-open -> fail-closed).
-    let matcher_decides = |lang: ast_sgrep_lang::Language| -> bool {
-        never_matches
-            && never_matches_comment_placement_sg_accepted(lang, comment_scan)
-            && (comment_free && ast_sgrep_lang::native_pattern_answerable(lang, pattern)
-                || (!comment_free && ast_sgrep_lang::php_comment_transparent_operand_lane(pattern)))
-    };
+    // (walk_matcher_decides: table-built at ingress; see
+    // `PatternCommentScans::with_answerability`.)
     // The template-exists route needs the same comment gate. A `$`-less
     // pattern short-circuits `native_pattern_answerable`'s own comment
     // refusal (the `!contains('$')` arm), so a comment placement the
@@ -106,18 +99,12 @@ pub(crate) fn search_pattern_native_profiled(
     // patterns: NeverMatches faces keep their registered routing
     // byte-for-byte (matcher_decides above; the lang-side refusal inside
     // native_pattern_answerable).
-    // The gate consumes the LANGUAGE-AWARE scan — ruby regex-literal `#`s
-    // and php leading-attribute `#[` faces are not comments
-    // (scan_pattern_comment_syntax_for) — plus the ts/js `#[` and php
-    // assignment-tail comment refusals inside the gate itself.
-    let template_comment_refused = |lang: ast_sgrep_lang::Language| -> bool {
-        !never_matches
-            && comment_placement_template_route_refused(
-                lang,
-                pattern,
-                scan_pattern_comment_syntax_for(lang, pattern),
-            )
-    };
+    // The gate consumes the precomputed LANGUAGE-AWARE scan — ruby
+    // regex-literal `#`s and php leading-attribute `#[` faces are not
+    // comments (`PatternCommentScans::for_lang`) — plus the ts/js `#[` and
+    // php assignment-tail comment refusals inside the gate itself.
+    // (walk_template_comment_refused: table-built at ingress; see
+    // `PatternCommentScans::with_answerability`.)
     // Single per-language answerability decision shared by the census and the
     // per-file skip so the two sites cannot drift: a language is unanswerable
     // when the NeverMatches exemption does not cover it AND (the comment gate
@@ -137,45 +124,17 @@ pub(crate) fn search_pattern_native_profiled(
     // rejects, the php meta-target veto `$A = $B`, NeverMatches
     // multi-root), and NeverMatches faces keep their routing byte-for-byte
     // (the `$x = /ab#{y}cd/` ruby spelling stays census-loud).
-    let language_unanswerable = |lang: ast_sgrep_lang::Language| -> bool {
-        if matcher_decides(lang) {
-            return false;
-        }
-        if template_comment_refused(lang) {
-            return true;
-        }
-        if !ast_sgrep_lang::native_pattern_answerable(lang, pattern) {
-            // The lane refusal stands (language unanswerable) UNLESS the
-            // override fires: non-NeverMatches AND the pattern actually
-            // carries comment bytes — i.e. the refusal is the lane's
-            // placement-unaware/content-blind comment verdict on a face the
-            // core adjudication accepted above. Carve-out: a `$`-carrying
-            // php attribute face keeps the refusal — the walk cannot bind
-            // metas inside attribute argument lists (`#[Route($X)]` answers
-            // walk-empty where the reference binds), so un-refusing would
-            // trade the registered fail-closed loud for a silent empty; the
-            // carve-out repairs exactly the `$`-less spellings through the
-            // template route above.
-            let php_attribute_carved = matches!(lang, ast_sgrep_lang::Language::Php)
-                && comment_scan.hash_bracket
-                && php_leading_attribute_function_face(pattern);
-            let lane_refusal_overridden = !never_matches
-                && !php_attribute_carved
-                && (comment_scan.line || comment_scan.block || comment_scan.hash);
-            !lane_refusal_overridden
-        } else {
-            false
-        }
-    };
+    // (walk_language_unanswerable: table-built at ingress; see
+    // `PatternCommentScans::with_answerability`.)
     // Census unanswerable corpus languages (see
     // census_unanswerable_languages).
     let unanswerable_corpus_languages =
-        census_unanswerable_languages(paths.iter(), lang_filter, &language_unanswerable);
+        census_unanswerable_languages(paths.iter(), lang_filter, unanswerable);
     // An expando-spelled metavariable normalizes to `$` per file language
-    // inside the walk, so a raw-byte required literal (`µA`) would
-    // prefilter away µ-free files the meta reading answers.
-    let required_literal = if use_prefilter && !pattern_may_carry_expando_meta(pattern) {
-        required_pattern_literal(pattern)
+    // inside the walk, so the literal comes from the shared expando-aware
+    // helper (O4): `None` disables the fast prefilter, never results.
+    let required_literal = if use_prefilter {
+        required_literal_for(pattern)
     } else {
         None
     };
@@ -189,7 +148,7 @@ pub(crate) fn search_pattern_native_profiled(
     };
     let results = paths
         .par_iter()
-        .map(|path| native_match_file(&file_ctx, &language_unanswerable, path))
+        .map(|path| native_match_file(&file_ctx, unanswerable, path))
         .collect::<Vec<_>>();
     let parallel_span_ns = parallel_started.elapsed().as_nanos();
     let rank_started = Instant::now();
@@ -276,9 +235,9 @@ fn bfs_corpus_paths(root: &Path, config: &crate::config::CoreConfig) -> Result<(
 fn census_unanswerable_languages<'a>(
     paths: impl Iterator<Item = &'a PathBuf>,
     lang_filter: Option<&str>,
-    language_unanswerable: &impl Fn(ast_sgrep_lang::Language) -> bool,
+    unanswerable: &HashMap<ast_sgrep_lang::Language, bool>,
 ) -> usize {
-    let mut unanswerable: Vec<ast_sgrep_lang::Language> = Vec::new();
+    let mut unanswerable_langs: Vec<ast_sgrep_lang::Language> = Vec::new();
     for path in paths {
         // Extension-only detection misses content-only languages — an
         // extension-less file carrying a shebang (`pybox`) was invisible
@@ -300,11 +259,11 @@ fn census_unanswerable_languages<'a>(
         if lang_filter.is_some_and(|filter| lang.as_str() != filter) {
             continue;
         }
-        if !unanswerable.contains(&lang) && language_unanswerable(lang) {
-            unanswerable.push(lang);
+        if !unanswerable_langs.contains(&lang) && unanswerable.get(&lang).copied().unwrap_or(false) {
+            unanswerable_langs.push(lang);
         }
     }
-    unanswerable.len()
+    unanswerable_langs.len()
 }
 
 /// One file's native match: candidate narrowing, byte prefilter, language
@@ -313,7 +272,7 @@ fn census_unanswerable_languages<'a>(
 /// shape (which profile counters get set).
 fn native_match_file(
     ctx: &FileMatchCtx<'_>,
-    language_unanswerable: &impl Fn(ast_sgrep_lang::Language) -> bool,
+    unanswerable: &HashMap<ast_sgrep_lang::Language, bool>,
     path: &Path,
 ) -> NativeFileResult {
     let prefilter_started = Instant::now();
@@ -389,7 +348,7 @@ fn native_match_file(
     // per-file detection (the file language decides the expando
     // normalization), spans suppressed at the conversion site below.
     let universal_root = ast_sgrep_lang::is_universal_root_pattern(lang, ctx.pattern);
-    if language_unanswerable(lang) {
+    if unanswerable.get(&lang).copied().unwrap_or(false) {
         return bail();
     }
     let prefilter_ns = prefilter_started.elapsed().as_nanos();

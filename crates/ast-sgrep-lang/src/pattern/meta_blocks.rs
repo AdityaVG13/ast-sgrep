@@ -1,7 +1,7 @@
 //! Java synchronized and PHP namespace block lanes.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -106,16 +106,13 @@ pub(crate) fn walk_java_synchronized_meta(
     body_name: &str,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "synchronized_statement" && node.is_named() && !is_in_comment_or_string(&node)
-    {
-        if let Some(hit) = java_synchronized_meta_match(&node, source, pattern, body_name) {
-            out.push(hit);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_java_synchronized_meta(child, source, pattern, body_name, out);
-    }
+    walk_kind(
+        node,
+        "synchronized_statement",
+        true,
+        out,
+        |n| java_synchronized_meta_match(n, source, pattern, body_name),
+    );
 }
 
 pub(crate) fn java_synchronized_meta_match(
@@ -300,15 +297,13 @@ pub(crate) fn walk_php_namespace_block(
     template: &PhpNamespaceBlockTemplate,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "namespace_definition" && node.is_named() && !is_in_comment_or_string(&node) {
-        if let Some(hit) = php_namespace_block_match(&node, source, pattern, template) {
-            out.push(hit);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_php_namespace_block(child, source, pattern, template, out);
-    }
+    walk_kind(
+        node,
+        "namespace_definition",
+        true,
+        out,
+        |n| php_namespace_block_match(n, source, pattern, template),
+    );
 }
 
 pub(crate) fn php_namespace_block_match(

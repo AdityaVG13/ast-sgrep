@@ -344,36 +344,45 @@ pub(crate) fn walk_member_call_chains(
     // semi-less spelling.
     let pattern_is_semi = pattern.trim().ends_with(';');
     let flat_property = segments.len() == 2 && segments.iter().all(|s| s.args.is_none());
-    let statement_ok = !(pattern_is_semi && flat_property)
-        || node
-            .parent()
-            .is_some_and(|parent| parent.kind() == "expression_statement");
-    let candidate_kind = node.kind();
-    let is_candidate = if pattern_ends_property {
-        matches!(
-            candidate_kind,
-            "member_access_expression"
-                | "nullsafe_member_access_expression"
-                | "member_call_expression"
-                | "nullsafe_member_call_expression"
-        )
-    } else {
-        matches!(
-            candidate_kind,
-            "member_call_expression" | "nullsafe_member_call_expression"
-        )
-    };
-    if is_candidate && statement_ok && !is_in_comment_or_string(&node) {
-        if let Some(captures) = member_chain_matches(&node, source, segments, nullsafe_flags) {
-            let mut captures = captures;
-            if let Some(text) = node_text(&node, source) {
-                captures.insert("MATCH".to_string(), text.to_string());
-            }
-            out.push(hit_for_node(&node, source, pattern, captures));
-        }
+    walk_nodes(
+        node,
+        out,
+        |n: &Node| {
+            let kind_ok = if pattern_ends_property {
+                matches!(
+                    n.kind(),
+                    "member_access_expression"
+                        | "nullsafe_member_access_expression"
+                        | "member_call_expression"
+                        | "nullsafe_member_call_expression"
+                )
+            } else {
+                matches!(
+                    n.kind(),
+                    "member_call_expression" | "nullsafe_member_call_expression"
+                )
+            };
+            kind_ok
+                && (!(pattern_is_semi && flat_property)
+                    || n.parent()
+                        .is_some_and(|parent| parent.kind() == "expression_statement"))
+                && !is_in_comment_or_string(n)
+        },
+        |n| member_call_chain_match(n, source, pattern, segments, nullsafe_flags),
+    );
+}
+
+/// Single-candidate check for [`walk_member_call_chains`].
+fn member_call_chain_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    segments: &[CallChainSegment],
+    nullsafe_flags: &[bool],
+) -> Option<PatternMatch> {
+    let mut captures = member_chain_matches(node, source, segments, nullsafe_flags)?;
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_member_call_chains(child, source, pattern, segments, nullsafe_flags, out);
-    }
+    Some(hit_for_node(node, source, pattern, captures))
 }

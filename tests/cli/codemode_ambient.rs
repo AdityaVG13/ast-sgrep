@@ -3,16 +3,13 @@
 //! probes the index delta and incrementally updates inline — the agent never
 //! calls an index tool. The call that performed maintenance says so
 //! (`refreshed.files`); untouched trees add no field (byte-stable responses).
+use ast_sgrep_testkit::asgrep_bin;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 /// Run one codemode-batch session over stdin and return the machine envelope.
 /// `calls_or_request`: a calls array, or a full request object (parallel, …).

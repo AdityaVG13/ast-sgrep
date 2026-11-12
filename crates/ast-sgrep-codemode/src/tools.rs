@@ -109,6 +109,21 @@ pub fn call_tool(
         Some(tool) => tool,
         None => return recover_tool_name(session, name, args),
     };
+    // Pre-IO format gate: unknown `format` spellings fail closed as
+    // InvalidArgs before any index work on every search-funneled tool.
+    // Absent/non-string falls through to the session default (lenient);
+    // only unknown strings are refused (no silent fallback to default).
+    if matches!(
+        tool,
+        ToolName::Search
+            | ToolName::Find
+            | ToolName::Semantic
+            | ToolName::Defs
+            | ToolName::Callers
+            | ToolName::Imports
+    ) {
+        reject_unknown_format(&args)?;
+    }
     match tool {
         ToolName::Search => session.search(&args).map_err(CallError::from),
         ToolName::Find => session.find(&args).map_err(CallError::from),
@@ -173,6 +188,20 @@ fn require_symbol(args: &Value) -> Result<&str, CallError> {
                     .into(),
             )
         })
+}
+
+/// Pre-IO `format` gate for the search family: unknown spellings fail closed
+/// as `InvalidArgs` before any index work — never a silent fallback to the
+/// session default. Absent/non-string stays lenient (session default).
+/// Shipped spellings mirror `resolve_format` in session.rs.
+fn reject_unknown_format(args: &Value) -> Result<(), CallError> {
+    match args.get("format").and_then(|v| v.as_str()) {
+        None => Ok(()),
+        Some("agent" | "llm" | "ai" | "capsule" | "agent-capsule") => Ok(()),
+        Some(other) => Err(CallError::InvalidArgs(format!(
+            "unknown format: {other}"
+        ))),
+    }
 }
 
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, CallError> {

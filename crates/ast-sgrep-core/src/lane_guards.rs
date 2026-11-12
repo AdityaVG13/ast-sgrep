@@ -1,7 +1,8 @@
 //! Exact-lane and walk-guard helpers, split verbatim from `pattern.rs`.
 
-use super::{pattern_may_carry_expando_meta, search_pattern_cached, search_pattern_native_profiled};
+use super::{search_pattern_cached, search_pattern_native_profiled};
 use crate::pattern_bench::find_ast_grep_binary;
+use crate::pattern_comment_syntax::PatternCommentScans;
 use crate::search::SearchHit;
 use crate::Result;
 use ast_sgrep_lang::{cached_pattern_signatures, index_can_serve_pattern};
@@ -25,6 +26,41 @@ pub(crate) fn structural_fallback_error(
     ))
 }
 
+/// Preconditions for the exact-signature index-serve lane, snapshotted ONCE
+/// per `search_pattern_with_config` entry (S2). The old 8-argument threading
+/// re-checked at the lane what the caller already knew (`comment_free`,
+/// `$$$`, expando, keyword); the value carries it instead.
+/// `match_spelling` is the de-collided spelling the index signatures key
+/// on; `pattern` is the normalized ingress spelling the expando guard
+/// judges — the split preserves the old per-argument behavior exactly.
+pub(crate) struct ExactLaneEligibility {
+    comment_free: bool,
+    has_pattern_rows: bool,
+    depth_truncated_in_scope: bool,
+    has_rest_meta: bool,
+    may_carry_expando: bool,
+    keyword_literal_root: bool,
+}
+
+impl ExactLaneEligibility {
+    pub(crate) fn for_spellings(
+        match_spelling: &str,
+        pattern: &str,
+        comment_free: bool,
+        has_pattern_rows: bool,
+        depth_truncated_in_scope: bool,
+    ) -> Self {
+        Self {
+            comment_free,
+            has_pattern_rows,
+            depth_truncated_in_scope,
+            has_rest_meta: match_spelling.contains("$$$"),
+            may_carry_expando: super::pattern_may_carry_expando_meta(pattern),
+            keyword_literal_root: ast_sgrep_lang::pattern_is_keyword_literal_root(match_spelling),
+        }
+    }
+}
+
 /// The exact-signature index-serve early returns of [`search_pattern`].
 /// Returns `Ok(Some(hits))` when a cached lane is authoritative for the
 /// pattern and the search is answered there; `Ok(None)` means the native
@@ -38,40 +74,34 @@ pub(crate) fn structural_fallback_error(
 /// truncated scope. call:/kind:/ident rows stay incomplete past the budget
 /// and keep the walk/refusal paths below. Comment placement remains a
 /// matcher decision, so comment-carrying spellings stay excluded.
-// Stable lane shape: query context is threaded, not bundled; bundling would
-// churn every pattern lane for no behavior gain.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn serve_cached_exact_lane(
     store: &crate::store::IndexStore,
     match_spelling: &str,
-    pattern: &str,
     lang_filter: Option<&str>,
     limit: usize,
-    comment_free: bool,
-    has_pattern_rows: bool,
-    depth_truncated_in_scope: bool,
+    eligibility: &ExactLaneEligibility,
 ) -> Result<Option<Vec<SearchHit>>> {
     let Some(signatures) = cached_pattern_signatures(match_spelling) else {
         return Ok(None);
     };
     let decl_exact = !signatures.is_empty() && signatures.iter().all(|s| s.starts_with("decl:"));
-    if depth_truncated_in_scope && comment_free && decl_exact {
+    if eligibility.depth_truncated_in_scope && eligibility.comment_free && decl_exact {
         let indexed =
             search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
         return Ok(Some(indexed));
     }
-    if has_pattern_rows
-        && !depth_truncated_in_scope
-        && comment_free
-        && !match_spelling.contains("$$$")
-        && !pattern_may_carry_expando_meta(pattern)
+    if eligibility.has_pattern_rows
+        && !eligibility.depth_truncated_in_scope
+        && eligibility.comment_free
+        && !eligibility.has_rest_meta
+        && !eligibility.may_carry_expando
         // Keyword-literal roots (`null`/`true`/`false`, py
         // `None`/`True`/`False`, `this`/`super`) have NO pattern_nodes
         // identifier rows, so the "ident-exact" index serve below composed
         // a silent empty where the reference answers the keyword leaf node.
         // Route the class to the native walk, which answers exactly; every
         // other ident signature keeps the index-served lane.
-        && !ast_sgrep_lang::pattern_is_keyword_literal_root(match_spelling)
+        && !eligibility.keyword_literal_root
     {
         let indexed =
             search_pattern_cached(match_spelling, &signatures, store, lang_filter, limit)?;
@@ -93,9 +123,10 @@ pub(crate) fn serve_cached_exact_lane(
 
 /// The native-walk leg of [`search_pattern`]: kind-candidate narrowing
 /// (skipped while depth-truncated files are in scope) followed by the
-/// profiled walk. A walk ERROR is not propagated — it composes into
-/// `Ok(None)` so the caller's fail-closed backstop decides, exactly as the
-/// historical `Err(_) => false` arm; candidate SQL errors DO propagate.
+/// profiled walk. Candidate SQL errors propagate, and so does a WALK error
+/// (S3): it is infrastructure failure (pool build), never unanswerability,
+/// so composing it into `Ok(None)` would silently answer empty where the
+/// walk never decided — the caller fails closed instead.
 ///
 /// Narrow the native walk to files holding a node of the pattern's kind
 /// when the exact shape is not indexable. Sound: files without such a node
@@ -109,6 +140,7 @@ pub(crate) fn native_walk_candidate_narrowed(
     has_pattern_rows: bool,
     depth_truncated_in_scope: bool,
     config: &crate::config::CoreConfig,
+    scans: &PatternCommentScans,
 ) -> Result<Option<(Vec<SearchHit>, usize)>> {
     let candidate_paths = match ast_sgrep_lang::candidate_kind_signatures(match_spelling) {
         Some(kinds) if has_pattern_rows && !depth_truncated_in_scope => {
@@ -116,19 +148,16 @@ pub(crate) fn native_walk_candidate_narrowed(
         }
         _ => None,
     };
-    Ok(
-        match search_pattern_native_profiled(
-            match_spelling,
-            root,
-            lang_filter,
-            true,
-            candidate_paths,
-            config,
-        ) {
-            Ok(native) => Some((native.hits, native.unanswerable_corpus_languages)),
-            Err(_) => None,
-        },
-    )
+    let native = search_pattern_native_profiled(
+        match_spelling,
+        root,
+        lang_filter,
+        true,
+        candidate_paths,
+        config,
+        scans,
+    )?;
+    Ok(Some((native.hits, native.unanswerable_corpus_languages)))
 }
 
 /// Post-walk honesty check: with a depth-truncated file in scope the

@@ -5,7 +5,7 @@
 //! cs_statements.rs — no overlap.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -55,15 +55,13 @@ pub(crate) fn walk_csharp_expression_root(
     template: &CsExpressionTemplate,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "checked_expression" && node.is_named() && !is_in_comment_or_string(&node) {
-        if let Some(hit) = csharp_expression_root_match(&node, source, pattern, template) {
-            out.push(hit);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_csharp_expression_root(child, source, pattern, template, out);
-    }
+    walk_kind(
+        node,
+        "checked_expression",
+        true,
+        out,
+        |n| csharp_expression_root_match(n, source, pattern, template),
+    );
 }
 
 pub(crate) fn csharp_expression_root_match(

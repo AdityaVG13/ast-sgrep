@@ -172,8 +172,6 @@ fn mutate_noop_rewrite(ctx: &DeltaCtx) {
     );
 }
 
-// --- row search checks ---
-
 fn search_add_single(ctx: &DeltaCtx, _refreshed: &Value) {
     let added = run_search(&ctx.bin, &ctx.index_s, &ctx.root_s, "word:gamma_new");
     assert_served_only_at(&added, "gamma.rs");
@@ -300,8 +298,6 @@ fn search_noop_rewrite(ctx: &DeltaCtx, refreshed: &Value) {
         "beta.rs",
     );
 }
-
-// --- row outline checks ---
 
 fn outline_add_single(ctx: &DeltaCtx) {
     let outline = run_outline(&ctx.bin, &ctx.index_s, &ctx.root_s, "gamma.rs");

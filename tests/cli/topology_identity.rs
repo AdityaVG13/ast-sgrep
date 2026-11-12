@@ -40,6 +40,16 @@ fn object_keys(value: &Value) -> BTreeSet<String> {
         .collect()
 }
 
+// Why file-local: semver-triple shape is asserted in two envelope tests;
+// testkit has no version-shape helper.
+fn assert_semver_triple(field: &str, v: &Value) {
+    let s = v.as_str().expect("{field} is a string");
+    assert!(
+        s.split('.').count() == 3 && s.split('.').all(|p| p.parse::<u32>().is_ok()),
+        "{field} must be a dotted semver triple, got {s}"
+    );
+}
+
 // Why file-local: fixed 1-file caller/callee tree; `CliSession::sample` uses a
 // different corpus whose counts this suite must not depend on.
 struct Fixture {
@@ -100,9 +110,11 @@ impl Fixture {
     }
 }
 
-/// INTENT: version + capabilities machine surfaces are byte/shape-identical in
-/// every build (no `cfg(feature)` in the CLI surface; any per-feature drift
-/// fails).
+/// INTENT: version + capabilities machine surfaces are byte/shape-identical
+/// in every build except the dev-only pair: `bench`/`eval` register only
+/// under `dev-tools`, so the command catalog differs by exactly those two
+/// names (each build pins its own list below). Any other per-feature drift
+/// fails.
 /// KILLS: BEHAVIOR-ONLY (drift pins).
 /// Absorbs: T1 version x2 + capabilities subset, T3 version exact +
 /// capabilities exact, T4 machine census pair (merged ungated), T2 version
@@ -138,16 +150,23 @@ fn machine_surfaces_identical_across_sets() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["exit_code"], 0);
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+    assert_semver_triple("version", &value["version"]);
     assert_eq!(
         value["index_schema_version"],
         ast_sgrep_core::INDEX_SCHEMA_VERSION
     );
-    assert_eq!(value["machine_schema_version"], value["schema_version"]);
+    // Both envelope slots must carry a parseable contract version AND agree:
+    // shape kills an equal-but-wrong pair, agreement kills single-slot drift.
+    assert_semver_triple("machine_schema_version", &value["machine_schema_version"]);
+    assert_eq!(value["schema_version"], value["machine_schema_version"]);
     assert!(value["machine_schema_version"]
         .as_str()
         .is_some_and(|v| !v.is_empty()));
 
-    // JSON<->text relation: the 3 text lines restate the JSON scalars exactly.
+    // JSON<->text relation: the 3 text lines restate the independently-pinned
+    // scalars (build version, core index schema, shape-pinned machine
+    // schema) — each render path is checked against its own source, so
+    // agreement here is a real cross-path property, not self-restatement.
     let output = run_env(&bin, &["version"], &[]);
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -155,11 +174,11 @@ fn machine_surfaces_identical_across_sets() {
     assert_eq!(lines.len(), 3, "text={text}");
     assert_eq!(
         lines[0],
-        format!("asgrep {}", value["version"].as_str().unwrap())
+        format!("asgrep {}", env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(
         lines[1],
-        format!("index_schema {}", value["index_schema_version"])
+        format!("index_schema {}", ast_sgrep_core::INDEX_SCHEMA_VERSION)
     );
     assert_eq!(
         lines[2],
@@ -169,14 +188,16 @@ fn machine_surfaces_identical_across_sets() {
         )
     );
 
-    // Clap `--version` restates the JSON version exactly (cross-entry check).
+    // Clap `--version` restates the build version exactly (checked against
+    // the build, not the JSON envelope, so this is a second independent
+    // pin on the same scalar).
     let output = run_env(&bin, &["--version"], &[]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert_eq!(stdout.lines().count(), 1);
     assert_eq!(
         stdout.trim(),
-        format!("asgrep {}", value["version"].as_str().unwrap())
+        format!("asgrep {}", env!("CARGO_PKG_VERSION"))
     );
 
     // capabilities: exact tuning-flag and environment lists, element-for-element.
@@ -295,35 +316,62 @@ fn machine_surfaces_identical_across_sets() {
         .map(|c| c["name"].as_str().expect("name"))
         .collect();
     names.sort_unstable();
-    assert_eq!(
-        names,
-        [
-            "bench",
-            "call-path",
-            "callers",
-            "capabilities",
-            "chain",
-            "codemod",
-            "codemode-batch",
-            "defs",
-            "doctor",
-            "eval",
-            "imports",
-            "index",
-            "install",
-            "keyword",
-            "outline",
-            "read",
-            "reindex",
-            "robot-docs",
-            "search",
-            "semantic",
-            "serve",
-            "status",
-            "version",
-            "watch",
-        ]
-    );
+    // `bench`/`eval` register only under `dev-tools`: each build pins its
+    // own command catalog (cf. the per-build capabilities goldens). The
+    // delta is exactly the dev-only pair — any other drift still fails.
+    #[cfg(feature = "dev-tools")]
+    let expected_commands = [
+        "bench",
+        "call-path",
+        "callers",
+        "capabilities",
+        "chain",
+        "codemod",
+        "codemode-batch",
+        "defs",
+        "doctor",
+        "eval",
+        "imports",
+        "index",
+        "install",
+        "keyword",
+        "outline",
+        "read",
+        "reindex",
+        "robot-docs",
+        "search",
+        "semantic",
+        "serve",
+        "status",
+        "version",
+        "watch",
+    ];
+    #[cfg(not(feature = "dev-tools"))]
+    let expected_commands = [
+        "call-path",
+        "callers",
+        "capabilities",
+        "chain",
+        "codemod",
+        "codemode-batch",
+        "defs",
+        "doctor",
+        "imports",
+        "index",
+        "install",
+        "keyword",
+        "outline",
+        "read",
+        "reindex",
+        "robot-docs",
+        "search",
+        "semantic",
+        "serve",
+        "status",
+        "version",
+        "watch",
+    ];
+    assert_eq!(names, expected_commands);
     let global: Vec<&str> = value["global_flags"]
         .as_array()
         .expect("global flags")
@@ -364,6 +412,10 @@ fn machine_surfaces_identical_across_sets() {
         ]
     );
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+    assert_semver_triple("version", &value["version"]);
+    // Same shape-then-agreement pin as the version envelope: shape kills an
+    // equal-but-wrong pair, agreement kills single-slot drift.
+    assert_semver_triple("schema_version", &value["schema_version"]);
     assert_eq!(
         value["machine_schema"]["schema_version"],
         value["schema_version"]

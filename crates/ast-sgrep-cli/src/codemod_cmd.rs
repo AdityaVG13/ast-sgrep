@@ -38,9 +38,15 @@ pub(crate) fn run_codemod(cli: &Cli, command: &CodemodCmd) -> anyhow::Result<()>
     options.root = root.clone();
     let refresh = (|| -> anyhow::Result<_> {
         let mut indexer = Indexer::new(options).context("could not open the index")?;
-        indexer
+        let refresh = indexer
             .update_paths(&changed_paths)
-            .context("incremental refresh did not complete")
+            .context("incremental refresh did not complete")?;
+        // Publish the sidecars the search side trusts: without this flush
+        // the edited tree and the read bundle disagree and the next search
+        // fails closed on a stale generation (every other update_paths
+        // caller flushes; codemod was the lone exception).
+        indexer.flush_deferred_rebuilds()?;
+        Ok(refresh)
     })();
     let refresh = match refresh {
         Ok(refresh) => refresh,

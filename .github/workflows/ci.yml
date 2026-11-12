@@ -52,6 +52,12 @@ jobs:
           # SOP: docs/validation/golden-files.md
           ASGREP_UPDATE_GOLDENS: "0"
         run: cargo test --workspace -j1
+      - name: test cli dev-tools feature (bench/eval surface)
+        env:
+          # Compare-only. Never set ASGREP_UPDATE_GOLDENS=1 under .github/.
+          # SOP: docs/validation/golden-files.md
+          ASGREP_UPDATE_GOLDENS: "0"
+        run: cargo test -p ast-sgrep-cli --features dev-tools -j1
       - name: upload golden mismatch dumps
         if: failure()
         uses: actions/upload-artifact@v5

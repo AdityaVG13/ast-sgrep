@@ -629,9 +629,12 @@ fn per_file_failure_is_counted_not_silent() {
     );
 }
 
-/// INTENT: search-before-index fails closed as `Other` through `Searcher::new`
-/// (readonly missing-db guard) — never an `Ok` searcher silently answering
-/// empty. Control: after indexing, the same constructor is `Ok`.
+/// INTENT: search-before-index fails closed as discriminant 2 (`Other` or
+/// `EmptyIndex` — testkit's single source of truth projects both as the
+/// fail-closed non-sqlite refusal; `missing_index_error` names EmptyIndex
+/// since the split) through `Searcher::new` (readonly missing-db guard) —
+/// never an `Ok` searcher silently answering empty. Control: after indexing,
+/// the same constructor is `Ok`.
 /// KILLS: fail-open-to-empty-searcher.
 /// ABSORBS: none (kept solo).
 #[test]
@@ -644,9 +647,10 @@ fn missing_db_through_searcher_new_fails_closed() {
         index_path: Some(db.clone()),
         ..SearchOptions::default()
     }));
-    assert!(
-        matches!(err, StoreError::Other(_)),
-        "missing db through Searcher::new must fail as Other, got {err:?}"
+    assert_eq!(
+        discriminant(&err),
+        2,
+        "missing db through Searcher::new must fail closed (discriminant 2), got {err:?}"
     );
     let mut indexer = indexer_at(temp.path(), &db);
     indexer.index_all().expect("index the fixture");
@@ -1268,6 +1272,9 @@ fn drill_dropped_tables_search_and_status_fail_database_then_rebuild_recovers() 
         rw.connection()
             .execute_batch("DROP TABLE pattern_nodes; DROP TABLE callers")
             .unwrap();
+        // Bundle-era total poison: defeat the read-bundle materialization too
+        // (it legitimately serves correct rows past SQLite schema loss).
+        ast_sgrep_testkit::remove_read_bundle(&db);
     }
     let searcher = searcher_at(temp.path(), &db)
         .expect("searcher")
@@ -1362,6 +1369,8 @@ fn drill_chained_double_fault_query_precedence_then_schema_fault_then_recovery()
         rw.connection()
             .execute_batch("DROP TABLE pattern_nodes")
             .unwrap();
+        // Bundle-era total poison: defeat the read-bundle materialization too.
+        ast_sgrep_testkit::remove_read_bundle(&db);
     }
     let searcher = searcher_at(temp.path(), &db)
         .expect("searcher")

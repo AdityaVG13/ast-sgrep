@@ -4,15 +4,12 @@
 //! (the surface deferral records why sg's --items/--view/--outline-rules
 //! framework is NOT cloned); outline reads the index and refuses loudly when
 //! a path has no indexed symbols (fail-closed, never silent-empty).
+use ast_sgrep_testkit::{self as testkit, asgrep_bin, assert_success};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 struct OutlineSession {
     _temp: TempDir,
@@ -33,15 +30,15 @@ fn outline_session() -> OutlineSession {
     #[cfg(unix)]
     fs::write(root.join(r"src\a.rs"), "fn literal_backslash() {}\n").expect("write distinct path");
     let index_path = temp.path().join("index.db");
-    let index_out = Command::new(asgrep_bin())
-        .args([
+    let index_out = testkit::run(
+        &asgrep_bin(),
+        &[
             "--index-path",
             index_path.to_str().unwrap(),
             "index",
             root.to_str().unwrap(),
-        ])
-        .output()
-        .expect("index corpus");
+        ],
+    );
     assert!(
         index_out.status.success(),
         "indexing failed: {}",
@@ -64,10 +61,8 @@ fn run_outline(session: &OutlineSession, args: &[&str]) -> (i32, String, String)
         "outline".into(),
     ];
     full.extend(args.iter().map(|s| s.to_string()));
-    let out = Command::new(asgrep_bin())
-        .args(&full)
-        .output()
-        .expect("run outline");
+    let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+    let out = testkit::run(&asgrep_bin(), &refs);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -123,7 +118,7 @@ fn outline_absolute_path_uses_the_default_cwd_root() {
         ])
         .output()
         .unwrap();
-    let value = ast_sgrep_testkit::assert_success(&output, "outline");
+    let value = assert_success(&output, "outline");
     assert_eq!(value["file"], "src/a.rs");
     assert_eq!(value["count"], 2);
     assert_eq!(value["symbols"][0]["name"], "one");

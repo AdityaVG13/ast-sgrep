@@ -70,6 +70,15 @@ pub fn remove_sqlite_sidecars(db: &Path) {
     }
 }
 
+/// Remove the columnar read-bundle sidecar (`index.read`) next to `db`.
+/// Total-poison drills must defeat both materializations: since the bundle
+/// era, a dropped/corrupt SQLite file alone no longer fails every lane —
+/// the intact bundle legitimately keeps serving correct rows. Missing file
+/// is ignored (`let _ =`), like the other sidecars.
+pub fn remove_read_bundle(db: &Path) {
+    let _ = std::fs::remove_file(ast_sgrep_core::store::read_bundle::path_for(db));
+}
+
 /// Extract the [`StoreError`] from a `Result` that must fail closed.
 /// Panics on `Ok` — the unexpected success is the failure under test.
 pub fn err_of<T>(result: Result<T, StoreError>) -> StoreError {

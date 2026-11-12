@@ -53,6 +53,26 @@ pub struct CoreConfig {
     pub write_read_bundle: bool,
 }
 
+/// Shared contract behind `Searcher::core_config` / `Indexer::core_config`
+/// and their `with_core_config` twins (W1). Both types resolve env knobs
+/// ONCE at construction and expose them through this interface; the inherent
+/// methods on each type keep their call surfaces and delegate here so the
+/// contract (and its docs) lives in exactly one place and the twins cannot
+/// drift.
+pub(crate) trait CoreConfigHolder: Sized {
+    /// Env knobs resolved once at construction. Call sites read from here,
+    /// never from process env.
+    fn core_config_ref(&self) -> &CoreConfig;
+    /// Setter behind [`with_core_config`](CoreConfigHolder::with_core_config).
+    fn core_config_mut(&mut self) -> &mut CoreConfig;
+    /// Override the construction-resolved config (lets harnesses pin knobs
+    /// without touching process env). Consulted lazily where read per query.
+    fn with_core_config(mut self, config: CoreConfig) -> Self {
+        *self.core_config_mut() = config;
+        self
+    }
+}
+
 impl CoreConfig {
     /// Resolve every knob from process env. THE single read point —
     /// [`crate::search::Searcher::new`]/[`crate::search::Searcher::with_store`]

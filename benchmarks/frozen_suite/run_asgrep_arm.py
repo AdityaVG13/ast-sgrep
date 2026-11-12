@@ -53,12 +53,15 @@ def main() -> None:
                    if p.is_dir())
     repos.append(bench / "corpus/cosqa")
     times = {}
+    bin_mtime = Path(args.bin).stat().st_mtime
     for repo in repos:
+        db = repo / ".asgrep/index.db"
+        if db.exists() and db.stat().st_mtime > bin_mtime:
+            continue
         t0 = time.time()
         subprocess.run([args.bin, "index", "--json"], cwd=repo,
                        capture_output=True, text=True, check=True)
         times[str(repo)] = round(time.time() - t0, 1)
-        db = repo / ".asgrep/index.db"
         assert db.exists(), f"no .asgrep index written in {repo}"
 
     backend = stored_backend(repos[0] / ".asgrep/index.db")

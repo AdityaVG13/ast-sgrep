@@ -1421,6 +1421,9 @@ fn drill_index_db_deleted_mid_session_miss_then_live_reindex_heals() {
 
         std::fs::remove_file(index_db_path(temp.path())).unwrap();
         assert!(!index_db_path(temp.path()).exists());
+        // Bundle-era total poison: the read bundle would otherwise keep
+        // serving correct rows past the deleted SQLite file.
+        remove_read_bundle(&index_db_path(temp.path()));
 
         // Fresh limit so the call cannot ride the warm searcher cache.
         let miss = session.call(&search_call(2, "keyword_search", 8), 2);
@@ -1531,6 +1534,9 @@ fn drill_index_db_overwritten_mid_session_refused_then_live_heal() {
     );
 
     corrupt_index_db(temp.path());
+    // Bundle-era total poison: garbage alone no longer refuses while the
+    // intact read bundle keeps serving; defeat both materializations.
+    remove_read_bundle(&index_db_path(temp.path()));
 
     // Fresh limit so the call cannot ride the warm searcher cache.
     let search = session.call(&search_call(2, "keyword_search", 8), 2);
@@ -1777,6 +1783,9 @@ fn drill_chained_double_fault_staged_heal_restores_live_session() {
 
     // Inject both faults at once.
     corrupt_index_db(temp.path());
+    // Bundle-era total poison (see overwritten drill): the intact read
+    // bundle would otherwise keep answering past the garbage SQLite file.
+    remove_read_bundle(&index_db_path(temp.path()));
     std::fs::remove_file(&victim).unwrap();
 
     let search1 = session.call(&search_call(3, "keyword_search", 8), 3);

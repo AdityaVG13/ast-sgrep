@@ -17,15 +17,15 @@
 //! comment above it). Nothing here snapshots production output.
 
 use ast_sgrep_core::fusion::{
-    analyze_weight_sensitivity, apply_weighted_rrf, learn_fusion_weights, weighted_rrf_score,
-    ChannelRanks, FusionCandidate, FusionChannel, FusionExample,
+    apply_weighted_rrf, weighted_rrf_score, ChannelRanks, FusionCandidate, FusionChannel,
 };
 use ast_sgrep_core::intent::{route_hits, ChannelWeights};
 use ast_sgrep_core::rank::{fuse_rrf, rrf_score, score_caller, score_def, score_lexical_rrf};
 use ast_sgrep_core::search::{HitKind, SearchHit};
 use ast_sgrep_core::ParsedQuery;
 use ast_sgrep_testkit::{
-    fused_keys, mixed_hits, mk_hit, pair_examples, set_rank, set_weight, single_rank,
+    analyze_weight_sensitivity, fused_keys, learn_fusion_weights, mixed_hits, mk_hit,
+    pair_examples, set_rank, set_weight, single_rank, FusionExample,
 };
 
 /// INTENT: `rrf_score` totality + rank/k monotonicity (pure-formula contract).
@@ -36,8 +36,8 @@ use ast_sgrep_testkit::{
 fn rrf_score_contract() {
     // --- Totality: rrf = 1/(k + rank + 1), no guards, IEEE all the way down.
     assert!(rrf_score(0, f64::NAN).is_nan()); // NaN k poisons the divisor -> NaN
-    assert_eq!(rrf_score(0, f64::INFINITY), 0.0); // 1/inf
-    assert_eq!(rrf_score(0, f64::NEG_INFINITY), -0.0); // 1/-inf
+    assert_eq!(rrf_score(0, f64::INFINITY), 0.0);
+    assert_eq!(rrf_score(0, f64::NEG_INFINITY), -0.0);
     assert!(rrf_score(0, f64::NEG_INFINITY).is_sign_negative());
     assert_eq!(rrf_score(0, -1.0), f64::INFINITY); // 1/(−1+0+1) = 1/+0
                                                    // 1/(-61+0+1) = 1/-60 = -(1/60): negation is exact, so bit-equality holds.

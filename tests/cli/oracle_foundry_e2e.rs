@@ -17,8 +17,7 @@ mod common;
 use ast_sgrep_core::{SearchOptions, Searcher};
 use ast_sgrep_testkit::{
     json_hit_keys, oracle_keyword_corpus, oracle_outline_corpus, oracle_run_json,
-    oracle_search_corpus, response_hit_keys, sorted_surface_keys, write_root_bytes, OracleCorpus,
-    SurfaceHitKey,
+    oracle_search_corpus, response_hit_keys, sorted_surface_keys, write_file, OracleCorpus, HitKey,
 };
 use common::asgrep;
 
@@ -118,7 +117,7 @@ fn keyword_face_is_coherent() {
     assert_eq!(fcode, 0, "stderr={fstderr}");
     assert_eq!(fvalue["ok"], true);
     let filtered = json_hit_keys(&fvalue);
-    let expected: Vec<SurfaceHitKey> = all.iter().filter(|k| k.file == "a.rs").cloned().collect();
+    let expected: Vec<HitKey> = all.iter().filter(|k| k.file == "a.rs").cloned().collect();
     assert!(!expected.is_empty(), "a.rs must match");
     assert_eq!(filtered, expected);
     assert!(filtered.len() < all.len(), "narrowing must shrink the set");
@@ -256,7 +255,12 @@ fn search_face_is_coherent() {
         let (hcode, hstdout, hstderr) = corpus.query_human(channel, "zzz_no_such_symbol_zzz", &[]);
         assert_eq!(hcode, 0, "channel={channel} stderr={hstderr}");
         assert!(hstdout.is_empty(), "channel={channel}");
-        assert!(hstderr.is_empty(), "channel={channel}");
+        // The miss classification rides stderr so script-parsed stdout stays
+        // pure result lines (empty here); total stderr silence would hide it.
+        assert!(
+            hstderr.contains("no hits for"),
+            "channel={channel} stderr={hstderr}"
+        );
     }
 }
 
@@ -395,7 +399,7 @@ fn index_status_chain_flows() {
     let (re_corpus, re_value) =
         OracleCorpus::index_files(&asgrep(), &[("a.rs", b"fn pass4_alpha() {}\n".as_slice())]);
     assert_eq!(re_value["files_indexed"], 1);
-    write_root_bytes(&re_corpus.root, "b.rs", b"fn pass4_newcomer() {}\n");
+    write_file(&re_corpus.root.join("b.rs"), b"fn pass4_newcomer() {}\n");
     let (rcode, rvalue, _, rstderr) = re_corpus.reindex();
     assert_eq!(rcode, 0, "stderr={rstderr}");
     assert_eq!(rvalue["command"], "reindex");

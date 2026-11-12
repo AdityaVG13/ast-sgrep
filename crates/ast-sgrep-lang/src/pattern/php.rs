@@ -1,7 +1,7 @@
 //! PHP assignment, member, and operand lanes.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -324,13 +324,44 @@ pub(crate) fn walk_php_assignments(
     head_comments: &[String],
     out: &mut Vec<PatternMatch>,
 ) {
-    let pattern_is_semi = pattern.trim().ends_with(';');
     let candidate_kind = match op_class {
         PhpBinaryClass::Assign => "assignment_expression",
         PhpBinaryClass::Augmented => "augmented_assignment_expression",
         PhpBinaryClass::Binary => "binary_expression",
     };
-    if node.kind() == candidate_kind && !is_in_comment_or_string(&node) {
+    walk_kind(node, candidate_kind, false, out, |n| {
+        php_assignment_node_match(
+            n,
+            source,
+            pattern,
+            target,
+            op,
+            op_class,
+            rhs_root,
+            lhs_root,
+            value,
+            value_multi,
+            head_comments,
+        )
+    });
+}
+
+/// Single-candidate check for [`walk_php_assignments`].
+#[allow(clippy::too_many_arguments)]
+fn php_assignment_node_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    target: &str,
+    op: &str,
+    op_class: PhpBinaryClass,
+    rhs_root: Option<(Node, &str)>,
+    lhs_root: Option<(Node, &str)>,
+    value: &str,
+    value_multi: bool,
+    head_comments: &[String],
+) -> Option<PatternMatch> {
+    let pattern_is_semi = pattern.trim().ends_with(';');
         // The matched operator node's own children align strictly: a comment
         // sitting directly inside the candidate breaks alignment and the face
         // is refused; comments between RHS operands sit inside the RHS
@@ -425,9 +456,9 @@ pub(crate) fn walk_php_assignments(
                     // The `;`-terminated pattern's match node is the
                     // `;`-rooted statement (span consumes the `;`).
                     let span_node = if pattern_is_semi {
-                        statement.unwrap_or(node)
+                        statement.unwrap_or(*node)
                     } else {
-                        node
+                        *node
                     };
                     let rhs_bound = if let Some((rhs_pattern, rhs_source)) = rhs_root {
                         // General expression RHS: structural match with meta
@@ -452,27 +483,10 @@ pub(crate) fn walk_php_assignments(
                         if let Some(text) = node_text(&span_node, source) {
                             captures.insert("MATCH".to_string(), text.to_string());
                         }
-                        out.push(hit_for_node(&span_node, source, pattern, captures));
+                        return Some(hit_for_node(&span_node, source, pattern, captures));
                     }
                 }
             }
         }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_php_assignments(
-            child,
-            source,
-            pattern,
-            target,
-            op,
-            op_class,
-            rhs_root,
-            lhs_root,
-            value,
-            value_multi,
-            head_comments,
-            out,
-        );
-    }
+    None
 }

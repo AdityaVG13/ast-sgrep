@@ -10,7 +10,9 @@ use tree_sitter::Node;
 /// every call. The historical `cached_` name promised a memoization that was
 /// never there; the rename keeps the contract honest (H3).
 pub(crate) fn general_template_for(lang: Language, pattern: &str) -> Option<GeneralTemplate> {
-    if general_lane_text_eligible_for(lang, pattern) && !lane_comment_refused(lang, pattern) {
+    if general_lane_text_eligible_for(lang, pattern)
+        && !comment_face_refused_for_lang(lang, &pattern_comment_content(pattern))
+    {
         let (substituted, placeholders, multi_names) = substitute_general_metavariables(pattern)?;
         build_general_template(lang, pattern, &substituted, &placeholders, &multi_names)
     } else {

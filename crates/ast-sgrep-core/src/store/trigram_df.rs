@@ -65,14 +65,6 @@ pub fn min_df(store: &IndexStore, needle: &str) -> Option<i64> {
         .min()
 }
 
-/// Per-trigram df for ordering ASCII anchors. Missing bundle df sorts last.
-pub fn df_or_unknown(store: &IndexStore, tri: &str) -> i64 {
-    let Ok(Some(bundle)) = store.read_bundle(None) else {
-        return i64::MAX;
-    };
-    crate::store::bundle_graph::trigram_df(&bundle, tri).unwrap_or(i64::MAX)
-}
-
 /// True when baked per-index df is available (exact, so the scan is unbounded).
 pub fn df_ready(store: &IndexStore) -> bool {
     store

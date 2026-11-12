@@ -3,14 +3,11 @@
 //! the `asgrep-watch` helper sitting next to it (or on PATH, or via
 //! `ASGREP_WATCH_BIN`). When no helper is reachable the failure must name
 //! the helper and how to fix it — never a hang or a bare spawn error.
+use ast_sgrep_testkit::{self as testkit, asgrep_bin};
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 fn exe_name(stem: &str) -> String {
     if cfg!(windows) {
@@ -26,12 +23,11 @@ fn exe_name(stem: &str) -> String {
 #[cfg(unix)]
 #[test]
 fn watch_helper_override_execs_with_forwarded_argv() {
-    let output = Command::new(asgrep_bin())
-        .args(["watch", "--debounce-ms", "321", "some-root"])
-        .env("ASGREP_WATCH_BIN", "/bin/echo")
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("spawn asgrep watch via echo");
+    let output = testkit::run_env(
+        &asgrep_bin(),
+        &["watch", "--debounce-ms", "321", "some-root"],
+        &[("ASGREP_WATCH_BIN", "/bin/echo")],
+    );
     assert!(
         output.status.success(),
         "echo-backed watch must exit 0; stderr:\n{}",

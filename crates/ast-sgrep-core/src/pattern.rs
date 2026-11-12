@@ -1,9 +1,7 @@
 use crate::gitignore::{should_skip_dir, should_skip_file};
 use crate::io_bounds::MAX_INDEX_FILE_BYTES;
 use crate::pattern_comment_syntax::{
-    comment_placement_template_route_refused, never_matches_comment_placement_sg_accepted,
-    php_leading_attribute_function_face, scan_pattern_comment_syntax,
-    scan_pattern_comment_syntax_for,
+    comment_placement_template_route_refused, literal_trailing_lane_verdict, PatternCommentScans,
 };
 use crate::rank::SCORE_PATTERN;
 use crate::search::{HitKind, SearchHit, SpanHitInput};
@@ -32,7 +30,7 @@ use self::rename_scan::rename_colliding_callee_rest;
 mod lane_guards;
 use self::lane_guards::{
     depth_truncation_disagreement_check, native_walk_candidate_narrowed, serve_cached_exact_lane,
-    structural_fallback_error,
+    structural_fallback_error, ExactLaneEligibility,
 };
 
 /// Convert a simple query or `defs:` / `callers:` prefix into an ast-grep pattern.
@@ -108,6 +106,26 @@ pub(crate) fn pattern_may_carry_expando_meta(pattern: &str) -> bool {
     pattern.contains('µ') || pattern.contains('\u{10000}')
 }
 
+/// Strip a leading BOM and surrounding whitespace — the single ingress
+/// normalization shared by the search lane and the codemod lane (O4).
+/// Returns a borrowed slice; empty means "refuse loudly at the caller".
+pub(crate) fn normalize_pattern_text(pattern: &str) -> &str {
+    pattern.trim().trim_start_matches('\u{feff}').trim()
+}
+
+/// Byte-prefilter literal for `pattern`, or `None` when no literal may
+/// narrow the walk (O4). An expando-spelled metavariable normalizes to `$`
+/// per file language inside the walk, so a raw-byte required literal (`µA`)
+/// would prefilter away µ-free files the meta reading answers. Over-broad
+/// matches only disable the fast prefilter, never results.
+pub(crate) fn required_literal_for(pattern: &str) -> Option<String> {
+    if pattern_may_carry_expando_meta(pattern) {
+        None
+    } else {
+        required_pattern_literal(pattern)
+    }
+}
+
 pub fn search_pattern(
     pattern: &str,
     store: &crate::store::IndexStore,
@@ -147,7 +165,7 @@ pub fn search_pattern_with_config(
     // every file that does not literally start with a BOM-prefixed callee —
     // the index-served lane answered silent ok:true-0 where the reference
     // answers through the BOM (BOM-led `greet($A)` python).
-    let pattern = pattern.trim().trim_start_matches('\u{feff}').trim();
+    let pattern = normalize_pattern_text(pattern);
     // The BOM strip runs BEFORE this guard, so a BOM-only pattern cannot
     // ride past it as a non-empty string and then degrade to a silent
     // ok:true-empty answer for the vacuous "" pattern. The codemod lane
@@ -178,7 +196,14 @@ pub fn search_pattern_with_config(
     // it can never compose into a silent empty. Comment-free refusals and
     // every reference-refused placement keep the ingress contract
     // byte-identical.
-    if needs_ast_grep_fallback(pattern) && !comment_carrying_face_gate_accepted(pattern) {
+    // Blind + per-language comment scans, computed ONCE per entry and
+    // threaded through the ingress gate, the exact lane, and the native
+    // walk below (O3). Values are byte-identical to the old per-gate
+    // rescans — only the repetition is gone.
+    let comment_scans = PatternCommentScans::compute(pattern);
+    if needs_ast_grep_fallback(pattern)
+        && !comment_carrying_face_gate_accepted(pattern, &comment_scans)
+    {
         return Err(structural_fallback_error(pattern, config));
     }
     // De-collide rest/single capture names (see
@@ -191,40 +216,54 @@ pub fn search_pattern_with_config(
     // carry the de-collided spelling on the affected faces — the faces
     // answered silent-empty before, so no previously-emitted symbol changes.
     let match_spelling = rename_colliding_callee_rest(pattern);
+    // Per-language walk-answerability, computed once at ingress for the
+    // exact spelling the walk gates on (d-NEEDLESS hoist 1): the walk
+    // consults this table instead of re-deriving classification verdicts
+    // per file. Values match the old per-file closures byte-for-byte.
+    let comment_scans = comment_scans.with_answerability(&match_spelling);
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut unanswerable_corpus_languages = 0usize;
-    // The comment scan is computed ONCE here and reused by the
-    // matcher_decides chain below (net-zero below this point; the
-    // early-return hot path pays one linear scan over the tiny pattern
-    // text). The exact-signature early-return must run ONLY for
-    // comment-free patterns: an exact index signature is a TEXT row and
-    // cannot express the comment-placement gates the walk adjudicates —
-    // and it cannot express the paren-token contract either (the bare
-    // `q($$$A)` signature rows served the ruby/swift paren-less
-    // over-answer where the reference answers []). `$$$`-rest spellings
-    // are likewise walk-served: the rest-slot semantics and the paren gate
-    // are matcher decisions, never index rows.
-    let comment_scan = scan_pattern_comment_syntax(pattern);
-    let comment_free = !(comment_scan.line || comment_scan.block || comment_scan.hash);
+    // The exact-signature early-return must run ONLY for comment-free
+    // patterns: an exact index signature is a TEXT row and cannot express
+    // the comment-placement gates the walk adjudicates — and it cannot
+    // express the paren-token contract either (the bare `q($$$A)`
+    // signature rows served the ruby/swift paren-less over-answer where
+    // the reference answers []). `$$$`-rest spellings are likewise
+    // walk-served: the rest-slot semantics and the paren gate are matcher
+    // decisions, never index rows.
+    let comment_free = comment_scans.comment_free();
     // Depth-budget-truncated files hold incomplete pattern_nodes rows, so
     // the "index is complete" premise below is false whenever one is in
     // scope. Skip the exact-serve early-return AND the candidate narrowing:
     // both would silently drop the truncated files' hits; the native walk
     // answers them instead.
-    let has_pattern_rows = store.pattern_node_count()? > 0;
+    //
+    // No index at all (missing db file, root still present): the pattern
+    // lane falls through to the native walk, which needs no index — native
+    // structural search works on an unindexed tree by construction (P1).
+    // Every other lane (hybrid, lexical, semantic) keeps failing closed
+    // with EmptyIndex, as do Searcher construction, the CLI pre-gate
+    // (NL-002), and corrupt (non-missing) stores, which surface Database.
+    let has_pattern_rows = match store.pattern_node_count() {
+        Ok(n) => n > 0,
+        Err(e) if e.is_empty_index() && root.is_dir() => false,
+        Err(e) => return Err(e.into()),
+    };
     let depth_truncated_in_scope =
         has_pattern_rows && store.has_depth_truncated_files(lang_filter)?;
-    if let Some(early) = serve_cached_exact_lane(
-        store,
+    // Exact-lane preconditions, snapshotted once per entry (S2): the lane
+    // re-checks nothing the caller already knows.
+    let eligibility = ExactLaneEligibility::for_spellings(
         &match_spelling,
         pattern,
-        lang_filter,
-        limit,
         comment_free,
         has_pattern_rows,
         depth_truncated_in_scope,
-    )? {
+    );
+    if let Some(early) =
+        serve_cached_exact_lane(store, &match_spelling, lang_filter, limit, &eligibility)?
+    {
         return Ok(early);
     }
     let mut native_accepted = false;
@@ -244,6 +283,7 @@ pub fn search_pattern_with_config(
         has_pattern_rows,
         depth_truncated_in_scope,
         config,
+        &comment_scans,
     )? {
         for hit in native_hits {
             if seen.insert((
@@ -291,16 +331,19 @@ pub fn search_pattern_with_config(
 /// Comment-free patterns are never exempt; placements the reference refuses
 /// (leading/trailing/line blocks, ruby inline, php assignment-tail
 /// comments) are accepted by NO language and keep the ingress rejection.
-fn comment_carrying_face_gate_accepted(pattern: &str) -> bool {
-    let scan = scan_pattern_comment_syntax(pattern);
-    if !(scan.line || scan.block || scan.hash) {
+/// Scans arrive precomputed from the entry (O3); values are byte-identical
+/// to the old per-gate rescans.
+fn comment_carrying_face_gate_accepted(pattern: &str, scans: &PatternCommentScans) -> bool {
+    if scans.comment_free() {
         return false;
     }
     ast_sgrep_lang::Language::all().iter().any(|lang| {
+        let scan = scans.for_lang(*lang);
         !comment_placement_template_route_refused(
             *lang,
             pattern,
-            scan_pattern_comment_syntax_for(*lang, pattern),
+            scan,
+            literal_trailing_lane_verdict(*lang, pattern, scan),
         )
     })
 }
@@ -356,11 +399,15 @@ pub fn profile_pattern_search(
         .map_err(|error| {
             crate::StoreError::Other(format!("failed to build pattern profiling pool: {error}"))
         })?;
+    // One scan set for all three walks (O3): same pattern, same values.
+    // Answerability is filled for the same walk spelling the walk gates
+    // on (d-NEEDLESS hoist 1).
+    let scans = PatternCommentScans::compute(pattern).with_answerability(pattern);
     let baseline = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None, &config))?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, false, None, &config, &scans))?;
     let serial = single_worker
-        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config))?;
-    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config)?;
+        .install(|| search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config, &scans))?;
+    let parallel = search_pattern_native_profiled(pattern, root, lang_filter, true, None, &config, &scans)?;
     let identity = |hits: &[SearchHit]| {
         hits.iter()
             .map(|hit| (hit.file.clone(), hit.line_start, hit.line_end))

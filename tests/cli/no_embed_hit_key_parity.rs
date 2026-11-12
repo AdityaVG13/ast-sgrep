@@ -1,18 +1,15 @@
 use ast_sgrep_testkit::{
-    core_search_hit_keys, json_hit_keys, lsp_search_hit_keys, CliSession, SurfaceHitKey,
+    asgrep_bin, core_search_hit_keys, json_hit_keys, lsp_search_hit_keys, CliSession,
+    HitKey,
 };
 use serde_json::Value;
-use std::path::PathBuf;
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
-fn sorted_keys(mut keys: Vec<SurfaceHitKey>) -> Vec<SurfaceHitKey> {
+fn sorted_keys(mut keys: Vec<HitKey>) -> Vec<HitKey> {
     keys.sort();
     keys
 }
 
-fn embed_keys(keys: &[SurfaceHitKey]) -> Vec<SurfaceHitKey> {
+fn embed_keys(keys: &[HitKey]) -> Vec<HitKey> {
     keys.iter().filter(|k| k.kind == "embed").cloned().collect()
 }
 
@@ -28,7 +25,7 @@ fn surface_equivalence_multi_mode_hit_keys() {
         ("defs:process_request", &["--limit", "10", "--no-embed"]),
         ("callers:process_request", &["--limit", "10", "--no-embed"]),
         ("imports:lib", &["--limit", "10", "--no-embed"]),
-        ("pattern:fn $NAME($$$)", &["--limit", "10", "--no-embed"]),
+        ("pattern:process_request($$$A)", &["--limit", "10", "--no-embed"]),
         (
             "how does auth refresh work",
             &["--limit", "10", "--no-embed"],
@@ -180,6 +177,37 @@ fn surface_equivalence_both_error_table() {
     assert!(
         cli_failed && core_failed,
         "both-error: invalid regex must fail on CLI and core; cli_failed={cli_failed} core={core:?}"
+    );
+
+    // Polyglot-corpus backstop: `fn $NAME($$$)` is natively answerable per
+    // language, but the sample corpus holds languages with no native
+    // template for the face and the walk finds no hits -- per-file
+    // Ok(empty) there is unanswerability, not agreement, so the search
+    // stays loud on every surface instead of composing a silent empty.
+    let beyond_native_face = "pattern:fn $NAME($$$)";
+    let cli_face = session.run(&[
+        "--index-path",
+        session.index_path.to_str().unwrap(),
+        "--json",
+        "--no-embed",
+        beyond_native_face,
+        session.root.to_str().unwrap(),
+    ]);
+    let core_face = ast_sgrep_core::Searcher::new(ast_sgrep_core::SearchOptions {
+        root: session.root.clone(),
+        index_path: Some(session.index_path.clone()),
+        limit: 10,
+        use_embed: false,
+        ..ast_sgrep_core::SearchOptions::default()
+    })
+    .and_then(|s| s.search(beyond_native_face));
+    let core_face_msg = format!("{core_face:?}");
+    assert!(
+        !cli_face.status.success()
+            && core_face.is_err()
+            && core_face_msg.contains("structural fallback"),
+        "both-error: beyond-native face must fail closed on CLI and core; cli={} core={core_face_msg}",
+        cli_face.status
     );
 
     // Empty/whitespace query: both return structured empty success (not a crash).

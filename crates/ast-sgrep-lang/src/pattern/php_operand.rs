@@ -1,7 +1,7 @@
 //! PHP bare-operand template lane (isomorphic split of php.rs).
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
 
@@ -174,16 +174,8 @@ pub(crate) fn walk_php_operand_template(
     let doc = tpl.parsed.doc.as_str();
     // P7-style hash-set dedup: nested self-similar binaries can emit the
     // same node twice through distinct binds; insertion order is preserved.
-    let mut seen = std::collections::HashSet::new();
-    walk_php_operand_node(
-        tree.root_node(),
-        source,
-        pattern,
-        pat_root,
-        doc,
-        &mut seen,
-        out,
-    );
+    // The set lives inside the shared walk (one set per top-level call).
+    walk_php_operand_node(tree.root_node(), source, pattern, pat_root, doc, out);
 }
 
 pub(crate) fn walk_php_operand_node<'a>(
@@ -192,24 +184,27 @@ pub(crate) fn walk_php_operand_node<'a>(
     pattern: &str,
     pat_root: Node<'_>,
     doc: &str,
-    seen: &mut std::collections::HashSet<(usize, usize)>,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == pat_root.kind() && !is_in_comment_or_string(&node) {
-        let mut captures = BTreeMap::new();
-        if php_rhs_expr_matches(pat_root, node, source, doc, &mut captures) {
-            let byte_start = node.start_byte();
-            let byte_end = node.end_byte();
-            if seen.insert((byte_start, byte_end)) {
-                if let Some(text) = node_text(&node, source) {
-                    captures.insert("MATCH".to_string(), text.to_string());
-                }
-                out.push(hit_for_node(&node, source, pattern, captures));
-            }
-        }
+    walk_kind_seen(node, pat_root.kind(), false, out, |n| {
+        php_operand_node_match(n, source, pattern, pat_root, doc)
+    });
+}
+
+/// Single-candidate check for [`walk_php_operand_node`].
+fn php_operand_node_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    pat_root: Node<'_>,
+    doc: &str,
+) -> Option<PatternMatch> {
+    let mut captures = BTreeMap::new();
+    if !php_rhs_expr_matches(pat_root, *node, source, doc, &mut captures) {
+        return None;
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_php_operand_node(child, source, pattern, pat_root, doc, seen, out);
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
     }
+    Some(hit_for_node(node, source, pattern, captures))
 }

@@ -1,7 +1,7 @@
 //! Rust/PHP `use` semi-clause lane.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -19,15 +19,9 @@ pub(crate) fn walk_use_semi(
         Language::Php => "namespace_use_declaration",
         _ => return,
     };
-    if node.kind() == want_kind && !is_in_comment_or_string(&node) {
-        if let Some(hit) = use_semi_match(&node, source, pattern, template) {
-            out.push(hit);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_use_semi(child, source, pattern, template, lang, out);
-    }
+    walk_kind(node, want_kind, false, out, |n| {
+        use_semi_match(n, source, pattern, template)
+    });
 }
 
 pub(crate) fn use_semi_match(

@@ -234,11 +234,13 @@ fn print_human_hits(
 ) -> anyhow::Result<()> {
     // A silent zero-hit answer is indistinguishable from a no-op: classify
     // the miss in human output too (the machine envelopes carry `why`).
+    // The classification rides stderr so stdout stays pure result lines for
+    // scripts (`--files-with-matches | xargs`, `| head`).
     if response.hits.is_empty() {
         if let Some(ctx) = miss {
             let reason = ctx.reason();
             let first_filter = ctx.scope.first().map(|(name, _)| name.as_str());
-            write_stdout_line(&format!(
+            crate::machine::write_stderr_line(&format!(
                 "no hits for `{}` (tried: {}) -- {}. Next: {}",
                 response.query,
                 ctx.tried.join("+"),

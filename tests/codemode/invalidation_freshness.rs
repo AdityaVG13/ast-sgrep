@@ -2,8 +2,9 @@
 //!
 //! Consolidates the I1 freshness-contract tests (`invalidation_pass1.rs`) and
 //! absorbs the render-cache legs of I2/I4 into per-matrix tests. Catalog:
-//! `tests/catalog/invalidation-codemode.md` (M-stale / M-render / M-writer /
-//! M-pure rows plus the `index_repo_arg_conflicts` KEEP).
+//! `tests/catalog/invalidation-codemode.md` (M-stale row, now an adapter
+//! phase, plus M-render / M-writer / M-pure rows and the
+//! `index_repo_arg_conflicts` KEEP).
 //!
 //! Discipline (inherited): `CallError` discriminants via `matches!`, never
 //! Display text; cache probes via `peek_cached_search`; epoch via
@@ -12,11 +13,10 @@
 use ast_sgrep_codemode::{CallError, CodeModeSession};
 use ast_sgrep_core::read_writer_generation;
 use ast_sgrep_testkit::{
-    external_reindex, hit_bytes, hit_file_set, hit_files, hit_name_set, hits_file,
-    index_dir_db_path as index_db_path, seeded_py_repo as setup, targeted_refresh as refresh,
-    write_py,
+    HitKey, external_reindex, index_dir_db_path as index_db_path, seeded_py_repo as setup,
+    targeted_refresh as refresh, write_py,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs;
 
@@ -35,55 +35,60 @@ fn generation(session: &CodeModeSession) -> u64 {
     read_writer_generation(&config.root, config.index_path.as_deref())
 }
 
-/// INTENT: pinned-stale-until-stamp contract — bare disk edits are invisible
-/// (epoch frozen, stale ALPHA served, BETA missing); an out-of-band Indexer
-/// write stamps a new epoch; post-stamp search reopens and serves fresh hits;
-/// `index_status` tracks the live epoch across the bump.
+// WHY area-local: `HitKey`-backed hit projections for freshness assertions;
+// only this suite reads find/search file sets and byte comparisons across
+// stale/fresh phases — single-suite helpers.
+fn hits_file(value: &Value, name: &str) -> bool {
+    HitKey::has_file(value, name)
+}
+
+fn hit_files(value: &Value) -> Vec<String> {
+    HitKey::file_keys(value)
+}
+
+fn hit_file_set(value: &Value) -> BTreeSet<String> {
+    HitKey::file_keys(value).into_iter().collect()
+}
+
+fn hit_name_set(value: &Value) -> BTreeSet<String> {
+    HitKey::file_keys(value)
+        .into_iter()
+        .map(|file| HitKey::name_key_of(&file).to_owned())
+        .collect()
+}
+
+fn hit_bytes(value: &Value) -> Vec<u8> {
+    hit_name_set(value)
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes()
+}
+
+/// INTENT (adapter): session agreement with the MCP-owned staleness contract —
+/// bare edits serve stale under a frozen epoch; an out-of-band Indexer write
+/// stamps a new epoch that reopens reads fresh; `index_status` tracks the
+/// live epoch. The full matrices live on MCP
+/// `search_on_stale_index_serves_pre_change_hits_without_flag`,
+/// `external_reindex_invalidates_warm_session_searcher`, and
+/// `index_status_discriminates_missing_unindexed_and_fresh` (wire truth) and
+/// are not re-pinned here.
 /// KILLS: auto-refresh-on-read, never-reopen-cached-Searcher,
-/// no-stamp-on-external-write, cached-or-stale-status-epoch mutants.
+/// no-stamp-on-external-write, cached-or-stale-status-epoch mutants
+/// (representative phases; full matrices on MCP).
 /// ABSORBS: bare_file_change_without_reindex_serves_stale_hits,
 /// external_indexer_write_bumps_writer_generation,
 /// search_after_external_reindex_serves_fresh_hits,
 /// index_status_reports_current_writer_generation.
 #[test]
-fn m_stale_pinned_until_stamp() {
-    // LEG 1 — bare edit without a writer: epoch frozen, stale served, BETA
-    // invisible (the stale-until-stamp contract).
-    {
-        let (root, _index, mut session) = setup();
-        let before = session
-            .call("find", json!({"query": ALPHA, "limit": 8}))
-            .expect("find alpha");
-        assert!(hits_file(&before, "alpha.py"), "{before}");
-
-        let stamp = generation(&session);
-        write_py(root.path(), "alpha.py", BETA);
-
-        assert_eq!(generation(&session), stamp);
-        let stale = session
-            .call("find", json!({"query": ALPHA, "limit": 8}))
-            .expect("stale find alpha");
-        assert!(hits_file(&stale, "alpha.py"), "{stale}");
-        let missing = session
-            .call("find", json!({"query": BETA, "limit": 8}))
-            .expect("unindexed find beta");
-        assert!(hit_files(&missing).is_empty(), "{missing}");
-    }
-    // LEG 2 — durable out-of-band Indexer write stamps a new epoch.
-    {
-        let (root, index_dir, session) = setup();
-        let before = generation(&session);
-        write_py(root.path(), "alpha.py", BETA);
-        external_reindex(root.path(), &index_db_path(&index_dir), "alpha.py");
-        let after = generation(&session);
-        assert_ne!(
-            before, after,
-            "durable external write must stamp a new epoch"
-        );
-    }
-    // LEG 3 — post-stamp search reopens: BETA served, ALPHA evicted.
+fn m_stale_adapter_agrees_with_mcp_contract() {
+    // PHASE 1 (stale-serve + reopen): a bare edit serves stale under a frozen
+    // epoch (ALPHA still served, BETA missing); the durable out-of-band
+    // Indexer write stamps a new epoch and post-stamp search serves fresh
+    // (BETA served, ALPHA evicted).
     {
         let (root, index_dir, mut session) = setup();
+        let stamp = generation(&session);
         let warm = session
             .call(
                 "search",
@@ -93,7 +98,28 @@ fn m_stale_pinned_until_stamp() {
         assert!(hits_file(&warm, "alpha.py"), "{warm}");
 
         write_py(root.path(), "alpha.py", BETA);
+        assert_eq!(generation(&session), stamp);
+        let stale = session
+            .call(
+                "search",
+                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
+            )
+            .expect("stale search alpha");
+        assert!(hits_file(&stale, "alpha.py"), "{stale}");
+        let missing = session
+            .call(
+                "search",
+                json!({"query": format!("word:{BETA}"), "limit": 8}),
+            )
+            .expect("unindexed search beta");
+        assert!(hit_files(&missing).is_empty(), "{missing}");
+
         external_reindex(root.path(), &index_db_path(&index_dir), "alpha.py");
+        assert_ne!(
+            generation(&session),
+            stamp,
+            "durable external write must stamp a new epoch"
+        );
 
         let fresh = session
             .call(
@@ -110,7 +136,8 @@ fn m_stale_pinned_until_stamp() {
             .expect("evicted search");
         assert!(hit_files(&gone).is_empty(), "{gone}");
     }
-    // LEG 4 — `index_status` writer_generation tracks the live epoch.
+    // PHASE 2 (status tracks): `index_status` writer_generation equals the
+    // live on-disk epoch before and after an external stamp move.
     {
         let (root, index_dir, mut session) = setup();
         let status_before = session.call("index_status", json!({})).expect("status");

@@ -4,7 +4,7 @@
 //! `numerical_pass{1,2,3,4}`. Pure transforms only — no index I/O.
 
 use ast_sgrep_testkit as testkit;
-use ast_sgrep_testkit::{hits_fixture, scored_hits5, scored_hits6};
+use ast_sgrep_testkit::{hits_fixture, scored_hits5, scored_hits6, HitKey};
 use serde_json::json;
 
 // Keep file-local: order-preserving nesting check for threshold relations;
@@ -167,7 +167,7 @@ fn filter_hits_contract() {
                 )
                 .expect("filter runs");
             let count = out["hit_count"].as_u64().expect("count") as usize;
-            assert_eq!(count, testkit::hit_files(&out).len());
+            assert_eq!(count, HitKey::file_keys(&out).len());
             if !first {
                 assert!(count >= prev_count, "min {min}: {count} < {prev_count}");
             }
@@ -190,7 +190,7 @@ fn filter_hits_contract() {
                     json!({"hits": scored_hits5(), "min_score": min}),
                 )
                 .expect("filter runs");
-            let files = testkit::hit_files(&out);
+            let files = HitKey::file_keys(&out);
             if !first {
                 assert!(
                     is_subsequence(&prev_files, &files),
@@ -214,7 +214,7 @@ fn filter_hits_contract() {
                     json!({"hits": scored_hits5(), "limit": limit}),
                 )
                 .expect("filter runs");
-            let files = testkit::hit_files(&out);
+            let files = HitKey::file_keys(&out);
             assert!(files.len() >= prev_files.len());
             assert_eq!(&files[..prev_files.len()], &prev_files[..]);
             prev_files = files;
@@ -255,9 +255,9 @@ fn filter_hits_contract() {
                 )
                 .expect("filter runs");
             assert_eq!(out["hit_count"], json!(count), "min {min}");
-            assert_eq!(testkit::hit_files(&out).len(), count);
+            assert_eq!(HitKey::file_keys(&out).len(), count);
             assert_eq!(
-                testkit::hit_files(&out)[0],
+                HitKey::file_keys(&out)[0],
                 "f6.rs".to_string(),
                 "min {min}"
             );
@@ -269,7 +269,7 @@ fn filter_hits_contract() {
             )
             .expect("mid threshold reruns");
         assert_eq!(
-            testkit::hit_files(&out),
+            HitKey::file_keys(&out),
             vec!["f6.rs", "f5.rs", "f4.rs", "f3.rs"]
         );
         assert_eq!(session.call_count(), 8);

@@ -28,6 +28,8 @@ fn block_comment_prefilter_preserves_token_boundaries() {
                 source.contains(&literal),
                 "prefilter {literal:?} would discard a matching source for {pattern:?}"
             );
+        } else {
+            panic!("prefilter-soundness leg skipped: no literal for {pattern:?}");
         }
     }
 }

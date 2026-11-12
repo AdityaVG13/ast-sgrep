@@ -212,6 +212,8 @@ fn readonly_and_missing_paths_fail_closed() {
         }
 
         // Read-only history dir: bench refuses with the operational discriminant.
+        // Dev-only: the bench subcommand exists only under `dev-tools`.
+        #[cfg(feature = "dev-tools")]
         {
             let (temp, root, index) = seed_project();
             run_index(&asgrep(), &temp, &root, &index);
@@ -248,6 +250,8 @@ fn readonly_and_missing_paths_fail_closed() {
 
 /// One-use bench runner: the history-path envs differ per facet, so the closure
 /// shape stays local to this test rather than growing the shared harness.
+/// Dev-only: bench exists only under `dev-tools`.
+#[cfg(feature = "dev-tools")]
 fn run_bench(
     temp: &TempDir,
     root_s: &str,
@@ -290,7 +294,9 @@ fn run_bench(
 /// fault_torn_truncated_bench_history_fails_loud_preserves_bytes,
 /// relation_corrupt_recover_verify_roundtrip_bench_history,
 /// corrupt_committed_prior_fails_open_to_baseline.
+/// Dev-only: bench history is written only by the `dev-tools` bench command.
 #[test]
+#[cfg(feature = "dev-tools")]
 fn bench_history_fault_matrix() {
     // Missing history (parents included) is rebuilt, not refused.
     {

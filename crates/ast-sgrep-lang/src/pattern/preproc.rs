@@ -1,7 +1,7 @@
 //! C preprocessor directive lane.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -282,50 +282,57 @@ pub(crate) fn walk_preproc_directive(
     value_binding: Option<&CondBinding>,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == kind && !is_in_comment_or_string(&node) {
-        // The directive keyword itself must agree — some grammars fold the
-        // whole conditional family into shared region kinds, and only the
-        // leading anonymous token (`#ifdef` vs `#ifndef`) tells them apart.
-        let directive_token_ok = node
-            .child(0)
-            .is_some_and(|token| !token.is_named() && token.kind() == directive);
-        // The directive head is the FIRST named child: the name identifier
-        // for ifdef/ifndef, the condition expression for `#if`, the macro
-        // name for `#define`. Branch-body children are ignored — exactly
-        // the reference's directive-head semantics.
-        if directive_token_ok {
-            if let Some(head) = node.named_child(0) {
-                let mut head_captures = BTreeMap::new();
-                let unified = node_text(&head, source).is_some_and(|text| {
-                    binding.unify(text, Some(head), source, &mut head_captures)
-                });
-                // A spelled `#define` value must exist and unify; an unspelled
-                // value ignores the source value.
-                if unified && define_value_matches(value_binding, &node, source, &mut head_captures)
-                {
-                    let mut captures = BTreeMap::new();
-                    if let Some(text) = node_text(&node, source) {
-                        captures.insert("MATCH".to_string(), text.to_string());
-                    }
-                    captures.extend(head_captures);
-                    out.push(hit_for_node(&node, source, pattern, captures));
-                }
-            }
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_preproc_directive(
-            child,
+    walk_kind(node, kind, false, out, |n| {
+        preproc_directive_match(
+            n,
             source,
             pattern,
             directive,
-            kind,
             binding,
             value_binding,
-            out,
-        );
+        )
+    });
+}
+
+/// Single-candidate check for [`walk_preproc_directive`]: the directive
+/// keyword must agree, the head must unify, and a spelled `#define` value
+/// must exist and unify.
+fn preproc_directive_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    directive: &str,
+    binding: &CondBinding,
+    value_binding: Option<&CondBinding>,
+) -> Option<PatternMatch> {
+    // The directive keyword itself must agree — some grammars fold the
+    // whole conditional family into shared region kinds, and only the
+    // leading anonymous token (`#ifdef` vs `#ifndef`) tells them apart.
+    let directive_token_ok = node
+        .child(0)
+        .is_some_and(|token| !token.is_named() && token.kind() == directive);
+    if !directive_token_ok {
+        return None;
     }
+    // The directive head is the FIRST named child: the name identifier
+    // for ifdef/ifndef, the condition expression for `#if`, the macro
+    // name for `#define`. Branch-body children are ignored — exactly
+    // the reference's directive-head semantics.
+    let head = node.named_child(0)?;
+    let mut head_captures = BTreeMap::new();
+    let unified =
+        node_text(&head, source).is_some_and(|text| binding.unify(text, Some(head), source, &mut head_captures));
+    // A spelled `#define` value must exist and unify; an unspelled
+    // value ignores the source value.
+    if !unified || !define_value_matches(value_binding, node, source, &mut head_captures) {
+        return None;
+    }
+    let mut captures = BTreeMap::new();
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
+    }
+    captures.extend(head_captures);
+    Some(hit_for_node(node, source, pattern, captures))
 }
 
 /// Answerability of the conditional-directive family — `Some(true)` when

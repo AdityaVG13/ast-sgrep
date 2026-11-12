@@ -14,14 +14,9 @@
 //! Failure-first: these tests were run against the pre-ingress tree and
 //! failed (clap rejected `--pattern` on search entirely).
 
-use ast_sgrep_testkit::CliSession;
+use ast_sgrep_testkit::{asgrep_bin, CliSession};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 /// (file, line_start, line_end) multiset per pattern — the per-pattern hit set.
 fn hits_by_pattern(envelope: &Value) -> BTreeMap<String, Vec<(String, i64, i64)>> {

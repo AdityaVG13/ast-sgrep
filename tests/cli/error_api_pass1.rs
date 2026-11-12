@@ -147,13 +147,21 @@ fn missing_root_search_is_operational_exit_2() {
     }
 
     // Leg 2 (was unindexed_root_search_is_operational_exit_2): no auto-index.
-    // Leg 3 (was eval_gold_failures_are_operational_exit_2): unreadable gold
-    // (machine) and query-less gold (human).
     {
         let dir = kit::fixture_root();
         let root = dir.path().to_string_lossy().into_owned();
         let output = kit::run(&["search", "--json", "greet", root.as_str()]);
         kit::assert_failure_envelope(&output, "search", 2, "operational");
+    }
+
+    // Leg 3 (was eval_gold_failures_are_operational_exit_2): unreadable gold
+    // (machine) and query-less gold (human). Dev-only: the eval subcommand
+    // exists only under `dev-tools`; without it the verb fails closed as
+    // usage under its own name (see the default-build legs below).
+    #[cfg(feature = "dev-tools")]
+    {
+        let dir = kit::fixture_root();
+        let root = dir.path().to_string_lossy().into_owned();
 
         let missing = dir.path().join("no-gold.json");
         let missing_arg = missing.to_string_lossy().into_owned();
@@ -171,6 +179,38 @@ fn missing_root_search_is_operational_exit_2() {
         let empty_arg = empty.to_string_lossy().into_owned();
         let query_less = kit::run(&["eval", "--gold", empty_arg.as_str(), root.as_str()]);
         kit::assert_human_error(&query_less, 2);
+    }
+
+    // Leg 3 default-build counterpart: `eval`/`bench` are dev-only, so a
+    // flag-carrying verb never reaches a subcommand — it fails closed as
+    // usage under its own name instead of dissolving into a search query.
+    #[cfg(not(feature = "dev-tools"))]
+    {
+        let dir = kit::fixture_root();
+        let root = dir.path().to_string_lossy().into_owned();
+        let missing = dir.path().join("no-gold.json");
+        let missing_arg = missing.to_string_lossy().into_owned();
+        let output = kit::run(&[
+            "eval",
+            "--json",
+            "--gold",
+            missing_arg.as_str(),
+            root.as_str(),
+        ]);
+        kit::assert_failure_envelope(&output, "eval", 1, "usage");
+        let human = kit::run(&["eval", "--gold", missing_arg.as_str(), root.as_str()]);
+        kit::assert_human_error(&human, 1);
+
+        let bench = kit::run(&[
+            "bench",
+            "--json",
+            "--suite",
+            "no-such-suite-xyz",
+            root.as_str(),
+        ]);
+        kit::assert_failure_envelope(&bench, "bench", 1, "usage");
+        let bench_human = kit::run(&["bench", "--suite", "no-such-suite-xyz", root.as_str()]);
+        kit::assert_human_error(&bench_human, 1);
     }
 
     // Leg 4 (was outline_unindexed_file_is_operational_exit_2).

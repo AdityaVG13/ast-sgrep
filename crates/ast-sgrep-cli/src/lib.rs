@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
 mod agent;
+#[cfg(feature = "dev-tools")]
 pub mod bench;
 mod cli_args;
 mod codemod_cmd;
 mod doctor;
+#[cfg(feature = "dev-tools")]
 mod eval;
 mod index_cmd;
 mod install;
@@ -31,8 +33,10 @@ use std::path::{Path, PathBuf};
 pub(crate) use cli_args::{usage_error, UsageError};
 pub(crate) use index_cmd::{
     effective_root, ensure_existing_root, ensure_unambiguous_root, index_options,
-    open_indexed_store, open_indexer, open_searcher, resolve_root_index, search_options,
+    open_indexed_store, open_searcher, resolve_root_index, search_options,
 };
+#[cfg(feature = "dev-tools")]
+pub(crate) use index_cmd::open_indexer;
 pub(crate) use machine::print_machine_json_status;
 
 pub fn main() -> anyhow::Result<()> {
@@ -375,6 +379,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
                 search_cmd::run_multi_pattern_search(&q.root.root, cli, &q.pattern)
             }
         }
+        #[cfg(feature = "dev-tools")]
         Commands::Bench {
             root,
             query,
@@ -422,6 +427,7 @@ fn run_command(cli: &Cli, command: &Commands) -> anyhow::Result<()> {
         Commands::Version(args) => run_version(cli, args),
         Commands::RobotDocs(args) => agent::run_robot_docs(cli, args),
         Commands::Doctor { root, args } => agent::run_doctor(cli, &root.root, args),
+        #[cfg(feature = "dev-tools")]
         Commands::Eval(args) => eval::run_eval(cli, args),
         Commands::CodemodeBatch { requests, .. } => run_codemode_batch(cli, requests),
         Commands::Serve { .. } => run_codemode_serve(cli),

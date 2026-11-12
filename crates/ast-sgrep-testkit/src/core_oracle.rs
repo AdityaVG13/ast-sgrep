@@ -15,8 +15,9 @@
 //!   convention: a broken fixture is a test failure, not a fallible op.
 //! - Key projections are pure functions of the response.
 
+use crate::fusion_train::FusionExample;
 use ast_sgrep_core::fusion::{
-    apply_weighted_rrf, ChannelRanks, FusionCandidate, FusionChannel, FusionExample,
+    apply_weighted_rrf, ChannelRanks, FusionCandidate, FusionChannel,
 };
 use ast_sgrep_core::intent::{route_hits, ChannelWeights};
 use ast_sgrep_core::query::{ParsedQuery, QueryMode};

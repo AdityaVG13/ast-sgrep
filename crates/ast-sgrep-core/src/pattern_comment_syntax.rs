@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Quote-external comment-syntax scan of a pattern — escape-aware string
 /// discipline, the same shape as the lang-side comment refusal the census
 /// fallback consults for every non-exempt face
@@ -19,7 +21,7 @@
 /// syntax the reference refuses. The blind flags (this scan) stay
 /// content-blind so the NeverMatches route and the lane-refusal override
 /// precondition keep their registered inputs;
-/// [`scan_pattern_comment_syntax_for`] refines them per language for the
+/// [`PatternCommentScans::for_lang`] refines them per language for the
 /// template route.
 #[derive(Clone, Copy)]
 pub(crate) struct PatternCommentScan {
@@ -29,6 +31,82 @@ pub(crate) struct PatternCommentScan {
     pub(crate) block_trailing: bool,
     pub(crate) block_leading: bool,
     pub(crate) hash_bracket: bool,
+}
+
+/// Blind + per-language comment scans computed ONCE per `search_pattern*`
+/// entry (O3). The old ingress path re-ran the same scans 1 + N×2 times per
+/// search: blind at the gate, blind + per-language refinement per language
+/// in `comment_carrying_face_gate_accepted`, and blind again per native-walk
+/// entry with a per-file-route refinement. The values here are byte-identical
+/// to the rescanned ones — only the repetition is gone.
+#[derive(Clone)]
+pub(crate) struct PatternCommentScans {
+    blind: PatternCommentScan,
+    per_lang: Vec<(ast_sgrep_lang::Language, PatternCommentScan)>,
+    /// Per-language walk-answerability verdicts, filled once at search
+    /// ingress (`with_answerability`) and consulted by the native walk's
+    /// census + per-file skip (d-NEEDLESS hoist 1). Empty until filled —
+    /// lookups on an unfilled table answer `false` (walk decides).
+    unanswerable: HashMap<ast_sgrep_lang::Language, bool>,
+}
+
+impl PatternCommentScans {
+    pub(crate) fn compute(pattern: &str) -> Self {
+        let blind = scan_pattern_comment_syntax(pattern);
+        let per_lang = ast_sgrep_lang::Language::all()
+            .iter()
+            .map(|lang| (*lang, refine_blind_for_lang(*lang, pattern, blind)))
+            .collect();
+        Self {
+            blind,
+            per_lang,
+            unanswerable: HashMap::new(),
+        }
+    }
+
+    /// The language-blind scan: feeds the NeverMatches route and the
+    /// lane-refusal override precondition, exactly as the old per-gate
+    /// blind rescan did.
+    pub(crate) fn blind(&self) -> PatternCommentScan {
+        self.blind
+    }
+
+    /// The language-aware refinement for `lang`: feeds the template route.
+    /// Falls back to the blind scan for unlisted languages (defensive only —
+    /// every `Language::all()` member is precomputed above).
+    pub(crate) fn for_lang(&self, lang: ast_sgrep_lang::Language) -> PatternCommentScan {
+        self.per_lang
+            .iter()
+            .find_map(|(candidate, scan)| (*candidate == lang).then_some(*scan))
+            .unwrap_or(self.blind)
+    }
+
+    /// Comment-free patterns may take the exact-signature index lane; every
+    /// comment-carrying spelling stays walk-decided or refused.
+    pub(crate) fn comment_free(&self) -> bool {
+        let blind = self.blind;
+        !(blind.line || blind.block || blind.hash)
+    }
+
+    /// Fill the per-language walk-answerability table for `walk_pattern`
+    /// (d-NEEDLESS hoist 1): one classification verdict per language per
+    /// search, computed here at ingress instead of re-derived per file in
+    /// the walk. Call with the exact spelling the walk gates on (the
+    /// de-collided spelling on the search path). Consumes and returns
+    /// `self` so the ingress can rebind without `mut`.
+    pub(crate) fn with_answerability(self, walk_pattern: &str) -> Self {
+        let unanswerable = compute_language_unanswerable_table(walk_pattern, &self);
+        Self {
+            unanswerable,
+            ..self
+        }
+    }
+
+    /// The ingress-computed walk-answerability table, for walk helpers that
+    /// take it directly (`&HashMap<Language, bool>`).
+    pub(crate) fn unanswerable_table(&self) -> &HashMap<ast_sgrep_lang::Language, bool> {
+        &self.unanswerable
+    }
 }
 
 pub(crate) fn scan_pattern_comment_syntax(pattern: &str) -> PatternCommentScan {
@@ -113,11 +191,16 @@ pub(crate) fn scan_pattern_comment_syntax(pattern: &str) -> PatternCommentScan {
 ///     reference answers/accepts); attribute-after-code and
 ///     attribute+property tails keep the comment flag (the reference
 ///     refuses).
-pub(crate) fn scan_pattern_comment_syntax_for(
+/// Refine a precomputed blind scan for `lang` without rescanning the blind
+/// bytes. [`PatternCommentScans::compute`] runs the blind scan once and maps
+/// this over every language; the removed `scan_pattern_comment_syntax_for`
+/// wrapper (blind rescan per language) was its only other caller.
+fn refine_blind_for_lang(
     lang: ast_sgrep_lang::Language,
     pattern: &str,
+    blind: PatternCommentScan,
 ) -> PatternCommentScan {
-    let mut scan = scan_pattern_comment_syntax(pattern);
+    let mut scan = blind;
     if scan.hash {
         match lang {
             ast_sgrep_lang::Language::Ruby if ruby_hash_all_inside_regex_literals(pattern) => {
@@ -131,6 +214,158 @@ pub(crate) fn scan_pattern_comment_syntax_for(
         }
     }
     scan
+}
+
+/// The single comment-placement decision table. Rows = comment-content
+/// facts × language class; columns = routing route (NeverMatches vs
+/// template). Every placement rule the reference probes is exactly one row
+/// here; the three routing arms below are thin filters over these rows, so
+/// no rule is narrated twice and never two refusals consult in series.
+///
+/// Row provenance (reference behavior each row pins):
+/// - `HashBracket` in ts/js: `#[` is INVALID syntax there — refused on both
+///   routes. Elsewhere the bracket rides the plain hash row (rust
+///   `#[derive($A)]` answers on the template route).
+/// - `Hash`: refused in python/ruby/php at EVERY placement — leading and
+///   trailing are reference-refused, and the EMBEDDED placement is
+///   UNREACHABLE through the query layer, which whitespace-collapses the
+///   newline terminating the comment. `#`-as-syntax languages
+///   (rust/c/cpp/go/js/ts) keep answering; the NeverMatches route refuses
+///   every hash face.
+/// - `Line`: refused everywhere EXCEPT python (floor-div — the reference
+///   answers `a // b`). The embedded-line acceptance the reference shows
+///   (`a + // c\n b` answers in rust) is unreachable for the same
+///   newline-collapse reason. The NeverMatches route refuses every line.
+/// - `BlockLeading`: refused in EVERY language on both routes (a second
+///   top-level node; the php walk answered it silent where the reference
+///   refuses).
+/// - `BlockTrailing`: refused in every language on both routes (registered
+///   `;`-statement-trailing `//`/`/*` faces).
+/// - `BlockInline`: the php hook-family exemption on the NeverMatches route
+///   (assignment-hook and operand-template lanes decide comments by AST
+///   structure); refused for ruby on the template route (no `/* */` syntax
+///   — the reference refuses) and ACCEPTED in every other language (the
+///   reference is lenient on `a + /* c */ b`, answering the rust
+///   container-slot faces through the comment-slot machinery).
+/// - `PhpAssignmentTail`: php `$`-carrying assignment-rooted patterns whose
+///   block-comment trivia sits after a top-level `=` are reference-refused
+///   (the php pattern gate refuses the metavariable assignment doc) — even
+///   at the inline placement the other ten languages answer. Never emitted
+///   without a pattern (the blind route has no textual proxy).
+/// - `LiteralTrailingLane`: the meta-free whole-token literal route's
+///   trailing line-comment faces (`q(µAble) // c`) — the reference parses
+///   the trailing comment as a real child and ANSWERS the js/ts rows. The
+///   lane admits exactly the reference-accepted, cleanly-parsing,
+///   trailing-line-comment faces (the verdict arrives precomputed — the
+///   gate no longer calls back into lang); everything else keeps its row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlacementRoute {
+    NeverMatches,
+    Template,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlacementFact {
+    HashBracket,
+    Hash,
+    Line,
+    BlockLeading,
+    BlockTrailing,
+    BlockInline,
+    PhpAssignmentTail,
+    LiteralTrailingLane,
+}
+
+/// Derive the table facts for (`lang`, `scan`). `pattern` feeds the
+/// php-assignment-tail textual proxy the scans cannot see (`None` on the
+/// blind route — no proxy there); `lane_admits` is the precomputed
+/// literal-trailing-lane verdict (evaluated once at ingress/table-build, so
+/// this gate never calls back into lang). The derivation preserves the
+/// historical arm order: the lane acceptance short-circuits the block arm
+/// (it returned before the block arm ran) but never the earlier
+/// bracket/hash arms, whose rows keep refusing those faces.
+fn placement_facts(
+    lang: ast_sgrep_lang::Language,
+    scan: PatternCommentScan,
+    pattern: Option<&str>,
+    lane_admits: bool,
+) -> Vec<PlacementFact> {
+    use ast_sgrep_lang::Language;
+    let mut facts = Vec::new();
+    let bracket_fires = scan.hash_bracket && matches!(lang, Language::TypeScript | Language::JavaScript);
+    let hash_fires = scan.hash && matches!(lang, Language::Python | Language::Ruby | Language::Php);
+    // The lane consult lives in the line arm: `-less` trailing-line-comment
+    // faces the lane admits (it refuses everything else by construction).
+    let lane_face = scan.line && !matches!(lang, Language::Python) && lane_admits;
+    if lane_face {
+        facts.push(PlacementFact::LiteralTrailingLane);
+        // An earlier arm already refused the face — its row carries the
+        // refusal; otherwise the lane acceptance stands alone.
+        if !(bracket_fires || hash_fires) {
+            return facts;
+        }
+    } else if scan.line {
+        facts.push(PlacementFact::Line);
+    }
+    if scan.hash_bracket {
+        facts.push(PlacementFact::HashBracket);
+    }
+    if scan.hash {
+        facts.push(PlacementFact::Hash);
+    }
+    if scan.block {
+        // The lane face returned before the block arm ran — unless an
+        // earlier arm already refused (handled above), no block fact applies.
+        if !(lane_face && !bracket_fires && !hash_fires) {
+            facts.push(if scan.block_leading {
+                PlacementFact::BlockLeading
+            } else if scan.block_trailing {
+                PlacementFact::BlockTrailing
+            } else {
+                PlacementFact::BlockInline
+            });
+        }
+        if pattern.is_some_and(|p| {
+            matches!(lang, Language::Php)
+                && p.contains('$')
+                && php_comment_follows_top_level_assignment(p)
+        }) {
+            facts.push(PlacementFact::PhpAssignmentTail);
+        }
+    }
+    facts
+}
+
+/// One row of the placement table: the per-route verdict for a single
+/// content fact. Faces carrying several facts take the AND across rows —
+/// any refusing row refuses the face on that route.
+fn placement_row(
+    route: PlacementRoute,
+    lang: ast_sgrep_lang::Language,
+    fact: PlacementFact,
+) -> bool {
+    use ast_sgrep_lang::Language;
+    use PlacementFact::*;
+    match fact {
+        HashBracket => !matches!(lang, Language::TypeScript | Language::JavaScript),
+        Hash => match route {
+            PlacementRoute::NeverMatches => false,
+            PlacementRoute::Template => {
+                !matches!(lang, Language::Python | Language::Ruby | Language::Php)
+            }
+        },
+        Line => match route {
+            PlacementRoute::NeverMatches => false,
+            PlacementRoute::Template => matches!(lang, Language::Python),
+        },
+        BlockLeading | BlockTrailing => false,
+        BlockInline => match route {
+            PlacementRoute::NeverMatches => matches!(lang, Language::Php),
+            PlacementRoute::Template => !matches!(lang, Language::Ruby),
+        },
+        PhpAssignmentTail => matches!(route, PlacementRoute::NeverMatches),
+        LiteralTrailingLane => matches!(route, PlacementRoute::Template),
+    }
 }
 
 /// True when EVERY quote-external `#` in `pattern` lies inside a `/.../`
@@ -367,129 +602,167 @@ fn php_comment_follows_top_level_assignment(pattern: &str) -> bool {
     false
 }
 
-/// The block-placement acceptance shared by both routing routes.
-/// Comment-free (`!block`) is accepted; a LEADING block comment is refused
-/// in EVERY language (the reference refuses the placement everywhere
-/// probed); the php inline non-leading non-trailing placement keeps the
-/// hook-family exemption; every other block placement (trailing, unclosed,
-/// non-php) is refused.
-fn block_placement_sg_accepted(lang: ast_sgrep_lang::Language, scan: PatternCommentScan) -> bool {
-    if !scan.block {
-        return true;
-    }
-    if scan.block_leading {
-        return false;
-    }
-    matches!(lang, ast_sgrep_lang::Language::Php) && !scan.block_trailing
-}
-
-/// Whether the reference accepts a NeverMatches pattern's comment
-/// placement in `lang`: comment-free faces (the walk decides) and INLINE
-/// `/* */` faces in php (the hook family) are exempt from the skip +
-/// census. Every glued line comment and every trailing/unclosed block
-/// comment keeps the census-loud contract — the reference refuses the
-/// registered spellings (py/rb/php `$x # note`, php/rust `$x // note`,
-/// `;`-statement-trailing `//`/`/*` in every probed language). A LEADING
-/// block comment is exempt in NO language
-/// (`block_placement_sg_accepted`) — the reference refuses it everywhere
-/// probed, and the php walk answered it silent where the reference refused
-/// the pattern. For the `#`-as-syntax languages (rust/c/cpp/go/js/ts) the
-/// census fallback finds the face answerable and the walk decides.
+/// Whether the reference accepts a NeverMatches pattern's comment placement
+/// in `lang` — a thin arm over the placement table's NeverMatches column
+/// (see [`placement_row`]): comment-free faces (the walk decides) and
+/// INLINE `/* */` faces in php (the hook family) are exempt from the skip +
+/// census; every other placement keeps the census-loud contract. (The old
+/// shared block-placement helper folded into the table's block rows.)
 pub(crate) fn never_matches_comment_placement_sg_accepted(
     lang: ast_sgrep_lang::Language,
     scan: PatternCommentScan,
 ) -> bool {
-    !scan.line && !scan.hash && block_placement_sg_accepted(lang, scan)
+    placement_facts(lang, scan, None, false)
+        .into_iter()
+        .all(|fact| placement_row(PlacementRoute::NeverMatches, lang, fact))
 }
 
-/// The same comment-placement acceptance must govern the
-/// template-exists route. A `$`-less pattern returns answerable from
-/// `native_pattern_answerable` before that function's comment refusal is
-/// ever consulted (the `!contains('$')` arm), so a comment face that dodges
-/// NeverMatches classification built a template over the comment trivia,
-/// walked, and answered a silent empty where the reference refuses the
-/// placement (py/rb hash faces, js/rust/ts/php leading blocks).
+/// Per-language walk-answerability table for one search (d-NEEDLESS hoist
+/// 1). The native walk used to re-derive these classification verdicts per
+/// file per language (the `matcher_decides` / `template_comment_refused` /
+/// `language_unanswerable` closures); they depend only on the walk spelling
+/// and the precomputed scans, so search ingress computes them once and the
+/// walk consults the table. Verdicts are byte-identical to the old per-file
+/// closures — only the repetition is gone.
+fn compute_language_unanswerable_table(
+    pattern: &str,
+    scans: &PatternCommentScans,
+) -> HashMap<ast_sgrep_lang::Language, bool> {
+    let comment_scan = scans.blind();
+    let comment_free = scans.comment_free();
+    let never_matches = matches!(
+        ast_sgrep_lang::classify_native(pattern),
+        Some(ast_sgrep_lang::NativeKind::NeverMatches)
+    );
+    ast_sgrep_lang::Language::all()
+        .iter()
+        .map(|lang| {
+            (
+                *lang,
+                walk_language_unanswerable(
+                    *lang,
+                    pattern,
+                    scans,
+                    comment_scan,
+                    comment_free,
+                    never_matches,
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Moved verbatim from the old walk-local `matcher_decides` closure: the
+/// NeverMatches exemption is per-language because the accepted block
+/// placement is language-scoped (php).
+fn walk_matcher_decides(
+    lang: ast_sgrep_lang::Language,
+    pattern: &str,
+    comment_scan: PatternCommentScan,
+    comment_free: bool,
+    never_matches: bool,
+) -> bool {
+    never_matches
+        && never_matches_comment_placement_sg_accepted(lang, comment_scan)
+        && (comment_free && ast_sgrep_lang::native_pattern_answerable(lang, pattern)
+            || (!comment_free && ast_sgrep_lang::php_comment_transparent_operand_lane(pattern)))
+}
+
+/// Moved verbatim from the old walk-local `template_comment_refused`
+/// closure. The trailing-comment lane verdict arrives precomputed
+/// (`literal_trailing_lane_verdict`) — the gate no longer calls into lang.
+fn walk_template_comment_refused(
+    lang: ast_sgrep_lang::Language,
+    pattern: &str,
+    scans: &PatternCommentScans,
+    never_matches: bool,
+) -> bool {
+    if never_matches {
+        return false;
+    }
+    let scan = scans.for_lang(lang);
+    comment_placement_template_route_refused(
+        lang,
+        pattern,
+        scan,
+        literal_trailing_lane_verdict(lang, pattern, scan),
+    )
+}
+
+/// Moved verbatim from the old walk-local `language_unanswerable` closure:
+/// a language is unanswerable when the NeverMatches exemption does not cover
+/// it AND (the comment gate refuses the placement OR the lang-side gate
+/// finds no template), with the single scoped lane-refusal override.
+fn walk_language_unanswerable(
+    lang: ast_sgrep_lang::Language,
+    pattern: &str,
+    scans: &PatternCommentScans,
+    comment_scan: PatternCommentScan,
+    comment_free: bool,
+    never_matches: bool,
+) -> bool {
+    if walk_matcher_decides(lang, pattern, comment_scan, comment_free, never_matches) {
+        return false;
+    }
+    if walk_template_comment_refused(lang, pattern, scans, never_matches) {
+        return true;
+    }
+    if !ast_sgrep_lang::native_pattern_answerable(lang, pattern) {
+        // The lane refusal stands (language unanswerable) UNLESS the
+        // override fires: non-NeverMatches AND the pattern actually
+        // carries comment bytes — i.e. the refusal is the lane's
+        // placement-unaware/content-blind comment verdict on a face the
+        // core adjudication accepted above. Carve-out: a `$`-carrying
+        // php attribute face keeps the refusal — the walk cannot bind
+        // metas inside attribute argument lists.
+        let php_attribute_carved = matches!(lang, ast_sgrep_lang::Language::Php)
+            && comment_scan.hash_bracket
+            && php_leading_attribute_function_face(pattern);
+        let lane_refusal_overridden = !never_matches
+            && !php_attribute_carved
+            && (comment_scan.line || comment_scan.block || comment_scan.hash);
+        !lane_refusal_overridden
+    } else {
+        false
+    }
+}
+
+/// The same comment-placement acceptance governs the template-exists route —
 ///
-/// PLACEMENT-AWARE narrowing: blanket arms over-refused placements the
-/// reference ANSWERS — the two registered rust container-slot block faces
-/// flipped census-loud, and py floor-div faces (`a // b`: `//` is NOT
-/// comment syntax in python, the reference answers hits). The narrowed gate:
-///   - hash `#`: refused in python/ruby/php at EVERY placement — leading
-///     and trailing are reference-refused, and the EMBEDDED placement is
-///     UNREACHABLE through the query layer, which whitespace-collapses the
-///     newline that would terminate the comment, so no embedded-hash
-///     spelling can ever reach this gate. `#`-as-syntax languages
-///     (rust/c/cpp/go/js/ts) keep answering (`#include <stdio.h>`,
-///     `#[derive($A)]`, `this.#x = 1`).
-///   - line `//`: refused in every language EXCEPT python (floor-div, the
-///     reference answers `a // b`); leading/trailing spellings are
-///     reference-refused or registered-census-loud, and the embedded-line
-///     acceptance the reference shows (`a + // c\n b` answers hits in
-///     rust) is unreachable for the same newline-collapse reason.
-///   - block: LEADING and TRAILING refused in every language; ruby inline
-///     refused (no `/* */` syntax — the reference refuses); INLINE
-///     non-leading non-trailing blocks ACCEPTED in every other language:
-///     the reference is lenient on `a + /* c */ b` everywhere probed and
-///     ANSWERS the rust container-slot faces via the comment-slot
-///     machinery (php's hook-family exemption is the already-accepted
-///     subset).
-///
-/// `#[` gets its own arms. In ts/js the pair is INVALID syntax — the
-/// reference refuses the face — so a quote-external `hash_bracket`
-/// refuses. In php the language-aware scan has ALREADY cleared the flag
-/// for the leading-attribute faces the reference accepts; everything else
-/// `#`-carrying keeps the py/rb/php refusal.
-/// Php assignment-rooted patterns whose block-comment trivia sits AFTER a
-/// top-level `=` are reference-refused — the php pattern gate refuses the
-/// metavariable assignment doc — so they stay refused even at the inline
-/// placement the other ten languages answer. The `pattern` parameter feeds
-/// that textual proxy; both consumers (template gate + lane override) call
-/// this one function so the class cannot drift apart.
-/// NeverMatches-classified faces never take this gate — their loudness
-/// comes from the lang-side refusal inside `native_pattern_answerable` and
-/// their walk-decided registered silent cases (rust/js `$x # note`) must
-/// not move.
-pub(crate) fn comment_placement_template_route_refused(
+/// A `$`-less pattern returns answerable from `native_pattern_answerable`
+/// before that function's comment refusal is ever consulted, so this thin
+/// arm over the placement table's template column (see [`placement_row`])
+/// keeps those faces honest. A `$`-less literal trailing line-comment face
+/// the lane admits (`q(µAble) // c`) is accepted and the walk decides;
+/// every other refused placement keeps its census-loud class.
+/// NeverMatches-classified faces never take this gate.
+/// Parse-backed trailing line-comment verdict for the template-route gate,
+/// evaluated ONCE per (language, pattern) at ingress/table-build and passed
+/// in below (d-NEEDLESS hairpin). The gate used to call
+/// `ast_sgrep_lang::literal_trailing_comment_lane` itself — a core→lang→core
+/// hairpin inside the hottest placement gate. Reaching the arm needs a
+/// line-comment scan in a non-python language on a meta-free spelling, so
+/// unreachable faces skip the parse-backed consult entirely.
+pub(crate) fn literal_trailing_lane_verdict(
     lang: ast_sgrep_lang::Language,
     pattern: &str,
     scan: PatternCommentScan,
 ) -> bool {
-    use ast_sgrep_lang::Language;
-    if scan.hash_bracket && matches!(lang, Language::TypeScript | Language::JavaScript) {
-        return true;
-    }
-    // `$`-carrying only: the `$`-LESS assignment-rooted php faces are the
-    // hook family the walk answers (accepted placement
-    // `alpha = 1 + /* c */ 2;`) — refusing them here flipped them loud.
-    // The reference-refused class is entirely metavariable-carrying.
-    if matches!(lang, Language::Php)
-        && pattern.contains('$')
-        && scan.block
-        && php_comment_follows_top_level_assignment(pattern)
-    {
-        return true;
-    }
-    if scan.hash && matches!(lang, Language::Python | Language::Ruby | Language::Php) {
-        return true;
-    }
-    if scan.line && !matches!(lang, Language::Python) {
-        // The meta-free whole-token literal route takes the literal
-        // trailing-comment lane's verdict — the reference parses the
-        // trailing line comment as a real child and ANSWERS the
-        // comment-carrying js/ts rows (`q(µAble) // c`), while the subject
-        // rejected the whole class. The lane admits exactly the
-        // reference-accepted, cleanly-parsing, trailing-line-comment faces
-        // (the `$`-carrying faces and the go/rust/java/csharp refused
-        // spellings stay refused — the lane refuses them by construction),
-        // so the walk decides every admitted face and the loud fold keeps
-        // everything else exactly where registered.
-        if !pattern.contains('$') && ast_sgrep_lang::literal_trailing_comment_lane(lang, pattern) {
-            return false;
-        }
-        return true;
-    }
-    if scan.block && (scan.block_leading || scan.block_trailing || matches!(lang, Language::Ruby)) {
-        return true;
-    }
-    false
+    scan.line
+        && !matches!(lang, ast_sgrep_lang::Language::Python)
+        && !pattern.contains('$')
+        && ast_sgrep_lang::literal_trailing_comment_lane(lang, pattern)
+}
+
+/// `literal_trailing_lane_admits` arrives precomputed from
+/// ingress/table-build — the gate itself no longer calls back into lang.
+pub(crate) fn comment_placement_template_route_refused(
+    lang: ast_sgrep_lang::Language,
+    pattern: &str,
+    scan: PatternCommentScan,
+    literal_trailing_lane_admits: bool,
+) -> bool {
+    !placement_facts(lang, scan, Some(pattern), literal_trailing_lane_admits)
+        .into_iter()
+        .all(|fact| placement_row(PlacementRoute::Template, lang, fact))
 }

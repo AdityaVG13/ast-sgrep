@@ -228,6 +228,15 @@ pub(crate) fn quick_check(store: &IndexStore) -> Result<String> {
         .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?)
 }
 
+impl crate::config::CoreConfigHolder for Indexer {
+    fn core_config_ref(&self) -> &crate::config::CoreConfig {
+        &self.config
+    }
+    fn core_config_mut(&mut self) -> &mut crate::config::CoreConfig {
+        &mut self.config
+    }
+}
+
 impl Indexer {
     pub fn new(options: IndexOptions) -> Result<Self> {
         let config = crate::config::CoreConfig::from_env();
@@ -288,13 +297,12 @@ impl Indexer {
     /// Env knobs resolved once at construction. Index-time call sites read
     /// from here, never from process env.
     pub fn core_config(&self) -> &crate::config::CoreConfig {
-        &self.config
+        crate::config::CoreConfigHolder::core_config_ref(self)
     }
     /// Override the construction-resolved config (lets harnesses pin knobs
     /// without touching process env). Consulted lazily where read per query.
-    pub fn with_core_config(mut self, config: crate::config::CoreConfig) -> Self {
-        self.config = config;
-        self
+    pub fn with_core_config(self, config: crate::config::CoreConfig) -> Self {
+        crate::config::CoreConfigHolder::with_core_config(self, config)
     }
 
     /// Cooperative cancel for in-process hosts (Pi/NAPI). CLI leaves this unset.

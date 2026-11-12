@@ -3009,3 +3009,37 @@ the guarded quality keep — next candidate only with a span-level profile
 naming its cost, per round-1c discipline. Lanes:
 `~/.hermes/cache/scratch/asgrep-rg-repin-20261029/` (spans
 `/tmp/span[1-4].jsonl`).
+
+## 2026-11-09 rank-arms mini-bench (self-corpus, n=27) — directional, not canonical
+
+**Status: reproducible-in-tree; explicitly NOT canonical and NOT a
+release fingerprint.** Harness
+`benchmarks/results/internal/rank-arms-20261109/mini_arms.py` +
+`mini-bench-queries.json`: 27 author-gold queries against the ast-sgrep
+repo itself, same `target/debug/asgrep` binary and same index for every
+arm — only process env differs per arm. Score is file-level rank of the
+first hit in `gold_files` (MRR@10 / Hit@1 / Hit@10). Regenerate:
+`python3 benchmarks/results/internal/rank-arms-20261109/mini_arms.py
+[arm ...]` from the repo root (requires `./.asgrep/index.db`).
+
+Provenance gap, stated plainly: the run (2026-11-09 ~12:35–12:39) did
+not record the binary sha or tree cleanliness, and the debug binary has
+since been rebuilt — so this row pins the harness and the measured
+deltas, not exact bytes. Current HEAD `075ed3a5`; re-run to re-pin.
+
+| arm (env) | MRR@10 | Hit@1 | Hit@10 |
+|---|---:|---:|---:|
+| control | .7640 | .6667 | 1.0000 |
+| no-clamps (`ASGREP_NO_CLAMPS=1`) | .7739 | .6667 | 1.0000 |
+| no-critic (`ASGREP_NO_CRITIC=1`) | .6885 | .5556 | .9630 |
+| no-critic-no-clamps | .6885 | .5556 | .9630 |
+| no-field-rescore (`ASGREP_NO_FIELD_RESCORE=1`) | **.7825** | **.7037** | 1.0000 |
+
+Reads: the critic carries ~.076 MRR / ~.11 hit@1 on this sample —
+dropping it is the only arm that loses a query entirely (hit@10 .963).
+Clamps are immaterial here: no-clamps is within noise of control
+(+.0099 on n=27), and no-critic-no-clamps is output-identical to
+no-critic. Disabling field-rescore is the best arm (+.0185 MRR, +.037
+hit@1) — a candidate for a frozen-suite paired confirmation, not a keep
+on this evidence alone. Evidence: `mini-*-rows.json` /
+`mini-*-summary.json` beside the harness.

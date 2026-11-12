@@ -33,7 +33,7 @@ pub(crate) const GENERAL_MV_PREFIX: &str = "__asgrep_mv_";
 /// python/ruby/php, so a language-free `#` refusal failed rust-attribute /
 /// C-preprocessor / swift-`#selector` / js-private-field patterns closed.
 /// The per-language builders and [`native_pattern_answerable`] apply
-/// [`lane_comment_refused`] instead.
+/// [`comment_face_refused_for_lang`] instead.
 pub(crate) fn general_lane_text_eligible(pattern: &str) -> bool {
     // The language-free gate is the UNION of the per-language admissions —
     // "does ANY grammar build a template?" The head admissions are

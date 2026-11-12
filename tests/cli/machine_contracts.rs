@@ -13,50 +13,23 @@
 //! NL-008 — `compact_omits_native_hit_array_and_excerpt_blobs`
 use ast_sgrep_core::chain::ChainResponse;
 use ast_sgrep_testkit::{
-    assert_golden_at, assert_golden_json_at, canonicalize_chain_response, canonicalize_text,
-    CliSession, Scrubber,
+    asgrep_bin, assert_golden_at, assert_golden_json_at, assert_operational_envelope,
+    assert_success as testkit_assert_success, assert_usage_envelope, canonicalize_chain_response,
+    canonicalize_text, parse_stdout, run, run_env, CliSession, Scrubber,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
-fn run(bin: &Path, args: &[&str]) -> Output {
-    Command::new(bin)
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep")
-}
-fn parse_stdout(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "stdout is not one standalone JSON value: {error}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-}
+/// Strictest machine success: the testkit envelope plus stderr silence —
+/// machine output must not leak human diagnostics.
 fn assert_success(output: &Output, command: &str) -> Value {
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let value = testkit_assert_success(output, command);
     assert!(
         output.stderr.is_empty(),
         "unexpected success diagnostic: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value = parse_stdout(output);
-    assert_eq!(value["schema_version"], "1.0.0");
-    assert_eq!(value["tool"], "asgrep");
-    assert_eq!(value["command"], command);
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["exit_code"], 0);
     value
 }
 fn assert_doctor_unhealthy(output: &Output) -> Value {
@@ -295,8 +268,16 @@ fn capabilities_and_version_match_goldens() {
     let bin = asgrep_bin();
     let mut capabilities = assert_success(&run(&bin, &["capabilities", "--json"]), "capabilities");
     capabilities["version"] = "<version>".into();
-    let capabilities_golden =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cli/fixtures/capabilities.json");
+    let capabilities_golden = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../tests/cli/fixtures/capabilities{}.json",
+        // bench/eval register only under `dev-tools`: each build has its own
+        // command catalog golden.
+        if cfg!(feature = "dev-tools") {
+            ".dev-tools"
+        } else {
+            ""
+        }
+    ));
     assert_golden_json_at(&capabilities_golden, &capabilities);
     let mut version = assert_success(&run(&bin, &["version", "--json"]), "version");
     version["version"] = "<version>".into();
@@ -502,8 +483,7 @@ fn targeted_index_updates_are_bounded_deduplicated_and_confined() {
             outside.to_str().expect("outside utf8"),
         ],
     );
-    assert_eq!(escaped.status.code(), Some(1));
-    assert_eq!(parse_stdout(&escaped)["error"]["kind"], "usage");
+    assert_usage_envelope(&escaped);
 
     let mut too_many = vec![
         "--json",
@@ -517,8 +497,7 @@ fn targeted_index_updates_are_bounded_deduplicated_and_confined() {
         too_many.extend(["--path", "source.rs"]);
     }
     let rejected = run(&bin, &too_many);
-    assert_eq!(rejected.status.code(), Some(1));
-    assert_eq!(parse_stdout(&rejected)["error"]["kind"], "usage");
+    assert_usage_envelope(&rejected);
 }
 #[test]
 fn agent_search_modes_are_stable_and_bounded() {
@@ -752,7 +731,7 @@ fn agent_search_embed_default_on_surfaces_semantic_hits() {
 }
 
 #[test]
-fn chain_eval_and_bench_successes_use_machine_envelope() {
+fn chain_success_uses_machine_envelope() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
     let root = session.root.to_str().expect("root utf8");
@@ -772,6 +751,14 @@ fn chain_eval_and_bench_successes_use_machine_envelope() {
         "chain",
     );
     assert!(chain["nodes"].is_array());
+}
+
+#[test]
+#[cfg(feature = "dev-tools")]
+fn bench_and_eval_successes_use_machine_envelope() {
+    let session = CliSession::sample(asgrep_bin());
+    let index = session.index_path.to_str().expect("index utf8");
+    let root = session.root.to_str().expect("root utf8");
     let bench = assert_success(
         &run(
             &session.bin,
@@ -839,16 +826,8 @@ fn operational_failures_are_json_and_exit_two() {
             vec!["--json", "--index-path", blocked_index, "query", root],
         ),
     ] {
-        let output = run(&bin, &args);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{command}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let mut value = parse_stdout(&output);
+        let mut value = assert_operational_envelope(&run(&bin, &args));
         assert_eq!(value["command"], command);
-        assert_eq!(value["error"]["kind"], "operational");
         assert!(
             value["error"]["message"]
                 .as_str()
@@ -871,11 +850,7 @@ fn bounded_arguments_are_json_usage_errors() {
         ["--json", "--limit", "-1", "query", "."],
         ["--json", "--excerpt-lines", "101", "query", "."],
     ] {
-        let output = run(&bin, &args);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(output.stderr.is_empty());
-        let mut value = parse_stdout(&output);
-        assert_eq!(value["error"]["kind"], "usage");
+        let mut value = assert_usage_envelope(&run(&bin, &args));
         value["error"]["message"] = "<message>".into();
         assert_eq!(&value, golden);
     }
@@ -885,16 +860,17 @@ fn bounded_arguments_are_json_usage_errors() {
 fn agent_discovery_defaults_and_boolish_envs_are_round_trip_free() {
     let bin = asgrep_bin();
     for value in ["1", "0", "true", "false", "yes", "no", "on", "off"] {
-        let output = Command::new(&bin)
-            .arg("capabilities")
-            .env("ASGREP_NO_EMBED", value)
-            .env("ASGREP_NEURAL_EMBED", value)
-            .env("ASGREP_SEMANTIC_ONLY", value)
-            .env("ASGREP_TANTIVY", value)
-            .env("ASGREP_RERANK", value)
-            .env("NO_COLOR", "1")
-            .output()
-            .expect("run capabilities");
+        let output = run_env(
+            &bin,
+            &["capabilities"],
+            &[
+                ("ASGREP_NO_EMBED", value),
+                ("ASGREP_NEURAL_EMBED", value),
+                ("ASGREP_SEMANTIC_ONLY", value),
+                ("ASGREP_TANTIVY", value),
+                ("ASGREP_RERANK", value),
+            ],
+        );
         assert_success(&output, "capabilities");
     }
     let output = run(&bin, &["--robot-help"]);
@@ -955,19 +931,20 @@ fn format_aliases_typos_and_root_failures_are_unambiguous() {
     for args in [
         vec!["--json", "serach"],
         vec!["--json", "chian"],
+        // `evall` recovery target (`eval`) exists only under `dev-tools`;
+        // without it `evall` is a bare query, not a typo.
+        #[cfg(feature = "dev-tools")]
         vec!["--json", "evall"],
         vec!["--format", "invalid", "query", "/definitely/missing"],
         vec!["--format", "compact", "status", root],
         // d2a1.12: --format must not be silently accepted on index/reindex/bench
         vec!["--format", "compact", "index", root],
         vec!["--format", "compact", "reindex", root],
+        #[cfg(feature = "dev-tools")]
         vec!["--format", "compact", "bench", root, "--query", "x"],
         vec!["--json", "--root", root, "status", root],
     ] {
-        let output = run(&session.bin, &args);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(output.stderr.is_empty());
-        assert_eq!(parse_stdout(&output)["error"]["kind"], "usage");
+        assert_usage_envelope(&run(&session.bin, &args));
     }
     let static_query = assert_success(
         &run(
@@ -1113,10 +1090,8 @@ fn retired_neural_flag_is_operational_error_not_usage() {
             root,
         ],
     );
-    assert_eq!(output.status.code(), Some(2));
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["error"]["kind"], "operational");
+    let value = assert_operational_envelope(&output);
+    assert_eq!(value["command"], "search");
 }
 
 #[test]
@@ -1160,6 +1135,7 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
         "status",
         "reindex",
         "search",
+        #[cfg(feature = "dev-tools")]
         "bench",
         "watch",
         "keyword",
@@ -1170,6 +1146,7 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
         "version",
         "robot-docs",
         "doctor",
+        #[cfg(feature = "dev-tools")]
         "eval",
     ] {
         assert!(
@@ -1202,46 +1179,27 @@ fn capabilities_lists_all_clap_subcommands_and_siblings() {
 }
 
 #[test]
-fn edit_distance_two_typos_are_rejected_before_search() {
-    let bin = asgrep_bin();
-    // distance 2 from `index`
-    let output = run(&bin, &["--json", "indxx"]);
-    assert_eq!(output.status.code(), Some(1));
-    let value = parse_stdout(&output);
-    let msg = value["error"]["message"].as_str().expect("message");
-    assert!(
-        msg.contains("did you mean") && msg.contains("index"),
-        "expected edit-distance≤2 suggestion, got {msg}"
-    );
-}
-
-#[test]
-fn index_dry_run_does_not_mutate() {
+fn index_dry_run_reports_without_mutating() {
     let tmp = TempDir::new().expect("tempdir");
     let root = tmp.path().join("proj");
+    let blocked = root.join("blocked");
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/a.rs"), "fn hello() {}\n").unwrap();
+    std::fs::write(root.join("visible.rs"), "fn visible() {}\n").unwrap();
+    std::fs::create_dir_all(&blocked).unwrap();
+    std::fs::write(blocked.join("hidden.rs"), "fn hidden() {}\n").unwrap();
     let bin = asgrep_bin();
-    let out = run(
-        &bin,
-        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
-    );
+    let root_str = root.to_str().expect("utf8");
+
+    // Clean walk: report only, mutate nothing.
+    let out = run(&bin, &["--json", "index", "--dry-run", root_str]);
     let value = assert_success(&out, "index");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["mutates_index"], false);
     assert_eq!(value["walk_errors"], false);
+    assert_eq!(value["files_would_index"], 3, "{value:#}");
     assert!(!root.join(".asgrep").exists() || !root.join(".asgrep/index.db").exists());
-}
 
-#[test]
-fn index_dry_run_reports_walk_errors_when_read_dir_fails() {
-    // d2a1.11: unreadable subdirs must not silently under-count as files_would_index: 0.
-    let tmp = TempDir::new().expect("tempdir");
-    let root = tmp.path().join("proj");
-    let blocked = root.join("blocked");
-    std::fs::create_dir_all(&blocked).unwrap();
-    std::fs::write(blocked.join("hidden.rs"), "fn hidden() {}\n").unwrap();
-    std::fs::write(root.join("visible.rs"), "fn visible() {}\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1252,20 +1210,10 @@ fn index_dry_run_reports_walk_errors_when_read_dir_fails() {
     #[cfg(not(unix))]
     {
         // Non-unix: still assert the field exists on a clean walk.
-        let bin = asgrep_bin();
-        let out = run(
-            &bin,
-            &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
-        );
-        let value = assert_success(&out, "index");
         assert!(value.get("walk_errors").is_some());
         return;
     }
-    let bin = asgrep_bin();
-    let out = run(
-        &bin,
-        &["--json", "index", "--dry-run", root.to_str().expect("utf8")],
-    );
+    let out = run(&bin, &["--json", "index", "--dry-run", root_str]);
     // Restore perms so TempDir cleanup can remove blocked/.
     #[cfg(unix)]
     {
@@ -1275,12 +1223,14 @@ fn index_dry_run_reports_walk_errors_when_read_dir_fails() {
         std::fs::set_permissions(&blocked, perms).unwrap();
     }
     let value = assert_success(&out, "index");
+    // d2a1.11: unreadable subdirs must not silently under-count as
+    // files_would_index: 0 — the visible files still count.
     assert_eq!(value["walk_errors"], true, "{value:#}");
-    // Visible file still counted; blocked subtree is incomplete, not total zero.
-    assert_eq!(value["files_would_index"], 1, "{value:#}");
+    assert_eq!(value["files_would_index"], 2, "{value:#}");
 }
 
 #[test]
+#[cfg(feature = "dev-tools")]
 fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
@@ -1324,6 +1274,7 @@ fn bench_json_emits_cv_pct_and_skips_vacuous_ast_grep_speedup() {
 }
 
 #[test]
+#[cfg(feature = "dev-tools")]
 fn bench_warmed_flag_reports_cold_and_warmed_blocks() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
@@ -1375,6 +1326,7 @@ fn bench_warmed_flag_reports_cold_and_warmed_blocks() {
 }
 
 #[test]
+#[cfg(feature = "dev-tools")]
 fn bench_suite_json_is_single_envelope_even_on_failure() {
     let session = CliSession::sample(asgrep_bin());
     let index = session.index_path.to_str().expect("index utf8");
@@ -1520,64 +1472,53 @@ fn codemode_no_embed_position_controls_real_session_and_json_precedence() {
     }
 }
 
-/// d2a1.9: oversized batch file is rejected before OOM; machine envelope on failure.
+/// d2a1.9/d2a1.10: every batch-input rejection — oversized file, oversized
+/// stdin, missing file — is a machine failure envelope (exit 2, stderr
+/// silent), never a panic or a human-only diagnostic.
 #[test]
-fn codemode_batch_oversized_file_is_machine_failure() {
+fn codemode_batch_rejections_are_machine_failures() {
+    use std::io::{Seek, SeekFrom, Write};
+    use std::process::Stdio;
     let dir = TempDir::new().expect("tempdir");
+    let bin = asgrep_bin();
     // MAX_BATCH_REQUEST_BYTES = 4 * MAX_STDIN_LINE_BYTES (1 MiB) = 4 MiB.
-    // Write slightly over the cap so metadata fast-path rejects.
-    let path = dir.path().join("huge.json");
+    // Write slightly over the cap so the metadata fast-path rejects.
+    let huge = dir.path().join("huge.json");
     {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut f = std::fs::File::create(&path).expect("create");
-        // MAX_BATCH_REQUEST_BYTES = 4 * 1_048_576. One byte past the cap.
+        let mut f = std::fs::File::create(&huge).expect("create");
+        // One byte past the cap.
         let over = (1_048_576u64 * 4) + 1;
         f.write_all(b"{").unwrap();
         f.seek(SeekFrom::Start(over - 1)).unwrap();
         f.write_all(b"}").unwrap();
         f.sync_all().unwrap();
         assert!(
-            std::fs::metadata(&path).unwrap().len() >= over,
+            std::fs::metadata(&huge).unwrap().len() >= over,
             "fixture must exceed batch cap"
         );
     }
-    let bin = asgrep_bin();
-    // No --json: codemode-batch must still emit a machine failure envelope (d2a1.10).
-    let output = Command::new(&bin)
-        .args(["codemode-batch", "--requests", path.to_str().expect("utf8")])
+    // No --json: codemode-batch must still emit a machine failure envelope.
+    let file_output = Command::new(&bin)
+        .args(["codemode-batch", "--requests", huge.to_str().expect("utf8")])
         .env("NO_COLOR", "1")
         .output()
         .expect("run");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "stderr={} stdout={}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "machine failure must not also print human stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["exit_code"], 2);
+    let value = assert_operational_envelope(&file_output);
     assert_eq!(value["command"], "codemode-batch");
-    assert_eq!(value["error"]["kind"], "operational");
-    let msg = value["error"]["message"].as_str().unwrap_or("");
     assert!(
-        msg.contains("exceeds max") || msg.contains("batch requests"),
-        "unexpected message: {msg}"
+        value["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("exceeds max")
+            || value["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("batch requests"),
+        "unexpected message: {}",
+        value["error"]["message"]
     );
-}
 
-/// d2a1.9: stdin path also caps (never fully slurp oversize); d2a1.10 envelope without --json.
-#[test]
-fn codemode_batch_oversized_stdin_is_machine_failure() {
-    use std::io::Write;
-    use std::process::Stdio;
-    let bin = asgrep_bin();
+    // Stdin path also caps (never fully slurp oversize).
     let mut child = Command::new(&bin)
         .args(["codemode-batch", "--requests", "-"])
         .env("NO_COLOR", "1")
@@ -1600,52 +1541,23 @@ fn codemode_batch_oversized_stdin_is_machine_failure() {
         }
         // Drop stdin to close pipe.
     }
-    let output = child.wait_with_output().expect("wait");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "stderr={} stdout={}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["exit_code"], 2);
+    let stdin_output = child.wait_with_output().expect("wait");
+    let value = assert_operational_envelope(&stdin_output);
     assert_eq!(value["command"], "codemode-batch");
     let msg = value["error"]["message"].as_str().unwrap_or("");
     assert!(
         msg.contains("exceeds max") || msg.contains("stdin") || msg.contains("batch"),
         "unexpected message: {msg}"
     );
-}
 
-/// d2a1.10: missing batch file without --json still yields machine operational envelope.
-#[test]
-fn codemode_batch_missing_file_machine_envelope_without_json_flag() {
-    let bin = asgrep_bin();
-    let missing = TempDir::new().expect("temp").path().join("nope.json");
-    let output = Command::new(&bin)
-        .args([
-            "codemode-batch",
-            "--requests",
-            missing.to_str().expect("utf8"),
-        ])
+    // Missing batch file without --json still yields machine envelope.
+    let missing = dir.path().join("nope.json");
+    let missing_output = Command::new(&bin)
+        .args(["codemode-batch", "--requests", missing.to_str().expect("utf8")])
         .env("NO_COLOR", "1")
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(2));
-    assert!(
-        output.stderr.is_empty(),
-        "stderr should be empty in machine mode: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false);
+    let value = assert_operational_envelope(&missing_output);
     assert_eq!(value["command"], "codemode-batch");
     assert_eq!(value["error"]["kind"], "operational");
 }
@@ -1678,7 +1590,10 @@ fn native_github_gitlab_search_shapes_are_stable() {
 #[test]
 fn path_free_usage_teaching_messages_match_goldens() {
     let bin = asgrep_bin();
-    let typo = parse_stdout(&run(&bin, &["--json", "indxx"]));
+    // Distance 2 from `index`: rejected before search, with a suggestion.
+    let typo_output = run(&bin, &["--json", "indxx"]);
+    assert_eq!(typo_output.status.code(), Some(1));
+    let typo = parse_stdout(&typo_output);
     assert_eq!(typo["ok"], false);
     assert_eq!(typo["error"]["kind"], "usage");
     let typo_msg = typo["error"]["message"].as_str().expect("typo message");
@@ -1754,8 +1669,7 @@ fn chain_work_override_is_honest_in_machine_and_human_output() {
             ],
         );
         // MJ-006 usage errors exit 1; exit 2 is operational failure (MJ-005).
-        assert_eq!(bad.status.code(), Some(1));
-        assert_eq!(parse_stdout(&bad)["error"]["kind"], "usage");
+        assert_usage_envelope(&bad);
     }
 }
 
@@ -1812,11 +1726,12 @@ fn robot_docs_guide_body_matches_golden() {
 }
 
 #[test]
-fn eval_reports_real_graph_precision_by_resolution_tier() {
+#[cfg(feature = "dev-tools")]
+fn eval_reports_precision_and_fails_closed_on_empty_index() {
     let bin = asgrep_bin();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = repo.join("benchmarks/fixtures/graph_precision");
     let gold = repo.join("benchmarks/gold/graph_precision.json");
+    let root = repo.join("benchmarks/fixtures/graph_precision");
     let scip = root.join("index.scip.json");
     let temp = TempDir::new().expect("tempdir");
     let index = temp.path().join("index.db");
@@ -1858,53 +1773,32 @@ fn eval_reports_real_graph_precision_by_resolution_tier() {
         graph["by_resolution"]["compiler_exact"]["precision"],
         Value::Null
     );
-}
 
-// GA-23 (H-SURF-006, pass 15): `eval --gold` must fail closed when the corpus
-// indexes to an empty index. An ok:true envelope of all-zero MRR/recall is a
-// fabricated quality measurement, and NL-002 already makes search and chain
-// exit 2 on the same condition. A missing root already fails closed with an
-// operational indexer error; this pins the empty-corpus sibling.
-#[test]
-fn eval_gold_fails_closed_on_empty_index() {
-    let bin = asgrep_bin();
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let gold = repo.join("benchmarks/gold/graph_precision.json");
+    // GA-23 (H-SURF-006, pass 15): `eval --gold` over an empty index fails
+    // closed (exit 2) instead of an ok:true envelope of all-zero MRR/recall.
+    // A missing root already fails closed; this pins the empty-corpus sibling.
     let empty = TempDir::new().expect("tempdir");
-    let temp = TempDir::new().expect("tempdir");
-    let index = temp.path().join("index.db");
+    let empty_index = temp.path().join("empty.db");
     let output = run(
         &bin,
         &[
             "--json",
             "--no-embed",
             "--index-path",
-            index.to_str().expect("index path utf8"),
+            empty_index.to_str().expect("index path utf8"),
             "eval",
             "--gold",
             gold.to_str().expect("gold path utf8"),
             empty.path().to_str().expect("root utf8"),
         ],
     );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "eval over an empty index must exit 2, got stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+    let envelope = assert_operational_envelope(&output);
     assert!(
-        output.stderr.is_empty(),
-        "unexpected diagnostic: {}",
-        String::from_utf8_lossy(&output.stderr)
+        envelope["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("index is empty")
     );
-    let envelope = parse_stdout(&output);
-    assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["exit_code"], 2);
-    assert_eq!(envelope["error"]["kind"], "operational");
-    assert!(envelope["error"]["message"]
-        .as_str()
-        .expect("message")
-        .contains("index is empty"));
 }
 
 // EXP-002 (H-CONF-003, pass 14): an unknown --lang label must fail closed as
@@ -1926,16 +1820,7 @@ fn unknown_lang_is_a_usage_error_not_silent_empty() {
             root,
         ],
     );
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "unknown --lang must exit as usage: stderr={} stdout={}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(output.stderr.is_empty());
-    let value = parse_stdout(&output);
-    assert_eq!(value["error"]["kind"], "usage", "{value}");
+    let value = assert_usage_envelope(&output);
     assert!(
         value["error"]["message"]
             .as_str()
@@ -2013,16 +1898,7 @@ fn gate_on_beyond_native_fails_closed_not_silent_empty() {
         .env("ASGREP_AST_GREP", &reference)
         .output()
         .expect("gate-on search");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "gate-on beyond-native must fail closed, got exit ok:true empty before the fix: stdout={}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(output.stderr.is_empty());
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false, "{value}");
-    assert_eq!(value["error"]["kind"], "operational", "{value}");
+    let value = assert_operational_envelope(&output);
     assert!(
         value["error"]["message"]
             .as_str()
@@ -2040,14 +1916,14 @@ fn gate_on_beyond_native_fails_closed_not_silent_empty() {
     );
 }
 
-/// H-CONF-023 (pass 30): pattern-ingress rejection must be LOUD at the
-/// envelope boundary. `RETURN $A` carries a metavariable but no structural
-/// syntax: sg fails pattern parse (exit 8) while the pre-fix subject printed
-/// a successful empty envelope (ok:true, exit 0) — a fail-open. The P4
-/// contract face: exit 2 + `{ok:false, error{kind:"operational"}}` (the same
-/// structured envelope class as every other fail-closed boundary).
+/// H-CONF-023 (pass 30): the classifier boundary is loud in both
+/// directions. A rejected pattern (`RETURN $A`: metavariable, no structural
+/// syntax) exits 2 with `{ok:false, error{kind:"operational"}}`; a
+/// classifier-ACCEPTED pattern that genuinely matches nothing stays a clean
+/// success-with-zero-hits envelope (ok:true, exit 0, hits == []) — never a
+/// rejection.
 #[test]
-fn pattern_ingress_rejection_envelope_is_loud_fail_closed() {
+fn pattern_ingress_boundary_is_loud_both_ways() {
     let bin = asgrep_bin();
     let temp = TempDir::new().expect("tempdir");
     std::fs::write(temp.path().join("calc.rs"), "fn main() {}\n").unwrap();
@@ -2065,7 +1941,8 @@ fn pattern_ingress_rejection_envelope_is_loud_fail_closed() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let output = Command::new(&bin)
+    // Rejected side: exit 2, never a successful empty envelope.
+    let rejected = Command::new(&bin)
         .args([
             "--json",
             "--index-path",
@@ -2081,46 +1958,15 @@ fn pattern_ingress_rejection_envelope_is_loud_fail_closed() {
         .env("NO_COLOR", "1")
         .output()
         .expect("ingress-rejection search");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "classification-rejected pattern must exit 2, not 0-empty: stdout={}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(output.stderr.is_empty());
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], false, "{value}");
-    assert_eq!(value["error"]["kind"], "operational", "{value}");
+    let value = assert_operational_envelope(&rejected);
     let message = value["error"]["message"].as_str().expect("error message");
     assert!(
         message.contains("fail-closed") && message.contains("RETURN $A"),
         "rejection message must name the pattern and state fail-closed: {message}"
     );
-}
 
-/// The other side of the H-CONF-023 line: a classifier-ACCEPTED pattern that
-/// genuinely matches nothing stays a clean success-with-zero-hits envelope
-/// (ok:true, exit 0, hits == []) — never a rejection.
-#[test]
-fn pattern_valid_but_zero_hits_envelope_stays_success() {
-    let bin = asgrep_bin();
-    let temp = TempDir::new().expect("tempdir");
-    std::fs::write(temp.path().join("calc.rs"), "fn main() {}\n").unwrap();
-    let root = temp.path().to_str().expect("root utf8");
-    let index = temp.path().join("idx.db");
-    let index = index.to_str().expect("index utf8");
-    let build = Command::new(&bin)
-        .args(["--index-path", index, "index", "--no-embed", root])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let output = Command::new(&bin)
+    // Accepted-but-empty side: stays a success.
+    let empty = Command::new(&bin)
         .args([
             "--json",
             "--index-path",
@@ -2136,14 +1982,7 @@ fn pattern_valid_but_zero_hits_envelope_stays_success() {
         .env("NO_COLOR", "1")
         .output()
         .expect("valid-empty search");
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "valid-but-empty pattern must stay a success: stdout={}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let value = parse_stdout(&output);
-    assert_eq!(value["ok"], true, "{value}");
+    let value = assert_success(&empty, "search");
     let hits = value["hits"].as_array().expect("hits array");
     assert!(hits.is_empty(), "no if statements in corpus: {value}");
 }

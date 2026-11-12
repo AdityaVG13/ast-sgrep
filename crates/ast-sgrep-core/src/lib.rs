@@ -72,8 +72,7 @@ pub mod fts {
 pub use config::CoreConfig;
 pub use ast_sgrep_lang::Language;
 pub use fusion::{
-    analyze_weight_sensitivity, learn_fusion_weights, ChannelRanks, FusionCandidate, FusionChannel,
-    FusionExample, LearnedFusionModel, WeightSensitivity,
+    ChannelRanks, FusionCandidate, FusionChannel,
 };
 pub use index::{
     canonicalize_affected_path, expand_incremental_path_list, index_candidate_admitted,

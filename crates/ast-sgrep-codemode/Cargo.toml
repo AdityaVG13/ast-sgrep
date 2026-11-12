@@ -62,17 +62,8 @@ path = "../../tests/codemode/recovery_relations.rs"
 name = "recovery_drills"
 path = "../../tests/codemode/recovery_drills.rs"
 [[test]]
-name = "error_api_pass1"
-path = "../../tests/codemode/error_api_pass1.rs"
-[[test]]
-name = "error_api_pass2"
-path = "../../tests/codemode/error_api_pass2.rs"
-[[test]]
-name = "error_api_pass3"
-path = "../../tests/codemode/error_api_pass3.rs"
-[[test]]
-name = "error_api_pass4"
-path = "../../tests/codemode/error_api_pass4.rs"
+name = "error_api_matrix"
+path = "../../tests/codemode/error_api_matrix.rs"
 [[test]]
 name = "invalidation_freshness"
 path = "../../tests/codemode/invalidation_freshness.rs"
@@ -112,3 +103,9 @@ path = "../../tests/codemode/numerical_select.rs"
 [[test]]
 name = "io_unit"
 path = "../../tests/codemode/io_unit.rs"
+[[test]]
+name = "jail"
+path = "../../tests/codemode/jail.rs"
+[[test]]
+name = "tool_vocab"
+path = "../../tests/codemode/tool_vocab.rs"

@@ -1,19 +1,15 @@
 //! Agent-ergonomics first-try surfaces (flag/command recovery).
+use ast_sgrep_testkit::{self as testkit, asgrep_bin};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
-
+/// Tuple projection over the hermetic testkit runner: exit code, stdout,
+/// stderr. Centralizes NO_COLOR / offline / ASGREP_* scrubbing so recovery
+/// notes never depend on the developer's ambient environment.
 fn run(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(asgrep_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep");
+    let output = testkit::run(&asgrep_bin(), args);
     (
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -58,30 +54,97 @@ fn envelope_notes(stdout: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Every "X recovers as Y with a teaching note" face in one table: the
+/// recovery must succeed (exit 0), stay stderr-silent in machine mode, echo
+/// the canonical command, and carry the exact teaching note.
 #[test]
-fn jsno_flag_recovers_as_json() {
-    let (code, stdout, stderr) = run(&["--jsno", "capabilities"]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["command"], "capabilities");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
+fn typo_recovery_table_teaches_the_canonical_spelling() {
+    // (args, allowed exit codes, expected command, note substrings that must
+    // all be present). Doctor-backed recoveries run doctor on the ambient
+    // root, which may be unhealthy in a dirty tree — exit 2 stays green as
+    // long as the recovery note rides the envelope.
+    let cases: &[(&[&str], &[i32], &str, &[&str])] = &[
+        (
+            &["--jsno", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered `--jsno` as `--json`"],
+        ),
+        (
+            &["--jason", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered `--jason` as `--json`"],
+        ),
+        (
+            &["--machine", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered", "`--json`"],
+        ),
+        (
+            &["--output-json", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered", "`--json`"],
+        ),
+        (
+            &["--format=json", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered", "`--json`"],
+        ),
+        (
+            &["capabilites", "--json"],
+            &[0],
+            "capabilities",
+            &["recovered `capabilites` as `capabilities`"],
+        ),
+        (
+            &["--jsn", "capabilities"],
+            &[0],
+            "capabilities",
+            &["recovered `--jsn` as `--json`"],
+        ),
+        (
+            &["--limmit", "3", "capabilities", "--json"],
+            &[0],
+            "capabilities",
+            &["recovered `--limmit` as `--limit`"],
+        ),
+        (
+            &["--robot-diagnose"],
+            &[0, 2],
+            "doctor",
+            &["`--robot-triage`"],
+        ),
+    ];
+    for (args, allowed, command, notes) in cases {
+        let (code, stdout, stderr) = run(args);
+        assert!(
+            allowed.contains(&code),
+            "args={args:?} exit {code}: stderr={stderr} stdout={stdout}"
+        );
+        assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
+        let value: Value = serde_json::from_str(&stdout).expect("json stdout");
+        assert_eq!(value["command"], *command, "args={args:?}");
+        let envelope = envelope_notes(&stdout);
+        for note in *notes {
+            assert!(
+                envelope.contains(note),
+                "args={args:?} envelope notes: {stdout}"
+            );
+        }
+    }
+    // The recovered surface still advertises the canonical short flag.
+    let flags = {
+        let (_, stdout, _) = run(&["--jsn", "capabilities"]);
+        let value: Value = serde_json::from_str(&stdout).expect("json");
+        value["global_flags"].as_array().expect("global_flags").clone()
+    };
     assert!(
-        envelope_notes(&stdout).contains("recovered `--jsno` as `--json`"),
-        "envelope should teach the canonical flag: {stdout}"
-    );
-}
-
-#[test]
-fn command_typo_capabilites_recovers() {
-    let (code, stdout, stderr) = run(&["capabilites", "--json"]);
-    assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["command"], "capabilities");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `capabilites` as `capabilities`"),
-        "envelope notes: {stdout}"
+        flags.iter().any(|f| f.as_str() == Some("-j")),
+        "capabilities must list -j: {flags:?}"
     );
 }
 
@@ -98,8 +161,11 @@ fn colour_flag_is_a_noop_with_a_teaching_note() {
     );
 }
 
+/// The robot mega-commands run doctor: `--robot-triage` directly,
+/// `--robot-next` as its alias, and a literal `--robot-next` data string
+/// must not inject doctor (it stays a search query).
 #[test]
-fn robot_triage_works_without_doctor_verb() {
+fn robot_mega_commands_run_doctor() {
     let (code, stdout, stderr) = run(&["--robot-triage"]);
     assert!(
         code == 0 || code == 2,
@@ -108,10 +174,7 @@ fn robot_triage_works_without_doctor_verb() {
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
     assert_eq!(value["command"], "doctor");
     assert!(value.get("robot_triage").is_some() || value["ok"].is_boolean());
-}
 
-#[test]
-fn robot_next_aliases_robot_triage() {
     let (code, stdout, stderr) = run(&["--robot-next"]);
     assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
     let value: Value = serde_json::from_str(&stdout).expect("json stdout");
@@ -172,38 +235,6 @@ fn short_j_is_json() {
 }
 
 #[test]
-fn jason_flag_recovers_as_json() {
-    let (code, stdout, stderr) = run(&["--jason", "capabilities"]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["command"], "capabilities");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `--jason` as `--json`"),
-        "envelope notes: {stdout}"
-    );
-}
-
-#[test]
-fn machine_and_format_json_recover_as_json() {
-    for flag in ["--machine", "--output-json", "--format=json"] {
-        let (code, stdout, stderr) = run(&[flag, "capabilities"]);
-        assert_eq!(code, 0, "flag={flag} stderr={stderr}");
-        let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-        assert_eq!(value["command"], "capabilities");
-        assert!(
-            stderr.is_empty(),
-            "machine mode is stderr-silent: flag={flag} stderr={stderr}"
-        );
-        assert!(
-            envelope_notes(&stdout).contains("recovered")
-                && envelope_notes(&stdout).contains("`--json`"),
-            "flag={flag} envelope notes: {stdout}"
-        );
-    }
-}
-
-#[test]
 fn dryrun_recovers_as_dry_run() {
     let (code, stdout, stderr) = run(&["codemod", "--dryrun"]);
     assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
@@ -232,18 +263,18 @@ fn docs_alias_recovers_as_robot_docs() {
     );
 }
 
+/// Codemod misuse teaches the recovery command: a bare `codemod` names the
+/// exact dry-run invocation, and an apply-shaped call without `--yes`
+/// refuses while naming both the dry-run and the apply commands.
 #[test]
-fn codemod_missing_args_names_dry_run_command() {
-    let (code, stdout, stderr) = run(&["codemod"]);
-    assert_eq!(code, 1, "stdout={stdout} stderr={stderr}");
+fn codemod_misuse_names_the_recovery_commands() {
+    let (code, _stdout, stderr) = run(&["codemod"]);
+    assert_eq!(code, 1, "stderr={stderr}");
     assert!(
         stderr.contains("asgrep codemod --dry-run --pattern"),
         "error must name the exact dry-run command: {stderr}"
     );
-}
 
-#[test]
-fn codemod_apply_without_yes_names_recovery_commands() {
     let (code, stdout, stderr) = run(&[
         "codemod",
         "--pattern",
@@ -389,7 +420,8 @@ fn no_color_flag_is_accepted_in_ci() {
 }
 
 #[test]
-fn pins_common_agent_typos() {
+fn indx_recovers_in_human_help() {
+    // Human mode: the typo recovery rides stderr, the help text stdout.
     let (code, stdout, stderr) = run(&["indx", "--help"]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(
@@ -397,39 +429,6 @@ fn pins_common_agent_typos() {
         "stderr={stderr}"
     );
     assert!(stdout.contains("asgrep index"), "stdout={stdout}");
-
-    let (code, stdout, stderr) = run(&["--jsn", "capabilities"]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `--jsn` as `--json`"),
-        "envelope notes: {stdout}"
-    );
-    let value: Value = serde_json::from_str(&stdout).expect("json");
-    assert_eq!(value["command"], "capabilities");
-    let flags = value["global_flags"].as_array().expect("global_flags");
-    assert!(
-        flags.iter().any(|f| f.as_str() == Some("-j")),
-        "capabilities must list -j: {flags:?}"
-    );
-
-    let (code, stdout, stderr) = run(&["--limmit", "3", "capabilities", "--json"]);
-    assert_eq!(code, 0, "stderr={stderr} stdout={stdout}");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `--limmit` as `--limit`"),
-        "envelope notes: {stdout}"
-    );
-
-    let (code, stdout, stderr) = run(&["--robot-diagnose"]);
-    assert!(code == 0 || code == 2, "stderr={stderr} stdout={stdout}");
-    assert!(stderr.is_empty(), "machine mode is stderr-silent: {stderr}");
-    assert!(
-        envelope_notes(&stdout).contains("`--robot-triage`"),
-        "envelope notes: {stdout}"
-    );
-    let value: Value = serde_json::from_str(&stdout).expect("json");
-    assert_eq!(value["command"], "doctor");
 }
 
 #[test]
@@ -548,7 +547,9 @@ fn doctor_supervision_json(envs: &[(&str, Option<&str>)]) -> Value {
 }
 
 #[test]
-fn doctor_reports_supervision_default_off() {
+fn doctor_reports_supervision_policy() {
+    // Default: supervision is opt-in (H-PERF-001 option b), so it is off and
+    // doctor teaches the opt-in variable.
     let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", None)]);
     assert_eq!(
         value["supervision"]["mode"], "off",
@@ -559,15 +560,14 @@ fn doctor_reports_supervision_default_off() {
         opt_in.contains("ASGREP_CPU_LIMIT_PERCENT"),
         "doctor must teach the opt-in variable: {value}"
     );
-}
 
-#[test]
-fn doctor_reports_opt_in_duty_cycle_and_invalid_falls_back_to_default() {
+    // Opt-in: a valid percent enables duty-cycle supervision.
     let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", Some("50"))]);
     assert_eq!(value["supervision"]["mode"], "duty_cycle", "{value}");
     assert_eq!(value["supervision"]["cpu_limit_percent"], 50, "{value}");
-    // A malformed opt-in value keeps the supervised default bound (80) —
-    // fail-safe, never a silent switch to unsupervised.
+
+    // Fail-safe: a malformed opt-in keeps the supervised default bound (80),
+    // never a silent switch to unsupervised.
     let value = doctor_supervision_json(&[("ASGREP_CPU_LIMIT_PERCENT", Some("not-a-number"))]);
     assert_eq!(value["supervision"]["mode"], "duty_cycle", "{value}");
     assert_eq!(value["supervision"]["cpu_limit_percent"], 80, "{value}");
@@ -598,8 +598,11 @@ fn habit_fixture(needle: &str) -> (TempDir, String) {
     (temp, root.to_str().unwrap().to_string())
 }
 
+/// Grep-habit flags on one fixture (one index build): semantic flags
+/// recover to the canonical spelling, noop flags teach the default, and
+/// true mode gaps (`-v`) teach the gap instead of a clap pass-as-value tip.
 #[test]
-fn grep_habit_semantic_flags_recover_to_canonical() {
+fn grep_habit_flags_recover_and_teach() {
     let (_temp, root) = habit_fixture("flurbify_widget");
     // (args after the needle, expectation on stdout)
     let cases: &[(&[&str], &str)] = &[
@@ -622,11 +625,7 @@ fn grep_habit_semantic_flags_recover_to_canonical() {
             "must teach the canonical flag: extra={extra:?} stderr={stderr}"
         );
     }
-}
 
-#[test]
-fn grep_noop_flags_teach_the_default() {
-    let (_temp, root) = habit_fixture("flurbify_widget");
     for flag in ["-i", "-n", "--ignore-case", "--line-number"] {
         let (code, stdout, stderr) = run(&["search", "flurbify_widget", flag, "--root", &root]);
         assert_eq!(code, 0, "flag={flag} stderr={stderr}");
@@ -639,25 +638,19 @@ fn grep_noop_flags_teach_the_default() {
             "noop flags must teach the default: flag={flag} stderr={stderr}"
         );
     }
-}
 
-#[test]
-fn grep_no_equivalent_flags_teach_not_wall() {
-    let (_temp, root) = habit_fixture("flurbify_widget");
-    // `-w` (word: channel), `-F` (queries are grammar tokens), and `-c`
-    // (--count) recovered in rounds 6-7; the remaining true gaps teach.
-    for (flag, mode) in [("-v", "invert")] {
-        let (code, _stdout, stderr) = run(&["search", "flurbify_widget", flag, "--root", &root]);
-        assert_eq!(code, 1, "flag={flag} stderr={stderr}");
-        assert!(
-            !stderr.contains("as a value"),
-            "clap's pass-as-value tip must not be the guidance: flag={flag} stderr={stderr}"
-        );
-        assert!(
-            stderr.contains(mode) && stderr.contains("asgrep search"),
-            "must name the mode gap and a real command: flag={flag} stderr={stderr}"
-        );
-    }
+    // `-v` (invert: word channel, -F queries-are-grammar-tokens, -c --count
+    // recovered in earlier rounds) — the remaining true gap teaches.
+    let (code, _stdout, stderr) = run(&["search", "flurbify_widget", "-v", "--root", &root]);
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(
+        !stderr.contains("as a value"),
+        "clap's pass-as-value tip must not be the guidance: stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("invert") && stderr.contains("asgrep search"),
+        "must name the mode gap and a real command: stderr={stderr}"
+    );
 }
 
 #[test]
@@ -780,12 +773,14 @@ fn root_level_pattern_flag_routes_to_search() {
 #[test]
 fn zero_hit_search_classifies_the_miss_in_both_formats() {
     let (_temp, root) = habit_fixture("flurbify_widget");
-    // Human: one miss line, never silence.
-    let (code, stdout, _stderr) = run(&["search", "nonexistent_token_xyz", "--root", &root]);
+    // Human: one miss line, never silence. The classification rides stderr
+    // so script-parsed stdout stays pure result lines (empty on a miss).
+    let (code, stdout, stderr) = run(&["search", "nonexistent_token_xyz", "--root", &root]);
     assert_eq!(code, 0, "stdout={stdout}");
+    assert!(stdout.is_empty(), "human zero-hit stdout must stay empty: stdout={stdout}");
     assert!(
-        stdout.contains("no hits") && stdout.contains("Next:"),
-        "human zero-hit must classify: stdout={stdout}"
+        stderr.contains("no hits") && stderr.contains("Next:"),
+        "human zero-hit must classify: stderr={stderr}"
     );
     // JSON: why + next on the standard envelope, matching the compact
     // envelope's documented contract.
@@ -801,132 +796,6 @@ fn zero_hit_search_classifies_the_miss_in_both_formats() {
         value["next"].as_str().is_some_and(|n| !n.is_empty()),
         "{value}"
     );
-}
-
-// ---- round 6: cross-dialect verbs, ast-grep/semgrep habits, LSP refs ----
-
-/// Shared corpus for the round-6 intents: one symbol with callers, one
-/// module import, indexed warm.
-fn round6_repo() -> (TempDir, std::path::PathBuf) {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().join("repo");
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("src/lib.rs"),
-        "fn cross_dialect_target() {\n    cross_dialect_target();\n}\nfn target_consumer() {\n    cross_dialect_target();\n}\n",
-    )
-    .unwrap();
-    std::fs::write(root.join("src/app.py"), "import json\n").unwrap();
-    let indexed = Command::new(asgrep_bin())
-        .args(["--json", "--no-embed", "index"])
-        .arg(&root)
-        .output()
-        .unwrap();
-    assert!(indexed.status.success(), "index must succeed");
-    (temp, root)
-}
-
-/// Codemode's verb family (`defs`/`callers`/`imports`) is first-class CLI
-/// surface, routing through the same prefixed grammar channels (QG-002/003)
-/// the session dispatcher uses — an agent transferring codemode vocabulary
-/// to the CLI must not hit the QUERY+ROOT misparse wall.
-#[test]
-fn cross_dialect_verbs_are_first_class() {
-    let (_temp, root) = round6_repo();
-    let root_s = root.to_str().unwrap();
-
-    let (code, stdout, stderr) = run(&["--json", "defs", "cross_dialect_target", root_s]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true, "{value}");
-    assert!(stdout.contains("lib.rs"), "{stdout}");
-
-    let (code, stdout, stderr) = run(&["--json", "callers", "cross_dialect_target", root_s]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true, "{value}");
-    assert!(stdout.contains("lib.rs"), "{stdout}");
-
-    let (code, stdout, stderr) = run(&["--json", "imports", "json", root_s]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true, "{value}");
-    assert!(stdout.contains("app.py"), "{stdout}");
-}
-
-/// ast-grep's `-p PATTERN` is exactly asgrep's structural `--pattern`:
-/// alias-and-teach, never clap's "pass it as a value" tip.
-#[test]
-fn p_short_flag_is_ast_grep_pattern_alias() {
-    let (_temp, root) = round6_repo();
-    let root_s = root.to_str().unwrap();
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "-p",
-        "fn cross_dialect_target",
-        "--lang",
-        "rust",
-        root_s,
-    ]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    assert!(
-        stdout.contains("lib.rs"),
-        "pattern must run and hit: {stdout}"
-    );
-    assert!(
-        envelope_notes(&stdout).contains("recovered `-p` as `--pattern`"),
-        "must teach the canonical flag: {stdout}"
-    );
-    assert!(!stderr.contains("to pass '-p' as a value"), "{stderr}");
-}
-
-/// semgrep's scan verbs (`run --pattern X`, `scan QUERY`) carry unambiguous
-/// read-only intent: recover onto search and run, stamped with the recovery.
-#[test]
-fn semgrep_verbs_recover_onto_search() {
-    let (_temp, root) = round6_repo();
-    let root_s = root.to_str().unwrap();
-
-    let (code, stdout, stderr) = run(&[
-        "--json",
-        "run",
-        "--pattern",
-        "fn cross_dialect_target",
-        root_s,
-    ]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("lib.rs"), "must run the pattern: {stdout}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `run` as `search`"),
-        "must teach the reroute: {stdout}"
-    );
-
-    let (code, stdout, stderr) = run(&["--json", "scan", "cross_dialect_target", root_s]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("lib.rs"), "must run the query: {stdout}");
-    assert!(
-        envelope_notes(&stdout).contains("recovered `scan` as `search`"),
-        "must teach the reroute: {stdout}"
-    );
-}
-
-/// LSP-style line refs (`path:12`, `path:12-40`) are exact-equivalent
-/// spellings of the canonical `path#L12` form: recover and teach.
-#[test]
-fn lsp_colon_refs_recover_in_read() {
-    let (_temp, root) = round6_repo();
-    let root_s = root.to_str().unwrap();
-
-    let (code, stdout, stderr) = run(&["--json", "--root", root_s, "read", "src/lib.rs:1"]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true, "{value}");
-    assert!(stdout.contains("cross_dialect_target"), "{stdout}");
-
-    let (code, stdout, stderr) = run(&["--json", "--root", root_s, "read", "src/lib.rs:1-2"]);
-    assert_eq!(code, 0, "stderr={stderr}");
-    let value: Value = serde_json::from_str(&stdout).expect("json stdout");
-    assert_eq!(value["ok"], true, "{value}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,10 +896,6 @@ fn ast_grep_run_scan_and_short_p_recover_to_search() {
         notes.contains("recovered `run` as `search`"),
         "notes should teach the verb: {stdout}"
     );
-    assert!(
-        notes.contains("recovered `-p` as `--pattern`") || true,
-        "positional -p rides the cluster path when preceded by a subcommand"
-    );
 
     // `sg scan QUERY` habit: scan recovers to search.
     let (code, stdout, stderr) = run(&["--json", "scan", "cross_dialect_target", root]);
@@ -1050,6 +915,7 @@ fn ast_grep_run_scan_and_short_p_recover_to_search() {
         envelope_notes(&stdout).contains("recovered `-p` as `--pattern`"),
         "notes should teach the flag: {stdout}"
     );
+    assert!(!stderr.contains("to pass '-p' as a value"), "{stderr}");
 }
 
 #[test]
@@ -1260,7 +1126,6 @@ fn file_as_root_in_subdir_walks_to_indexed_ancestor() {
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let code = output.status.code().unwrap_or(-1);
-    assert_eq!(code, 0, "{stderr}");
     assert_eq!(code, 0, "{stderr}");
     let files: Vec<String> = hits(&stdout)
         .iter()

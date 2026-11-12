@@ -99,5 +99,18 @@ fn default_option_semantics() {
         ast_sgrep_embed::STATIC_MODEL_ID,
         "static:potion-code-16M-v2:256"
     );
-    assert_eq!(ast_sgrep_embed::STATIC_DIM, 256);
+    // The dimension is behavior, not trivia: the engine must emit exactly
+    // STATIC_DIM floats, and the model id must name that same width. A dim
+    // bump without a model rename (or vice versa) fails here, not downstream.
+    let probe = ast_sgrep_embed::StaticEmbedder::new().embed("dimension probe");
+    assert_eq!(
+        probe.len(),
+        ast_sgrep_embed::STATIC_DIM,
+        "embed width must equal STATIC_DIM"
+    );
+    assert!(
+        ast_sgrep_embed::STATIC_MODEL_ID.ends_with(&format!(":{}", ast_sgrep_embed::STATIC_DIM)),
+        "model id must name its width, got {}",
+        ast_sgrep_embed::STATIC_MODEL_ID
+    );
 }

@@ -237,18 +237,13 @@ pub(crate) fn walk_csharp_statement(
     template: &CsStatementTemplate,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == template.head.root_kind()
-        && node.is_named()
-        && !is_in_comment_or_string(&node)
-    {
-        if let Some(hits) = csharp_statement_match(&node, source, pattern, template) {
-            out.extend(hits);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_csharp_statement(child, source, pattern, template, out);
-    }
+    walk_kind_multi(
+        node,
+        template.head.root_kind(),
+        true,
+        out,
+        |n| csharp_statement_match(n, source, pattern, template),
+    );
 }
 
 pub(crate) fn csharp_statement_match(
@@ -465,32 +460,40 @@ pub(crate) fn walk_return_paren_meta(
     name: &str,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "return_statement" && !is_in_comment_or_string(&node) {
-        let mut cursor = node.walk();
-        let named: Vec<Node> = node
-            .children(&mut cursor)
-            .filter(|child| child.is_named() && !is_trivia_kind(child.kind()))
-            .collect();
-        if let [operand] = named.as_slice() {
-            if operand.kind() == "parenthesized_expression" {
-                if let Some(inner_expr) = operand.named_child(0) {
-                    let mut captures = BTreeMap::new();
-                    if let Some(whole) = node_text(&node, source) {
-                        captures.insert("MATCH".to_string(), whole.to_string());
-                    }
-                    if let Some(text) = node_text(&inner_expr, source) {
-                        if bind_capture(&mut captures, name, text).is_some() {
-                            push_match_with_captures(&node, source, pattern, captures, out);
-                        }
+    walk_kind(node, "return_statement", false, out, |n| {
+        return_paren_meta_match(n, source, pattern, name)
+    });
+}
+
+/// Single-candidate check for [`walk_return_paren_meta`]: a lone
+/// `parenthesized_expression` operand binds its inner expression.
+fn return_paren_meta_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    name: &str,
+) -> Option<PatternMatch> {
+    let mut cursor = node.walk();
+    let named: Vec<Node> = node
+        .children(&mut cursor)
+        .filter(|child| child.is_named() && !is_trivia_kind(child.kind()))
+        .collect();
+    if let [operand] = named.as_slice() {
+        if operand.kind() == "parenthesized_expression" {
+            if let Some(inner_expr) = operand.named_child(0) {
+                let mut captures = BTreeMap::new();
+                if let Some(whole) = node_text(node, source) {
+                    captures.insert("MATCH".to_string(), whole.to_string());
+                }
+                if let Some(text) = node_text(&inner_expr, source) {
+                    if bind_capture(&mut captures, name, text).is_some() {
+                        return Some(hit_for_node(node, source, pattern, captures));
                     }
                 }
             }
         }
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_return_paren_meta(child, source, pattern, name, out);
-    }
+    None
 }
 
 /// Bare statement heads (`break`, `continue`, `throw`, `yield`, `raise`,

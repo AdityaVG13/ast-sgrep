@@ -1,24 +1,34 @@
 //! Invalidation per-surface delta-matrix suite for `ast-sgrep-codemode`.
 //!
-//! Consolidates the I2 delta-class tests (`invalidation_pass2.rs`) into
-//! per-surface matrices plus the catalog stability/convergence matrix (I1+I3
-//! legs). Catalog: `tests/catalog/invalidation-codemode.md` (M-find / M-search
-//! / M-defs / M-census / M-catalog rows).
+//! Consolidates the I2 delta-class tests (`invalidation_pass2.rs`) into a
+//! thin session adapter plus the catalog stability/convergence matrix (I1+I3
+//! legs). Catalog: `tests/catalog/invalidation-codemode.md` (M-find /
+//! M-search / M-census rows, now adapter phases, plus M-defs / M-catalog
+//! rows).
+//!
+//! Mirror rule: the add/modify/delete/rename change→detect→refresh→serve arc
+//! matrix is owned by MCP `m1_search_hit_path_sets_across_delta_classes`
+//! (`tests/mcp/invalidation_matrix.rs`) and
+//! `m7_full_arcs_per_delta_class` (`tests/mcp/invalidation_drills.rs`), with
+//! rename chains on `drill_rename_chain_single_refresh_serves_final_path`
+//! (wire-truth surfaces). This file pins only session agreement — one compact
+//! phase per surface — plus the `defs` delta matrix (MCP-unpinned) and the
+//! catalog matrix (session-surface flags and discriminants, never collapsed).
 //!
 //! Discipline (inherited): discriminants via `matches!` / typed JSON accessors
 //! only; the shared DELETE-leg source (`delta_delete_find_and_search_...`)
 //! contributes its find leg to M-find and its search leg to M-search; the
-//! catalog name-equality leg is BEHAVIOR-ONLY (same static fn both sides) and
-//! appears only as a trailing leg inside M-catalog.
+//! trailing catalog leg pins static-registry vs live-session-serve name
+//! agreement (two genuinely different paths) and appears only inside M-catalog.
 
 use ast_sgrep_codemode::CodeModeSession;
 use ast_sgrep_testkit as testkit;
 use ast_sgrep_testkit::{
-    external_reindex, hit_file_set, hits_file, index_dir_db_path as index_db_path,
-    seeded_py_repo as setup, session_at_limit8 as session_for, status_file_count as file_count,
+    HitKey, external_reindex, index_dir_db_path as index_db_path, seeded_py_repo as setup,
+    session_at_limit8 as session_for, status_file_count as file_count,
     status_writer_generation as writer_generation, targeted_refresh as refresh, write_py,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs;
 use tempfile::TempDir;
@@ -54,39 +64,35 @@ fn catalog_tool_names(session: &mut CodeModeSession, query: &str) -> BTreeSet<St
         .collect()
 }
 
-/// INTENT: per-surface `find` delta matrix — ADD surfaces the new token in
-/// exactly the new file with the sibling intact; MODIFY swaps old for new
-/// exactly; DELETE evicts (shared DELETE-leg source, find half); RENAME moves
-/// the token to the new path without duplication and the census stays at 1.
+// WHY area-local: `HitKey`-backed file projections for delta assertions;
+// only this suite reads find/defs file sets — single-suite helpers.
+fn hit_file_set(value: &Value) -> BTreeSet<String> {
+    HitKey::file_keys(value).into_iter().collect()
+}
+
+fn hits_file(value: &Value, name: &str) -> bool {
+    HitKey::has_file(value, name)
+}
+
+/// INTENT (adapter): session agreement with the MCP-owned delta matrix — one
+/// compact phase per surface (find modify-swap, find+search delete-evict,
+/// search add, census move with epoch bump). The full add/modify/delete/
+/// rename matrices live on MCP M1 + m7 (wire truth); the rename arc
+/// additionally lives in the session chained drill KEEP
+/// (`drill_chained_multi_change_add_modify_delete_rename`, LINK 4) and is not
+/// re-pinned here.
 /// KILLS: add-invisible, spillover, stale-linger, new-missing, delete-linger,
-/// rename-loses-hits, old-path-linger mutants.
+/// census-not-tracked mutants (representative phases; full matrices on MCP).
 /// ABSORBS: delta_add_find_surfaces_new_file_token_only,
 /// delta_modify_find_swaps_token_exactly,
-/// delta_delete_find_and_search_evict_token (find leg),
-/// delta_rename_refresh_moves_hits_to_new_path.
+/// delta_delete_find_and_search_evict_token (both legs),
+/// delta_rename_refresh_moves_hits_to_new_path,
+/// delta_add_search_word_query_surfaces_new_file,
+/// delta_catalog_file_count_tracks_add_and_delete.
 #[test]
-fn m_find_delta_matrix() {
-    // LEG 1 — ADD: new token resolves to exactly the new file; sibling intact.
-    {
-        let (root, _index, mut session) = setup();
-        write_py(root.path(), "beta.py", BETA);
-        let refreshed = refresh(&mut session, &["beta.py"]);
-        assert_eq!(refreshed["ok"], true);
-        assert_eq!(refreshed["stats"]["files_indexed"], 1);
-        assert_eq!(refreshed["stats"]["files_removed"], 0);
-
-        let found = session
-            .call("find", json!({"query": BETA, "limit": 8}))
-            .expect("find beta");
-        assert!(hits_file(&found, "beta.py"), "{found}");
-        assert!(!hits_file(&found, "alpha.py"), "{found}");
-        assert_eq!(hit_file_set(&found).len(), 1, "{found}");
-        let sibling = session
-            .call("find", json!({"query": ALPHA, "limit": 8}))
-            .expect("find alpha");
-        assert!(hits_file(&sibling, "alpha.py"), "{sibling}");
-    }
-    // LEG 2 — MODIFY: new token present AND old token gone — exactly the swap.
+fn m_delta_adapter_agrees_with_mcp_matrix() {
+    // PHASE 1 (MODIFY swap on find): new token present AND old token gone —
+    // exactly the swap, with index stats shape.
     {
         let (root, _index, mut session) = setup();
         write_py(root.path(), "alpha.py", BETA);
@@ -104,8 +110,8 @@ fn m_find_delta_matrix() {
             .expect("find alpha");
         assert!(hit_file_set(&gone).is_empty(), "{gone}");
     }
-    // LEG 3 — DELETE (find half of the shared DELETE-leg source; the search
-    // half lives in M-search): no `find` may surface the removed token.
+    // PHASE 2 (DELETE evict on find+search): no surface may serve the removed
+    // token, with removal stats shape.
     {
         let (root, _index, mut session) = setup();
         fs::remove_file(root.path().join("alpha.py")).expect("delete fixture");
@@ -118,36 +124,16 @@ fn m_find_delta_matrix() {
             .call("find", json!({"query": ALPHA, "limit": 8}))
             .expect("find alpha");
         assert!(hit_file_set(&via_find).is_empty(), "{via_find}");
+        let via_search = session
+            .call(
+                "search",
+                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
+            )
+            .expect("search alpha");
+        assert!(hit_file_set(&via_search).is_empty(), "{via_search}");
     }
-    // LEG 4 — RENAME: token moves to the new path, no duplication, census 1.
-    {
-        let (root, _index, mut session) = setup();
-        fs::rename(root.path().join("alpha.py"), root.path().join("beta.py"))
-            .expect("rename fixture");
-        let refreshed = refresh(&mut session, &["alpha.py", "beta.py"]);
-        assert_eq!(refreshed["ok"], true);
-        assert_eq!(refreshed["stats"]["files_removed"], 1);
-        assert_eq!(refreshed["stats"]["files_indexed"], 1);
-
-        let moved = session
-            .call("find", json!({"query": ALPHA, "limit": 8}))
-            .expect("find alpha");
-        assert!(hits_file(&moved, "beta.py"), "{moved}");
-        assert!(!hits_file(&moved, "alpha.py"), "{moved}");
-        assert_eq!(hit_file_set(&moved).len(), 1, "{moved}");
-        assert_eq!(file_count(&mut session), 1);
-    }
-}
-
-/// INTENT: per-surface `search` delta matrix — ADD through hybrid word search
-/// resolves exactly the new file; DELETE evicts (shared DELETE-leg source,
-/// search half).
-/// KILLS: search-misses-add, delete-linger mutants.
-/// ABSORBS: delta_add_search_word_query_surfaces_new_file,
-/// delta_delete_find_and_search_evict_token (search leg).
-#[test]
-fn m_search_delta_matrix() {
-    // LEG 1 — ADD through hybrid search: exact file set, no spillover.
+    // PHASE 3 (ADD on search + sibling intact on find): the new token
+    // resolves to exactly the new file with no spillover.
     {
         let (root, _index, mut session) = setup();
         write_py(root.path(), "beta.py", BETA);
@@ -161,24 +147,36 @@ fn m_search_delta_matrix() {
             .expect("search beta");
         assert!(hits_file(&found, "beta.py"), "{found}");
         assert_eq!(hit_file_set(&found).len(), 1, "{found}");
+        let sibling = session
+            .call("find", json!({"query": ALPHA, "limit": 8}))
+            .expect("find alpha");
+        assert!(hits_file(&sibling, "alpha.py"), "{sibling}");
     }
-    // LEG 2 — DELETE (search half of the shared DELETE-leg source; the find
-    // half lives in M-find): hybrid search must not surface the removed token.
+    // PHASE 4 (census move): `index_status` file_count moves 1→2→1 with an
+    // epoch bump per delta, and reads agree with the census (only the
+    // survivor resolves).
     {
         let (root, _index, mut session) = setup();
-        fs::remove_file(root.path().join("alpha.py")).expect("delete fixture");
-        let refreshed = refresh(&mut session, &["alpha.py"]);
-        assert_eq!(refreshed["ok"], true);
-        assert_eq!(refreshed["stats"]["files_removed"], 1);
-        assert_eq!(refreshed["stats"]["files_indexed"], 0);
+        assert_eq!(file_count(&mut session), 1);
+        let gen_before = writer_generation(&mut session);
 
-        let via_search = session
-            .call(
-                "search",
-                json!({"query": format!("word:{ALPHA}"), "limit": 8}),
-            )
-            .expect("search alpha");
-        assert!(hit_file_set(&via_search).is_empty(), "{via_search}");
+        write_py(root.path(), "beta.py", BETA);
+        refresh(&mut session, &["beta.py"]);
+        assert_eq!(file_count(&mut session), 2);
+        assert_ne!(writer_generation(&mut session), gen_before);
+
+        fs::remove_file(root.path().join("beta.py")).expect("delete fixture");
+        refresh(&mut session, &["beta.py"]);
+        assert_eq!(file_count(&mut session), 1);
+
+        let survivor = session
+            .call("find", json!({"query": ALPHA, "limit": 8}))
+            .expect("find alpha");
+        assert_eq!(hit_file_set(&survivor).len(), 1, "{survivor}");
+        let evicted = session
+            .call("find", json!({"query": BETA, "limit": 8}))
+            .expect("find beta");
+        assert!(hit_file_set(&evicted).is_empty(), "{evicted}");
     }
 }
 
@@ -251,43 +249,15 @@ fn m_defs_delta_matrix() {
     }
 }
 
-/// INTENT: `index_status` file_count census moves 1→2→1 with an epoch bump
-/// per delta, and reads agree with the census (only the survivor resolves).
-/// KILLS: census-not-tracked mutants.
-/// ABSORBS: delta_catalog_file_count_tracks_add_and_delete.
-#[test]
-fn m_census_tracks_deltas() {
-    let (root, _index, mut session) = setup();
-    assert_eq!(file_count(&mut session), 1);
-    let gen_before = writer_generation(&mut session);
-
-    write_py(root.path(), "beta.py", BETA);
-    refresh(&mut session, &["beta.py"]);
-    assert_eq!(file_count(&mut session), 2);
-    assert_ne!(writer_generation(&mut session), gen_before);
-
-    fs::remove_file(root.path().join("beta.py")).expect("delete fixture");
-    refresh(&mut session, &["beta.py"]);
-    assert_eq!(file_count(&mut session), 1);
-
-    let survivor = session
-        .call("find", json!({"query": ALPHA, "limit": 8}))
-        .expect("find alpha");
-    assert_eq!(hit_file_set(&survivor).len(), 1, "{survivor}");
-    let evicted = session
-        .call("find", json!({"query": BETA, "limit": 8}))
-        .expect("find beta");
-    assert!(hit_file_set(&evicted).is_empty(), "{evicted}");
-}
-
 /// INTENT: catalog stability across writes and convergence across histories —
 /// `read_only` flags survive every writer path, unknown names fail
 /// InvalidArgs, and divergent refresh histories over the same tree expose
 /// identical catalogs and census.
 /// KILLS: read_only-flag-flip, unknown-not-InvalidArgs,
+/// session-catalog-wiring (static-vs-serve name agreement),
 /// history-dependent-catalog mutants.
-/// ABSORBS: catalog_is_stable_across_index_writes (name-equality leg kept only
-/// as the trailing BEHAVIOR-ONLY leg below),
+/// ABSORBS: catalog_is_stable_across_index_writes (static-vs-serve
+/// name-agreement leg kept only here),
 /// catalog_converges_across_divergent_refresh_histories.
 #[test]
 fn m_catalog_stable_and_convergent() {
@@ -337,17 +307,20 @@ fn m_catalog_stable_and_convergent() {
             "{unknown:?}"
         );
 
-        // TRAILING BEHAVIOR-ONLY leg (catalog name-equality: same static fn
-        // both sides, kills nothing) — kept only here, never standalone.
-        let names_after: Vec<&str> = {
-            let mut names: Vec<&str> = ast_sgrep_codemode::catalog_search("")
-                .iter()
-                .map(|def| def.name)
+        // TRAILING leg (static snapshot vs live session serve): the same
+        // "index" query answered two genuinely different ways — direct static
+        // registry call vs session tool dispatch + JSON round-trip — so a
+        // broken session catalog wiring fails it. (The former
+        // static-vs-static form killed nothing: both sides read the same fn
+        // in the same binary.)
+        let live_names = catalog_tool_names(&mut session, "index");
+        let static_names: BTreeSet<String> =
+            ast_sgrep_codemode::catalog_search("index")
+                .into_iter()
+                .map(|def| def.name.to_string())
                 .collect();
-            names.sort_unstable();
-            names
-        };
-        assert_eq!(names_before, names_after);
+        assert_eq!(live_names, static_names);
+        assert!(live_names.contains("index_repo"));
     }
     // LEG 2 — convergence: wildly different refresh histories over the same
     // final tree expose identical catalogs and census.

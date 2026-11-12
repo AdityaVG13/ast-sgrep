@@ -20,7 +20,9 @@ mod core_invalidation;
 mod core_oracle;
 mod core_recovery;
 mod fault;
+mod fault_corpus;
 mod fixture;
+mod fusion_train;
 mod golden;
 mod hit;
 mod index;
@@ -89,12 +91,17 @@ pub use core_recovery::{
     search_parity_key, search_parity_keys, store_snapshot, upsert_test_file, RECOVERY_CORPUS,
 };
 pub use fault::{
-    corrupt_db_total, err_of, flip_bytes, is_corrupt_kind, remove_sqlite_sidecars, sqlite_code,
-    store_error_discriminant, truncate_file, write_garbage,
+    corrupt_db_total, err_of, flip_bytes, is_corrupt_kind, remove_read_bundle,
+    remove_sqlite_sidecars, sqlite_code, store_error_discriminant, truncate_file, write_garbage,
 };
+pub use fault_corpus::{agreement, FaultAgreement, FaultBehavior, FAULT_CORPUS};
 pub use fixture::{
     dir_listing, file_tree, index_db_path, sample_file, sample_root, set_mtime_secs, write_file,
     write_temp,
+};
+pub use fusion_train::{
+    analyze_weight_sensitivity, learn_fusion_weights, FusionExample, LearnedFusionModel,
+    WeightSensitivity,
 };
 pub use golden::{
     assert_golden, assert_golden_at, assert_golden_json, assert_golden_json_at,

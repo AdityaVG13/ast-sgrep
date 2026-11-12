@@ -5,16 +5,13 @@
 //! near-miss naming a mutating tool teaches instead of running. Truly
 //! unknown tools get the catalog pointer, never a bare wall.
 
+use ast_sgrep_testkit::asgrep_bin;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 /// Run one codemode-batch session over stdin; returns the machine envelope.
 fn batch(root: &str, calls: Value) -> (i32, Value, String) {

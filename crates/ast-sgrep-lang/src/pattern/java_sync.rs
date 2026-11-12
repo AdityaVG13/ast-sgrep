@@ -4,7 +4,7 @@
 //! the lanes here take what it refuses.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -259,20 +259,24 @@ pub(crate) fn walk_java_sync_block_nested(
     block: &JaSyncMetaBlock,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "synchronized_statement" && node.is_named() && !is_in_comment_or_string(&node)
-    {
-        let mut captures = BTreeMap::new();
-        if let Some(text) = node_text(&node, source) {
-            captures.insert("MATCH".to_string(), text.to_string());
-        }
-        if java_sync_block_bind(&node, source, block, &mut captures).is_some() {
-            push_match_with_captures(&node, source, pattern, captures, out);
-        }
+    walk_kind(node, "synchronized_statement", true, out, |n| {
+        java_sync_block_nested_match(n, source, pattern, block)
+    });
+}
+
+/// Single-candidate check for [`walk_java_sync_block_nested`].
+fn java_sync_block_nested_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    block: &JaSyncMetaBlock,
+) -> Option<PatternMatch> {
+    let mut captures = BTreeMap::new();
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_java_sync_block_nested(child, source, pattern, block, out);
-    }
+    java_sync_block_bind(node, source, block, &mut captures)?;
+    Some(hit_for_node(node, source, pattern, captures))
 }
 
 pub(crate) fn match_java_sync_method(source: &str, pattern: &str) -> Option<Vec<PatternMatch>> {

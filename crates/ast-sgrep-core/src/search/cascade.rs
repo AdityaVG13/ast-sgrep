@@ -23,39 +23,65 @@ pub(crate) const NL_FANOUT_HITS_PER_CHANNEL: usize = 16;
 /// Caller-leg fan-out hits rank below defs in fusion (Sep-7 recorded shape).
 pub(crate) const FANOUT_CALLER_SCALE: f64 = 0.35;
 
-pub(crate) fn conceptual_def_terms(query: &str) -> Vec<String> {
+/// Per-query token sets shared by the conceptual cascade lanes (d-NEEDLESS
+/// hoist 3). `search_hybrid` computes one instance per conceptual query and
+/// threads it through def-terms, fanout, and discovery-extras — one
+/// model-backed `expand_concepts` per query, tokens read instead of
+/// re-expanded. (`tokenize` sorts, so sorted iteration below reproduces the
+/// old per-call token order exactly.)
+#[derive(Clone)]
+pub(crate) struct ConceptualQueryTokens {
+    pub user: HashSet<String>,
+    pub expanded: HashSet<String>,
+}
+
+impl ConceptualQueryTokens {
+    pub(crate) fn for_query(query: &str) -> Self {
+        Self {
+            user: ast_sgrep_embed::tokenize(query).into_iter().collect(),
+            expanded: ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
+/// `conceptual_def_terms` over precomputed per-query tokens: one expansion
+/// per query, tokens passed down. Output matches the old expand-per-call
+/// form exactly (the surviving terms are sorted + truncated).
+pub(crate) fn conceptual_def_terms_with_tokens(tokens: &ConceptualQueryTokens) -> Vec<String> {
     // Snake_case from expansion can name a def (`intern_paths`). Other tokens
     // must appear in the user query: dumping a whole CONCEPT_GROUPS list into
     // symbol LIKE was unique-hybrid p100 (auth NL) and a rarity cap on that
     // dump ranked auth_refresh for "durable session write".
-    let user: HashSet<String> = ast_sgrep_embed::tokenize(query).into_iter().collect();
-    let mut terms: Vec<String> =
-        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
-            .into_iter()
-            .filter(|tok| {
-                tok.chars().count() >= 4
-                    && !critic::is_generic_concept_token(tok)
-                    && (tok.contains('_')
-                        || user.contains(tok)
-                        || user.iter().any(|u| u.contains(tok.as_str())))
-            })
-            .collect();
+    let mut terms: Vec<String> = tokens
+        .expanded
+        .iter()
+        .filter(|tok| {
+            let tok = *tok;
+            tok.chars().count() >= 4
+                && !critic::is_generic_concept_token(tok)
+                && (tok.contains('_')
+                    || tokens.user.contains(tok)
+                    || tokens.user.iter().any(|u| u.contains(tok.as_str())))
+        })
+        .cloned()
+        .collect();
     terms.sort();
     terms.dedup();
     terms.truncate(8);
     terms
 }
 
-pub(crate) fn conceptual_fanout_pass(
+/// `conceptual_fanout_pass` over precomputed per-query tokens: one
+/// expansion per query, tokens passed down.
+pub(crate) fn conceptual_fanout_pass_with_tokens(
     store: &IndexStore,
     options: &SearchOptions,
-    query: &str,
+    tokens: &ConceptualQueryTokens,
     semantic: &[SearchHit],
 ) -> Result<Vec<SearchHit>> {
-    let query_tokens: HashSet<String> =
-        ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(query))
-            .into_iter()
-            .collect();
+    let query_tokens: HashSet<String> = tokens.expanded.clone();
     let mut seen_symbols = HashSet::new();
     let mut ranked = Vec::new();
     for hit in semantic {

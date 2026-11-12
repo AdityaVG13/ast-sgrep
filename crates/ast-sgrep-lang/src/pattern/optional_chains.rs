@@ -31,9 +31,41 @@ pub(crate) fn walk_optional_calls(
     arguments: Option<&ArgumentTemplate>,
     out: &mut Vec<PatternMatch>,
 ) {
-    if let Some(captures) = optional_call_matches(
+    walk_nodes(
+        node,
+        out,
+        |_: &Node| true,
+        |n| {
+            optional_call_match(
+                n,
+                lang,
+                source,
+                pattern,
+                head_capture,
+                head_literal,
+                tail_capture,
+                tail_literal,
+                arguments,
+            )
+        },
+    );
+}
+
+/// Single-candidate check for [`walk_optional_calls`].
+fn optional_call_match(
+    node: &Node,
+    lang: Language,
+    source: &str,
+    pattern: &str,
+    head_capture: Option<&str>,
+    head_literal: Option<&str>,
+    tail_capture: Option<&str>,
+    tail_literal: Option<&str>,
+    arguments: Option<&ArgumentTemplate>,
+) -> Option<PatternMatch> {
+    let mut captures = optional_call_matches(
         lang,
-        &node,
+        node,
         source,
         pattern,
         head_capture,
@@ -41,30 +73,13 @@ pub(crate) fn walk_optional_calls(
         tail_capture,
         tail_literal,
         arguments,
-    ) {
-        let mut captures = captures;
-        if !captures.contains_key("MATCH") {
-            if let Some(text) = node_text(&node, source) {
-                captures.insert("MATCH".to_string(), text.to_string());
-            }
+    )?;
+    if !captures.contains_key("MATCH") {
+        if let Some(text) = node_text(node, source) {
+            captures.insert("MATCH".to_string(), text.to_string());
         }
-        out.push(hit_for_node(&node, source, pattern, captures));
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_optional_calls(
-            lang,
-            child,
-            source,
-            pattern,
-            head_capture,
-            head_literal,
-            tail_capture,
-            tail_literal,
-            arguments,
-            out,
-        );
-    }
+    Some(hit_for_node(node, source, pattern, captures))
 }
 
 /// Segment unification + argument-template check for one optional-chain
@@ -439,19 +454,29 @@ pub(crate) fn walk_optional_call_chains(
     optional_flags: &[bool],
     out: &mut Vec<PatternMatch>,
 ) {
-    if let Some(captures) =
-        optional_chain_matches(lang, &node, source, pattern, segments, optional_flags)
-    {
-        let mut captures = captures;
-        if !captures.contains_key("MATCH") {
-            if let Some(text) = node_text(&node, source) {
-                captures.insert("MATCH".to_string(), text.to_string());
-            }
+    walk_nodes(
+        node,
+        out,
+        |_: &Node| true,
+        |n| optional_call_chain_match(n, lang, source, pattern, segments, optional_flags),
+    );
+}
+
+/// Single-candidate check for [`walk_optional_call_chains`].
+fn optional_call_chain_match(
+    node: &Node,
+    lang: Language,
+    source: &str,
+    pattern: &str,
+    segments: &[CallChainSegment],
+    optional_flags: &[bool],
+) -> Option<PatternMatch> {
+    let mut captures =
+        optional_chain_matches(lang, node, source, pattern, segments, optional_flags)?;
+    if !captures.contains_key("MATCH") {
+        if let Some(text) = node_text(node, source) {
+            captures.insert("MATCH".to_string(), text.to_string());
         }
-        out.push(hit_for_node(&node, source, pattern, captures));
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_optional_call_chains(lang, child, source, pattern, segments, optional_flags, out);
-    }
+    Some(hit_for_node(node, source, pattern, captures))
 }

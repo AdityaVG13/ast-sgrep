@@ -5,7 +5,7 @@
 //! templates stay in statements.rs — no overlap.
 
 use super::*;
-use crate::extract::{is_in_comment_or_string, node_text};
+use crate::extract::node_text;
 use crate::Language;
 use std::collections::BTreeMap;
 use tree_sitter::Node;
@@ -93,26 +93,29 @@ pub(crate) fn walk_go_goto_bare(
     template: &GoGotoBareTemplate,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.kind() == "goto_statement" && node.is_named() && !is_in_comment_or_string(&node) {
-        let mut cursor = node.walk();
-        let label = node.children(&mut cursor).find(|c| c.is_named());
-        if let Some(hit) = label.and_then(|label| {
-            let mut captures = BTreeMap::new();
-            if let Some(text) = node_text(&node, source) {
-                captures.insert("MATCH".to_string(), text.to_string());
-            }
-            template
-                .label
-                .bind(&mut captures, node_text(&label, source)?.trim())?;
-            Some(hit_for_node(&node, source, pattern, captures))
-        }) {
-            out.push(hit);
-        }
-    }
+    walk_kind(node, "goto_statement", true, out, |n| {
+        go_goto_bare_match(n, source, pattern, template)
+    });
+}
+
+/// Single-candidate check for [`walk_go_goto_bare`]: the label child binds
+/// through the lane meta; anything else is not this face.
+fn go_goto_bare_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    template: &GoGotoBareTemplate,
+) -> Option<PatternMatch> {
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_go_goto_bare(child, source, pattern, template, out);
+    let label = node.children(&mut cursor).find(|c| c.is_named())?;
+    let mut captures = BTreeMap::new();
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
     }
+    template
+        .label
+        .bind(&mut captures, node_text(&label, source)?.trim())?;
+    Some(hit_for_node(node, source, pattern, captures))
 }
 
 /// The remaining statement-root lanes, language-scoped exactly as covered

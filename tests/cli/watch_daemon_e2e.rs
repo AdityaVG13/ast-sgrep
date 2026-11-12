@@ -1,5 +1,6 @@
 //! Real CLI `watch` process + filesystem edit (lbx1.8).
 //! Does not replace `watch_incremental` (library `update_paths` only).
+use ast_sgrep_testkit::{self as testkit, asgrep_bin};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -9,10 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 struct WatchProcess {
     child: Child,
@@ -90,9 +87,10 @@ impl Drop for WatchProcess {
     }
 }
 
-fn search_keyword(bin: &Path, root: &Path, index_path: &Path, query: &str) -> Value {
-    let output = Command::new(bin)
-        .args([
+fn run_keyword(bin: &Path, root: &Path, index_path: &Path, query: &str) -> std::process::Output {
+    testkit::run(
+        bin,
+        &[
             "--json",
             "--no-embed",
             "--index-path",
@@ -100,10 +98,12 @@ fn search_keyword(bin: &Path, root: &Path, index_path: &Path, query: &str) -> Va
             "keyword",
             query,
             root.to_str().expect("root utf8"),
-        ])
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("keyword search");
+        ],
+    )
+}
+
+fn search_keyword(bin: &Path, root: &Path, index_path: &Path, query: &str) -> Value {
+    let output = run_keyword(bin, root, index_path, query);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -166,7 +166,8 @@ fn cli_watch_reindexes_after_real_fs_create() {
     let before = search_keyword(&bin, &root, &index_path, "hello_lbx18");
     assert!(
         hit_mentions(&before, "hello_lbx18"),
-        "seed symbol missing after initial watch index: {before}"
+        "seed symbol missing after initial watch index: {before}\nwatch log:\n{}",
+        watch.log_text()
     );
     assert!(
         !hit_mentions(&before, "planted_lbx18_watch"),
@@ -197,13 +198,28 @@ fn cli_watch_reindexes_after_real_fs_create() {
     let started = Instant::now();
     let timeout = Duration::from_secs(10);
     loop {
-        let after = search_keyword(&bin, &root, &index_path, "planted_lbx18_watch");
-        if hit_mentions(&after, "planted_lbx18_watch") {
-            return;
+        // The daemon logs the row update before the deferred sidecar flush
+        // lands, so a search in that window fails closed with a stale-bundle
+        // error instead of the new hit. That is the visibility lag this loop
+        // polls for: retry it, fail loudly on anything else.
+        let output = run_keyword(&bin, &root, &index_path, "planted_lbx18_watch");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() {
+            let after: Value = serde_json::from_str(&stdout).expect("keyword stdout is JSON");
+            if hit_mentions(&after, "planted_lbx18_watch") {
+                return;
+            }
+        } else if output.status.code() != Some(2) || !stdout.contains("reindex required") {
+            panic!(
+                "keyword search failed unexpectedly (not the transient stale bundle): status {}\nstderr:\n{}\nstdout:\n{stdout}\nwatch log:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+                watch.log_text()
+            );
         }
         if started.elapsed() > timeout {
             panic!(
-                "watch logged a reindex but keyword search never saw planted_lbx18_watch within {:?}.\nstderr:\n{}\nlast search: {after}",
+                "watch logged a reindex but keyword search never saw planted_lbx18_watch within {:?}.\nstderr:\n{}",
                 timeout,
                 watch.log_text()
             );
@@ -563,9 +579,25 @@ fn cli_watch_reindexes_during_sustained_same_file_writes() {
     let started = Instant::now();
     let timeout = Duration::from_secs(5);
     let observed_while_writing = loop {
-        let result = search_keyword(&bin, &root, &index_path, "sustained_watch_token");
-        if hit_mentions(&result, "sustained_watch_token") {
-            break writer_active.load(Ordering::SeqCst);
+        // Same transient as the create drill above: a poll landing between
+        // the row update and the deferred sidecar flush fails closed with a
+        // stale-bundle error instead of the new hit. Retry it; fail loudly
+        // on anything else.
+        let output = run_keyword(&bin, &root, &index_path, "sustained_watch_token");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() {
+            let result: Value =
+                serde_json::from_str(&stdout).expect("keyword stdout is JSON");
+            if hit_mentions(&result, "sustained_watch_token") {
+                break writer_active.load(Ordering::SeqCst);
+            }
+        } else if output.status.code() != Some(2) || !stdout.contains("reindex required") {
+            panic!(
+                "keyword search failed unexpectedly (not the transient stale bundle): status {}\nstderr:\n{}\nstdout:\n{stdout}\nwatch log:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+                watch.log_text()
+            );
         }
         if started.elapsed() > timeout {
             break false;

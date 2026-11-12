@@ -189,6 +189,12 @@ struct CachedSearcher {
     lang_filter: Option<String>,
     open_limit: usize,
     writer_generation: u64,
+    /// (len, mtime-nanos) of the index db at cache time. The writer stamp
+    /// only moves on protocol writes; an external delete/overwrite/replace
+    /// leaves the stamp put while the bytes change, so reuse also requires
+    /// the file identity to match — otherwise a warm Searcher keeps serving
+    /// the old mapping (open fd / mmap survive unlink) as fresh hits.
+    db_identity: Option<(u64, u64)>,
     searcher: Searcher,
 }
 
@@ -452,6 +458,19 @@ impl McpServer {
         }
     }
 
+/// (len, mtime-nanos) identity of the index db file; `None` when it cannot
+/// be statted (deleted). Mirrors the read-bundle `file_stamp` pattern.
+fn db_file_identity(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let mtime = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
+    Some((metadata.len(), mtime))
+}
+
     fn dispatch_search(
         searcher: &Searcher,
         mode: AgentSearchMode,
@@ -522,7 +541,10 @@ impl McpServer {
                         && cached_lang.as_deref() == lang_filter
                         && *open_limit >= needed
                         && *cached_gen == writer_generation
-            );
+            )
+            && guard.as_ref().is_some_and(|cached| {
+                Self::db_file_identity(cached.searcher.store().db_path()) == cached.db_identity
+            });
         if !reuse {
             if let Some(old) = guard.take() {
                 old.searcher.release_read_snapshot();
@@ -545,6 +567,7 @@ impl McpServer {
                 lang_filter: lang_filter.map(str::to_owned),
                 open_limit,
                 writer_generation,
+                db_identity: Self::db_file_identity(searcher.store().db_path()),
                 searcher,
             });
         }
@@ -574,14 +597,50 @@ impl McpServer {
         query: &str,
     ) -> anyhow::Result<(ast_sgrep_core::SearchResponse, Option<usize>)> {
         if file_filter.is_some() || ast_sgrep_core::env_flag::memo_off("warm") {
-            let searcher = self.searcher_for(root, limit, file_filter, lang)?;
+            let searcher = match self.searcher_for(root.clone(), limit, file_filter, lang.clone())
+            {
+                Ok(searcher) => searcher,
+                Err(error) => self.ast_walk_fallback(mode, error, &root, limit, &lang)?,
+            };
             let response = Self::dispatch_search(&searcher, mode, query)?;
             return Ok(Self::finish_search(response, limit, searcher.store()));
         }
-        let guard = self.cached_searcher(root, limit, lang.as_deref())?;
-        let searcher = &guard.as_ref().expect("cached_searcher populates").searcher;
-        let response = Self::dispatch_search(searcher, mode, query)?;
-        Ok(Self::finish_search(response, limit, searcher.store()))
+        match self.cached_searcher(root.clone(), limit, lang.as_deref()) {
+            Ok(guard) => {
+                let searcher = &guard.as_ref().expect("cached_searcher populates").searcher;
+                let response = Self::dispatch_search(searcher, mode, query)?;
+                Ok(Self::finish_search(response, limit, searcher.store()))
+            }
+            Err(error) => {
+                let searcher = self.ast_walk_fallback(mode, error, &root, limit, &lang)?;
+                let response = Self::dispatch_search(&searcher, mode, query)?;
+                Ok(Self::finish_search(response, limit, searcher.store()))
+            }
+        }
+    }
+
+    /// Native-walk fallback for `ast_search` when no index exists: structural
+    /// search needs no index, so serve the walk from an empty in-memory
+    /// store instead of the empty-index miss. Every other mode — and any
+    /// non-empty-index error — propagates unchanged, so index-backed
+    /// channels keep failing closed (P1). The fallback Searcher is one-shot:
+    /// it never enters `searcher_cache`, so a later index build is seen.
+    fn ast_walk_fallback(
+        &self,
+        mode: AgentSearchMode,
+        error: anyhow::Error,
+        root: &Path,
+        limit: usize,
+        lang: &Option<String>,
+    ) -> anyhow::Result<Searcher> {
+        if !matches!(mode, AgentSearchMode::Ast) || !Self::is_empty_index_error(&error) {
+            return Err(error);
+        }
+        let store = IndexStore::open_in_memory(root)?;
+        Ok(Searcher::with_store(
+            store,
+            self.search_options(root.to_path_buf(), limit, None, lang.clone()),
+        ))
     }
 
     fn tool_code_read(&self, args: CodeReadArgs) -> anyhow::Result<String> {

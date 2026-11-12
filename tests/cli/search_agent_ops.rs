@@ -1,27 +1,17 @@
 //! Agent/MCP search contract: read-only, abort, --path alias, schema channel.
+use ast_sgrep_testkit::{self as testkit, asgrep_bin};
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
-
+/// Tuple projection over the testkit JSON runner: exit code, parsed body,
+/// stderr. One place for the hermetic env so abort/lock tests never depend
+/// on the developer's ambient environment.
 fn run_json(args: &[&str]) -> (i32, Value, String) {
-    let output = Command::new(asgrep_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!("stdout is not JSON: {error}\nstdout: {stdout}\nstderr: {stderr}")
-    });
-    (output.status.code().expect("exit code"), value, stderr)
+    testkit::run_json_full(&asgrep_bin(), args, &[])
 }
 
 fn index_fixture(root: &Path, index: &Path) {
@@ -101,12 +91,17 @@ fn search_is_read_only_and_does_not_grow_wal() {
     );
 }
 
+/// `--path` is subcommand-scoped: under `search` it filters hits to the
+/// named subtree; under `index` it stays an index flag, never rewritten
+/// into a file filter.
 #[test]
-fn search_accepts_path_as_file_filter_alias() {
+fn path_flag_meaning_is_subcommand_scoped() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("src");
     let index = temp.path().join("index.db");
     index_fixture(&root, &index);
+
+    // Search face: --path filters hits to the named subtree.
     let (code, value, stderr) = run_json(&[
         "--json",
         "--no-embed",
@@ -129,6 +124,23 @@ fn search_accepts_path_as_file_filter_alias() {
             .is_some_and(|file| file.starts_with("pkg/"))),
         "hits escaped --path filter: {hits:?}"
     );
+
+    // Index face: --path remains an index flag.
+    let (code, value, stderr) = run_json(&[
+        "--json",
+        "--no-embed",
+        "--index-path",
+        index.to_str().unwrap(),
+        "index",
+        root.to_str().unwrap(),
+        "--path",
+        "pkg/auth.rs",
+    ]);
+    assert_eq!(
+        code, 0,
+        "index --path must remain an index flag; stderr={stderr} value={value}"
+    );
+    assert_eq!(value["ok"], true);
 }
 
 #[test]
@@ -288,107 +300,58 @@ fn concurrent_searches_all_succeed() {
     }
 }
 
+/// Doctor schema-mismatch in both directions: a newer-on-disk index names
+/// install/version recovery, an older one names reindex. Both fail closed
+/// (exit 2) with the on-disk and supported versions pinned.
 #[test]
-fn index_path_is_not_rewritten_to_file_filter() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().join("src");
-    let index = temp.path().join("index.db");
-    index_fixture(&root, &index);
-    let (code, value, stderr) = run_json(&[
-        "--json",
-        "--no-embed",
-        "--index-path",
-        index.to_str().unwrap(),
-        "index",
-        root.to_str().unwrap(),
-        "--path",
-        "pkg/auth.rs",
-    ]);
-    assert_eq!(
-        code, 0,
-        "index --path must remain an index flag; stderr={stderr} value={value}"
-    );
-    assert_eq!(value["ok"], true);
-}
-
-#[test]
-fn doctor_names_on_disk_vs_binary_schema() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().join("src");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("lib.rs"), "pub fn x() {}\n").unwrap();
-    let index = temp.path().join("index.db");
+fn doctor_schema_mismatch_names_direction_appropriate_recovery() {
+    // (forced user_version, setup needs a real indexed db, recovery to name)
+    for (user_version, needs_index, recovery) in
+        [(99u32, false, "asgrep version --json"), (1u32, true, "asgrep reindex")]
     {
-        let store = ast_sgrep_core::IndexStore::open(&root, Some(&index)).expect("open writer");
-        store
-            .connection()
-            .execute_batch("PRAGMA user_version=99;")
-            .expect("force newer user_version");
-    }
-    let (code, value, stderr) = run_json(&[
-        "--json",
-        "--index-path",
-        index.to_str().unwrap(),
-        "doctor",
-        root.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 2, "stderr={stderr} value={value}");
-    assert_eq!(value["ok"], false);
-    let issues = value["issues"].as_array().expect("issues");
-    let mismatch = issues
-        .iter()
-        .find(|issue| issue["kind"] == "schema_mismatch")
-        .expect("schema_mismatch issue");
-    assert_eq!(mismatch["on_disk"], 99);
-    assert_eq!(mismatch["supported"], ast_sgrep_core::INDEX_SCHEMA_VERSION);
-    let suggested = value["suggested_commands"]
-        .as_array()
-        .expect("suggested_commands");
-    assert!(
-        suggested.iter().any(|cmd| cmd
-            .as_str()
-            .is_some_and(|s| s.contains("asgrep version --json"))),
-        "newer-on-disk recovery must name install/version; got {suggested:?}"
-    );
-}
-
-#[test]
-fn doctor_older_schema_suggests_reindex() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path().join("src");
-    let index = temp.path().join("index.db");
-    index_fixture(&root, &index);
-    {
-        let store = ast_sgrep_core::IndexStore::open(&root, Some(&index)).expect("open writer");
-        store
-            .connection()
-            .execute_batch("PRAGMA user_version=1;")
-            .expect("force older user_version");
-    }
-    let (code, value, stderr) = run_json(&[
-        "--json",
-        "--index-path",
-        index.to_str().unwrap(),
-        "doctor",
-        root.to_str().unwrap(),
-    ]);
-    assert_eq!(code, 2, "stderr={stderr} value={value}");
-    let issues = value["issues"].as_array().expect("issues");
-    let mismatch = issues
-        .iter()
-        .find(|issue| issue["kind"] == "schema_mismatch")
-        .expect("schema_mismatch issue");
-    assert_eq!(mismatch["on_disk"], 1);
-    assert_eq!(mismatch["supported"], ast_sgrep_core::INDEX_SCHEMA_VERSION);
-    let suggested = value["suggested_commands"]
-        .as_array()
-        .expect("suggested_commands");
-    assert!(
-        suggested
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("src");
+        let index = temp.path().join("index.db");
+        if needs_index {
+            index_fixture(&root, &index);
+        } else {
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("lib.rs"), "pub fn x() {}\n").unwrap();
+        }
+        {
+            let store =
+                ast_sgrep_core::IndexStore::open(&root, Some(&index)).expect("open writer");
+            store
+                .connection()
+                .execute_batch(&format!("PRAGMA user_version={user_version};"))
+                .expect("force user_version");
+        }
+        let (code, value, stderr) = run_json(&[
+            "--json",
+            "--index-path",
+            index.to_str().unwrap(),
+            "doctor",
+            root.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 2, "stderr={stderr} value={value}");
+        assert_eq!(value["ok"], false);
+        let issues = value["issues"].as_array().expect("issues");
+        let mismatch = issues
             .iter()
-            .any(|cmd| cmd.as_str().is_some_and(|s| s.contains("asgrep reindex"))),
-        "older-on-disk recovery must name reindex; got {suggested:?}"
-    );
+            .find(|issue| issue["kind"] == "schema_mismatch")
+            .expect("schema_mismatch issue");
+        assert_eq!(mismatch["on_disk"], user_version);
+        assert_eq!(mismatch["supported"], ast_sgrep_core::INDEX_SCHEMA_VERSION);
+        let suggested = value["suggested_commands"]
+            .as_array()
+            .expect("suggested_commands");
+        assert!(
+            suggested
+                .iter()
+                .any(|cmd| cmd.as_str().is_some_and(|s| s.contains(recovery))),
+            "user_version={user_version} recovery must name {recovery}; got {suggested:?}"
+        );
+    }
 }
 
 #[cfg(unix)]

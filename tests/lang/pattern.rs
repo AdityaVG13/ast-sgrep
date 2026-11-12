@@ -3,93 +3,121 @@ use ast_sgrep_lang::{
     NativeKind,
 };
 use ast_sgrep_testkit::sample_file;
+/// review_grammar chain faces (kotlin/ruby/php) as ONE (lang, source, pattern,
+/// expected-lines, expected-captures) table. Row oracles, all pinned sg 0.45.2:
+/// - kotlin `a?.b($X)?.c($Y)` on `a?.b(1)?.c(2)` -> 1 hit, X=1, Y=2
+///   (was review_grammar_kotlin_chain_captures_bind_and_unify).
+/// - kotlin `a.b($X).c($Y)` on `a.b(1).c(2)` -> 1 hit, X=1, Y=2.
+/// - kotlin `a?.b($X)?.c($$$A)` on `a?.b(1)?.c(2, 3)` -> X=1, $$$A="2, 3".
+/// - kotlin repeated-name equality `a?.b($X)?.c($X)` on the two-line source
+///   -> only line 2 (line 1's c-args differ, unification rejects).
+/// - ruby `a.b($X).c($Y)` on the 4-line chain source -> only line 1
+///   (receiver hop + arity: `a.b(1, 2).c(3)`, `a&.b(1).c(2)`, `a.b(1).c 2`
+///   reject), X=1, Y=2
+///   (was review_grammar_ruby_parenthesized_call_chain_contracts).
+/// - ruby `a.b().c($Y)` on `a.b.c(1)` -> empty (a bare receiver link is not
+///   a parenthesized call segment).
+/// - php `$O?->$M($X);` on the 3-statement source -> lines 2,3 with O=$x,
+///   M=m and X=1 / X=$x per hit
+///   (was review_grammar_php_statement_nullsafe_receiver_captures).
+/// - php `$O?->m($O);` on `<?php $x?->m(1);` -> empty (unequal
+///   receiver/argument names must not unify).
 #[test]
-fn review_grammar_kotlin_chain_captures_bind_and_unify() {
-    for (pattern, source, expected) in [
+fn review_grammar_chain_captures_bind_and_unify() {
+    let rows: [(
+        Language,
+        &str,
+        &str,
+        Vec<u32>,
+        Vec<Vec<(&str, &str)>>,
+    ); 8] = [
         (
-            "a?.b($X)?.c($Y)",
+            Language::Kotlin,
             "a?.b(1)?.c(2)",
-            vec![("X", "1"), ("Y", "2")],
+            "a?.b($X)?.c($Y)",
+            vec![1],
+            vec![vec![("X", "1"), ("Y", "2")]],
         ),
-        ("a.b($X).c($Y)", "a.b(1).c(2)", vec![("X", "1"), ("Y", "2")]),
         (
-            "a?.b($X)?.c($$$A)",
-            "a?.b(1)?.c(2, 3)",
-            vec![("X", "1"), ("$$$A", "2, 3")],
+            Language::Kotlin,
+            "a.b(1).c(2)",
+            "a.b($X).c($Y)",
+            vec![1],
+            vec![vec![("X", "1"), ("Y", "2")]],
         ),
-    ] {
-        let hits = match_pattern(Language::Kotlin, source, pattern).unwrap();
-        assert_eq!(hits.len(), 1, "{pattern}: {hits:?}");
-        for (name, text) in expected {
-            assert_eq!(
-                hits[0].captures.get(name).map(String::as_str),
-                Some(text),
-                "fieldless Kotlin capture {name}: {pattern}"
-            );
+        (
+            Language::Kotlin,
+            "a?.b(1)?.c(2, 3)",
+            "a?.b($X)?.c($$$A)",
+            vec![1],
+            vec![vec![("X", "1"), ("$$$A", "2, 3")]],
+        ),
+        (
+            Language::Kotlin,
+            "a?.b(1)?.c(2)\na?.b(1)?.c(1)\n",
+            "a?.b($X)?.c($X)",
+            vec![2],
+            vec![vec![]],
+        ),
+        (
+            Language::Ruby,
+            "a.b(1).c(2)\na.b(1, 2).c(3)\na&.b(1).c(2)\na.b(1).c 2\n",
+            "a.b($X).c($Y)",
+            vec![1],
+            vec![vec![("X", "1"), ("Y", "2")]],
+        ),
+        (Language::Ruby, "a.b.c(1)\n", "a.b().c($Y)", vec![], vec![]),
+        (
+            Language::Php,
+            "<?php\n$x?->m(1);\n$x?->m($x);\n$x->m($x);\n",
+            "$O?->$M($X);",
+            vec![2, 3],
+            vec![
+                vec![("O", "$x"), ("M", "m"), ("X", "1")],
+                vec![("O", "$x"), ("M", "m"), ("X", "$x")],
+            ],
+        ),
+        (
+            Language::Php,
+            "<?php\n$x?->m(1);\n",
+            "$O?->m($O);",
+            vec![],
+            vec![],
+        ),
+    ];
+    for (lang, source, pattern, expected_lines, expected_caps) in rows {
+        let hits = match_pattern(lang, source, pattern).unwrap();
+        assert_eq!(lines_of(&hits), expected_lines, "{pattern}: {hits:?}");
+        assert_eq!(
+            hits.len(),
+            expected_caps.len(),
+            "{pattern} hit count: {hits:?}"
+        );
+        for (hit, caps) in hits.iter().zip(expected_caps.iter()) {
+            for (name, text) in caps.iter() {
+                assert_eq!(
+                    hit.captures.get(*name).map(String::as_str),
+                    Some(*text),
+                    "capture {name} for {pattern}: {hits:?}"
+                );
+            }
         }
     }
-    let hits = match_pattern(
-        Language::Kotlin,
-        "a?.b(1)?.c(2)\na?.b(1)?.c(1)\n",
-        "a?.b($X)?.c($X)",
-    )
-    .unwrap();
-    assert_eq!(
-        lines_of(&hits),
-        vec![2],
-        "Kotlin repeated-name equality: {hits:?}"
-    );
-}
-
-#[test]
-fn review_grammar_ruby_parenthesized_call_chain_contracts() {
-    let source = "a.b(1).c(2)\na.b(1, 2).c(3)\na&.b(1).c(2)\na.b(1).c 2\n";
-    let hits = match_pattern(Language::Ruby, source, "a.b($X).c($Y)").unwrap();
-    assert_eq!(
-        lines_of(&hits),
-        vec![1],
-        "Ruby receiver hop and arity: {hits:?}"
-    );
-    assert_eq!(hits[0].captures.get("X").map(String::as_str), Some("1"));
-    assert_eq!(hits[0].captures.get("Y").map(String::as_str), Some("2"));
-    assert!(
-        match_pattern(Language::Ruby, "a.b.c(1)\n", "a.b().c($Y)")
-            .unwrap()
-            .is_empty(),
-        "a bare receiver link is not a parenthesized call segment"
-    );
-}
-
-#[test]
-fn review_grammar_php_statement_nullsafe_receiver_captures() {
-    let source = "<?php\n$x?->m(1);\n$x?->m($x);\n$x->m($x);\n";
-    let hits = match_pattern(Language::Php, source, "$O?->$M($X);").unwrap();
-    assert_eq!(
-        lines_of(&hits),
-        vec![2, 3],
-        "nullsafe statement connector: {hits:?}"
-    );
-    for (hit, argument) in hits.iter().zip(["1", "$x"]) {
-        assert_eq!(
-            hit.captures.get("O").map(String::as_str),
-            Some("$x"),
-            "nullsafe statement receiver must bind"
-        );
-        assert_eq!(hit.captures.get("M").map(String::as_str), Some("m"));
-        assert_eq!(hit.captures.get("X").map(String::as_str), Some(argument));
-    }
-    let hits = match_pattern(Language::Php, "<?php\n$x?->m(1);\n", "$O?->m($O);").unwrap();
-    assert!(
-        hits.is_empty(),
-        "unequal receiver/argument names must not unify: {hits:?}"
-    );
 }
 
 #[test]
 fn literal_pattern_matches_rust_symbol() {
     let source = sample_file("src/main.rs");
     let hits = match_pattern(Language::Rust, &source, "process_request").unwrap();
-    assert!(!hits.is_empty());
+    assert!(!hits.is_empty(), "literal must match: {hits:?}");
+    assert!(
+        hits.iter().all(|hit| hit.line_start == 4 || hit.line_start == 8),
+        "literal hits must pin def/use lines: {hits:?}"
+    );
+    assert!(
+        hits.iter().any(|hit| hit.line_start == 8),
+        "literal must reach the definition line: {hits:?}"
+    );
 }
 #[test]
 fn literal_pattern_matching_is_case_sensitive() {
@@ -759,43 +787,51 @@ fn ruby_receiver_calls_with_arguments_match_path_patterns() {
 // over-matched every registered face (FUZZ38-R1-DUPMETA-{PY,GO,TS}).
 // ---------------------------------------------------------------------------
 
-/// Registered repro: `def $A($A): $$$C` py — subject matched greet.py:1,6
-/// where pinned sg returns [] (name node text != parameter text).
+/// dupmeta reject-empty faces (py/go/ts) as ONE (lang, source, pattern) table:
+/// a name used twice in one pattern is ONE variable bound once (H-CONF-025,
+/// pass 43); binding it to a second, different text must reject. Pinned sg
+/// returns [] on every row below. Row oracles:
+/// - py `def $A($A): $$$C` on the greet/shout suite -> [] (decl name text !=
+///   parameter text; was dupmeta_py_def_suite_rejects_independent_binding).
+/// - go `func $A() { $A }` on server.go -> [] (decl name != body statement;
+///   was dupmeta_go_func_body_rejects_independent_binding).
+/// - ts `function $A($B) { $A }` on util.ts helper -> [] ($A reused across
+///   decl and body while $B binds once;
+///   was dupmeta_ts_function_body_rejects_independent_binding).
+/// NOTE: no rust row belongs here — the rust dupmeta faces pin POSITIVE
+/// unification (`dupmeta_repeated_argument_name_requires_equal_text`,
+/// `dupmeta_rust_typed_param_return_body_unifies`,
+/// `dupmeta_rust_method_chain_on_call_unifies`) and stay untouched.
 #[test]
-fn dupmeta_py_def_suite_rejects_independent_binding() {
-    let source = "def greet(name):\n    msg = \"hello \" + name\n    return msg\n\n\ndef shout(text):\n    return text.upper()\n";
-    let hits = match_pattern(Language::Python, source, "def $A($A): $$$C").unwrap();
-    assert!(
-        hits.is_empty(),
-        "duplicate $A (decl name vs parameter) must unify and reject: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-}
-
-/// Registered repro: `func $A() { $A }` go — subject matched server.go:9
-/// (main) where pinned sg returns [] (decl name != body statement).
-#[test]
-fn dupmeta_go_func_body_rejects_independent_binding() {
-    let source = "package server\n\nimport \"fmt\"\n\nfunc Greet(name string) string {\n\treturn \"hello \" + name\n}\n\nfunc main() {\n\tfmt.Println(Greet(\"world\"))\n}\n";
-    let hits = match_pattern(Language::Go, source, "func $A() { $A }").unwrap();
-    assert!(
-        hits.is_empty(),
-        "duplicate $A (decl name vs body) must unify and reject: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-}
-
-/// Registered repro: `function $A($B) { $A }` ts — subject matched util.ts:5
-/// where pinned sg returns [] ($A reused across decl and body; $B binds once).
-#[test]
-fn dupmeta_ts_function_body_rejects_independent_binding() {
-    let source = "export function helper(x: number) {\n  console.log(x)\n}\n";
-    let hits = match_pattern(Language::TypeScript, source, "function $A($B) { $A }").unwrap();
-    assert!(
-        hits.is_empty(),
-        "duplicate $A (decl name vs body) must unify and reject: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
+fn dupmeta_repeated_name_rejects_independent_binding() {
+    let rows: [(Language, &str, &str, &str); 3] = [
+        (
+            Language::Python,
+            "def greet(name):\n    msg = \"hello \" + name\n    return msg\n\ndef shout(text):\n    return text.upper()\n",
+            "def $A($A): $$$C",
+            "decl name vs parameter",
+        ),
+        (
+            Language::Go,
+            "package server\n\nimport \"fmt\"\n\nfunc Greet(name string) string {\n\treturn \"hello \" + name\n}\n\nfunc main() {\n\tfmt.Println(Greet(\"world\"))\n}\n",
+            "func $A() { $A }",
+            "decl name vs body",
+        ),
+        (
+            Language::TypeScript,
+            "export function helper(x: number) {\n  console.log(x)\n}\n",
+            "function $A($B) { $A }",
+            "decl name vs body ($B binds once)",
+        ),
+    ];
+    for (lang, source, pattern, differing) in rows {
+        let hits = match_pattern(lang, source, pattern).unwrap();
+        assert!(
+            hits.is_empty(),
+            "duplicate $A ({differing}) must unify and reject: {:?}",
+            hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// Positive control (sg agrees): when every occurrence of the repeated name
@@ -836,86 +872,77 @@ fn dupmeta_repeated_argument_name_requires_equal_text() {
 // `ok:true` empty where pinned sg matches — a fail-open.
 // ---------------------------------------------------------------------------
 
-/// Registered face: `pattern:1` rust — sg matches the number literal;
-/// subject answered empty.
+/// literal_content faces as ONE (lang, source, pattern, expected-lines) table
+/// (H-CONF-021, pass 43): `$`-less literal patterns match nodes whose complete
+/// text equals the pattern. Row oracles (pinned sg match sets):
+/// - rust `1` on the calc stub -> [2] (number literal matches its node;
+///   was literal_content_number_pattern_matches_rust).
+/// - py `greet("world")` on the print/greet corpus -> [2]
+///   (was literal_content_call_pattern_matches_python).
+/// - rust `add(1, 2)` on the let-s corpus -> [2]
+///   (was literal_content_call_pattern_matches_rust).
+/// - py `text.upper()` on the shout corpus -> [2]
+///   (was literal_content_member_call_pattern_matches_python).
+/// - py `return msg` on the greet corpus -> [2] (full statement node text;
+///   was literal_content_return_statement_matches_python).
+/// - rust `zzz_no_such_content` on `fn main() {}` -> [] (a valid `$`-less
+///   pattern with no equal-text node stays a valid EMPTY result;
+///   was literal_content_pattern_without_equal_node_stays_ok_empty).
 #[test]
-fn literal_content_number_pattern_matches_rust() {
-    let source = "fn calc() -> i32 {\n    1\n}\n";
-    let hits = match_pattern(Language::Rust, source, "1").unwrap();
-    assert_eq!(
-        hits.len(),
-        1,
-        "number literal must match its node: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-    assert_eq!(hits[0].line_start, 2);
-}
-
-/// Registered face: `greet("world")` py — sg matches the inner call.
-#[test]
-fn literal_content_call_pattern_matches_python() {
-    let source = "def main():\n    print(greet(\"world\"))\n";
-    let hits = match_pattern(Language::Python, source, "greet(\"world\")").unwrap();
-    assert_eq!(
-        hits.len(),
-        1,
-        "literal-argument call must match: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-    assert_eq!(hits[0].line_start, 2);
-}
-
-/// Registered face: `add(1, 2)` rust — sg matches the two-arg call.
-#[test]
-fn literal_content_call_pattern_matches_rust() {
-    let source = "fn main() {\n    let s = add(1, 2);\n}\n";
-    let hits = match_pattern(Language::Rust, source, "add(1, 2)").unwrap();
-    assert_eq!(
-        hits.len(),
-        1,
-        "two-arg literal call must match: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-    assert_eq!(hits[0].line_start, 2);
-}
-
-/// Registered face: `text.upper()` py — sg matches the zero-arg member call.
-#[test]
-fn literal_content_member_call_pattern_matches_python() {
-    let source = "def shout(text):\n    return text.upper()\n";
-    let hits = match_pattern(Language::Python, source, "text.upper()").unwrap();
-    assert_eq!(
-        hits.len(),
-        1,
-        "member call must match: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-    assert_eq!(hits[0].line_start, 2);
-}
-
-/// Registered family face: `return msg` py — the full statement node text.
-#[test]
-fn literal_content_return_statement_matches_python() {
-    let source = "def greet(name):\n    return msg\n";
-    let hits = match_pattern(Language::Python, source, "return msg").unwrap();
-    assert_eq!(
-        hits.len(),
-        1,
-        "full statement text must match: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-    assert_eq!(hits[0].line_start, 2);
-}
-
-/// Pass-30 interplay guard: a valid `$`-less pattern with no equal-text node
-/// stays a valid EMPTY result (the fail-closed guard still exempts `$`-less
-/// patterns; the literal lane matching content never turns it into an error).
-#[test]
-fn literal_content_pattern_without_equal_node_stays_ok_empty() {
-    let source = "fn main() {}\n";
-    assert!(match_pattern(Language::Rust, source, "zzz_no_such_content")
-        .unwrap()
-        .is_empty());
+fn literal_content_faces_match_equal_text_nodes() {
+    let rows: [(Language, &str, &str, Vec<u32>, &str); 6] = [
+        (
+            Language::Rust,
+            "fn calc() -> i32 {\n    1\n}\n",
+            "1",
+            vec![2],
+            "number literal must match its node",
+        ),
+        (
+            Language::Python,
+            "def main():\n    print(greet(\"world\"))\n",
+            "greet(\"world\")",
+            vec![2],
+            "literal-argument call must match",
+        ),
+        (
+            Language::Rust,
+            "fn main() {\n    let s = add(1, 2);\n}\n",
+            "add(1, 2)",
+            vec![2],
+            "two-arg literal call must match",
+        ),
+        (
+            Language::Python,
+            "def shout(text):\n    return text.upper()\n",
+            "text.upper()",
+            vec![2],
+            "member call must match",
+        ),
+        (
+            Language::Python,
+            "def greet(name):\n    return msg\n",
+            "return msg",
+            vec![2],
+            "full statement text must match",
+        ),
+        (
+            Language::Rust,
+            "fn main() {}\n",
+            "zzz_no_such_content",
+            vec![],
+            "no equal-text node stays ok:true empty",
+        ),
+    ];
+    for (lang, source, pattern, expected, note) in rows {
+        let hits = match_pattern(lang, source, pattern).unwrap();
+        assert_eq!(
+            lines_of(&hits),
+            expected,
+            "{note}: {pattern}: {:?}",
+            hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// Identifier-literal lane is unchanged: exact ident text still matches
@@ -1158,92 +1185,115 @@ fn registered_fail_closed_spellings_stay_fail_closed() {
 // the same tokens are LITERAL code and answer through the literal lane
 // (F68a-1, pass 69a — see f68a_1_... below).
 
-/// v2 row 5: lowercase in argument position — zero candidates, native ingress.
-/// sg: accepted-empty on the same probe corpus.
+/// metavar_v2 never-match faces as ONE (lang, source, pattern, native,
+/// loud-control) table (H-CONF-022 v2 grammar, pass 54): a NON-canonical
+/// `$`-token is a non-canonical metavariable matching nothing (accepted-empty)
+/// in py/rust-class languages — never the pass-51 general-lane wildcard
+/// overmatch. `native` pins the ingress class (true = admitted natively,
+/// false = loud fail-closed). Row oracles:
+/// - py `greet($a)` -> native empty (lowercase in argument position; sg
+///   accepted-empty; was metavar_v2_lowercase_arg_is_never_match_not_wildcard).
+/// - py `$o($A)` / `$a(1)` -> native empty (lowercase callee faces; sg exit 8,
+///   subject keeps ok:true empty, never an overmatch;
+///   was metavar_v2_lowercase_callee_never_match).
+/// - py `$a = 1` -> native empty (statement-leading lowercase;
+///   was metavar_v2_lowercase_stmt_leading_never_match).
+/// - py `def $a(x): $$$B` -> native empty, with the `def a(x): $$$B`
+///   loud-control pinned fallback-classified
+///   (was metavar_v2_lowercase_decl_ingress_native_zero_hits).
+/// - rust `foo($$$a)` / `let $aB = 1;` -> native empty (lowercase after `$$$`
+///   and mixed-case tails;
+///   was metavar_v2_lowercase_multi_and_mixed_never_match).
+/// - py `greet($Ü)` -> LOUD empty (non-ASCII metavar closes the overmatch,
+///   keeps the fail-closed class;
+///   was metavar_v2_non_ascii_metavar_closes_overmatch_and_stays_loud).
 #[test]
-fn metavar_v2_lowercase_arg_is_never_match_not_wildcard() {
-    assert!(!needs_ast_grep_fallback("greet($a)"), "valid ingress");
-    let source =
-        "def greet(name):\n    return name\nr1 = greet(\"world\")\nr2 = greet(  \"world\"  )\n";
-    let hits = match_pattern(Language::Python, source, "greet($a)").unwrap();
-    assert!(
-        hits.is_empty(),
-        "lowercase-led $a must match nothing: {:?}",
-        hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
-    );
-}
-
-/// v2 row 5: lowercase callee faces (`$o($A)`, `$a(1)`) — the general lane
-/// must not turn them into wildcard member/arity calls (13 live overmatches
-/// on the pass-53 corpus). sg: exit 8 (residual empty-vs-error divergence —
-/// the subject keeps ok:true empty, never an overmatch).
-#[test]
-fn metavar_v2_lowercase_callee_never_match() {
-    assert!(!needs_ast_grep_fallback("$o($A)"));
-    assert!(!needs_ast_grep_fallback("$a(1)"));
-    let source = "t = (1, 2)\nt.t(1)\nq = a(1)\nobj = Obj()\nobj.method()\n";
-    for pattern in ["$o($A)", "$a(1)"] {
-        let hits = match_pattern(Language::Python, source, pattern).unwrap();
+fn metavar_v2_non_canonical_metavars_never_match() {
+    let rows: [(Language, &str, &str, bool, Option<&str>, &str); 8] = [
+        (
+            Language::Python,
+            "def greet(name):\n    return name\nr1 = greet(\"world\")\nr2 = greet(  \"world\"  )\n",
+            "greet($a)",
+            true,
+            None,
+            "lowercase-led $a in argument position",
+        ),
+        (
+            Language::Python,
+            "t = (1, 2)\nt.t(1)\nq = a(1)\nobj = Obj()\nobj.method()\n",
+            "$o($A)",
+            true,
+            None,
+            "lowercase callee must not become a wildcard call",
+        ),
+        (
+            Language::Python,
+            "t = (1, 2)\nt.t(1)\nq = a(1)\nobj = Obj()\nobj.method()\n",
+            "$a(1)",
+            true,
+            None,
+            "lowercase callee must not become a wildcard call",
+        ),
+        (
+            Language::Python,
+            "a = 1\nb = 2\n",
+            "$a = 1",
+            true,
+            None,
+            "statement-leading lowercase assignment",
+        ),
+        (
+            Language::Python,
+            "def a(x):\n    a = 1\n    return a\n",
+            "def $a(x): $$$B",
+            true,
+            Some("def a(x): $$$B"),
+            "lowercase decl-name stays native zero-hit; literal-name control is fallback",
+        ),
+        (
+            Language::Rust,
+            "fn main() {\n    foo(1);\n    foo(1, 2);\n    let ab = 1;\n}\n",
+            "foo($$$a)",
+            true,
+            None,
+            "lowercase after $$$ is never wildcard-args",
+        ),
+        (
+            Language::Rust,
+            "fn main() {\n    foo(1);\n    foo(1, 2);\n    let ab = 1;\n}\n",
+            "let $aB = 1;",
+            true,
+            None,
+            "mixed-case tail keeps the native zero-hit face",
+        ),
+        (
+            Language::Python,
+            "def greet(name):\n    return name\nr = greet(\"world\")\n",
+            "greet($Ü)",
+            false,
+            None,
+            "non-ASCII metavar closes the overmatch and stays loud",
+        ),
+    ];
+    for (lang, source, pattern, native, loud_control, note) in rows {
+        if let Some(control) = loud_control {
+            assert!(
+                needs_ast_grep_fallback(control),
+                "{control} must stay fail-closed ({note})"
+            );
+        }
+        assert_eq!(
+            !needs_ast_grep_fallback(pattern),
+            native,
+            "{pattern} ingress class ({note})"
+        );
+        let hits = match_pattern(lang, source, pattern).unwrap();
         assert!(
             hits.is_empty(),
-            "{pattern} must match nothing: {:?}",
+            "{pattern} must match nothing ({note}): {:?}",
             hits.iter().map(|h| &h.excerpt).collect::<Vec<_>>()
         );
     }
-}
-
-/// v2 row 5: statement-leading lowercase assignment — the general lane's
-/// assignment root previously absorbed every assignment on the corpus.
-#[test]
-fn metavar_v2_lowercase_stmt_leading_never_match() {
-    assert!(!needs_ast_grep_fallback("$a = 1"));
-    let source = "a = 1\nb = 2\n";
-    assert!(match_pattern(Language::Python, source, "$a = 1")
-        .unwrap()
-        .is_empty());
-}
-
-/// v2 row 5: lowercase in a declaration-name position with a canonical `$$$`
-/// body. sg: accepted-empty; the held-out literal control `def a(x): $$$B`
-/// MATCHES the same def, so the `$` prefix alone kills the match — error-node
-/// semantics, refuting the pass-34 literal-ident reading.
-#[test]
-fn metavar_v2_lowercase_decl_ingress_native_zero_hits() {
-    assert!(!needs_ast_grep_fallback("def $a(x): $$$B"));
-    let source = "def a(x):\n    a = 1\n    return a\n";
-    assert!(match_pattern(Language::Python, source, "def $a(x): $$$B")
-        .unwrap()
-        .is_empty());
-}
-
-/// v2 rows 4/5: lowercase after `$$$` and mixed-case tails. `foo($$$a)` was a
-/// live wildcard-args overmatch; `let $aB = 1;` keeps the loud class today
-/// and must become a native zero-hit face.
-#[test]
-fn metavar_v2_lowercase_multi_and_mixed_never_match() {
-    assert!(!needs_ast_grep_fallback("foo($$$a)"));
-    assert!(!needs_ast_grep_fallback("let $aB = 1;"));
-    let source = "fn main() {\n    foo(1);\n    foo(1, 2);\n    let ab = 1;\n}\n";
-    for pattern in ["foo($$$a)", "let $aB = 1;"] {
-        assert!(
-            match_pattern(Language::Rust, source, pattern)
-                .unwrap()
-                .is_empty(),
-            "{pattern} must match nothing"
-        );
-    }
-}
-
-/// v2 row 10: non-ASCII `$Ü` — the unicode-wide `is_pattern_ident` made
-/// `greet($Ü)` a live overmatch; the ASCII check closes it. The garbage-led
-/// token keeps the LOUD fail-closed class (not a silent empty).
-#[test]
-fn metavar_v2_non_ascii_metavar_closes_overmatch_and_stays_loud() {
-    let source = "def greet(name):\n    return name\nr = greet(\"world\")\n";
-    assert!(match_pattern(Language::Python, source, "greet($Ü)")
-        .unwrap()
-        .is_empty());
-    assert!(needs_ast_grep_fallback("greet($Ü)"));
 }
 
 /// v2 row 6/7 (THE HOLE): `fn $3.14() { }` classified as

@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::agent;
+#[cfg(feature = "dev-tools")]
 use crate::eval;
 
 pub(crate) use crate::value_parsers::{
@@ -467,7 +468,8 @@ pub(crate) enum Commands {
         alias = "query"
     )]
     Search(QueryCmd),
-    /// Run fixed performance and identity suites
+    /// Run fixed performance and identity suites (dev-only: `dev-tools` feature)
+    #[cfg(feature = "dev-tools")]
     #[command(about = "Run fixed performance and identity suites")]
     Bench {
         #[command(flatten)]
@@ -537,7 +539,8 @@ pub(crate) enum Commands {
         #[command(flatten)]
         args: agent::DoctorArgs,
     },
-    /// Evaluate retrieval against a gold fixture
+    /// Evaluate retrieval against a gold fixture (dev-only: `dev-tools` feature)
+    #[cfg(feature = "dev-tools")]
     #[command(about = "Evaluate retrieval against a gold fixture")]
     Eval(eval::EvalArgs),
     /// Run many Code Mode tool calls in one warm process (Pi parallel coalescing).
@@ -576,6 +579,7 @@ impl Commands {
             Commands::Reindex(_) => "reindex",
             Commands::Codemod(_) => "codemod",
             Commands::Search(_) => "search",
+            #[cfg(feature = "dev-tools")]
             Commands::Bench { .. } => "bench",
             Commands::Watch { .. } => "watch",
             Commands::Keyword(_) => "keyword",
@@ -589,6 +593,7 @@ impl Commands {
             Commands::Version(_) => "version",
             Commands::RobotDocs(_) => "robot-docs",
             Commands::Doctor { .. } => "doctor",
+            #[cfg(feature = "dev-tools")]
             Commands::Eval(_) => "eval",
             Commands::CodemodeBatch { .. } => "codemode-batch",
             Commands::Serve { .. } => "serve",
@@ -649,6 +654,7 @@ impl Commands {
             "reindex",
             "codemod",
             "search",
+            #[cfg(feature = "dev-tools")]
             "bench",
             "watch",
             "keyword",
@@ -662,6 +668,7 @@ impl Commands {
             "version",
             "robot-docs",
             "doctor",
+            #[cfg(feature = "dev-tools")]
             "eval",
             "codemode-batch",
             "serve",
@@ -729,6 +736,8 @@ impl Cli {
     }
 
     /// Bench `--warmed`: measure the warmed product path as a second block.
+    /// Dev-only (`dev-tools` feature); the Bench variant exists only then.
+    #[cfg(feature = "dev-tools")]
     pub(crate) fn bench_warmed(&self) -> bool {
         matches!(
             self.command.as_ref(),
@@ -744,6 +753,7 @@ impl Cli {
             Some(Commands::Codemod(c)) => Some(&c.tuning),
             Some(Commands::Search(c)) => Some(&c.tuning),
             Some(Commands::Keyword(c) | Commands::Semantic(c)) => Some(&c.tuning),
+            #[cfg(feature = "dev-tools")]
             Some(Commands::Bench { tuning, .. }) => Some(tuning),
             _ => None,
         };
@@ -826,6 +836,7 @@ mod command_name_sync_tests {
             "search" | "keyword" | "semantic" | "chain" => &["q"],
             "call-path" => &["a", "b"],
             "defs" | "callers" | "imports" => &["sym"],
+            #[cfg(feature = "dev-tools")]
             "eval" => &["--gold", "g.json"],
             "codemode-batch" => &["--requests", "-"],
             "install" => &["--target", "cursor"],
@@ -835,6 +846,9 @@ mod command_name_sync_tests {
 
     #[test]
     fn cli_name_tables_stay_in_sync() {
+        // `bench`/`eval` exist only under `dev-tools`: the table length is
+        // 24 with the feature, 22 without.
+        let expected_len = if cfg!(feature = "dev-tools") { 24 } else { 22 };
         // (a) every `Commands::name` arm, in order, equals `all_names()` (24).
         let mut parsed_names = Vec::with_capacity(Commands::all_names().len());
         let mut tuning_names = Vec::new();
@@ -861,7 +875,7 @@ mod command_name_sync_tests {
         );
         assert_eq!(
             Commands::all_names().len(),
-            24,
+            expected_len,
             "all_names count drift (add the new command to the fixture + tables)"
         );
         let cmd = Cli::command();

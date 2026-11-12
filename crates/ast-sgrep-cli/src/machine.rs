@@ -25,6 +25,13 @@ pub(crate) fn write_stdout_line(line: &str) -> io::Result<()> {
     write_line(&mut out, line)
 }
 
+/// Write a line to stderr (see [`write_line`]). Human diagnostics ride here
+/// so script-parsed stdout stays pure result lines.
+pub(crate) fn write_stderr_line(line: &str) -> io::Result<()> {
+    let mut err = io::stderr().lock();
+    write_line(&mut err, line)
+}
+
 fn bounded_error_message(message: &str) -> String {
     let mut chars = message.chars();
     let bounded: String = chars.by_ref().take(MAX_ERROR_MESSAGE_CHARS).collect();
@@ -156,13 +163,64 @@ pub(crate) fn raw_machine_output_requested(args: &[std::ffi::OsString]) -> bool 
 }
 
 pub(crate) fn raw_command_name(args: &[std::ffi::OsString]) -> String {
-    crate::Cli::command()
+    let parsed = crate::Cli::command()
         // Recover only command provenance; the strict parse still owns refusal.
         .ignore_errors(true)
         .try_get_matches_from(args.iter().cloned())
         .ok()
-        .and_then(|matches| matches.subcommand_name().map(str::to_owned))
-        .unwrap_or_else(|| "search".to_owned())
+        .and_then(|matches| matches.subcommand_name().map(str::to_owned));
+    if let Some(name) = parsed {
+        return name;
+    }
+    // No recognizable subcommand: a dev-only verb (`bench`/`eval`) in a
+    // default build must fail closed under its own name, not dissolve into
+    // the bare-search fallback (which would blame search grammar for
+    // bench/eval flags). The strict parse still owns refusal; this only
+    // fixes provenance so the envelope and the teaching note name the verb
+    // the caller actually typed.
+    if !cfg!(feature = "dev-tools") {
+        if let Some(verb) = verb_position_token(args) {
+            if verb == "bench" || verb == "eval" {
+                return verb;
+            }
+        }
+    }
+    "search".to_owned()
+}
+
+/// First positional (the verb slot), skipping global flags and their values.
+/// Mirrors the verb scan in `rewrite_search_path_alias`: option values and
+/// later positionals must not promote a query/root into a command.
+fn verb_position_token(args: &[std::ffi::OsString]) -> Option<String> {
+    let parser = crate::Cli::command();
+    let mut value_pending = false;
+    for arg in args.iter().skip(1) {
+        if value_pending {
+            value_pending = false;
+            continue;
+        }
+        if arg == "--" {
+            break;
+        }
+        let Some(text) = arg.to_str() else {
+            break;
+        };
+        if let Some(option) = text.strip_prefix("--") {
+            let (name, attached) = option
+                .split_once('=')
+                .map_or((option, false), |(name, _)| (name, true));
+            value_pending = !attached
+                && parser.get_arguments().any(|spec| {
+                    spec.get_long() == Some(name) && spec.get_action().takes_values()
+                });
+            continue;
+        }
+        if text.starts_with('-') && text != "-" {
+            continue;
+        }
+        return Some(text.to_owned());
+    }
+    None
 }
 
 /// Max bytes for `codemode-batch` request payloads (file or stdin).

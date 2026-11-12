@@ -57,7 +57,8 @@ pub(crate) fn robot_guide_markdown() -> &'static str {
 - Pi and Code Mode refresh before search, with a configurable 30-second correctness lease by default. LSP applies document open/change/save/close notifications before processing the next request.
 - Ripgrep remains the tool for logs and unindexed or unsupported files. ast-sgrep never spawns it as a compatibility layer.
 ## Subcommands
-See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `codemod`, `status`, `bench`, `watch`, `eval`, `doctor`, `version`.
+See `capabilities --json` → `commands` (complete clap catalog). Notable: `search`/`find`/`query`, `keyword`, `semantic`, `chain`, `call-path`, `index`/`reindex` (`--dry-run`), `codemod`, `status`, `watch`, `doctor`, `version`.
+Dev-only (cargo feature `dev-tools`, not in the default binary): `bench`, `eval`.
 ## Integrations / sibling binaries
 - `asgrep-mcp` — MCP stdio server (`ASGREP_ROOT`, tools: keyword/ast/semantic search, index_repo, code_read)
 - `asgrep-lsp` — Language Server Protocol server
@@ -141,6 +142,17 @@ pub(crate) fn suppress_progress() -> bool {
 
 /// Teach missing-QUERY and other clap usage gaps with an exact recoverable command.
 pub(crate) fn augment_clap_usage_message(msg: &str, command: &str) -> String {
+    // Dev-only verbs in a default build: clap's search-grammar lecture is the
+    // wrong move (the verb never reaches a subcommand that owns those flags).
+    // Name the real gate and stop: no other tip applies.
+    if !cfg!(feature = "dev-tools") && (command == "bench" || command == "eval") {
+        let mut msg = msg.to_string();
+        msg.push('\n');
+        msg.push_str(&format!(
+            "Tip: `{command}` is dev-only in this build (the shipped binary carries product surface only). Rebuild with --features dev-tools to enable it."
+        ));
+        return msg;
+    }
     let mut msg = msg.to_string();
     let missing_query = msg.contains("required arguments were not provided")
         && (msg.contains("<QUERY>") || msg.contains("QUERY"));

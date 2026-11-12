@@ -8,7 +8,7 @@
 
 use ast_sgrep_codemode::{parse_plan, run_plan, CallError};
 use ast_sgrep_testkit as testkit;
-use ast_sgrep_testkit::{indexed_session_at, scored_hits6};
+use ast_sgrep_testkit::{indexed_session_at, scored_hits6, HitKey};
 use serde_json::json;
 
 /// INTENT=typo within len/3 Levenshtein budget recovers (80924ef2: dispatch
@@ -106,7 +106,7 @@ fn filter_then_select_topk_exact_orderings() {
         .expect("filter runs");
     assert_eq!(filtered["hit_count"], json!(4));
     assert_eq!(
-        testkit::hit_files(&filtered),
+        HitKey::file_keys(&filtered),
         vec!["f6.rs", "f5.rs", "f4.rs", "f3.rs"]
     );
     let top2 = session
@@ -144,11 +144,6 @@ fn filter_then_select_topk_exact_orderings() {
 /// ABSORBS=none (KEEP standalone)
 #[test]
 fn find_filter_read_select_pipeline_exact_counts() {
-    // Full indexed pipeline with per-step call counts: index(1) -> find
-    // limit 10 over 4 single-match files yields exactly 4 hits(2) ->
-    // path_contains narrows to exactly 1 hit(3) -> read of that file's
-    // first two lines returns the exact text(4) -> select projects exactly
-    // 3 file rows(5).
     let temp = tempfile::tempdir().expect("tempdir");
     for stem in ["a", "b", "c", "d"] {
         std::fs::write(

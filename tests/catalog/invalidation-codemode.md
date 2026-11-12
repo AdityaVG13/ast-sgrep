@@ -2,15 +2,17 @@
 
 Scope: `tests/codemode/invalidation_pass1.rs` (I1 session freshness contract), `invalidation_pass2.rs` (I2 per-delta-class consequences), `invalidation_pass3.rs` (I3 rebuild-parity relations), `invalidation_pass4.rs` (I4 end-to-end drills). 41 `#[test]`s, one bullet each, strict calibration: KEEP only standalone intents; every per-delta-class (add/modify/delete/rename) test merges into a per-surface delta-matrix intent; per-relation and per-kind drill tests merge into per-family matrices.
 
-Matrix targets referenced by MERGE verdicts: `M-stale` = pinned-stale-until-stamp contract (bare-edit invisible, external epoch bump, reopen-fresh, status tracks live epoch); `M-render` = render-cache invalidation across triggers (external/delete/modify), never-serve-stale, repopulate; `M-writer` = writer refresh paths (targeted shape, force shape, edit-tool reindex); `M-pure` = non-writer stability (noop edit, pure tools leave epoch+cache untouched); `M-catalog` = catalog stability across writes and convergence across histories; `M-find` / `M-search` / `M-defs` = per-surface delta matrices (ADD/MODIFY/DELETE/RENAME legs); `M-census` = file_count census tracking deltas; `M-parity` = targeted≡rebuild≡fresh agreement; `M-order` = path/delta/rename order independence; `M-idem` = repeat-refresh idempotence; `M-conv` = transient/add-delete cycle convergence; `M-drill` = e2e serve→change→detect→refresh→serve loop per single change kind.
+Matrix targets referenced by MERGE verdicts: `m_stale_adapter_agrees_with_mcp_contract` = pinned-stale-until-stamp contract (bare-edit invisible, external epoch bump, reopen-fresh, status tracks live epoch); `M-render` = render-cache invalidation across triggers (external/delete/modify), never-serve-stale, repopulate; `M-writer` = writer refresh paths (targeted shape, force shape, edit-tool reindex); `M-pure` = non-writer stability (noop edit, pure tools leave epoch+cache untouched); `M-catalog` = catalog stability across writes and convergence across histories; `m_delta_adapter_agrees_with_mcp_matrix` = per-surface delta matrices (find ADD/MODIFY/DELETE/RENAME legs, search ADD/DELETE legs, census move) with full matrices on MCP wire truth; `M-defs` = per-surface defs delta matrix (ADD/MODIFY/DELETE legs, MCP-unpinned); `M-parity` = targeted≡rebuild≡fresh agreement; `M-order` = path/delta/rename order independence; `M-idem` = repeat-refresh idempotence; `M-conv` = transient/add-delete cycle convergence; `M-drill` = e2e serve→change→detect→refresh→serve loop per single change kind.
 
 Overlap finding: no DELETEs — every apparent cross-pass overlap differs in trigger, surface, or asserted dimension (e.g. I1 `stale_render_cache_*` triggers on external write while I2 `delta_delete_refresh_drops_*` triggers on delete-refresh and I4 `drill_render_cache_*` on modify-refresh; I1 `edit_tool_*` pins the writer path via find only while I4 `drill_edit_tool_*` runs the full e2e loop across all surfaces). The two KEEPs are the only tests with no matrix siblings.
 
 ## Pass 1 — freshness contract (`tests/codemode/invalidation_pass1.rs`)
 
-- bare_file_change_without_reindex_serves_stale_hits: INTENT=Bare disk edit without a writer leaves the epoch unmoved; pinned index serves stale ALPHA hits while BETA stays invisible; CAT=staleness; KILLS=auto-refresh-on-read/reopen-every-call mutants; VERDICT=MERGE→M-stale
-- external_indexer_write_bumps_writer_generation: INTENT=Out-of-band Indexer write on the same DB stamps a new writer_generation epoch; CAT=staleness; KILLS=no-stamp-on-external-write mutants; VERDICT=MERGE→M-stale
-- search_after_external_reindex_serves_fresh_hits: INTENT=Post-stamp search reopens the index and serves BETA hits while ALPHA evicts; CAT=staleness; KILLS=never-reopen-cached-Searcher mutants; VERDICT=MERGE→M-stale
+NOW: single adapter `m_stale_adapter_agrees_with_mcp_contract` (`tests/codemode/invalidation_freshness.rs`) — PHASE 1 pins the stale-serve + external-reopen legs, PHASE 2 the status-tracks-epoch legs.
+
+- bare_file_change_without_reindex_serves_stale_hits: INTENT=Bare disk edit without a writer leaves the epoch unmoved; pinned index serves stale ALPHA hits while BETA stays invisible; CAT=staleness; KILLS=auto-refresh-on-read/reopen-every-call mutants; VERDICT=MERGE→m_stale_adapter_agrees_with_mcp_contract
+- external_indexer_write_bumps_writer_generation: INTENT=Out-of-band Indexer write on the same DB stamps a new writer_generation epoch; CAT=staleness; KILLS=no-stamp-on-external-write mutants; VERDICT=MERGE→m_stale_adapter_agrees_with_mcp_contract
+- search_after_external_reindex_serves_fresh_hits: INTENT=Post-stamp search reopens the index and serves BETA hits while ALPHA evicts; CAT=staleness; KILLS=never-reopen-cached-Searcher mutants; VERDICT=MERGE→m_stale_adapter_agrees_with_mcp_contract
 - stale_render_cache_is_never_served_after_writer_change: INTENT=peek_cached_search answers None once the epoch moves, until a fresh search repopulates the cache; CAT=staleness; KILLS=serve-cache-regardless-of-epoch mutants; VERDICT=MERGE→M-render
 - index_repo_targeted_refresh_returns_fresh_results: INTENT=Targeted paths refresh reports targeted shape plus stats and find serves the new token; CAT=delta; KILLS=targeted-refresh-skipped mutants; VERDICT=MERGE→M-writer
 - index_repo_force_rebuild_refreshes_and_reports_full_shape: INTENT=Force rebuild reports full shape and find swaps the old token for the new; CAT=delta; KILLS=force-flag-ignored mutants; VERDICT=MERGE→M-writer
@@ -19,22 +21,26 @@ Overlap finding: no DELETEs — every apparent cross-pass overlap differs in tri
 - noop_edit_leaves_generation_and_cache_untouched: INTENT=Zero-change edit reports changed=0 with epoch and render cache untouched; CAT=staleness; KILLS=noop-bumps-epoch/noop-drops-cache mutants; VERDICT=MERGE→M-pure
 - catalog_is_stable_across_index_writes: INTENT=Catalog names and read_only flags identical across all four writer paths; unknown name fails InvalidArgs; CAT=other; KILLS=read_only-flag-flip/unknown-not-InvalidArgs mutants (name-equality leg BEHAVIOR-ONLY: same static fn both sides); VERDICT=MERGE→M-catalog
 - pure_tools_neither_bump_generation_nor_drop_cache: INTENT=catalog_search/describe, filter_hits, and select leave the epoch and warm cache untouched; CAT=staleness; KILLS=pure-tool-invalidates mutants; VERDICT=MERGE→M-pure
-- index_status_reports_current_writer_generation: INTENT=index_status writer_generation tracks the live epoch across an external bump; CAT=staleness; KILLS=cached-or-stale-status-epoch mutants; VERDICT=MERGE→M-stale
+- index_status_reports_current_writer_generation: INTENT=index_status writer_generation tracks the live epoch across an external bump; CAT=staleness; KILLS=cached-or-stale-status-epoch mutants; VERDICT=MERGE→m_stale_adapter_agrees_with_mcp_contract
 
 ## Pass 2 — delta classes (`tests/codemode/invalidation_pass2.rs`)
 
-- delta_add_find_surfaces_new_file_token_only: INTENT=ADD plus refresh surfaces the new token in exactly the new file while the sibling token stays intact; CAT=delta; KILLS=add-invisible/spillover mutants; VERDICT=MERGE→M-find
-- delta_add_search_word_query_surfaces_new_file: INTENT=ADD through hybrid word search resolves exactly the new file; CAT=delta; KILLS=search-misses-add mutants; VERDICT=MERGE→M-search
+NOW: single adapter `m_delta_adapter_agrees_with_mcp_matrix` (`tests/codemode/invalidation_delta.rs`) — PHASE 1 pins the MODIFY find-swap, PHASE 2 the DELETE find+search evict, PHASE 3 the ADD search, PHASE 4 the census move; the RENAME leg is additionally pinned by the chained-drill KEEP LINK 4 with full matrices on MCP M1+m7 wire truth.
+
+- delta_add_find_surfaces_new_file_token_only: INTENT=ADD plus refresh surfaces the new token in exactly the new file while the sibling token stays intact; CAT=delta; KILLS=add-invisible/spillover mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix
+- delta_add_search_word_query_surfaces_new_file: INTENT=ADD through hybrid word search resolves exactly the new file; CAT=delta; KILLS=search-misses-add mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix
 - delta_add_defs_lookup_finds_new_symbol: INTENT=ADD through defs resolves the new symbol while an unknown symbol resolves empty; CAT=delta; KILLS=defs-misses-add/phantom-def mutants; VERDICT=MERGE→M-defs
-- delta_modify_find_swaps_token_exactly: INTENT=MODIFY swaps the find token exactly (new present, old gone); CAT=delta; KILLS=stale-linger/new-missing mutants; VERDICT=MERGE→M-find
+- delta_modify_find_swaps_token_exactly: INTENT=MODIFY swaps the find token exactly (new present, old gone); CAT=delta; KILLS=stale-linger/new-missing mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix
 - delta_modify_defs_lookup_tracks_renamed_symbol: INTENT=MODIFY renaming a definition moves defs lookup to the new name only; CAT=delta; KILLS=defs-stale-name mutants; VERDICT=MERGE→M-defs
-- delta_delete_find_and_search_evict_token: INTENT=DELETE evicts the removed token from both find and search; CAT=delta; KILLS=delete-linger mutants; VERDICT=MERGE→M-find + M-search (DELETE legs)
+- delta_delete_find_and_search_evict_token: INTENT=DELETE evicts the removed token from both find and search; CAT=delta; KILLS=delete-linger mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix (DELETE legs)
 - delta_delete_defs_lookup_empties: INTENT=DELETE of the defining file empties defs lookup; CAT=delta; KILLS=defs-delete-linger mutants; VERDICT=MERGE→M-defs
-- delta_rename_refresh_moves_hits_to_new_path: INTENT=RENAME moves the token to the new path without duplication while the census stays at 1; CAT=delta; KILLS=rename-loses-hits/old-path-linger mutants; VERDICT=MERGE→M-find
-- delta_catalog_file_count_tracks_add_and_delete: INTENT=file_count census moves 1→2→1 with an epoch bump per delta and reads agreeing with the census; CAT=delta; KILLS=census-not-tracked mutants; VERDICT=MERGE→M-census
+- delta_rename_refresh_moves_hits_to_new_path: INTENT=RENAME moves the token to the new path without duplication while the census stays at 1; CAT=delta; KILLS=rename-loses-hits/old-path-linger mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix
+- delta_catalog_file_count_tracks_add_and_delete: INTENT=file_count census moves 1→2→1 with an epoch bump per delta and reads agreeing with the census; CAT=delta; KILLS=census-not-tracked mutants; VERDICT=MERGE→m_delta_adapter_agrees_with_mcp_matrix
 - delta_delete_refresh_drops_stale_render_and_repopulates_fresh: INTENT=Delete refresh drops the warm render, post-delete search serves empty, and re-add repopulates the cache; CAT=staleness; KILLS=render-survives-delete mutants; VERDICT=MERGE→M-render
 
 ## Pass 3 — parity relations (`tests/codemode/invalidation_pass3.rs`)
+
+NOW: single adapter `m_parity_adapter_agrees_with_mcp_relations` (`tests/codemode/invalidation_parity.rs`) — PHASE 1 pins the M-parity rows, PHASE 2 the M-order rows, PHASE 3 the M-idem rows, PHASE 4 the M-conv rows.
 
 - targeted_refresh_matches_force_rebuild_find: INTENT=Targeted refresh and force rebuild of the same final state agree on find bytes, counts, and census; CAT=parity; KILLS=targeted-vs-rebuild-divergence mutants; VERDICT=MERGE→M-parity
 - incremental_vs_fresh_index_search_parity: INTENT=Incremental add+modify and a fresh index of the same tree agree on search and find bytes; CAT=parity; KILLS=incremental-divergence mutants; VERDICT=MERGE→M-parity
@@ -49,6 +55,8 @@ Overlap finding: no DELETEs — every apparent cross-pass overlap differs in tri
 - add_then_delete_cycle_returns_to_baseline_reads: INTENT=An add/delete cycle returns find/search bytes and census to baseline; CAT=parity; KILLS=cycle-residue mutants; VERDICT=MERGE→M-conv
 
 ## Pass 4 — end-to-end drills (`tests/codemode/invalidation_pass4.rs`)
+
+NOW: adapter `m_drill_codemode_only_edit_rebuild_adapter` (`tests/codemode/invalidation_drills.rs`) pins the codemode-only edit-tool and force-rebuild legs; the add/modify/delete/rename legs mirror MCP `m7_full_arcs_per_delta_class`; KEEP `drill_chained_multi_change_add_modify_delete_rename` unchanged.
 
 - drill_add_change_detect_refresh_serve: INTENT=E2E ADD: baseline serve, stale detect (epoch frozen, new token invisible), targeted refresh, exact multi-surface serve with census 2; CAT=drill; KILLS=add-loop-break mutants; VERDICT=MERGE→M-drill
 - drill_modify_change_detect_refresh_serve: INTENT=E2E MODIFY: pinned old-token serve pre-refresh, refresh, exact all-surface swap with census 1; CAT=drill; KILLS=modify-loop-break mutants; VERDICT=MERGE→M-drill
@@ -74,4 +82,4 @@ Overlap finding: no DELETEs — every apparent cross-pass overlap differs in tri
 - Total: 41 tests (pass1: 12, pass2: 10, pass3: 11, pass4: 8).
 - By CAT: staleness 8, delta 12, parity 11, drill 8, other 2.
 - By VERDICT: KEEP 2 (`index_repo_arg_conflicts_fail_with_other_discriminant`, `drill_chained_multi_change_add_modify_delete_rename`), MERGE 39, DELETE 0.
-- MERGE targets: M-stale 4, M-render 3, M-writer 3, M-pure 2, M-catalog 2, M-find 4 (incl. shared DELETE leg), M-search 2 (incl. shared DELETE leg), M-defs 3, M-census 1, M-parity 3, M-order 3, M-idem 2, M-conv 2, M-drill 6.
+- MERGE targets: m_stale_adapter 4, M-render 3, M-writer 3, M-pure 2, M-catalog 2, m_delta_adapter 7 (find 4 incl. shared DELETE leg, search 2 incl. shared DELETE leg, census 1), M-defs 3, M-parity 3, M-order 3, M-idem 2, M-conv 2, M-drill 6.

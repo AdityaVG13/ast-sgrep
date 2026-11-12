@@ -1,12 +1,9 @@
-use ast_sgrep_testkit::CliSession;
+use ast_sgrep_testkit::{self as testkit, asgrep_bin, CliSession};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 #[test]
 fn cli_smoke() {
     let session = CliSession::sample(asgrep_bin());
@@ -92,11 +89,7 @@ fn cli_failure_oracle_preserves_diagnostics() {
 }
 
 fn run_json(args: &[&str]) -> (i32, Value, String, String) {
-    let output = Command::new(asgrep_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep");
+    let output = testkit::run(&asgrep_bin(), args);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
@@ -648,7 +641,6 @@ fn file_filter_is_rejected_by_non_search_commands() {
 // plan to that language exactly like `search --lang` does.
 #[test]
 fn codemod_dry_run_honors_lang_filter() {
-    let bin = asgrep_bin();
     let temp = TempDir::new().expect("tempdir");
     let root = temp.path();
     fs::write(
@@ -665,19 +657,19 @@ fn codemod_dry_run_honors_lang_filter() {
     let index = root.join("idx.db");
     let index = index.to_str().unwrap();
     let root_arg = root.to_str().unwrap();
-    let build = Command::new(&bin)
-        .args(["--index-path", index, "index", "--no-embed", root_arg])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let build = testkit::run(
+        &asgrep_bin(),
+        &["--index-path", index, "index", "--no-embed", root_arg],
+    );
     assert!(
         build.status.success(),
         "{}",
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let out = Command::new(&bin)
-        .args([
+    let (code, plan, stderr) = testkit::run_json_full(
+        &asgrep_bin(),
+        &[
             "--json",
             "--index-path",
             index,
@@ -690,17 +682,10 @@ fn codemod_dry_run_honors_lang_filter() {
             "py",
             "--dry-run",
             root_arg,
-        ])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        ],
+        &[],
     );
-    let plan: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(code, 0, "{stderr}");
     let paths: Vec<&str> = plan["plan"]["files"]
         .as_array()
         .unwrap()
@@ -718,7 +703,6 @@ fn codemod_dry_run_honors_lang_filter() {
 // template must bind (python suite body), not error as unbound.
 #[test]
 fn codemod_rewrite_binds_suite_body_metavariable() {
-    let bin = asgrep_bin();
     let temp = TempDir::new().expect("tempdir");
     let root = temp.path();
     fs::write(
@@ -729,19 +713,19 @@ fn codemod_rewrite_binds_suite_body_metavariable() {
     let index = root.join("idx.db");
     let index = index.to_str().unwrap();
     let root_arg = root.to_str().unwrap();
-    let build = Command::new(&bin)
-        .args(["--index-path", index, "index", "--no-embed", root_arg])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
+    let build = testkit::run(
+        &asgrep_bin(),
+        &["--index-path", index, "index", "--no-embed", root_arg],
+    );
     assert!(
         build.status.success(),
         "{}",
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let out = Command::new(&bin)
-        .args([
+    let (code, envelope, stderr) = testkit::run_json_full(
+        &asgrep_bin(),
+        &[
             "--json",
             "--index-path",
             index,
@@ -754,17 +738,13 @@ fn codemod_rewrite_binds_suite_body_metavariable() {
             "py",
             "--dry-run",
             root_arg,
-        ])
-        .env("NO_COLOR", "1")
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "identity body rewrite must succeed (unbound $C error is the registered gap): {}",
-        String::from_utf8_lossy(&out.stderr)
+        ],
+        &[],
     );
-    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        code, 0,
+        "identity body rewrite must succeed (unbound $C error is the registered gap): {stderr}"
+    );
     assert_eq!(envelope["ok"], true, "{envelope}");
     let edits: Vec<&Value> = envelope["plan"]["files"]
         .as_array()

@@ -16,15 +16,10 @@
 //! Failure-first: these tests were run against the pre-flag tree and failed
 //! (clap rejected `--files-with-matches` with an unknown-flag error).
 
-use ast_sgrep_testkit::CliSession;
+use ast_sgrep_testkit::{self as testkit, CliSession, asgrep_bin};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
-
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
 
 /// Corpus with a multi-match file (dedup face) and a non-matching file:
 /// src/a.rs matches the rust fn template TWICE, src/b.rs once, c.txt never.
@@ -47,15 +42,15 @@ fn corpus_session() -> CliSession {
     .expect("write b.rs");
     fs::write(root.join("c.txt"), "plain text, no rust here\n").expect("write c.txt");
     let index_path = temp.path().join("index.db");
-    let index_out = std::process::Command::new(asgrep_bin())
-        .args([
+    let index_out = testkit::run(
+        &asgrep_bin(),
+        &[
             "--index-path",
             index_path.to_str().unwrap(),
             "index",
             root.to_str().unwrap(),
-        ])
-        .output()
-        .expect("index corpus");
+        ],
+    );
     assert!(
         index_out.status.success(),
         "indexing failed: {}",
@@ -128,8 +123,8 @@ fn files_with_matches_zero_matches_is_empty_output_exit_ok() {
         "zero matches prints no paths; got {stdout:?}"
     );
     assert!(
-        stderr.trim().is_empty(),
-        "no diagnostics on a clean miss: {stderr}"
+        stderr.contains("no hits for"),
+        "the miss classification rides stderr (stdout stays script-parseable): {stderr:?}"
     );
 }
 

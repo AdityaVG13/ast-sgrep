@@ -3,7 +3,7 @@ use ast_sgrep_core::semantic_ann::{SemanticAnnIndex, DEFAULT_ANN_THRESHOLD};
 use ast_sgrep_core::semantic_ivf::{
     compute_ann_fingerprint, invalidate_semantic_ivf, load_semantic_ivf, load_semantic_ivf_index,
     load_semantic_ivf_unchecked, save_semantic_ivf, save_semantic_ivf_with_ids,
-    save_semantic_ivf_with_publication, semantic_ivf_ids_path,
+    save_semantic_ivf_with_publication, semantic_ivf_ids_path, semantic_ivf_path,
 };
 use ast_sgrep_embed::{top_k_flat_similarity, MIN_SIMILARITY};
 use ast_sgrep_testkit::updating_goldens;
@@ -13,8 +13,11 @@ use std::path::PathBuf;
 fn invalidating_a_missing_sidecar_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let database = dir.path().join("index.db");
-    invalidate_semantic_ivf(&database).unwrap();
-    invalidate_semantic_ivf(&database).unwrap();
+    let sidecar = semantic_ivf_path(&database);
+    assert!(invalidate_semantic_ivf(&database).is_ok());
+    assert!(!sidecar.exists(), "sidecar must still be absent after first call");
+    assert!(invalidate_semantic_ivf(&database).is_ok());
+    assert!(!sidecar.exists(), "sidecar must still be absent after second call");
 }
 
 /// v3 sidecars carry the chunk-id column so the embed pass can resolve IVF

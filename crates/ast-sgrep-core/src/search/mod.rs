@@ -42,8 +42,9 @@ pub use types::{
 pub(crate) use cascade::{
     CASCADE_EXTRA_FILE_RESERVE, CASCADE_PER_TERM_FILE_LIMIT, CASCADE_PREFILTER_FILE_LIMIT,
     FANOUT_CALLER_SCALE, MAX_QUERY_EXPANSIONS, NL_FANOUT_HITS_PER_CHANNEL, NL_FANOUT_SYMBOL_LIMIT,
-    cascade_stopword, conceptual_def_terms, conceptual_fanout_pass, discovery_df,
-    literal_prefilter_pass, pattern_hits_for_symbol, structural_index_pass,
+    ConceptualQueryTokens, cascade_stopword, conceptual_def_terms_with_tokens,
+    conceptual_fanout_pass_with_tokens, discovery_df, literal_prefilter_pass,
+    pattern_hits_for_symbol, structural_index_pass,
 };
 
 /// On mutex poison, clear cached state before continuing so a panicked
@@ -167,6 +168,15 @@ pub fn choose_embed_query<'a>(
     }
 }
 
+impl crate::config::CoreConfigHolder for Searcher {
+    fn core_config_ref(&self) -> &crate::config::CoreConfig {
+        &self.config
+    }
+    fn core_config_mut(&mut self) -> &mut crate::config::CoreConfig {
+        &mut self.config
+    }
+}
+
 impl Searcher {
     pub fn new(mut options: SearchOptions) -> Result<Self> {
         // Match Indexer: canonicalize roots so relative/symlink inputs share identity (0fg6/0f7r).
@@ -258,7 +268,9 @@ impl Searcher {
             inert: foreign_root,
             options,
             config,
-            use_field_rescoring: true,
+            // Paired-arm switch: ASGREP_NO_FIELD_RESCORE=1 disables
+            // field-vector rescoring for this process (field_weight lever).
+            use_field_rescoring: std::env::var_os("ASGREP_NO_FIELD_RESCORE").is_none(),
             stamp_response: true,
             cache_responses: true,
             response_cache: Mutex::new(ResponseCache {
@@ -289,13 +301,12 @@ impl Searcher {
     /// Env knobs resolved once at construction. Search-time call sites read
     /// from here, never from process env.
     pub fn core_config(&self) -> &crate::config::CoreConfig {
-        &self.config
+        crate::config::CoreConfigHolder::core_config_ref(self)
     }
     /// Override the construction-resolved config (lets harnesses pin knobs
     /// without touching process env). Consulted lazily where read per query.
-    pub fn with_core_config(mut self, config: crate::config::CoreConfig) -> Self {
-        self.config = config;
-        self
+    pub fn with_core_config(self, config: crate::config::CoreConfig) -> Self {
+        crate::config::CoreConfigHolder::with_core_config(self, config)
     }
     /// Select concatenated-vector scoring (`false`) or the default per-field
     /// semantic rescoring (`true`). This eval-oriented setting lives on the
@@ -884,7 +895,10 @@ impl Searcher {
                     // one channel, so rank order is the lane's own.
                     crate::intent::route_hits(&parsed, &mut hits);
                     let intent = crate::intent::classify(&parsed);
-                    critic::apply_critic(&parsed, intent, &mut hits, critic_vocabulary.as_ref());
+                    // Paired-arm switch: ASGREP_NO_CRITIC=1 skips the critic.
+                    if std::env::var_os("ASGREP_NO_CRITIC").is_none() {
+                        critic::apply_critic(&parsed, intent, &mut hits, critic_vocabulary.as_ref());
+                    }
                     hits
                 }
                 QueryMode::Regex => regex_pass(&self.store, &self.options, &parsed)?,
@@ -911,28 +925,39 @@ impl Searcher {
                             // distinguish boost-manufactured overrides (fusion
                             // had the leader first) from earned ones.
                             let fused: Vec<f64> = hits.iter().map(|hit| hit.score).collect();
-                            critic::apply_critic(
-                                &parsed,
-                                intent,
-                                &mut hits,
-                                critic_vocabulary.as_ref(),
-                            );
+                            // Paired-arm switches: ASGREP_NO_CRITIC=1 skips the
+                            // critic; ASGREP_NO_CLAMPS=1 skips both post-critic
+                            // clamps (they exist to undo critic reversals).
+                            let no_critic = std::env::var_os("ASGREP_NO_CRITIC").is_some();
+                            let no_clamps = std::env::var_os("ASGREP_NO_CLAMPS").is_some();
+                            if !no_critic {
+                                critic::apply_critic(
+                                    &parsed,
+                                    intent,
+                                    &mut hits,
+                                    critic_vocabulary.as_ref(),
+                                );
+                            }
                             // Fusion already dropped extra votes below the
                             // decisive margin. The critic then reverses that
                             // order. On a description, put it back.
-                            critic::clamp_far_cosine_on_description(
-                                &parsed,
-                                &mut hits,
-                                &magnitudes,
-                            );
+                            if !no_clamps {
+                                critic::clamp_far_cosine_on_description(
+                                    &parsed,
+                                    &mut hits,
+                                    &magnitudes,
+                                );
+                            }
                             // The same reversal happens off-description when
                             // boosts carry a corroborated hit over the embed
                             // channel's own decisively-leading answer.
-                            critic::clamp_boost_overrides_of_semantic_leader(
-                                &mut hits,
-                                &magnitudes,
-                                &fused,
-                            );
+                            if !no_clamps {
+                                critic::clamp_boost_overrides_of_semantic_leader(
+                                    &mut hits,
+                                    &magnitudes,
+                                    &fused,
+                                );
+                            }
                         }
                         crate::env_flag::emit_profile_stage_since("search_fusion", t_fusion);
                         hits
@@ -1146,6 +1171,12 @@ impl Searcher {
                 intent = crate::intent::QueryIntent::Symbol;
             }
         }
+        // One model-backed expansion per query (d-NEEDLESS hoist 3): the
+        // def-terms, fanout, and discovery-extras lanes below share these
+        // tokens instead of each re-expanding. Non-conceptual queries never
+        // expanded before and still don't.
+        let query_tokens = (intent == crate::intent::QueryIntent::Conceptual)
+            .then(|| ConceptualQueryTokens::for_query(&parsed.raw));
         // Constraint cascade: each stage receives only files that survived the prior stage.
         let t_lexical = crate::env_flag::profile_clock();
         let t_lex_vocab = crate::env_flag::profile_clock();
@@ -1243,7 +1274,17 @@ impl Searcher {
         };
         if intent == crate::intent::QueryIntent::Conceptual {
             let mut extra = discovery.terms.len().saturating_sub(parsed.terms.len());
-            for tok in ast_sgrep_embed::tokenize(&ast_sgrep_embed::expand_concepts(&parsed.raw)) {
+            // Shared expansion: `tokenize` sorts, so sorted iteration visits
+            // exactly the old per-call order with no second expansion.
+            let mut novel: Vec<String> = query_tokens
+                .as_ref()
+                .expect("conceptual queries expand once above")
+                .expanded
+                .iter()
+                .cloned()
+                .collect();
+            novel.sort();
+            for tok in novel {
                 if extra >= 3 {
                     break;
                 }
@@ -1282,7 +1323,9 @@ impl Searcher {
             let db = self.store.db_path().to_path_buf();
             let opts = self.options.clone();
             let sem_q = semantic_query.clone();
-            let raw = parsed.raw.clone();
+            let fork_tokens = query_tokens
+                .clone()
+                .expect("embed fork runs only for conceptual queries");
             let field = self.use_field_rescoring;
             let run_id = crate::perf_profile::current_run_id();
             Some(std::thread::spawn(move || {
@@ -1297,7 +1340,12 @@ impl Searcher {
                 let semantic = passes::embed::run_embed_pass_cached(
                     &sibling, &opts, &sem_q, false, field,
                 )?;
-                let fanout = conceptual_fanout_pass(&sibling, &opts, &raw, &semantic)?;
+                let fanout = conceptual_fanout_pass_with_tokens(
+                    &sibling,
+                    &opts,
+                    &fork_tokens,
+                    &semantic,
+                )?;
                 Ok::<_, crate::StoreError>((version, semantic, fanout))
             }))
         } else {
@@ -1385,10 +1433,12 @@ impl Searcher {
                     "search",
                     "conceptual_fanout_pass",
                 );
-                hits.extend(conceptual_fanout_pass(
+                hits.extend(conceptual_fanout_pass_with_tokens(
                     &self.store,
                     &self.options,
-                    &parsed.raw,
+                    query_tokens
+                        .as_ref()
+                        .expect("conceptual queries expand once above"),
                     &hits,
                 )?);
                 return Ok(hits);
@@ -1422,7 +1472,10 @@ impl Searcher {
             term.chars().count() >= 3 && !(drop_generics && critic::is_generic_concept_token(term))
         });
         if conceptual {
-            for tok in conceptual_def_terms(&parsed.raw) {
+            let tokens = query_tokens
+                .as_ref()
+                .expect("conceptual queries expand once above");
+            for tok in conceptual_def_terms_with_tokens(tokens) {
                 if !stage_query.terms.contains(&tok) {
                     stage_query.terms.push(tok);
                 }
@@ -1585,10 +1638,12 @@ impl Searcher {
                         "search",
                         "conceptual_fanout_pass",
                     );
-                    hits.extend(conceptual_fanout_pass(
+                    hits.extend(conceptual_fanout_pass_with_tokens(
                         &self.store,
                         &self.options,
-                        &parsed.raw,
+                        query_tokens
+                            .as_ref()
+                            .expect("conceptual queries expand once above"),
                         &semantic,
                     )?);
                 }

@@ -4,22 +4,15 @@
 //! jail, index-backed window with disk fallback). Fail-closed: jail escapes,
 //! inverted ranges, and ref floods are usage errors. The `code_read`
 //! cross-surface vocabulary recovers into this subcommand.
+use ast_sgrep_testkit::{self as testkit, asgrep_bin};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use tempfile::TempDir;
 
-fn asgrep_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_asgrep"))
-}
-
+/// Hermetic tuple projection: exit code, stdout, stderr.
 fn run(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(asgrep_bin())
-        .args(args)
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("run asgrep");
+    let output = testkit::run(&asgrep_bin(), args);
     (
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -43,15 +36,15 @@ fn read_session() -> ReadSession {
     )
     .expect("write a.rs");
     let index_path = temp.path().join("index.db");
-    let index_out = Command::new(asgrep_bin())
-        .args([
+    let index_out = testkit::run(
+        &asgrep_bin(),
+        &[
             "--index-path",
             index_path.to_str().unwrap(),
             "index",
             root.to_str().unwrap(),
-        ])
-        .output()
-        .expect("index corpus");
+        ],
+    );
     assert!(
         index_out.status.success(),
         "indexing failed: {}",

@@ -82,7 +82,6 @@ fn drill_modify_add(ctx: &DrillCtx) {
     let baseline = run_status(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(baseline["file_count"], 2, "{baseline}");
 
-    // CHANGE: alpha gains a second symbol.
     rewrite_with_mtime_bump(
         &ctx.root.join("alpha.rs"),
         "pub fn alpha_one() -> u32 { 1 }\npub fn i4_modify_added() -> u32 { 4 }\n",
@@ -222,7 +221,6 @@ fn drill_delete_file(ctx: &DrillCtx) {
     let baseline = run_status(&ctx.bin, &ctx.index_s, &ctx.root_s);
     assert_eq!(baseline["file_count"], 2, "{baseline}");
 
-    // CHANGE: beta is deleted from the tree.
     fs::remove_file(ctx.root.join("beta.rs")).expect("delete beta");
 
     // DETECT (stale): status counts are still pre-change and the deleted
@@ -280,7 +278,6 @@ fn drill_rename_file(ctx: &DrillCtx) {
         2
     );
 
-    // CHANGE: beta moves to a new path with identical content.
     fs::rename(ctx.root.join("beta.rs"), ctx.root.join("beta_moved.rs")).expect("rename beta");
 
     // DETECT (stale): the hit is still served at the OLD path only.

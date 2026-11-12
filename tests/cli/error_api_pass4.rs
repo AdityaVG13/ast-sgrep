@@ -161,6 +161,8 @@ fn invalid_regex_query_drill_fix_query_recovers() {
 /// scored query.
 /// KILLS: gold-fault-sticks-after-fix.
 /// ABSORBS: none (only eval drill).
+/// Dev-only: the eval subcommand exists only under `dev-tools`.
+#[cfg(feature = "dev-tools")]
 #[test]
 fn unreadable_gold_eval_drill_valid_gold_recovers() {
     let dir = kit::fixture_root();

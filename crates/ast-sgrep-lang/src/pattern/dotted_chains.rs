@@ -25,19 +25,29 @@ pub(crate) fn walk_call_chains(
     segments: &[CallChainSegment],
     out: &mut Vec<PatternMatch>,
 ) {
-    if is_call_kind(node.kind()) && !is_in_comment_or_string(&node) {
-        if let Some(captures) = chain_matches(lang, &node, source, segments) {
-            let mut captures = captures;
-            if let Some(text) = node_text(&node, source) {
-                captures.insert("MATCH".to_string(), text.to_string());
-            }
-            out.push(hit_for_node(&node, source, pattern, captures));
-        }
+    walk_nodes(
+        node,
+        out,
+        |n: &Node| is_call_kind(n.kind()) && !is_in_comment_or_string(n),
+        |n| call_chain_match(n, lang, source, pattern, segments),
+    );
+}
+
+/// Single-candidate check for [`walk_call_chains`]: the callee path must
+/// decompose into exactly the pattern's segment count, every segment name
+/// unifies, and every call segment's argument list matches its template.
+fn call_chain_match(
+    node: &Node,
+    lang: Language,
+    source: &str,
+    pattern: &str,
+    segments: &[CallChainSegment],
+) -> Option<PatternMatch> {
+    let mut captures = chain_matches(lang, node, source, segments)?;
+    if let Some(text) = node_text(node, source) {
+        captures.insert("MATCH".to_string(), text.to_string());
     }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_call_chains(lang, child, source, pattern, segments, out);
-    }
+    Some(hit_for_node(node, source, pattern, captures))
 }
 
 /// Capture arguments at any plain-chain call level after its arity check.

@@ -16,6 +16,9 @@ workspace = true
 
 [features]
 default = []
+# Dev-only harnesses (bench/eval subcommands + their suites). Off by default
+# so the shipped binary carries product surface only.
+dev-tools = []
 
 [lib]
 name = "ast_sgrep_cli"
@@ -76,6 +79,7 @@ path = "../../tests/cli/codemod_crash_windows.rs"
 [[test]]
 name = "bench_history_integrity"
 path = "../../tests/cli/bench_history_integrity.rs"
+required-features = ["dev-tools"]
 [[test]]
 name = "dependency_posture"
 path = "../../tests/cli/dependency_posture.rs"
@@ -128,6 +132,9 @@ path = "../../tests/cli/error_api_pass3.rs"
 name = "error_api_pass4"
 path = "../../tests/cli/error_api_pass4.rs"
 [[test]]
+name = "fault_corpus_agreement"
+path = "../../tests/cli/fault_corpus_agreement.rs"
+[[test]]
 name = "invalidation_staleness"
 path = "../../tests/cli/invalidation_staleness.rs"
 [[test]]
@@ -142,6 +149,7 @@ path = "../../tests/cli/invalidation_drills.rs"
 [[test]]
 name = "numerical_eval"
 path = "../../tests/cli/numerical_eval.rs"
+required-features = ["dev-tools"]
 [[test]]
 name = "numerical_search"
 path = "../../tests/cli/numerical_search.rs"
@@ -163,3 +171,4 @@ path = "../../tests/cli/keep_gate_unit.rs"
 [[test]]
 name = "bench_unit"
 path = "../../tests/cli/bench_unit.rs"
+required-features = ["dev-tools"]

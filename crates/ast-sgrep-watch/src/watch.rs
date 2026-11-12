@@ -249,6 +249,15 @@ pub fn run_watch(opts: IndexOptions, debounce_ms: u64) -> anyhow::Result<()> {
                         s.files_indexed, s.files_removed, s.files_skipped
                     );
                 }
+                // Publish the sidecars inline, not only at quiescence. A
+                // sustained storm never yields a quiet window, so a
+                // quiescence-only flush leaves every mid-storm read failing
+                // closed on a stale bundle forever. Backpressure is unchanged:
+                // when batches arrive faster than update+flush, the bounded
+                // queue overflows into a coalesced full rescan as before.
+                if indexer.deferred_rebuilds_pending() {
+                    indexer.flush_deferred_rebuilds()?;
+                }
                 flush_deadline = None;
             }
             Err(RecvTimeoutError::Timeout) if indexer.deferred_rebuilds_pending() => {
@@ -275,6 +284,7 @@ fn case_root(name: &str) -> PathBuf {
 #[cfg(test)]
 mod self_event_tests {
     use super::{case_root, is_watch_self_event, sqlite_artifact};
+    use std::path::PathBuf;
 
     #[test]
     fn empty_paths_are_not_self_events() {

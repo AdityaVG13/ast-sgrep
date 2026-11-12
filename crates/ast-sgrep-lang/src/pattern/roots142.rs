@@ -717,8 +717,23 @@ pub(crate) fn walk_root_142(
     template: &Root142Template,
     out: &mut Vec<PatternMatch>,
 ) {
-    if node.is_named() && !is_in_comment_or_string(&node) {
-        let hit = match template {
+    walk_nodes(
+        node,
+        out,
+        |n: &Node| n.is_named() && !is_in_comment_or_string(n),
+        |n| root142_node_match(n, source, pattern, template),
+    );
+}
+
+/// Single-candidate check for [`walk_root_142`]: the template's construct
+/// selects the kind-exact matcher; every other kind is not this face.
+fn root142_node_match(
+    node: &Node,
+    source: &str,
+    pattern: &str,
+    template: &Root142Template,
+) -> Option<PatternMatch> {
+    let hit = match template {
             Root142Template::RsMod { .. } if node.kind() == "mod_item" => {
                 root142_block_member_match(&node, source, pattern, "name", "body", template)
             }
@@ -803,14 +818,7 @@ pub(crate) fn walk_root_142(
             }
             _ => None,
         };
-        if let Some(hit) = hit {
-            out.push(hit);
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_root_142(child, source, pattern, template, out);
-    }
+        hit
 }
 
 /// Directive-family PATTERN spellings the reference ACCEPTS but binds

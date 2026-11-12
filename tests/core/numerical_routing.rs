@@ -8,7 +8,7 @@
 //! Every expectation is HAND-DERIVED (rational or float derivation in the
 //! comment above it). Nothing here snapshots production output.
 
-use ast_sgrep_core::fusion::LearnedFusionModel;
+use ast_sgrep_testkit::LearnedFusionModel;
 use ast_sgrep_core::intent::{
     default_weights, route_hits, weights_for, ChannelWeights, QueryIntent,
 };

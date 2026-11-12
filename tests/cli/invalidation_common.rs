@@ -154,7 +154,6 @@ pub fn run_outline(bin: &Path, index_s: &str, root_s: &str, rel: &str) -> Output
     )
 }
 
-// why: hit count for one indexed path within a search response.
 // WHY area-local: served-set projection specific to invalidation oracles;
 // shared here via the include.
 pub fn hits_in(value: &Value, file: &str) -> usize {
@@ -166,20 +165,17 @@ pub fn hits_in(value: &Value, file: &str) -> usize {
         .count()
 }
 
-// why: total hit count within a search response. WHY area-local: same as
-// `hits_in`.
+// WHY area-local: same as `hits_in`.
 pub fn total_hits(value: &Value) -> usize {
     value["hits"].as_array().expect("hits array").len()
 }
 
-// why: assert a word query is served by exactly one path with exactly one hit.
 // WHY area-local: same as `hits_in`.
 pub fn assert_served_only_at(value: &Value, file: &str) {
     assert_eq!(total_hits(value), 1, "exactly one hit total: {value}");
     assert_eq!(hits_in(value, file), 1, "hit must be in {file}: {value}");
 }
 
-// why: assert a word query matches nothing anywhere (exit 0, empty hit set).
 // WHY area-local: same as `hits_in`.
 pub fn assert_served_nowhere(value: &Value) {
     assert_eq!(total_hits(value), 0, "stale hit served: {value}");

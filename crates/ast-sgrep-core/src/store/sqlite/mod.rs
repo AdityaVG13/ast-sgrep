@@ -109,6 +109,13 @@ impl IndexStore {
     /// materialization, not a query-keyed memo; a generation mismatch reopens
     /// it. Explicit `bundle` fails closed when absent/stale; `auto` falls back
     /// to SQL only when the file does not exist.
+    ///
+    /// A store-ahead-of-bundle mismatch gets a bounded grace instead of
+    /// failing closed: a daemon publish bumps `index_data_version` per
+    /// file-tx but swaps the bundle file once at flush, so a reader arriving
+    /// between the two sees a torn pair that converges on its own when the
+    /// swap lands. A store that stays stable while the bundle stays stale is
+    /// genuinely stale and still fails closed below.
     pub(crate) fn read_bundle(
         &self,
         generation: Option<i64>,
@@ -140,17 +147,73 @@ impl IndexStore {
         };
         if let Some(generation) = generation {
             if bundle.generation() != generation {
-                return Err(crate::StoreError::Other(format!(
-                    "read bundle generation {} != store {generation}; reindex required",
-                    bundle.generation()
-                ))
-                .into());
+                match self.await_bundle_publish(generation) {
+                    Some(settled) => {
+                        // The swap replaced the file: re-stamp, or the memo
+                        // would pin the old inode and force a reopen per call.
+                        let stamp = crate::store::read_bundle::file_stamp(
+                            &crate::store::read_bundle::path_for(&self.db_path),
+                        );
+                        return Ok(Some(self.memoize_bundle(settled, stamp)));
+                    }
+                    None => {
+                        return Err(crate::StoreError::Other(format!(
+                            "read bundle generation {} != store {generation}; reindex required",
+                            bundle.generation()
+                        ))
+                        .into());
+                    }
+                }
             }
         }
+        Ok(Some(self.memoize_bundle(bundle, stamp)))
+    }
+
+    /// Memoize an opened bundle and return the shared handle. Single home for
+    /// the memo store so the publish-grace path and the fast path cannot drift.
+    fn memoize_bundle(
+        &self,
+        bundle: crate::store::read_bundle::ReadBundle,
+        stamp: Option<(u64, u64)>,
+    ) -> std::sync::Arc<crate::store::read_bundle::ReadBundle> {
         let bundle = std::sync::Arc::new(bundle);
         *self.bundle.borrow_mut() = Some(std::sync::Arc::clone(&bundle));
         self.bundle_file_stamp.set(stamp);
-        Ok(Some(bundle))
+        bundle
+    }
+
+    /// Bounded grace for a store-ahead-of-bundle read: re-open the bundle
+    /// while the store version is stable at the requested generation, so an
+    /// in-flight daemon publish can land its swap. Returns the settled bundle
+    /// when its header reaches `generation`; returns `None` when the store
+    /// moved on (the caller's snapshot is superseded — its own fence owns the
+    /// retry) or the budget expires with the bundle still stale (genuinely
+    /// stale, or a crashed writer: fail closed as before).
+    fn await_bundle_publish(
+        &self,
+        generation: i64,
+    ) -> Option<crate::store::read_bundle::ReadBundle> {
+        const GRACE_POLLS: usize = 200;
+        const GRACE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+        let mut polls = 0;
+        loop {
+            // The store moved past the caller's snapshot: superseded, not
+            // settleable here. A crashed-writer read error also exits here
+            // (fail closed, no grace on a broken connection).
+            if self.index_data_version().ok() != Some(generation) {
+                return None;
+            }
+            match crate::store::read_bundle::ReadBundle::open(&self.db_path).ok()? {
+                Some(next) if next.generation() == generation => return Some(next),
+                Some(_) => {}
+                None => return None,
+            }
+            polls += 1;
+            if polls >= GRACE_POLLS {
+                return None;
+            }
+            std::thread::sleep(GRACE_INTERVAL);
+        }
     }
     pub(crate) fn line_corpus(
         &self,

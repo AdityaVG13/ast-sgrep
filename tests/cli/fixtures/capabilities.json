@@ -16,34 +16,6 @@
   "command": "capabilities",
   "commands": [
     {
-      "about": "Run fixed performance and identity suites",
-      "flags": [
-        "--ann-probes",
-        "--ann-threshold",
-        "--budget-tokens",
-        "--count",
-        "--excerpt-lines",
-        "--file-filter",
-        "--files-with-matches",
-        "--fixture",
-        "--format",
-        "--iterations",
-        "--no-embed",
-        "--preview",
-        "--queries-file",
-        "--query",
-        "--response-snippet-tokens",
-        "--semantic-only",
-        "--skip-index",
-        "--snippet-tokens",
-        "--suite",
-        "--tantivy",
-        "--warmed"
-      ],
-      "name": "bench",
-      "usage": "asgrep bench"
-    },
-    {
       "about": "Find a bounded call path (call graph only, not value flow)",
       "flags": [
         "--max-depth",
@@ -129,16 +101,6 @@
       ],
       "name": "doctor",
       "usage": "asgrep doctor"
-    },
-    {
-      "about": "Evaluate retrieval against a gold fixture",
-      "flags": [
-        "--ab",
-        "--gold",
-        "--scip"
-      ],
-      "name": "eval",
-      "usage": "asgrep eval"
     },
     {
       "about": "Find files importing a module (imports: channel)",

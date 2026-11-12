@@ -300,7 +300,9 @@ fn call_path_oversize_propagates_operational() {
 /// INTENT: unknown bench suite (lib None) reaches CLI as exit 2.
 /// KILLS: suite-fallback-to-default, exit-swap.
 /// ABSORBS: none.
+/// Dev-only: the bench subcommand exists only under `dev-tools`.
 #[test]
+#[cfg(feature = "dev-tools")]
 fn bench_unknown_suite_propagates_operational() {
     let dir = kit::fixture_root();
     let root = dir.path().to_string_lossy().into_owned();
