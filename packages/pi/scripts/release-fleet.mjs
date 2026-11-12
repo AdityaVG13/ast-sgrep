@@ -218,7 +218,7 @@ const doPack = async () => {
   run(process.execPath, ['packages/pi/scripts/release-acceptance.mjs', 'verify', '--artifacts', packOut]);
   if (skipE2e) { console.log('[fleet] packaged e2e skipped (--skip-e2e)'); return; }
   console.log('[fleet] building the debug trio the packaged e2e drives');
-  for (const args of [['--locked', '-p', 'ast-sgrep-cli', '--bin', 'asgrep'], ['--locked', '-p', 'ast-sgrep-watch', '--bin', 'asgrep-watch'], ['--locked', '-p', 'ast-sgrep-codemode-napi']]) {
+  for (const args of [['build', '--locked', '-p', 'ast-sgrep-cli', '--bin', 'asgrep'], ['build', '--locked', '-p', 'ast-sgrep-watch', '--bin', 'asgrep-watch'], ['build', '--locked', '-p', 'ast-sgrep-codemode-napi']]) {
     run('cargo', args, { env: { ...process.env, RUSTC_WRAPPER: '' } });
   }
   const cdylib = existsSync(path.join(root, 'target/debug/libast_sgrep_codemode_napi.dylib'))
