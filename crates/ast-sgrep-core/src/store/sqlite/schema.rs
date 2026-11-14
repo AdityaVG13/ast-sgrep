@@ -42,6 +42,79 @@ fn ensure_semantic_field_vector_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_semantic_vectors_to_f16(conn: &Connection) -> Result<bool> {
+    let mut migrated = false;
+    let mut last_id = 0_i64;
+    loop {
+        let rows = {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, vector, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples \
+                 FROM semantic_chunks WHERE id > ?1 ORDER BY id LIMIT 256",
+            )?;
+            let rows = stmt.query_map([last_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                ))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let Some((next_id, ..)) = rows.last() else {
+            break;
+        };
+        last_id = *next_id;
+        for (id, vector, name, docs, body, graph, tests_examples) in rows {
+            let converted = (|| {
+                Ok((
+                    crate::store::bundle_semantic::quantize_semantic_blob(&vector)?,
+                    name.as_deref()
+                        .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                        .transpose()?,
+                    docs.as_deref()
+                        .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                        .transpose()?,
+                    body.as_deref()
+                        .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                        .transpose()?,
+                    graph
+                        .as_deref()
+                        .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                        .transpose()?,
+                    tests_examples
+                        .as_deref()
+                        .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                        .transpose()?,
+                ))
+            })()
+            .map_err(|error: crate::StoreError| {
+                crate::StoreError::Other(format!(
+                    "schema 20 semantic f16 migration failed at chunk {id}: {error}"
+                ))
+            })?;
+            let (vector, name, docs, body, graph, tests_examples) = converted;
+            conn.prepare_cached(
+                "UPDATE semantic_chunks SET vector=?2, vector_name=?3, vector_docs=?4, vector_body=?5, vector_graph=?6, vector_tests_examples=?7 WHERE id=?1",
+            )?
+            .execute(rusqlite::params![
+                id,
+                vector,
+                name,
+                docs,
+                body,
+                graph,
+                tests_examples,
+            ])?;
+            migrated = true;
+        }
+    }
+    Ok(migrated)
+}
+
 fn ensure_scip_facts_table(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS scip_facts (
@@ -88,6 +161,7 @@ impl IndexStore {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let drops_fts_shadows = version < 18;
         let mut drops_trigram_pages = false;
+        let mut migrated_semantic_vectors = false;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
             if version < 12 {
@@ -238,6 +312,13 @@ impl IndexStore {
                 self.conn.execute_batch(SCHEMA_DDL)?;
                 drops_trigram_pages = true;
             }
+            if version > 0 && version < 20 {
+                migrated_semantic_vectors = migrate_semantic_vectors_to_f16(&self.conn)?;
+                if migrated_semantic_vectors {
+                    self.bump_index_data_version()?;
+                    crate::semantic_ann::mark_semantic_ivf_stale(self)?;
+                }
+            }
             self.conn
                 .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
             Ok(())
@@ -253,10 +334,9 @@ impl IndexStore {
                 return Err(error);
             }
         }
-        if drops_fts_shadows || drops_trigram_pages {
-            // DROP frees pages to the freelist only; return the file space
-            // once for the schema-18 shadow-content reclaim and the schema-19
-            // trigram reclaim.
+        if drops_fts_shadows || drops_trigram_pages || migrated_semantic_vectors {
+            // DROP and narrower vectors free pages to the freelist only;
+            // return that space to the filesystem once after COMMIT.
             let _ = self.conn.execute_batch("VACUUM");
         }
         Ok(())

@@ -31,7 +31,10 @@ use std::sync::Arc;
 //      ~1GB it costs on a mid-size repo. Purely a space reclaim: the table
 //      survives (empty) so the incremental delete statements stay valid, and
 //      the no-bundle control arm still builds and reads it.
-pub const INDEX_SCHEMA_VERSION: i64 = 19;
+//   20: primary and per-field `semantic_chunks` vectors are f16, matching
+//      the precision already served by the read bundle. Migration quantizes
+//      saved vectors in place; no source reindex or re-embedding is needed.
+pub const INDEX_SCHEMA_VERSION: i64 = 20;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";

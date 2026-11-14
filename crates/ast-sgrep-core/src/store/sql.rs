@@ -397,16 +397,26 @@ DELETE FROM scip_facts; DELETE FROM callers; DELETE FROM symbols; DELETE FROM li
 DELETE FROM embed_cache; \
 DELETE FROM meta WHERE key NOT IN ('root', 'semantic_data_version', 'index_data_version', 'lexicon_data_version');";
 
-pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+fn decode_emb_vec(
+    r: &rusqlite::Row<'_>,
+    idx: usize,
+    decode: fn(&[u8]) -> std::result::Result<Vec<f32>, &'static str>,
+) -> rusqlite::Result<Vec<f32>> {
     let v: Vec<u8> = r.get(idx)?;
     // Fail closed on corrupt blobs -- never default to zeros.
-    ast_sgrep_embed::embed_from_bytes(&v).map_err(|msg| {
+    decode(&v).map_err(|msg| {
         rusqlite::Error::FromSqlConversionFailure(
             idx,
             rusqlite::types::Type::Blob,
             Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, msg)),
         )
     })
+}
+pub(crate) fn emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+    decode_emb_vec(r, idx, crate::store::bundle_semantic::decode_semantic_blob)
+}
+pub(crate) fn legacy_emb_vec(r: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Vec<f32>> {
+    decode_emb_vec(r, idx, ast_sgrep_embed::embed_from_bytes)
 }
 pub fn read_legacy_emb(
     r: &rusqlite::Row<'_>,
@@ -417,7 +427,7 @@ pub fn read_legacy_emb(
         line_end: r.get(1)?,
         symbol: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
         text: r.get(2)?,
-        embedding: emb_vec(r, 4)?,
+        embedding: legacy_emb_vec(r, 4)?,
     })
 }
 pub fn read_sem_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ast_sgrep_embed::SemanticChunkRow> {

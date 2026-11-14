@@ -530,6 +530,9 @@ impl Indexer {
         // Lexicon SQL must land before the read bundle is packed; otherwise the mmap
         // table is an empty snapshot and hybrid critic expansion goes dark.
         self.rebuild_lexicon_if_dirty();
+        if self.store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1") {
+            semantic_ivf_dirty = true;
+        }
         self.rebuild_dirty_sidecars(&stats, semantic_ivf_dirty)?;
         Ok(stats)
     }
@@ -1041,12 +1044,13 @@ impl Indexer {
     }
 
     pub fn flush_deferred_rebuilds(&mut self) -> Result<()> {
-        let pending = self.deferred_rebuilds_pending();
+        let stale_ivf = self.store.get_meta("semantic_ivf_stale")?.as_deref() == Some("1");
+        let pending = self.deferred_rebuilds_pending() || stale_ivf;
         if self.sidecars_dirty.tantivy {
             self.rebuild_tantivy_sidecar()?;
             self.sidecars_dirty.tantivy = false;
         }
-        if self.sidecars_dirty.semantic_ivf {
+        if self.sidecars_dirty.semantic_ivf || stale_ivf {
             self.rebuild_semantic_ivf_sidecar()?;
             self.sidecars_dirty.semantic_ivf = false;
         }
@@ -1054,6 +1058,8 @@ impl Indexer {
         self.rebuild_lexicon_if_dirty();
         if lexicon_dirty {
             self.rebuild_read_bundle()?;
+        } else {
+            self.rebuild_read_bundle_if_stale()?;
         }
         if pending {
             self.advertise_writer_generation();

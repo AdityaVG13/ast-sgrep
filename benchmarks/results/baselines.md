@@ -16,6 +16,69 @@ repository. Any number quoted in docs, commit messages, or bead close reasons
 must trace back to a row here or carry its own reproduce command. Each dated
 fingerprint owns its machine, corpus, configuration and sample-count limits.
 
+## 2026-11-14 schema-20 semantic vector storage: f16 candidate
+
+**Status: measured uncommitted candidate, not canonical or release-certified.**
+HEAD `7b2c662b8da2c193d34535065de429ef99df29a5` plus the schema-20 worktree,
+on an Apple M5 Max. The frozen copy-on-write fixture is a schema-19 codewhale
+index (4,549 files, 209,022 semantic chunks), not a quality corpus. Baseline
+binary sha256
+`2607c97aee23ed3c175eea51f08e9cf57047861832bb7a38761229948cae66bd`;
+candidate sha256
+`f74f22505748e161eb7bf096341f49414bdb02871ff234be06a675c756c607b0`.
+Raw before/after evidence, exact counters, and query rows are under the local
+`/tmp/idxlab` fixture, not a checked-in reproducible benchmark bundle.
+
+The six `semantic_chunks` columns are `vector` plus five nullable per-field
+vectors. Fresh writes and the in-place id-ordered migration quantize each f32
+lane once. Every non-null 256-dimensional blob measured 1,024 bytes before and
+512 bytes after; null field vectors stayed null. The prior f16 read bundle and
+the separate `embeddings` f32 representation are not included in these totals.
+
+| Frozen schema-19 → schema-20 fixture | Before bytes | After bytes |
+|---|---:|---:|
+| Primary vectors | 214,038,528 | 107,019,264 |
+| Nullable field vectors (summed per column) | 690,648,064 | 345,324,032 |
+| Six-vector total | 904,686,592 | 452,343,296 |
+| `index.db` after migration and VACUUM | 2,532,454,400 | 2,255,245,312 |
+
+Raw vector bytes saved **452,343,296 bytes (431.39 MiB)**; actual `index.db`
+bytes saved **277,209,088 bytes (264.37 MiB, 10.95%)**. The top-level index
+files fell from 4,420,722,223 to 4,143,513,136 bytes (the extra one-byte
+accounting difference is the writer-generation counter). Do not substitute the
+raw halving for the file-size result: `dbstat` for `semantic_chunks` measured
+the expected 452,343,296-byte payload reduction, but unused bytes increased
+209,539,376 during migration. `index.read` was already f16 and stayed
+1,668,387,446 bytes; the f32 IVF payloads each stayed 215,140,352 bytes.
+Database hashes before/after are `078d4aac…cdacc` and `d5efd816…f94f`;
+both `PRAGMA quick_check` calls returned `ok`.
+
+The migration ran only against `/tmp/idxlab/f16_final/index.db`:
+`ASGREP_NO_AMBIENT_FRESHNESS=1 /tmp/idxlab/asgrep-schema20-final index
+/Users/aditya/Developer/codewhale --index-path /tmp/idxlab/f16_final/index.db
+--json` (operation `01M7C9MJSPMF3SB5D8FTX0NXFM`). It preserved file hashes,
+indexed and removed zero source files, failed zero files, and elapsed in
+41.40 seconds including the required IVF rebuild; this is not a general
+migration-latency baseline. The post-migration fixture has schema 20,
+`semantic_ivf_stale=0`, and an empty WAL. A second unchanged-file pass also
+indexed and removed zero files, failed none, and retained those health checks.
+The production codewhale and ast-sgrep indexes remained schema 18.
+
+Query parity used 14 commands (six semantic-only, eight hybrid/literal/regex)
+in default, `ASGREP_READPATH=sql`, and `ASGREP_NOCACHE=corpus` arms, with
+`ASGREP_NO_AMBIENT_FRESHNESS=1`, `--no-auto-index --limit 16 --json`. All
+42/42 calls succeeded in each binary. Comparing ordered
+`(file, line_start, line_end, kind, symbol)` tuples found **42/42 exact f32/f16
+matches**. Across the 56 within-binary arm pairs, only the two default-arm
+comparisons for the hybrid needle `database connection retry` differed; those
+same two differed before and after, so no new arm divergence was introduced.
+This checks hit identity and order, not bitwise floating-point score equality,
+and is not a RepoQA/CoSQA recall rerun. Evidence:
+`/tmp/idxlab/final-query-parity.json`, `final-storage-measurements.json`, and
+`run_query_battery.py` with the two binary/index/output/label tuples shown there.
+Historical-mining blocker and retry condition:
+`docs/progress/perf-negative-results.md`, schema-20 entry.
+
 ## 2.7.0 shipped benchmark (2026-10-30)
 
 **Status: canonical for shipped-2.7.0 claims; reproducible-in-tree.** Harness

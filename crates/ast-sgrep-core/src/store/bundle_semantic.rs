@@ -255,23 +255,43 @@ fn append_field_trailer(
 }
 
 fn push_f16_row(out: &mut Vec<u8>, blob: Option<&[u8]>, dim: usize) -> bool {
-    let zeros = dim.saturating_mul(2);
+    let row_bytes = dim.saturating_mul(2);
     let Some(bytes) = blob.filter(|b| !b.is_empty()) else {
-        out.extend(std::iter::repeat_n(0u8, zeros));
+        out.extend(std::iter::repeat_n(0u8, row_bytes));
         return false;
     };
-    let Ok(vec) = ast_sgrep_embed::embed_from_bytes(bytes) else {
-        out.extend(std::iter::repeat_n(0u8, zeros));
-        return false;
-    };
-    if vec.len() != dim {
-        out.extend(std::iter::repeat_n(0u8, zeros));
+    if bytes.len() != row_bytes {
+        out.extend(std::iter::repeat_n(0u8, row_bytes));
         return false;
     }
-    for lane in vec {
-        out.extend_from_slice(&f32_to_f16(lane).to_le_bytes());
-    }
+    out.extend_from_slice(bytes);
     true
+}
+
+pub(crate) fn encode_semantic_blob(vector: &[f32]) -> Vec<u8> {
+    vector
+        .iter()
+        .flat_map(|lane| f32_to_f16(*lane).to_le_bytes())
+        .collect()
+}
+
+pub(crate) fn decode_semantic_blob(bytes: &[u8]) -> std::result::Result<Vec<f32>, &'static str> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err("semantic f16 byte length is not a multiple of 2");
+    }
+    Ok(bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| f16_to_f32(u16::from_le_bytes(*chunk)))
+        .collect())
+}
+
+pub(crate) fn quantize_semantic_blob(bytes: &[u8]) -> crate::Result<Vec<u8>> {
+    let vector = ast_sgrep_embed::embed_from_bytes(bytes).map_err(|error| {
+        crate::StoreError::Other(format!("invalid f32 semantic vector: {error}"))
+    })?;
+    Ok(encode_semantic_blob(&vector))
 }
 
 fn concat_bytes(count: usize, dim: usize) -> usize {

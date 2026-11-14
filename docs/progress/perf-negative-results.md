@@ -1384,3 +1384,41 @@ Retry predicate (directly testable): close P5 only when `general_lane_supported`
 teaching error, structural-intent on gold sha256 `231aec65efc1876cd8a3499997fa2365d0330356157176db22d6350ae64605bc`
 still prints ALL MRR@10 **0.9847**, and the P3 mill protocol still has pattern p50 **≤0.090 ms**
 bundle and identity 45/45. Restoring any of the deleted compile caches does not count as a keep.
+
+## Measured: schema-20 f16 `semantic_chunks` storage (2026-11-14)
+
+Measured uncommitted candidate on HEAD `7b2c662b`, Apple M5 Max. The primary
+and five nullable per-field vectors are stored as f16, sharing the precision
+already used by `index.read`; the separate `embeddings` f32 reader remains
+unchanged. On a frozen copy-on-write schema-19 codewhale index (4,549 files,
+209,022 chunks), raw vectors fell 904,686,592 → 452,343,296 bytes (431.39 MiB
+saved), while `index.db` after migration and VACUUM fell 2,532,454,400 →
+2,255,245,312 bytes (264.37 MiB saved). The raw-byte halving is not the actual
+file-size claim: unused `semantic_chunks` bytes rose 209,539,376. The f32 IVF
+sidecar remains intentional. Full fixture, machine, binary hashes, counts, and
+scope: `benchmarks/results/baselines.md`, schema-20 semantic vector storage.
+This is a storage result, not a latency, recall, or release claim.
+
+Migration preserves source hashes, changed zero source files, and produces
+schema 20, empty WAL, `quick_check=ok`, and `semantic_ivf_stale=0`. The initial
+implementation left IVF stale across unchanged-file full and incremental
+passes; both now consume the marker and refresh a stale read bundle. Failure-
+first checks caught that state and independently rejected an f32-storage
+mutant. Final core suites (26 passed, one existing ignored fixture), CLI smoke
+(18), and MCP cross-surface parity (2) passed via their named RCH commands.
+All 14 default/SQL/no-corpus command triples matched frozen f32 ordered hits,
+42/42. One hybrid `database connection retry` query retains its two baseline
+read-arm ordering differences; f16 changes none of them.
+
+CASS history is **OPEN / BLOCKED**, not searched successfully. Every required
+60-day universal and ast-sgrep failure-term lexical probe was attempted with
+`cass search "$term" --robot --days 60 --limit 50 --mode lexical --timeout
+30000` (30-second outer timeout) and returned `maintenance-required`: the
+8,226,547,592-byte archive exceeded the 1,073,741,824-byte automatic-repair
+budget. No detached/manual rebuild was authorized or run, so no historical
+exclusion is certified. Retry the history probes only when repository-scoped
+CASS lexical searches complete without maintenance errors for every required
+term; until then this blocker must remain. Retry a further file-size claim
+only with a changed page-packing mechanism on the same frozen fixture, a
+measured saving above 277,209,088 bytes, and the complete 42-call ordered-hit
+comparison intact; repeating VACUUM alone does not establish a new keep.

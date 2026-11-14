@@ -1,7 +1,7 @@
 //! Intent-weighted combination of per-field embedding similarities (7d5x.3).
 use crate::intent::QueryIntent;
 use crate::semantic_chunk::{FieldVectorMask, SemanticFieldVectors};
-use ast_sgrep_embed::{cosine_similarity, embed_from_bytes};
+use ast_sgrep_embed::cosine_similarity;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FieldWeights {
@@ -94,20 +94,12 @@ pub fn field_weights(intent: QueryIntent) -> FieldWeights {
 
 pub fn decode_field_vector(bytes: Option<&[u8]>) -> Option<Vec<f32>> {
     let bytes = bytes.filter(|b| !b.is_empty())?;
-    embed_from_bytes(bytes).ok()
+    crate::store::bundle_semantic::decode_semantic_blob(bytes).ok()
 }
 
-/// Bundle field planes are f16 (`dim * 2` bytes). SQL blobs are f32 LE
-/// (`dim * 4`). Both expand to the same `f32` lane cosine uses.
+/// SQL and bundle fields now share the same f16 bytes and widen only for
+/// the f32 cosine kernel.
 fn vector_for_query(query: &[f32], bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.len() == query.len().saturating_mul(2) {
-        let mut out = Vec::with_capacity(query.len());
-        for chunk in bytes.chunks_exact(2) {
-            let bits = u16::from_le_bytes(chunk.try_into().ok()?);
-            out.push(crate::store::bundle_semantic::f16_to_f32(bits));
-        }
-        return Some(out);
-    }
     decode_field_vector(Some(bytes)).filter(|v| v.len() == query.len())
 }
 

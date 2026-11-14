@@ -73,13 +73,13 @@ impl IndexStore {
         // enough. COUNT/MAX(id) stay on the integer PK.
         let (count, max_id, dim): (usize, i64, usize) = if let Some(l) = lang {
             self.conn.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(sc.id),0),                  COALESCE(length((SELECT sc2.vector FROM semantic_chunks sc2                     JOIN files f2 ON f2.id=sc2.file_id WHERE f2.language=?1 LIMIT 1))/4, 0)                  FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1",
+                "SELECT COUNT(*), COALESCE(MAX(sc.id),0),                  COALESCE(length((SELECT sc2.vector FROM semantic_chunks sc2                     JOIN files f2 ON f2.id=sc2.file_id WHERE f2.language=?1 LIMIT 1))/2, 0)                  FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id WHERE f.language=?1",
                 params![l],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?
         } else {
             self.conn.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(id),0),                  COALESCE(length((SELECT vector FROM semantic_chunks LIMIT 1))/4, 0)                  FROM semantic_chunks",
+                "SELECT COUNT(*), COALESCE(MAX(id),0),                  COALESCE(length((SELECT vector FROM semantic_chunks LIMIT 1))/2, 0)                  FROM semantic_chunks",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?
@@ -90,7 +90,7 @@ impl IndexStore {
     pub fn semantic_primary_dim(&self) -> Result<usize> {
         Ok(optional_row(
             &self.conn,
-            "SELECT length(vector)/4 FROM semantic_chunks LIMIT 1",
+            "SELECT length(vector)/2 FROM semantic_chunks LIMIT 1",
             &[],
             |row| row.get::<_, i64>(0),
         )?

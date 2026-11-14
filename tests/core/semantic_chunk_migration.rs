@@ -284,6 +284,11 @@ fn persist_per_field_vectors_on_index() {
         .unwrap();
     let store = indexer.store();
     assert_eq!(store.schema_version(), ast_sgrep_core::INDEX_SCHEMA_VERSION);
+    assert_eq!(
+        store.semantic_primary_dim().unwrap(),
+        ast_sgrep_embed::STATIC_DIM,
+        "storage bytes must widen back to the model dim, not an f32-sized impostor"
+    );
     let fields = store.semantic_chunk_field_vectors().unwrap();
     assert!(
         !fields.is_empty(),
@@ -350,14 +355,7 @@ fn assert_field_roundtrip(sql: Option<&[u8]>, packed: Option<&[u8]>, field: &str
     match (sql.filter(|b| !b.is_empty()), packed.filter(|b| !b.is_empty())) {
         (None, None) => {}
         (Some(sql), Some(packed)) => {
-            let sql = ast_sgrep_embed::embed_from_bytes(sql).expect("sql f32");
-            let packed = ast_sgrep_embed::embed_from_bytes(packed).expect("packed f32");
-            assert_eq!(sql.len(), packed.len(), "{field} dim");
-            let cosine = ast_sgrep_embed::cosine_similarity(&sql, &packed);
-            assert!(
-                cosine > 0.999,
-                "{field} f16 roundtrip cosine {cosine} (want > 0.999)"
-            );
+            assert_eq!(sql, packed, "{field} SQL storage must be the bundle's f16");
         }
         (sql, packed) => {
             assert_eq!(
@@ -369,6 +367,72 @@ fn assert_field_roundtrip(sql: Option<&[u8]>, packed: Option<&[u8]>, field: &str
             );
         }
     }
+}
+
+#[test]
+fn schema_19_semantic_vectors_migrate_to_f16_without_reindexing() {
+    let temp = TempDir::new().unwrap();
+    let store = IndexStore::open(temp.path(), None).unwrap();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO files(path, language, mtime_secs, mtime_nanos, content_hash) VALUES('legacy.rs', 'rust', 1, 0, 'unchanged')",
+            [],
+        )
+        .unwrap();
+    let file_id = store.connection().last_insert_rowid();
+    let primary = [1.0, 0.5, -2.75];
+    let field = [-1.0, 0.5, 0.125];
+    store
+        .connection()
+        .execute(
+            "INSERT INTO semantic_chunks(file_id, symbol_id, chunk_kind, line_start, line_end, symbol_name, text, vector, vector_name, vector_docs, vector_body, vector_graph, vector_tests_examples) VALUES(?1, NULL, 'symbol', 1, 3, 'legacy', 'whole parent', ?2, ?3, NULL, ?3, NULL, ?3)",
+            params![file_id, ast_sgrep_embed::embed_to_bytes(&primary), ast_sgrep_embed::embed_to_bytes(&field)],
+        )
+        .unwrap();
+    let generation = store.index_data_version().unwrap();
+    store
+        .connection()
+        .execute_batch("PRAGMA user_version = 19")
+        .unwrap();
+    drop(store);
+
+    let migrated = IndexStore::open(temp.path(), None).unwrap();
+    let (primary_blob, name_blob, docs, content_hash): (
+        Vec<u8>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        String,
+    ) = migrated
+        .connection()
+        .query_row(
+            "SELECT sc.vector, sc.vector_name, sc.vector_docs, f.content_hash FROM semantic_chunks sc JOIN files f ON f.id=sc.file_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(primary_blob.len(), primary.len() * 2);
+    assert_eq!(name_blob.as_deref().map(<[u8]>::len), Some(field.len() * 2));
+    assert!(docs.is_none(), "absent field vectors must stay absent");
+    assert_eq!(content_hash, "unchanged");
+    assert!(migrated.index_data_version().unwrap() > generation);
+    assert_eq!(
+        migrated.get_meta("semantic_ivf_stale").unwrap().as_deref(),
+        Some("1"),
+        "f32 IVF payloads must not survive quantization as fresh"
+    );
+    assert_eq!(migrated.semantic_primary_dim().unwrap(), primary.len());
+
+    let rows = migrated.all_semantic_chunks(None).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, "whole parent");
+    assert_eq!(rows[0].embedding, primary);
+
+    let fields = migrated.semantic_chunk_field_vectors().unwrap();
+    let name =
+        ast_sgrep_core::search::field_weight::decode_field_vector(fields[0].1.name.as_deref())
+            .unwrap();
+    assert_eq!(name, field);
 }
 
 #[test]
@@ -442,4 +506,52 @@ fn fragment_only_parent_chunks_are_rebuilt_on_schema_upgrade() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, ast_sgrep_core::INDEX_SCHEMA_VERSION);
+}
+
+#[test]
+fn index_all_persists_stale_ivf_rebuild_after_f16_migration() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("account.rs"),
+        "/// renews billing\nfn renew_account() { charge(); }\nfn main() { renew_account(); }\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        root: temp.path().to_path_buf(),
+        embed_semantic: true,
+        ann_threshold: Some(0),
+        ..IndexOptions::default()
+    };
+    let mut initial = Indexer::new(options.clone()).unwrap();
+    initial.index_all().unwrap();
+    assert!(semantic_ivf_path(initial.store().db_path()).exists());
+    initial
+        .store()
+        .connection()
+        .execute_batch(
+            "UPDATE semantic_chunks SET
+               vector=zeroblob(2*length(vector)),
+               vector_name=CASE WHEN vector_name IS NULL THEN NULL ELSE zeroblob(2*length(vector_name)) END,
+               vector_docs=CASE WHEN vector_docs IS NULL THEN NULL ELSE zeroblob(2*length(vector_docs)) END,
+               vector_body=CASE WHEN vector_body IS NULL THEN NULL ELSE zeroblob(2*length(vector_body)) END,
+               vector_graph=CASE WHEN vector_graph IS NULL THEN NULL ELSE zeroblob(2*length(vector_graph)) END,
+               vector_tests_examples=CASE WHEN vector_tests_examples IS NULL THEN NULL ELSE zeroblob(2*length(vector_tests_examples)) END;
+             PRAGMA user_version = 19;",
+        )
+        .unwrap();
+    drop(initial);
+
+    let mut migrated = Indexer::new(options).unwrap();
+    let stats = migrated.index_all().unwrap();
+    assert_eq!(stats.files_indexed, 0);
+    assert_eq!(stats.files_removed, 0);
+    assert_eq!(
+        migrated
+            .store()
+            .get_meta("semantic_ivf_stale")
+            .unwrap()
+            .as_deref(),
+        Some("0"),
+        "an unchanged-file index pass must publish a fresh IVF payload"
+    );
 }

@@ -360,6 +360,32 @@ impl IndexStore {
                 .binary_search_by(|(name, _)| name.as_str().cmp(&key))
                 .ok()
                 .map(|i| name_to_id[i].1);
+            let vector = crate::store::bundle_semantic::quantize_semantic_blob(&e.vector_bytes)?;
+            let name = e
+                .name
+                .as_deref()
+                .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                .transpose()?;
+            let docs = e
+                .docs
+                .as_deref()
+                .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                .transpose()?;
+            let body = e
+                .body
+                .as_deref()
+                .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                .transpose()?;
+            let graph = e
+                .graph
+                .as_deref()
+                .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                .transpose()?;
+            let tests_examples = e
+                .tests_examples
+                .as_deref()
+                .map(crate::store::bundle_semantic::quantize_semantic_blob)
+                .transpose()?;
             st.execute(params![
                 file_id,
                 sid,
@@ -368,12 +394,12 @@ impl IndexStore {
                 c.line_end,
                 c.symbol_name,
                 c.excerpt,
-                e.vector_bytes,
-                e.name.clone(),
-                e.docs.clone(),
-                e.body.clone(),
-                e.graph.clone(),
-                e.tests_examples.clone(),
+                vector,
+                name,
+                docs,
+                body,
+                graph,
+                tests_examples,
             ])?;
         }
         self.persist_embed_metadata(first.dim)
