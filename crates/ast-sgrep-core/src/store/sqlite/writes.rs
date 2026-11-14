@@ -154,9 +154,14 @@ impl IndexStore {
             }
         } else if common == lines.len() && existing.len() > lines.len() {
             // Truncate trailing lines: drop FTS + content=trigram rowids before lines.
-            delete_file_lines(&self.conn, file_id, Some(lines.len() as u32 + 1))?;
+            delete_file_lines(
+                &self.conn,
+                file_id,
+                Some(lines.len() as u32 + 1),
+                self.builds_trigram_index(),
+            )?;
         } else {
-            delete_file_lines(&self.conn, file_id, None)?;
+            delete_file_lines(&self.conn, file_id, None, self.builds_trigram_index())?;
             self.insert_lines(file_id, lines)?;
         }
         self.conn
@@ -213,7 +218,7 @@ impl IndexStore {
         depth_truncated: bool,
     ) -> Result<i64> {
         if let Some(id) = self.file_id(path)? {
-            delete_file_children(&self.conn, id)?;
+            delete_file_children(&self.conn, id, self.builds_trigram_index())?;
             self.conn.prepare_cached(
                 "UPDATE files SET language=?1, mtime_secs=?2, mtime_nanos=?3, content_hash=?4, depth_truncated=?5 WHERE id=?6",
             )?.execute(params![lang, mtime_secs, mtime_nanos, hash, depth_truncated, id])?;
@@ -249,14 +254,20 @@ impl IndexStore {
             "INSERT INTO lines_code_fts(rowid, content, file_id, line_no) VALUES(?1,?2,?3,?4)",
         )?;
         let mut tri = self
-            .conn
-            .prepare_cached("INSERT INTO lines_trigram(rowid, content) VALUES(?1,?2)")?;
+            .builds_trigram_index()
+            .then(|| {
+                self.conn
+                    .prepare_cached("INSERT INTO lines_trigram(rowid, content) VALUES(?1,?2)")
+            })
+            .transpose()?;
         for (no, content) in lines {
             ls.execute(params![file_id, no, content])?;
             let rid = self.conn.last_insert_rowid();
             fts.execute(params![rid, content, file_id, no])?;
             code_fts.execute(params![rid, content, file_id, no])?;
-            tri.execute(params![rid, content])?;
+            if let Some(tri) = tri.as_mut() {
+                tri.execute(params![rid, content])?;
+            }
         }
         Ok(())
     }
@@ -434,7 +445,7 @@ impl IndexStore {
             let Some(id) = self.file_id(rel_path)? else {
                 return Ok(());
             };
-            delete_file_children(&self.conn, id)?;
+            delete_file_children(&self.conn, id, self.builds_trigram_index())?;
             self.conn
                 .execute("DELETE FROM files WHERE id = ?1", params![id])?;
             self.delete_meta(&format!("eol:{rel_path}"))?;

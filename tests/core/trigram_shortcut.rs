@@ -54,10 +54,19 @@ fn setup() -> (TempDir, Searcher) {
         index_path: Some(index_path.clone()),
         force_reindex: true,
         embed_semantic: false,
+        // These contracts are about the trigram shortcut, which a
+        // bundle-backed index no longer builds: the corpus answers literal
+        // and regex queries there. Ask for the table explicitly.
+        build_trigram_index: true,
         ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
+    // The trigram lane only answers on the no-bundle arm: a bundle-backed
+    // index serves literal queries from the line corpus, so a raw
+    // `lines_trigram` mutation would not move the result. Drop the bundle so
+    // these contracts exercise the path they are about.
+    let _ = fs::remove_file(index_path.with_extension("read"));
     let searcher = Searcher::new(SearchOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path),
@@ -195,10 +204,19 @@ fn static_flood_falls_back_to_phrase() {
         index_path: Some(index_path.clone()),
         force_reindex: true,
         embed_semantic: false,
+        // These contracts are about the trigram shortcut, which a
+        // bundle-backed index no longer builds: the corpus answers literal
+        // and regex queries there. Ask for the table explicitly.
+        build_trigram_index: true,
         ..IndexOptions::default()
     })
     .unwrap();
     indexer.index_all().unwrap();
+    // The trigram lane only answers on the no-bundle arm: a bundle-backed
+    // index serves literal queries from the line corpus, so a raw
+    // `lines_trigram` mutation would not move the result. Drop the bundle so
+    // these contracts exercise the path they are about.
+    let _ = fs::remove_file(index_path.with_extension("read"));
     let searcher = Searcher::new(SearchOptions {
         root: root.to_path_buf(),
         index_path: Some(index_path),

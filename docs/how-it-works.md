@@ -143,6 +143,11 @@ Metadata (SQLite `meta` table) stores embed backend, dimension, and index finger
 | `.asgrep/lexical.db` | `--tantivy` / `ASGREP_TANTIVY=1` only | Dedicated FTS5 lexical index (opt-in; removed when the flag is off) |
 | `.asgrep/semantic.ivf` | ≥ `ann_threshold` symbols | Persisted IVF clusters + vectors; fingerprint-invalidated on reindex |
 
+The `lines_trigram` FTS5 table is a no-bundle accelerator: a bundle-backed
+index answers literal and regex queries from the line corpus, so the indexer
+leaves it empty. Only `ASGREP_READPATH=sql` without
+`ASGREP_WRITE_READ_BUNDLE` populates it.
+
 Superseded `<sidecar>.v<N>` generations from older releases are reclaimed at
 index finalize; nothing in the tree opens them.
 

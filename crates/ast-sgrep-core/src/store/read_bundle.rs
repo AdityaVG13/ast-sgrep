@@ -71,6 +71,24 @@ pub fn bundle_enabled() -> bool {
     readpath() != ReadPath::Sql
 }
 
+/// Whether this process writes a read bundle. A bundle-backed index answers
+/// literal and regex queries from the line corpus, so the `lines_trigram`
+/// FTS5 index is dead weight there: the indexer leaves it empty and the
+/// ~1GB it costs on a mid-size repo is never spent. `ASGREP_READPATH=sql`
+/// without `ASGREP_WRITE_READ_BUNDLE` is the no-bundle control arm, and it
+/// keeps the trigram index because nothing else accelerates it.
+pub fn bundle_armed() -> bool {
+    bundle_enabled() || crate::env_flag::env_flag("ASGREP_WRITE_READ_BUNDLE")
+}
+
+/// Whether this process wants the `lines_trigram` FTS5 index populated.
+/// `ASGREP_TRIGRAM_INDEX=1` asks for it explicitly; otherwise it follows the
+/// bundle, because a bundle-backed index answers literal and regex queries
+/// from the line corpus and never reads the trigram table.
+pub fn trigram_index_wanted() -> bool {
+    crate::env_flag::env_flag("ASGREP_TRIGRAM_INDEX") || !bundle_armed()
+}
+
 pub fn path_for(db_path: &Path) -> PathBuf {
     db_path.with_extension("read")
 }

@@ -25,7 +25,13 @@ use std::sync::Arc;
 //      pre-17 fragment-only parents would never be rebuilt on unchanged
 //      files; 17 wipes derived semantic state and re-keys content hashes
 //      (same treatment as the 10 re-render). Never reuse a version.
-pub const INDEX_SCHEMA_VERSION: i64 = 18;
+//   19: `lines_trigram` becomes a no-bundle accelerator. A bundle-backed
+//      index answers literal and regex queries from the line corpus, so the
+//      indexer stops populating the table and 19 empties it, returning the
+//      ~1GB it costs on a mid-size repo. Purely a space reclaim: the table
+//      survives (empty) so the incremental delete statements stay valid, and
+//      the no-bundle control arm still builds and reads it.
+pub const INDEX_SCHEMA_VERSION: i64 = 19;
 const SCHEMA_VERSION: i64 = INDEX_SCHEMA_VERSION;
 const IMPORT_SELECT: &str =
     "SELECT f.path, f.language, i.module_path, i.line_no FROM imports i JOIN files f ON f.id = i.file_id";
@@ -56,6 +62,16 @@ pub struct IndexStore {
     /// alone.
     bundle_file_stamp: std::cell::Cell<Option<(u64, u64)>>,
     line_corpus_disabled: std::cell::Cell<bool>,
+    /// Whether line writes also populate the `lines_trigram` FTS5 index. The
+    /// trigram index is a no-bundle accelerator; a bundle-backed index answers
+    /// literal and regex queries from the line corpus, so the indexer turns
+    /// this off and the table stays empty. Defaults to on so a store opened
+    /// outside the indexer keeps the historical behavior.
+    build_trigram_index: std::cell::Cell<bool>,
+    /// Cached answer to "does `lines_trigram` carry rows". The trigram arms
+    /// are only correct against a populated table, so every one of them asks
+    /// first; the table cannot gain rows under a live store.
+    trigram_populated: std::cell::Cell<Option<bool>>,
     /// Opened names sidecar (folded idf vocabularies). Generation-gated by
     /// the reader; cleared implicitly by reopen on generation change.
     names_sidecar: std::cell::RefCell<Option<std::sync::Arc<crate::names_sidecar::NamesSidecar>>>,
@@ -214,6 +230,41 @@ impl IndexStore {
             }
             std::thread::sleep(GRACE_INTERVAL);
         }
+    }
+    /// Turn `lines_trigram` population on or off for this store's line
+    /// writes. The indexer calls this once at construction; see
+    /// [`crate::store::read_bundle::bundle_armed`].
+    pub(crate) fn set_build_trigram_index(&self, build: bool) {
+        self.build_trigram_index.set(build);
+    }
+    /// Whether line writes populate `lines_trigram`.
+    pub(crate) fn builds_trigram_index(&self) -> bool {
+        self.build_trigram_index.get()
+    }
+    /// Whether `lines_trigram` carries rows. Every trigram arm is only
+    /// correct against a populated table — an empty one answers `MATCH` with
+    /// zero rows rather than falling back — so each asks here first and takes
+    /// the full-scan arm when the answer is no. A bundle-backed index never
+    /// populates it, and the table cannot gain rows under a live store, so
+    /// the probe runs once.
+    ///
+    /// The probe reads the FTS5 `_docsize` shadow table, not `lines_trigram`
+    /// itself: the table is external-content (`content = 'lines'`), so a
+    /// plain `SELECT` there answers from `lines` and reports rows even when
+    /// the index holds none. `_docsize` carries one row per indexed document
+    /// and is empty exactly when the index is.
+    pub(crate) fn trigram_index_populated(&self) -> bool {
+        if let Some(cached) = self.trigram_populated.get() {
+            return cached;
+        }
+        let populated = self
+            .conn
+            .query_row("SELECT 1 FROM lines_trigram_docsize LIMIT 1", [], |_| {
+                Ok(())
+            })
+            .is_ok();
+        self.trigram_populated.set(Some(populated));
+        populated
     }
     pub(crate) fn line_corpus(
         &self,

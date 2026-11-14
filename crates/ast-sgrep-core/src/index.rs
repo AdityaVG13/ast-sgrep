@@ -86,6 +86,11 @@ pub struct IndexOptions {
     pub lang_filter: Option<String>,
     pub respect_gitignore: bool,
     pub use_tantivy: bool,
+    /// Populate the `lines_trigram` FTS5 index. Off by default: a
+    /// bundle-backed index answers literal and regex queries from the line
+    /// corpus, so the table is dead weight (~1GB on a 4.5k-file corpus).
+    /// `ASGREP_TRIGRAM_INDEX=1` and the no-bundle control arm turn it on.
+    pub build_trigram_index: bool,
     pub embed_semantic: bool,
     pub force_reindex: bool,
     pub ann_threshold: Option<usize>,
@@ -100,6 +105,7 @@ impl Default for IndexOptions {
             lang_filter: None,
             respect_gitignore: true,
             use_tantivy: false,
+            build_trigram_index: false,
             embed_semantic: true,
             force_reindex: false,
             ann_threshold: None,
@@ -279,6 +285,12 @@ impl Indexer {
             Err(error) => return Err(error),
         };
         let ignore = crate::gitignore::IgnoreMatcher::new(&options.root);
+        // The trigram FTS5 index is a no-bundle accelerator. A bundle-backed
+        // index answers literal and regex queries from the line corpus, so
+        // populating it would spend ~1GB of index on a lane nothing reads.
+        store.set_build_trigram_index(
+            options.build_trigram_index || crate::store::read_bundle::trigram_index_wanted(),
+        );
         Ok(Self {
             store,
             root_dir,
@@ -786,9 +798,7 @@ impl Indexer {
             return Ok(());
         }
         // `auto` writes the bundle; explicit `sql` is the no-bundle control arm.
-        let armed = crate::store::read_bundle::readpath()
-            != crate::store::read_bundle::ReadPath::Sql
-            || self.config.write_read_bundle;
+        let armed = crate::store::read_bundle::bundle_armed();
         if !armed {
             return Ok(());
         }

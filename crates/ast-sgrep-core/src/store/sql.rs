@@ -308,32 +308,60 @@ pub fn at_least_rows(conn: &Connection, table: &str, threshold: usize) -> Result
 }
 /// Delete lines_fts + content-sync trigram + lines for one file.
 /// When `from_line` is `Some(n)`, only rows with `line_no >= n` are removed (truncate path).
-pub fn delete_file_lines(conn: &Connection, file_id: i64, from_line: Option<u32>) -> Result<()> {
+///
+/// `trigram` must match whether the index populates `lines_trigram`. An
+/// external-content FTS5 delete reads the content table to derive the tokens
+/// to remove, so deleting a rowid the index never held corrupts the index
+/// ("database disk image is malformed"). A bundle-backed index leaves the
+/// table empty, so it must skip these statements entirely.
+pub fn delete_file_lines(
+    conn: &Connection,
+    file_id: i64,
+    from_line: Option<u32>,
+    trigram: bool,
+) -> Result<()> {
     match from_line {
         // Partial: trigram → fts → code_fts → lines (line_no >= first).
-        Some(first) => exec_line_deletes(
-            conn,
-            &[
-                "DELETE FROM lines_trigram WHERE rowid IN \
-                 (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)",
-                "DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2",
-                // The code field must stay in lockstep or it serves stale rows.
-                "DELETE FROM lines_code_fts WHERE file_id = ?1 AND line_no >= ?2",
-                "DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2",
-            ],
-            params![file_id, first],
-        ),
+        Some(first) => {
+            if trigram {
+                exec_line_deletes(
+                    conn,
+                    &["DELETE FROM lines_trigram WHERE rowid IN \
+                      (SELECT rowid FROM lines WHERE file_id = ?1 AND line_no >= ?2)"],
+                    params![file_id, first],
+                )?;
+            }
+            exec_line_deletes(
+                conn,
+                &[
+                    "DELETE FROM lines_fts WHERE file_id = ?1 AND line_no >= ?2",
+                    // The code field must stay in lockstep or it serves stale rows.
+                    "DELETE FROM lines_code_fts WHERE file_id = ?1 AND line_no >= ?2",
+                    "DELETE FROM lines WHERE file_id = ?1 AND line_no >= ?2",
+                ],
+                params![file_id, first],
+            )
+        }
         // Whole-file: fts → code_fts → trigram → lines (FTS-content sync safe).
-        None => exec_line_deletes(
-            conn,
-            &[
-                "DELETE FROM lines_fts WHERE file_id = ?1",
-                "DELETE FROM lines_code_fts WHERE file_id = ?1",
-                "DELETE FROM lines_trigram WHERE rowid IN (SELECT rowid FROM lines WHERE file_id = ?1)",
-                "DELETE FROM lines WHERE file_id = ?1",
-            ],
-            params![file_id],
-        ),
+        None => {
+            exec_line_deletes(
+                conn,
+                &[
+                    "DELETE FROM lines_fts WHERE file_id = ?1",
+                    "DELETE FROM lines_code_fts WHERE file_id = ?1",
+                ],
+                params![file_id],
+            )?;
+            if trigram {
+                exec_line_deletes(
+                    conn,
+                    &["DELETE FROM lines_trigram WHERE rowid IN \
+                      (SELECT rowid FROM lines WHERE file_id = ?1)"],
+                    params![file_id],
+                )?;
+            }
+            exec_line_deletes(conn, &["DELETE FROM lines WHERE file_id = ?1"], params![file_id])
+        }
     }
 }
 
@@ -349,8 +377,8 @@ fn exec_line_deletes(
     Ok(())
 }
 /// Delete per-file child rows (lines/FTS/trigram first, then relational tables).
-pub fn delete_file_children(conn: &Connection, file_id: i64) -> Result<()> {
-    delete_file_lines(conn, file_id, None)?;
+pub fn delete_file_children(conn: &Connection, file_id: i64, trigram: bool) -> Result<()> {
+    delete_file_lines(conn, file_id, None, trigram)?;
     for t in FILE_CHILD_TABLE_ALLOWLIST {
         assert_sql_ident(t, FILE_CHILD_TABLE_ALLOWLIST)?;
         conn.prepare_cached(&format!("DELETE FROM {t} WHERE file_id=?1"))?

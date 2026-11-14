@@ -134,6 +134,9 @@ pub(crate) fn index_options(root: &Path, cli: &Cli) -> IndexOptions {
         embed_semantic: !t.no_embed,
         force_reindex: false,
         ann_threshold: t.ann_threshold,
+        // `ASGREP_TRIGRAM_INDEX` and the no-bundle arm are resolved by the
+        // indexer; the CLI has no flag for a table nothing reads.
+        build_trigram_index: false,
         // Explicit flag wins; otherwise the safe default.
         durability: cli.durability.unwrap_or_default(),
     }

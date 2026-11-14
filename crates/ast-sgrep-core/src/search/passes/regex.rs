@@ -72,7 +72,10 @@ pub fn regex_pass(
             deadline,
             budget,
         )?
-    } else if let Some(literal) = trigram_literal.as_deref() {
+    } else if let Some(literal) = trigram_literal
+        .as_deref()
+        .filter(|_| store.trigram_index_populated())
+    {
         let query = crate::fts::escape_fts_term(literal);
         let mut stmt = store.connection().prepare_cached(
             "SELECT f.path, l.line_no, l.content, f.language

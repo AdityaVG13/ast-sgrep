@@ -87,6 +87,7 @@ impl IndexStore {
         }
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let drops_fts_shadows = version < 18;
+        let mut drops_trigram_pages = false;
         let migration = (|| -> Result<()> {
             self.conn.execute_batch(SCHEMA_DDL)?;
             if version < 12 {
@@ -149,7 +150,7 @@ impl IndexStore {
                 // created the column.
                 ensure_depth_truncated_column(&self.conn)?;
             }
-            if version < 3 {
+            if version < 3 && crate::store::read_bundle::trigram_index_wanted() {
                 self.conn.execute_batch(
                     "INSERT INTO lines_trigram(rowid, content) SELECT rowid, content FROM lines;",
                 )?;
@@ -223,6 +224,20 @@ impl IndexStore {
                      DROP INDEX IF EXISTS idx_pattern_nodes_file;",
                 )?;
             }
+            if version > 0 && version < 19 && !crate::store::read_bundle::trigram_index_wanted() {
+                // `lines_trigram` is a no-bundle accelerator: a bundle-backed
+                // index answers literal and regex queries from the line
+                // corpus, so the indexer no longer populates it and a pre-19
+                // index carries rows nothing reads. DROP + recreate is
+                // instant, unlike walking every line through the FTS5 delete
+                // path; the VACUUM below returns the pages to the filesystem.
+                // The no-bundle control arm and `ASGREP_TRIGRAM_INDEX=1`
+                // keep their index.
+                self.conn
+                    .execute_batch("DROP TABLE IF EXISTS lines_trigram;")?;
+                self.conn.execute_batch(SCHEMA_DDL)?;
+                drops_trigram_pages = true;
+            }
             self.conn
                 .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
             Ok(())
@@ -238,9 +253,10 @@ impl IndexStore {
                 return Err(error);
             }
         }
-        if drops_fts_shadows {
+        if drops_fts_shadows || drops_trigram_pages {
             // DROP frees pages to the freelist only; return the file space
-            // once for the schema-18 shadow-content reclaim.
+            // once for the schema-18 shadow-content reclaim and the schema-19
+            // trigram reclaim.
             let _ = self.conn.execute_batch("VACUUM");
         }
         Ok(())

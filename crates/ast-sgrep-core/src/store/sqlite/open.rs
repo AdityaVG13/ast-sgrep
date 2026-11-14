@@ -143,6 +143,8 @@ impl IndexStore {
             bundle: std::cell::RefCell::new(None),
             bundle_file_stamp: std::cell::Cell::new(None),
             line_corpus_disabled: std::cell::Cell::new(false),
+            build_trigram_index: std::cell::Cell::new(true),
+            trigram_populated: std::cell::Cell::new(None),
             names_sidecar: std::cell::RefCell::new(None),
             lazy_ivf: std::cell::RefCell::new(None),
             read_only,

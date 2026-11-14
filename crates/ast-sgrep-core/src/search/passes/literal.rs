@@ -83,6 +83,12 @@ fn literal_trigram(
     parsed: &ParsedQuery,
     needle: &str,
 ) -> Result<Vec<SearchHit>> {
+    // An empty `lines_trigram` answers MATCH with zero rows rather than
+    // falling back, so a bundle-backed index (which never populates it) must
+    // take the full-scan arm instead.
+    if !store.trigram_index_populated() {
+        return literal_sql(store, options, needle, parsed.mode == QueryMode::Word, None);
+    }
     // Rarest-trigram df shortcut: when trustworthy document-frequency
     // data shows one needle trigram to be rare, MATCH only that trigram instead
     // of making FTS5 intersect every trigram of the phrase. Safety: only
@@ -331,7 +337,7 @@ fn literal_sql(
 }
 
 fn ascii_trigrams(store: &IndexStore, needle: &str) -> Option<Vec<String>> {
-    if !needle.is_ascii() || needle.contains('\0') {
+    if !needle.is_ascii() || needle.contains('\0') || !store.trigram_index_populated() {
         return None;
     }
     let lower = needle.to_ascii_lowercase();

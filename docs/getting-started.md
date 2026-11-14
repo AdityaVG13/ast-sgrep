@@ -251,6 +251,14 @@ without the flag removes a leftover sidecar.
 
 Tune ANN: `--ann-threshold N` or `ASGREP_ANN_THRESHOLD`.
 
+The `lines_trigram` FTS5 table is a no-bundle accelerator. A bundle-backed
+index answers literal and regex queries from the line corpus, so the indexer
+leaves the table empty and the ~1GB it costs on a 4.5k-file corpus is never
+spent. Only the no-bundle control arm (`ASGREP_READPATH=sql` without
+`ASGREP_WRITE_READ_BUNDLE`) populates it, because nothing else accelerates
+that arm. An index built before this change reclaims the space on its next
+`asgrep index` (schema 19 drops and recreates the table, then VACUUMs).
+
 ## Benchmarks
 
 Requires the `dev-tools` cargo feature (`cargo build -p ast-sgrep-cli --features dev-tools`).
