@@ -34,6 +34,17 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
 /// authoritative DB so a coincidentally equal generation cannot admit stale
 /// lexical or ANN rows from the corrupt index.
 fn remove_derived_sidecars(index_path: &Path) -> Result<()> {
+    remove_lexical_sidecar(index_path)?;
+    remove_file_if_present(&crate::semantic_ivf::semantic_ivf_path(index_path))
+}
+
+/// Remove the opt-in lexical sidecar and its SQLite siblings.
+///
+/// `lexical.db` is derived data that only `--tantivy` / `ASGREP_TANTIVY`
+/// reads (`search/passes/lexical.rs`). An index built without the flag must
+/// not keep paying for it: it was 955MB on a 4.5k-file corpus, and `keyword`
+/// mode measured identical with and without it.
+pub(crate) fn remove_lexical_sidecar(index_path: &Path) -> Result<()> {
     let lexical = index_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -42,7 +53,42 @@ fn remove_derived_sidecars(index_path: &Path) -> Result<()> {
     for suffix in SQLITE_SIDECAR_SUFFIXES {
         remove_file_if_present(&suffixed_path(&lexical, suffix)?)?;
     }
-    remove_file_if_present(&crate::semantic_ivf::semantic_ivf_path(index_path))
+    Ok(())
+}
+
+/// Sidecars this build reads. A `<name>.v<N>` sibling is a superseded
+/// generation from an older release: nothing in the tree opens it, and it
+/// costs a full copy of the structure it shadows (`index.read.v1` was 1.0GB
+/// on a 4.5k-file corpus, `names.v1` 2.8MB). The index directory belongs to
+/// the indexer, so finalize reclaims them.
+const CURRENT_SIDECARS: [&str; 3] = ["index.read", "names", "semantic.ivf"];
+
+/// Remove superseded `<sidecar>.v<N>` siblings. Returns bytes reclaimed.
+pub(crate) fn sweep_superseded_sidecars(index_path: &Path) -> Result<u64> {
+    let dir = index_path.parent().unwrap_or_else(|| Path::new("."));
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(0);
+    };
+    let mut reclaimed = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let superseded = CURRENT_SIDECARS.iter().any(|sidecar| {
+            name.strip_prefix(sidecar)
+                .and_then(|rest| rest.strip_prefix(".v"))
+                .is_some_and(|version| {
+                    !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit())
+                })
+        });
+        if !superseded {
+            continue;
+        }
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if remove_file_if_present(&entry.path()).is_ok() {
+            reclaimed += size;
+        }
+    }
+    Ok(reclaimed)
 }
 
 /// Preserve a corrupt database and its SQLite sidecars without overwriting an

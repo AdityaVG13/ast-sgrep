@@ -240,8 +240,14 @@ then search errors rather than serving stale vectors. See
 
 | Threshold | Behavior |
 |-----------|----------|
-| 1000+ files | Secondary FTS5 lexical DB auto-enabled (`--tantivy` to force) |
 | 2000+ symbols | IVF-ANN with persisted `.asgrep/semantic.ivf` |
+
+The secondary FTS5 lexical DB (`.asgrep/lexical.db`) is opt-in: pass
+`--tantivy` / `ASGREP_TANTIVY=1` to build and read it. It is no longer built
+automatically above a file count, because the search path only reads it under
+that same flag — the auto-built sidecar was never opened (955MB on a 4.5k-file
+corpus, with `keyword` mode measuring identical either way). An index built
+without the flag removes a leftover sidecar.
 
 Tune ANN: `--ann-threshold N` or `ASGREP_ANN_THRESHOLD`.
 

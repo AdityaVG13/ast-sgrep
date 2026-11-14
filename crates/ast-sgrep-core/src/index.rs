@@ -750,9 +750,15 @@ impl Indexer {
     }
     fn rebuild_dirty_sidecars(&self, _stats: &IndexStats, semantic_ivf_dirty: bool) -> Result<()> {
         self.check_cancel()?;
-        let file_count = self.store.status()?.file_count;
-        if crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy) {
+        // Reclaim superseded sidecar generations and, when the opt-in lexical
+        // sidecar is off, the sidecar itself. Both are derived data nothing in
+        // this build opens; leaving them costs a full copy of the structures
+        // they shadow.
+        crate::index_recovery::sweep_superseded_sidecars(self.store.db_path())?;
+        if self.options.use_tantivy {
             self.rebuild_tantivy_sidecar_if_fresh_skipping()?;
+        } else {
+            crate::index_recovery::remove_lexical_sidecar(self.store.db_path())?;
         }
         if self.options.embed_semantic && semantic_ivf_dirty {
             self.rebuild_semantic_ivf_sidecar()?;
@@ -1069,13 +1075,9 @@ impl Indexer {
             || self.store.lexicon_is_dirty().unwrap_or(true)
     }
     fn mark_sidecars_dirty(&mut self) -> Result<()> {
-        let lexical_exists =
-            crate::tantivy_index::sidecar_path(&self.options.root, Some(self.store.db_path()))
-                .exists();
-        let file_count = self.store.status()?.file_count;
-        self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy
-            || lexical_exists
-            || crate::tantivy_index::should_use_tantivy(file_count, self.options.use_tantivy);
+        // The lexical sidecar is opt-in: an existing `lexical.db` is not a
+        // reason to rebuild it when this run will not read it.
+        self.sidecars_dirty.tantivy = self.sidecars_dirty.tantivy || self.options.use_tantivy;
         if self.options.embed_semantic {
             self.sidecars_dirty.semantic_ivf = true;
         }

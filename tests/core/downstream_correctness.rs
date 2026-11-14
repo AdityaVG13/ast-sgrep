@@ -325,14 +325,21 @@ fn bead_firi_ivf_and_flat_min_similarity_agree() {
 }
 
 /// 6dx9 — hybrid search returns hits on both small and large corpora; both
-/// sides of the tantivy-1000 threshold are exercised. The parallel-pass gate
-/// concept (128 files) is a historical constant kept as a corpus size here.
+/// sides of the historical tantivy-1000 threshold are exercised. The
+/// parallel-pass gate concept (128 files) is a historical constant kept as a
+/// corpus size here.
+///
+/// The threshold no longer auto-enables the sidecar: it was built above 1000
+/// files but read only under `--tantivy`/`ASGREP_TANTIVY`, so the auto arm
+/// produced a sidecar nothing opened (955MB on a 4.5k-file corpus, with
+/// `keyword` mode measuring identical either way). The corpus-size halves of
+/// this test are unchanged; only the build predicate is now opt-in.
 #[test]
 fn bead_6dx9_threshold_sides_differentially_exercised() {
     const PARALLEL_PASS_FILE_THRESHOLD: usize = 128;
     assert_eq!(TANTIVY_AUTO_THRESHOLD, 1000);
     assert!(!should_use_tantivy(TANTIVY_AUTO_THRESHOLD - 1, false));
-    assert!(should_use_tantivy(TANTIVY_AUTO_THRESHOLD, false));
+    assert!(!should_use_tantivy(TANTIVY_AUTO_THRESHOLD, false));
     assert!(should_use_tantivy(1, true));
 
     // Serial side (<128 files): HitKey set for a fixture query.

@@ -227,6 +227,12 @@ fn source_identity(root: &Path, index_path: Option<&Path>) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-pub fn should_use_tantivy(file_count: usize, force: bool) -> bool {
-    force || file_count >= TANTIVY_AUTO_THRESHOLD
+/// Tantivy is an opt-in lexical sidecar: it is built only when the caller
+/// asked for it (`--tantivy` / `ASGREP_TANTIVY`), because the search path
+/// reads it only under that same flag (`search/passes/lexical.rs`). The
+/// former `file_count >= TANTIVY_AUTO_THRESHOLD` arm built a sidecar that
+/// nothing read: 955MB on a 4.5k-file corpus, and `keyword` mode measured
+/// identical with and without it.
+pub fn should_use_tantivy(_file_count: usize, force: bool) -> bool {
+    force
 }

@@ -140,8 +140,11 @@ Metadata (SQLite `meta` table) stores embed backend, dimension, and index finger
 
 | File | When | Purpose |
 |------|------|---------|
-| `.asgrep/lexical.db` | 1000+ files or `--tantivy` | Dedicated FTS5 lexical index |
+| `.asgrep/lexical.db` | `--tantivy` / `ASGREP_TANTIVY=1` only | Dedicated FTS5 lexical index (opt-in; removed when the flag is off) |
 | `.asgrep/semantic.ivf` | ≥ `ann_threshold` symbols | Persisted IVF clusters + vectors; fingerprint-invalidated on reindex |
+
+Superseded `<sidecar>.v<N>` generations from older releases are reclaimed at
+index finalize; nothing in the tree opens them.
 
 Below the ANN threshold, semantic search uses brute-force cosine over all symbol vectors (sub-millisecond for typical repos).
 
