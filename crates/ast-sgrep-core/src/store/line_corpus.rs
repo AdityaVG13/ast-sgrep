@@ -686,6 +686,62 @@ impl LineCorpus {
         hits
     }
 
+    /// Files whose per-file trigram filter admits every trigram of `needle`.
+    ///
+    /// The filter is a bloom over the file's folded text: a file that fails
+    /// cannot contain the needle, a file that passes may not. Callers use this
+    /// as a superset prefilter and decide membership themselves. Indices are
+    /// ascending, which is path order.
+    pub fn files_may_contain(&self, needle: &str) -> Vec<usize> {
+        let lower = needle.to_lowercase();
+        let required: Vec<_> = lower
+            .as_bytes()
+            .windows(3)
+            .take(32)
+            .map(trigram_bit)
+            .collect();
+        if required.is_empty() {
+            return (0..self.files.len()).collect();
+        }
+        (0..self.files.len())
+            .filter(|&fi| {
+                required
+                    .iter()
+                    .all(|&(word, bit)| self.file_trigram(fi, word) & bit != 0)
+            })
+            .collect()
+    }
+
+    /// Visit every line of `files` in (path, line_no) order.
+    ///
+    /// `files` must be ascending file indices, which is path order. `visit`
+    /// owns admission, scoring, and budget checks; returning `Ok(false)` stops
+    /// the scan. This is the regex pass's alternative to a trigram doclist
+    /// walk: the caller prunes with [`Self::files_may_contain`] and decides
+    /// each line itself, so no per-line index is needed.
+    pub fn scan_files<'a>(
+        &'a self,
+        files: &[usize],
+        mut visit: impl FnMut(LineHit<'a>) -> Result<bool>,
+    ) -> Result<()> {
+        for &fi in files {
+            let Some(&start) = self.file_first_line.get(fi) else {
+                continue;
+            };
+            let end = self
+                .file_first_line
+                .get(fi + 1)
+                .copied()
+                .unwrap_or(self.len() as u32);
+            for i in start as usize..end as usize {
+                if !visit(self.hit(i))? {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Bounded distinct-file discovery. Token postings seed each preference
     /// group, but unused slots must be filled by residual matches. The caller
     /// supplies the same per-record verifier as cold search, so Unicode folds

@@ -55,7 +55,24 @@ pub fn regex_pass(
         .map_err(StoreError::Other)?;
     let budget = regex_budget();
     let deadline = regex_deadline(Instant::now(), budget)?;
-    let mut hits = if let Some(literal) = trigram_literal.as_deref() {
+    // Bundle-backed scan first: the per-file trigram filters prune the same
+    // way a trigram doclist does, at 2.2MB instead of a full substring index.
+    // The SQL arms below stay for indexes without a read bundle.
+    let mut hits = if let Some(corpus) = store.line_corpus_for_query()? {
+        let candidates = match trigram_literal.as_deref() {
+            Some(literal) => corpus.files_may_contain(literal),
+            None => (0..corpus.file_count()).collect(),
+        };
+        scan_regex_corpus(
+            &corpus,
+            &candidates,
+            &re,
+            file_filter.as_ref(),
+            options,
+            deadline,
+            budget,
+        )?
+    } else if let Some(literal) = trigram_literal.as_deref() {
         let query = crate::fts::escape_fts_term(literal);
         let mut stmt = store.connection().prepare_cached(
             "SELECT f.path, l.line_no, l.content, f.language
@@ -79,6 +96,61 @@ pub fn regex_pass(
     hits.truncate(options.retained_limit());
     attach_regex_context(store, options, &mut hits, deadline, budget)?;
     Ok(hits)
+}
+
+/// Regex scan over the resident line corpus.
+///
+/// `candidates` are ascending file indices (path order), already pruned by the
+/// required literal's trigrams. Admission, the per-file preference cap, and
+/// the rank-decayed score mirror [`scan_regex_rows`] so the two arms agree on
+/// membership and order; only the rank's candidate stream differs, and both
+/// streams are monotonic in (path, line_no).
+fn scan_regex_corpus(
+    corpus: &crate::store::line_corpus::LineCorpus,
+    candidates: &[usize],
+    re: &Regex,
+    file_filter: Option<&Regex>,
+    options: &SearchOptions,
+    deadline: Instant,
+    budget: Duration,
+) -> Result<Vec<SearchHit>> {
+    const PREFERRED_PER_FILE: usize = 3;
+    let candidate_limit = options.retained_limit().max(100);
+    let mut preferred = Vec::new();
+    let mut overflow = Vec::new();
+    let mut intern = NameIntern::new(candidate_limit);
+    let mut per_file: Vec<usize> = Vec::new();
+    let mut admitted = 0usize;
+    corpus.scan_files(candidates, |line| {
+        check_regex_deadline(deadline, budget)?;
+        if file_filter.is_some_and(|filter| !filter.is_match(line.path))
+            || !matches_lang(line.language, options.lang_filter.as_deref())
+            || !re.is_match(line.content)
+        {
+            return Ok(true);
+        }
+        let hit = asgrep_line_hit(
+            line.path.to_string(),
+            line.language.map(str::to_owned),
+            line.line_no,
+            line.content.to_string(),
+            regex_rank_score(admitted),
+        );
+        admitted += 1;
+        let id = intern.intern(line.path) as usize;
+        if per_file.len() <= id {
+            per_file.resize(id + 1, 0);
+        }
+        if per_file[id] < PREFERRED_PER_FILE {
+            per_file[id] += 1;
+            preferred.push(hit);
+        } else if overflow.len() < candidate_limit {
+            overflow.push(hit);
+        }
+        Ok(preferred.len() < candidate_limit)
+    })?;
+    preferred.extend(overflow.into_iter().take(candidate_limit - preferred.len()));
+    Ok(preferred)
 }
 fn required_literal(pattern: &str) -> Option<String> {
     if pattern.contains("(?") {
@@ -140,6 +212,17 @@ fn map_regex_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::store::Inde
     ))
 }
 
+/// Positional decay for a regex hit.
+///
+/// The rank is the hit's position among *admitted* results, not among scanned
+/// candidates. Candidate streams differ by arm (a trigram doclist versus the
+/// lines of bloom-admitted files) and by index shape, so a candidate-relative
+/// rank made the same query score differently depending on which arm answered
+/// it. Ranking admitted hits keeps the score a property of the result set.
+fn regex_rank_score(admitted: usize) -> f64 {
+    1.0 / (1.0 + admitted as f64 * 0.01)
+}
+
 fn scan_regex_rows(
     rows: impl Iterator<Item = rusqlite::Result<crate::store::IndexedLineRow>>,
     re: &Regex,
@@ -154,7 +237,8 @@ fn scan_regex_rows(
     let mut overflow = Vec::new();
     let mut intern = NameIntern::new(candidate_limit);
     let mut per_file: Vec<usize> = Vec::new();
-    for (rank, row) in rows.enumerate() {
+    let mut admitted = 0usize;
+    for row in rows {
         // Between-line deadline check (56w1.3): a zero budget must fail
         // immediately instead of scanning everything.
         check_regex_deadline(deadline, budget)?;
@@ -170,8 +254,9 @@ fn scan_regex_rows(
             language.as_deref().map(str::to_owned),
             line_no,
             content,
-            1.0 / (1.0 + rank as f64 * 0.01),
+            regex_rank_score(admitted),
         );
+        admitted += 1;
         let id = intern.intern(path.as_ref()) as usize;
         if per_file.len() <= id {
             per_file.resize(id + 1, 0);
