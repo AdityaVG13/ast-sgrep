@@ -308,6 +308,37 @@ impl IndexStore {
     pub fn has_resident_line_corpus(&self) -> bool {
         self.line_corpus_if_cached().ok().flatten().is_some()
     }
+    /// Corpus for a one-shot query: the warmed cache when it is fresh, else a
+    /// bundle-backed corpus when the read bundle exists.
+    ///
+    /// The cached-only gate above exists to keep a one-shot off the SQL `lines`
+    /// materialization. The bundle arm is a different cost class: it is
+    /// mmap-backed and copies only the file table, so a one-shot can hold it
+    /// for ~1MB and answer the cascade's literal prefilter with the memchr scan
+    /// instead of a trigram doclist walk. Measured on a 4.5k-file corpus, the
+    /// prefilter drops from 88-103ms (SQL arm) to 1-5ms (bundle arm) with
+    /// identical hits. Without a bundle this is exactly
+    /// [`Self::line_corpus_if_cached`].
+    pub(crate) fn line_corpus_for_query(
+        &self,
+    ) -> Result<Option<std::sync::Arc<crate::store::line_corpus::LineCorpus>>> {
+        if let Some(cached) = self.line_corpus_if_cached()? {
+            return Ok(Some(cached));
+        }
+        if self.line_corpus_disabled.get()
+            || crate::env_flag::memo_off("corpus")
+            || !crate::store::read_bundle::bundle_enabled()
+        {
+            return Ok(None);
+        }
+        let Some(bundle) = self.read_bundle(None)? else {
+            return Ok(None);
+        };
+        let generation = bundle.generation();
+        let arc = crate::store::line_corpus::LineCorpus::from_bundle(bundle, generation, 0)?;
+        *self.line_corpus.borrow_mut() = Some(std::sync::Arc::clone(&arc));
+        Ok(Some(arc))
+    }
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached( "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )?.execute(params![key, value])?;

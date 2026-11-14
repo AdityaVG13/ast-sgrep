@@ -294,9 +294,10 @@ pub(crate) fn literal_prefilter_pass(
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
     terms = keyed.into_iter().map(|(_, _, term)| term).collect();
-    // Cached-only (one-shot literal discipline): the prefilter already
-    // handles `None` via the per-term `literal_pass` fallback below.
-    let corpus = store.line_corpus_if_cached()?;
+    // Bundle-backed when the read bundle exists (mmap, ~1MB of file table),
+    // cached-only otherwise: the prefilter already handles `None` via the
+    // per-term `literal_pass` fallback below.
+    let corpus = store.line_corpus_for_query()?;
     // Residency changes the candidate source, never the global quota policy.
     let file_cap = CASCADE_PREFILTER_FILE_LIMIT;
     let mut files = HashSet::new();

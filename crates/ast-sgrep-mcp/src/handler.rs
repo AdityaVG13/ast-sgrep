@@ -8,7 +8,11 @@
 //! Cancellation: fastmcp's per-request cancellation domain
 //! (`McpContext::request_cancellation`) is bridged onto the core's
 //! `AtomicBool` by a short-lived watcher thread per call; the core polls the
-//! flag between steps. The watcher exits when the call completes.
+//! flag between steps. The watcher exits when the call completes, and call
+//! completion signals it through a condvar rather than waiting out its poll
+//! interval: a plain `sleep` poll made every tool call pay the full interval
+//! as a latency floor (measured 22-28ms for `index_status`, whose own work is
+//! ~1ms).
 //!
 //! Concurrency: all tools share one FIFO `tool_lock`, preserving the previous
 //! adapter's contract that a client pipelining `tools/call` sees serialized
@@ -17,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -31,20 +35,31 @@ use super::McpServer;
 /// Watches the fastmcp cancellation domain and sets the core's cancel flag.
 /// Exits as soon as the flag is set by call completion (flag set = done,
 /// regardless of which side set it first).
+///
+/// `done` is signalled by the dispatching thread the moment the tool returns,
+/// so the watcher never holds the call open for the remainder of its poll
+/// interval. The interval only bounds how long a *cancellation* takes to
+/// reach the core, which is the latency this bridge exists to provide.
 fn spawn_cancel_watcher(
     cancellation: McpRequestCancellation,
     cancel: Arc<AtomicBool>,
+    done: Arc<(Mutex<bool>, Condvar)>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        let (finished, wake) = &*done;
+        let mut finished = finished.lock().unwrap_or_else(|e| e.into_inner());
         loop {
-            if cancel.load(Ordering::Acquire) {
+            if *finished || cancel.load(Ordering::Acquire) {
                 return;
             }
             if cancellation.is_cancel_requested() {
                 cancel.store(true, Ordering::Release);
                 return;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            let (guard, _) = wake
+                .wait_timeout(finished, Duration::from_millis(20))
+                .unwrap_or_else(|e| e.into_inner());
+            finished = guard;
         }
     })
 }
@@ -76,12 +91,22 @@ impl CatalogTool {
     /// return the raw JSON text the core produced.
     fn dispatch(&self, ctx: &McpContext, arguments: &serde_json::Value) -> Result<String, String> {
         let cancel = Arc::new(AtomicBool::new(false));
-        let watcher = spawn_cancel_watcher(ctx.request_cancellation(), cancel.clone());
+        let done = Arc::new((Mutex::new(false), Condvar::new()));
+        let watcher = spawn_cancel_watcher(
+            ctx.request_cancellation(),
+            cancel.clone(),
+            Arc::clone(&done),
+        );
         let _guard = self.tool_lock.lock().unwrap_or_else(|e| e.into_inner());
         let outcome = self
             .server
             .dispatch_tool(&self.tool.name, arguments, cancel.clone());
         cancel.store(true, Ordering::Release);
+        {
+            let (finished, wake) = &*done;
+            *finished.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            wake.notify_all();
+        }
         let _ = watcher.join();
         outcome.map_err(|error| format!("{error:#}"))
     }
